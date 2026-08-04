@@ -111,11 +111,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             client_key = self._client_key(request)
             rule = self._rule_for(request)
 
-            allowed = await self._registry.check(
-                client_key,
-                max_requests=rule[1],
-                window_s=rule[2],
-            )
+            try:
+                allowed = await self._registry.check(
+                    client_key,
+                    max_requests=rule[1],
+                    window_s=rule[2],
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning(
+                    "ratelimit.check_failed",
+                    extra={"client_key": client_key},
+                    exc_info=True,
+                )
+                allowed = True
             if not allowed:
                 _log.warning("ratelimit.exceeded", extra={"client_key": client_key})
                 return ProblemDetail.from_type(

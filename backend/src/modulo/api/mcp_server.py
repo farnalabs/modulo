@@ -527,6 +527,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     media_type="application/json",
                 )
+            except (SQLAlchemyError, OperationalError, TimeoutError):
+                _log.exception("mcp.auth.db_unavailable")
+                return Response(
+                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
             await _set_authz_enforce(org_id)
             resp3: Response = await call_next(request)
             return resp3
@@ -569,11 +576,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         str(principal.account_id),
                         str(principal.organisation_id),
                     )
-            except SQLAlchemyError:
-                _log.warning("permission.live_role_read_failed", exc_info=True)
+            except (SQLAlchemyError, OperationalError, TimeoutError):
+                _log.exception("mcp.auth.db_unavailable")
                 return Response(
-                    '{"error":"unauthorized","detail":"Role validation failed"}',
-                    status_code=401,
+                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    status_code=503,
                     media_type="application/json",
                 )
             if live_role is None:
@@ -612,6 +619,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         status_code=401,
                         media_type="application/json",
                     )
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception("mcp.auth.db_unavailable")
+            return Response(
+                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                status_code=503,
+                media_type="application/json",
+            )
         except Exception:
             _log.exception("OAuth token family check failed")
             return Response(
@@ -632,11 +646,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     str(claims.account_id),
                     str(claims.organisation_id),
                 )
-        except SQLAlchemyError:
-            _log.warning("permission.live_role_read_failed", exc_info=True)
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception("mcp.auth.db_unavailable")
             return Response(
-                '{"error":"unauthorized","detail":"Role validation failed"}',
-                status_code=401,
+                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                status_code=503,
                 media_type="application/json",
             )
         if live_role is None:

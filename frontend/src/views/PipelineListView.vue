@@ -407,6 +407,10 @@
             {{ runError }}
           </div>
 
+          <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning" data-testid="pipeline-list-run-empty-warning">
+            {{ emptyRunWarning }}
+          </div>
+
           <div class="flex justify-end gap-2 pt-2">
             <button
               class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
@@ -792,6 +796,16 @@ const showAdvanced = ref(false)
 const advancedPayload = ref('')
 const running = ref(false)
 const runError = ref<string | null>(null)
+const confirmEmptyRun = ref(false)
+const emptyRunWarning = ref<string | null>(null)
+
+watch([prompt, advancedPayload, showAdvanced], () => {
+  if (confirmEmptyRun.value) {
+    confirmEmptyRun.value = false
+    emptyRunWarning.value = null
+  }
+})
+
 const search = ref('')
 const page = ref(1)
 const pageSize = 12
@@ -910,6 +924,8 @@ function openRunDialog(p: PipelineItem) {
   showAdvanced.value = false
   advancedPayload.value = ''
   runError.value = null
+  confirmEmptyRun.value = false
+  emptyRunWarning.value = null
   showRunDialog.value = true
 }
 
@@ -1012,27 +1028,36 @@ function closeRunDialog() {
   selectedPipeline.value = null
   prompt.value = ''
   runError.value = null
+  confirmEmptyRun.value = false
+  emptyRunWarning.value = null
 }
 
 async function triggerRun() {
   if (!selectedPipeline.value) return
+  let inputPayload: Record<string, unknown>
+  if (showAdvanced.value && advancedPayload.value.trim()) {
+    try {
+      inputPayload = JSON.parse(advancedPayload.value)
+    } catch {
+      runError.value = t('views.PipelineListView.invalid_json_in_advanced_payload')
+      return
+    }
+  } else if (prompt.value.trim()) {
+    inputPayload = { prompt: prompt.value }
+  } else {
+    inputPayload = {}
+  }
+  if (Object.keys(inputPayload ?? {}).length === 0) {
+    if (!confirmEmptyRun.value) {
+      confirmEmptyRun.value = true
+      emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
+      return
+    }
+    emptyRunWarning.value = null
+  }
   running.value = true
   runError.value = null
   try {
-    let inputPayload: Record<string, unknown>
-    if (showAdvanced.value && advancedPayload.value.trim()) {
-      try {
-        inputPayload = JSON.parse(advancedPayload.value)
-      } catch {
-        runError.value = t('views.PipelineListView.invalid_json_in_advanced_payload')
-        running.value = false
-        return
-      }
-    } else if (prompt.value.trim()) {
-      inputPayload = { prompt: prompt.value }
-    } else {
-      inputPayload = {}
-    }
     const { data } = await api.POST('/api/v1/runs', {
       body: {
         pipeline_id: selectedPipeline.value.id,
