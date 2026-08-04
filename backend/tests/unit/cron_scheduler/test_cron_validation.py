@@ -146,6 +146,18 @@ class TestComputeNextFire:
 
         assert result == datetime.datetime(2026, 1, 1, 9, tzinfo=datetime.UTC)
 
+    def test_next_fire_strictly_after_exact_match(self):
+        """An ``after`` exactly on a fire time must return the NEXT occurrence."""
+        now = datetime.datetime(2026, 1, 1, 9, 0, 0, tzinfo=datetime.UTC)
+        next_fire = compute_next_fire("0 9 * * *", after=now)
+        assert next_fire == datetime.datetime(2026, 1, 2, 9, 0, 0, tzinfo=datetime.UTC)
+
+    def test_next_fire_monthly_rollover(self):
+        """First-of-month expressions roll into the following month."""
+        now = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+        next_fire = compute_next_fire("0 0 1 * *", after=now)
+        assert next_fire == datetime.datetime(2026, 2, 1, 0, 0, 0, tzinfo=datetime.UTC)
+
 
 class TestComputeNextSend:
     def test_next_send_returns_future_datetime(self):
@@ -172,6 +184,17 @@ class TestComputeNextSend:
     def test_next_send_without_after_defaults_to_now(self):
         result = compute_next_send("* * * * *")
         assert result > datetime.datetime.now(datetime.UTC)
+
+    def test_next_send_weekly_on_monday(self):
+        now = datetime.datetime(2026, 1, 1, 8, 0, 0, tzinfo=datetime.UTC)
+        next_send = compute_next_send("0 9 * * 1", after=now)
+        # 2026-01-01 is a Thursday; next Monday is 2026-01-05.
+        assert next_send == datetime.datetime(2026, 1, 5, 9, 0, 0, tzinfo=datetime.UTC)
+
+    def test_next_send_strictly_after_exact_match(self):
+        now = datetime.datetime(2026, 1, 1, 9, 0, 0, tzinfo=datetime.UTC)
+        next_send = compute_next_send("0 9 * * *", after=now)
+        assert next_send == datetime.datetime(2026, 1, 2, 9, 0, 0, tzinfo=datetime.UTC)
 
     def test_next_send_invalid_expression_raises(self):
         with pytest.raises(ValueError):
