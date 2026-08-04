@@ -217,6 +217,25 @@ showing per-table and per-row progress.
 
 ---
 
+## Break-Glass Admin Recovery Deploy Gate
+
+The break-glass enforcement ships in two deliverables — **(A)** last-admin
+prevention + operator role + migration, **(B)** CLI + login-hook consumption +
+SQL-predicate deny. The (B) deploy carries a one-time precondition:
+
+1. **Zero live break-glass rows.** Run `modulo-break-glass status --all`
+   before deploying (B). A non-zero exit (`5`) means a live row exists —
+   resolve it (`deactivate` / `deactivate --force`) before deploying. See
+   `docs/operations/break-glass-admin-recovery-runbook.md`.
+2. **Expired rows must NOT block deploys.** A row past `break_glass_expires_at`
+   is deny-covered by the enforcement code itself; it is a hygiene item for
+   the daily sweep, not a deploy blocker.
+
+From (B) onward the daily `status --all` sweep (§8 of the runbook) is the
+ongoing monitoring surface.
+
+---
+
 ## CORS Configuration
 
 Cross-Origin Resource Sharing (CORS) is configured via environment variables.
