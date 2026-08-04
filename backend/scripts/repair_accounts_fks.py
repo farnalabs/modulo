@@ -42,6 +42,11 @@ Usage
 ``rebuild-accounts`` and ``repair`` are destructive: they DROP and recreate the
 ``accounts`` table. They require the ``--yes`` confirmation flag; without it the
 tool prints the warning and exits non-zero without touching the database.
+
+The rebuild itself is a single transaction, but the pre-checks run just before
+it in a separate window: a concurrent writer that inserts into ``accounts``
+between the pre-checks and the DROP would lose those rows. Run with the app
+drained / writes quiesced during maintenance, and keep a backup.
 """
 
 from __future__ import annotations
@@ -233,10 +238,14 @@ async def _cmd_check(conn: asyncpg.Connection) -> int:
             print(f"  - {name}")
     probe_ok, probe_msg = await _run_fk_probe(conn)
     print(probe_msg)
-    if not missing and probe_ok:
-        print("RESULT: accounts catalog looks healthy (all 46 FKs present, probe passed).")
+    if not missing and not unexpected and probe_ok:
+        print("RESULT: accounts catalog looks healthy (all 46 FKs present, no drift, probe passed).")
         return 0
-    print("RESULT: repair needed.")
+    if missing or not probe_ok:
+        print("RESULT: repair needed.")
+    else:
+        print("RESULT: WARNING - ACCOUNTS_FKS is stale (drift against the live catalog).")
+        print("Update ACCOUNTS_FKS in this script to match the migrations, then re-run.")
     return 1
 
 

@@ -315,3 +315,8 @@ accounts -> re-apply grants/ownership -> re-add all 46 FK constraints. This is
 scripted as a repeatable, version-controlled tool in
 `backend/scripts/repair_accounts_fks.py` (`check` / `rebuild-accounts` /
 `add-fks` / `repair`), including the orphan-row guard (never auto-delete data).
+`check` returns non-zero on any drift between the tool's `ACCOUNTS_FKS`
+snapshot and the live catalog, so a stale snapshot fails loudly. Run the
+rebuild with the app drained / writes quiesced: the pre-checks and the rebuild
+transaction are separate windows, so a concurrent INSERT between them would be
+lost.
