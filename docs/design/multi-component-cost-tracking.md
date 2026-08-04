@@ -2109,6 +2109,15 @@ The migration steps (upgrade):
    actually being superuser- or owner-privileged. This is TESTED by the
    pre-flight smoke.
 
+   **MIGRATE-role deploy-wiring (first-class PR A deliverable):** for
+   `modulo_migrate` to CREATE the table it needs CREATE on the public schema
+   (PG15+ does not grant CREATE to PUBLIC by default) AND REFERENCES on
+   `organisations` (the new table's org FK references it). `bootstrap_role.py`
+   grants both on every boot (the REFERENCES grant guarded by `to_regclass`
+   because the pre-alembic bootstrap runs on a fresh DB where `organisations`
+   does not exist yet), and 0065 re-applies both idempotently right before
+   `SET ROLE` so a fresh-DB migration works regardless of bootstrap state.
+
    **The POST-CREATE ownership assertion sits between `create_table` and the
    RLS-enable step:** after create_table, 0065 asserts the created table's
    owner is `modulo_migrate`, not the app role
