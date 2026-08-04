@@ -46,8 +46,9 @@ migration adds the ``created_by`` column + partial index to whatever
 ``scheduled_reports`` shape exists. On the legacy staging table this leaves the
 table still legacy-shaped (``period`` etc. remain), so this migration's
 ``period``-based detection still fires and the drop+recreate reconciles the full
-table. A healthy table is unaffected by both. This migration is a graph merge
-point (tuple ``down_revision``) resolving the parallel heads #612 and #615.
+table. A healthy table is unaffected by both. This migration chains linearly
+after ``0064_merge_heads_0037`` (which merges the parallel heads #612 and #615),
+keeping a single head at 0065.
 """
 
 from collections.abc import Sequence
@@ -210,6 +211,9 @@ def _reconcile_scheduled_reports() -> None:
     if not is_legacy:
         _warn("SKIP scheduled_reports: current schema detected (drift-tolerant)")
         return
+    # Take an exclusive lock before counting so no rows can be inserted between
+    # the count and the drop (closes the check-then-drop race window).
+    op.execute(sa.text('LOCK TABLE "scheduled_reports" IN ACCESS EXCLUSIVE MODE'))
     rows = bind.execute(sa.text('SELECT count(*) FROM "scheduled_reports"')).scalar_one()
     if rows > 0:
         _warn(f"SKIP scheduled_reports: legacy shape but {rows} rows present — refusing to drop (manual review needed)")

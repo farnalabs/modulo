@@ -36,12 +36,6 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _has_column(bind, table: str, column: str) -> bool:
-    """Return True if ``table.column`` exists in the connected DB."""
-    insp = sa.inspect(bind)
-    return column in {c["name"] for c in insp.get_columns(table)}
-
-
 def upgrade() -> None:
     bind = op.get_bind()
     _add_missing_indexes(bind)
