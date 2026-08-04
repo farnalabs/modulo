@@ -20,7 +20,7 @@ DOCKERFILES = (
     PRODUCT / "Dockerfile.all-in-one",
 )
 
-REQUIRES_PYTHON = re.compile(r'requires-python\s*=\s*">=(3)\.(\d+)(?:,<3\.(\d+))?"')
+REQUIRES_PYTHON = re.compile(r'requires-python\s*=\s*">=3\.(\d+)(?:,<3\.(\d+))?"')
 PYTHON_IMAGE = re.compile(r"^FROM\s+python:3\.(\d+)(?:-.*)?(?:\s+AS\s+[\w.-]+)?$", re.MULTILINE)
 
 
@@ -30,8 +30,8 @@ def test_dockerfile_python_version_satisfies_pyproject():
 
     requires = REQUIRES_PYTHON.search(PYPROJECT_TOML.read_text(encoding="utf-8"))
     assert requires, "Could not parse requires-python in backend/pyproject.toml"
-    min_minor = int(requires.group(2))
-    max_minor = int(requires.group(3)) if requires.group(3) else None
+    min_minor = int(requires.group(1))
+    max_minor = int(requires.group(2)) if requires.group(2) else None
 
     pinned = []
     for dockerfile in DOCKERFILES:
