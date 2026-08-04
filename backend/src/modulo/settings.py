@@ -93,9 +93,7 @@ class Settings(BaseSettings):
     saq_runs_queue: str = Field(default="runs", alias="SAQ_RUNS_QUEUE")
     # Staleness gate for re-claiming a SAQ run whose heartbeat is stale.
     run_claim_stale_seconds: int = Field(default=450, alias="RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
-    # Legacy claim window kept for the shared sync claim helpers (claim_run /
-    # execute_run legacy path), which the SAQ worker does not use.
-    legacy_run_claim_stale_seconds: int = Field(default=180, alias="LEGACY_RUN_CLAIM_STALE_SECONDS", ge=1, le=3600)
+
     # SAQ job heartbeat knob (per-job). The DB heartbeat cadence is
     # RUN_HEARTBEAT_SECONDS below.
     saq_job_heartbeat: int = Field(default=300, alias="SAQ_JOB_HEARTBEAT", ge=1, le=3600)
@@ -120,7 +118,7 @@ class Settings(BaseSettings):
     saq_test_pause: bool = Field(default=False, alias="SAQ_TEST_PAUSE")
     # Legacy sweep windows (never_dispatched / worker_lost / re-enqueue) match
     # today's beat-sweep values (5 min / 10 min; re-enqueue is SAQ-only, 600 is
-    # unverifiable from today's Celery code), decoupled from
+    # 600), decoupled from
     # RUN_CLAIM_STALE_SECONDS (SAQ only).
     saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
     saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)

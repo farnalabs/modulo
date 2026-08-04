@@ -119,7 +119,7 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     oid = uuid.UUID(org_id)
     job = ctx.get("job")
 
-    claimed = await claim_run_async(aeng, run_id, org_id, legacy=False)
+    claimed = await claim_run_async(aeng, run_id, org_id)
     if not claimed:
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}

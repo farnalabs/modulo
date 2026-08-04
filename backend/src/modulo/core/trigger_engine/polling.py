@@ -1,9 +1,8 @@
 """Polling trigger -- connector-driven condition evaluation and run creation.
 
 Fire logic lives in ``fire_polling_trigger()`` -- enqueued as a per-item SAQ
-fire job by ``fire_due_triggers`` (system cron). The Celery beat path
-(``PollingFireTask`` / ``DatabasePollingScheduler``) was removed in PR C of the
-Celery->SAQ migration.
+fire job by ``fire_due_triggers`` (system cron). The legacy beat path (Celery
+removed in PR C) was removed in PR C of the Celery->SAQ migration.
 """
 
 import asyncio
@@ -152,9 +151,8 @@ async def fire_polling_trigger(
 ) -> dict[str, Any]:
     """Fire a polling trigger — runs the connector query and evaluates the condition.
 
-    Shared between Celery beat tasks and the in-process asyncio scheduler.
-    Opens its own DB connection so it can be called from both sync (Celery)
-    and async contexts.
+    Shared between the SAQ scheduler and the in-process asyncio path.
+    Opens its own DB connection so it can be called from both sync and async contexts.
     """
     settings = get_settings()
     factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)

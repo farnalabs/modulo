@@ -78,7 +78,7 @@ class Run(OrgScoped):
     rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     # SAQ dispatch tracking (PR B, migration 0031) — dispatcher reflects where
-    # the job actually went: 'saq' iff enqueued to SAQ; NULL iff Celery/legacy.
+    # the job actually went: 'saq' iff enqueued to SAQ; NULL iff legacy (pre-PR C).
     dispatcher: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     # SAQ job id — deterministic saq:job:{queue}:run:{id}. SAQ retries reuse it.
     saq_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
