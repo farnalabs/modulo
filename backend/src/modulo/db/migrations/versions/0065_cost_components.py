@@ -161,7 +161,15 @@ def upgrade() -> None:
     # 2. cost_components table — created under SET ROLE modulo_migrate so the
     #    owner is the MIGRATE role (the app role must NOT own it: the owner
     #    bypasses RLS). ``formula`` is NULLABLE (NULL for self_reported).
+    #    The MIGRATE-role deploy-wiring: modulo_migrate needs CREATE on the
+    #    public schema + REFERENCES on organisations to create the table's
+    #    org FK. bootstrap_role.py grants both on every boot, but the
+    #    pre-alembic bootstrap runs on a fresh DB where organisations does not
+    #    exist yet — so 0065 re-applies both grants itself (idempotent)
+    #    right before SET ROLE.
     if pg:
+        op.execute(f"GRANT CREATE ON SCHEMA public TO {_MIGRATE_ROLE}")
+        op.execute(f"GRANT REFERENCES ON TABLE public.organisations TO {_MIGRATE_ROLE}")
         op.execute(f"SET ROLE {_MIGRATE_ROLE}")
     op.create_table(
         "cost_components",

@@ -248,17 +248,26 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         await _create_or_update_role(conn, _MIGRATE_ROLE, login=False, password=None)
         await _create_or_update_role(conn, bg_user, login=True, password=bg_pass)
 
-        # The migration chain (0036 break-glass deliverable) transfers ownership
-        # of accounts/org_memberships/token_families/org_api_keys to
-        # ``modulo_migrate`` via ``ALTER TABLE ... OWNER TO``. PostgreSQL's ALTER
-        # OWNER requires the NEW owner to hold CREATE on the owning schema, and
-        # modulo_migrate is NOLOGIN + non-superuser, so it needs an explicit
-        # grant. Without it a fresh-DB migration fails at 0036 with
-        # ``permission denied for schema public`` (hit on the reset staging DB,
-        # 2026-08-04). The app role also gets CREATE so it can run DDL on
-        # environments where the migration connects as the app user.
+        # Role grants for schema/DDL ownership (merged from the break-glass
+        # 0036 deliverable + the cost 0065 MIGRATE-role deploy-wiring):
+        #   - GRANT CREATE ON SCHEMA public: the migration chain (0036
+        #     break-glass) transfers ownership of accounts/org_memberships/
+        #     token_families/org_api_keys to modulo_migrate via ALTER TABLE
+        #     ... OWNER TO, which requires CREATE on the owning schema; and
+        #     modulo_migrate creates the RLS-confinement tables (e.g.
+        #     cost_components, migration 0065) via SET ROLE modulo_migrate
+        #     from the superuser DATABASE_ADMIN_URL. PG15+ does not grant
+        #     CREATE to PUBLIC by default, so the explicit grants are
+        #     required (hit on the reset staging DB, 2026-08-04).
+        #   - GRANT REFERENCES ON organisations: a new table's org FK
+        #     references it; guarded by to_regclass because the pre-alembic
+        #     bootstrap runs on a fresh DB where organisations does not
+        #     exist yet (migration 0065 re-applies both grants itself,
+        #     right before SET ROLE).
         await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
         await conn.execute(f'GRANT CREATE ON SCHEMA public TO "{app_user}"')
+        if await _table_exists(conn, "organisations"):
+            await conn.execute(f'GRANT REFERENCES ON TABLE public.organisations TO "{_MIGRATE_ROLE}"')
 
         # Grant DML on existing tables.
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')

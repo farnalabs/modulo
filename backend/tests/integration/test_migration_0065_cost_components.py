@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 async def _columns(db_engine: AsyncEngine, table: str) -> set[str]:
     async with db_engine.connect() as connection:
         return await connection.run_sync(
-            lambda sync_connection: set(inspect(sync_connection).get_columns(table)),
+            lambda sync_connection: {col["name"] for col in inspect(sync_connection).get_columns(table)},
         )
 
 
@@ -58,13 +58,14 @@ async def test_cost_components_table_exists(db_engine: AsyncEngine) -> None:
 
 async def test_null_distinct_unique_index(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        row = await connection.execute(
+        result = await connection.execute(
             text(
                 "SELECT indexrelid::regclass::text, indisunique, "
                 "indnullsnotdistinct FROM pg_index "
                 "WHERE indexrelid = 'uq_org_daily_run_counts'::regclass"
             )
-        ).first()
+        )
+        row = result.first()
     assert row is not None, "uq_org_daily_run_counts index not found"
     assert row[1] is True
     assert row[2] is True, "uq_org_daily_run_counts must be NULLS NOT DISTINCT"
@@ -72,29 +73,32 @@ async def test_null_distinct_unique_index(db_engine: AsyncEngine) -> None:
 
 async def test_old_unique_constraint_dropped(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        row = await connection.execute(
+        result = await connection.execute(
             text(
                 "SELECT conname FROM pg_constraint "
                 "WHERE conrelid = 'public.org_daily_run_counts'::regclass "
                 "AND conname = 'uq_org_daily_run_counts_org_team_date'"
             )
-        ).first()
+        )
+        row = result.first()
     assert row is None, "old unique constraint must be dropped"
 
 
 async def test_cost_components_owned_by_migrate_role(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        owner = await connection.execute(
+        result = await connection.execute(
             text("SELECT relowner::regrole::text FROM pg_class WHERE oid = to_regclass('public.cost_components')")
-        ).scalar_one()
+        )
+        owner = result.scalar_one()
     assert owner == "modulo_migrate", f"cost_components owner is {owner}, expected modulo_migrate"
 
 
 async def test_cost_components_rls_enabled(db_engine: AsyncEngine) -> None:
     async with db_engine.connect() as connection:
-        relrowsecurity = await connection.execute(
+        result = await connection.execute(
             text("SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public.cost_components')")
-        ).scalar_one()
+        )
+        relrowsecurity = result.scalar_one()
     assert relrowsecurity is True
 
 
