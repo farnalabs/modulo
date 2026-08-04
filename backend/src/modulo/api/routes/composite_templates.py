@@ -14,7 +14,10 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.composite_engine.expander import _PARAM_PLACEHOLDER_RE, _PROMPT_FIELDS
+from modulo.core.composite_engine.expander import (
+    _PARAM_PLACEHOLDER_RE,
+    _PROMPT_FIELDS,
+)
 from modulo.db.crud.composite_template import (
     create_composite_template,
     get_composite_template,
