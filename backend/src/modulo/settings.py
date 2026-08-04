@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import Field, field_validator, model_validator
@@ -135,6 +136,52 @@ class Settings(BaseSettings):
     # sandbox uptime). Default reflects the dashboard-confirmed opencode
     # template = 2 vCPU / 2 GiB at E2B per-second rates (~$0.133/hr).
     e2b_sandbox_usd_per_hour: float = Field(default=0.13, alias="E2B_SANDBOX_USD_PER_HOUR", ge=0)
+
+    # ------------------------------------------------------------------
+    # Cost-tracking knobs (multi-component per-run cost tracking — PR A1)
+    # ------------------------------------------------------------------
+    # These are the operator-tunable anti-abuse bounds for self-reported
+    # model cost. All are Decimal-typed so the runtime never mixes float and
+    # Decimal min()/comparison operations. A violating env value fails at
+    # Settings LOAD (fail-fast), never silently accepted.
+    #
+    # The floor: any self-reported model_cost_usd below this is NOT a report
+    # (closes the spend-evasion hole where a 1e-9 report suppressed the
+    # estimate). ge-bounded so a sub-floor knob cannot silently disable the
+    # floor.
+    max_reportable_usd_min: Decimal = Field(
+        default=Decimal("0.000001"),
+        alias="MODULO_MAX_REPORTABLE_USD_MIN",
+        ge=Decimal("0.000001"),
+    )
+    # The per-node clamp: an absurd single-node report is clamped here. The
+    # WRITE-PATH effective value is min(knob, Decimal("99999999.999999")) —
+    # the Numeric(14,6) column cap — so a 1e9 env value cannot silently
+    # disable the load-bearing per-node clamp. ge-bounded (a sub-floor knob
+    # would disable the floor).
+    max_self_reported_usd: Decimal = Field(
+        default=Decimal("10000.0"),
+        alias="MODULO_MAX_SELF_REPORTED_USD",
+        ge=Decimal("0.000001"),
+    )
+    # The band ceiling — the TOP OF THE SANITY BAND, the trust boundary for
+    # self-reported model cost at the backend extraction boundary. Any
+    # producer is clamped here (band < per-node cap by default, so the band
+    # dominates). ge-bounded like the other knobs.
+    max_reportable_band_usd: Decimal = Field(
+        default=Decimal("50.0"),
+        alias="MODULO_MAX_REPORTABLE_BAND_USD",
+        ge=Decimal("0.000001"),
+    )
+    # Dynamic rate_usd bound for cost_components writes: a rate above this is
+    # rejected 422. The WRITE-PATH effective value is
+    # min(knob, Decimal("999999999999.999999")) — the Numeric(18,6) column
+    # cap. ge-bounded at 0.
+    max_rate_usd: Decimal = Field(
+        default=Decimal("100000.0"),
+        alias="MODULO_MAX_RATE_USD",
+        ge=Decimal(0),
+    )
 
     # ------------------------------------------------------------------
     # Health check timeouts (seconds) — configurable per-check limits for
@@ -398,6 +445,69 @@ class Settings(BaseSettings):
             )
         return self
 
+    def _validate_cost_knobs(self) -> "Settings":
+        """Cost-knob invariants — enforced at Settings LOAD, never log-only.
+
+        A violating combination is UNREPRESENTABLE: every process that
+        constructs Settings (including the SAQ system worker) fails fast
+        identically, and the boot self-test surfaces the operator-facing
+        recovery message.
+
+        All comparisons are DECIMAL-TYPED: knobs are coerced with
+        Decimal(str(value)) so a float/str env override cannot raise
+        TypeError or compare lexicographically.
+
+        Guards:
+        1. Ordering invariant — max_reportable_usd_min >= max_self_reported_usd
+           would silently disable self-reporting (no report can clear the
+           floor), so it raises.
+        2. Floor-vs-band guard (BOOT-FATAL) — max_reportable_usd_min >=
+           max_reportable_band_usd omits every plausible report (reports are
+           bounded by the band ceiling), so it raises.
+        3. Knob-below-band guard — max_reportable_band_usd > max_self_reported_usd
+           makes the out_of_band_high marker unreachable (no report can exceed
+           the band), so it raises.
+        """
+        floor = Decimal(str(self.max_reportable_usd_min))
+        clamp = Decimal(str(self.max_self_reported_usd))
+        band = Decimal(str(self.max_reportable_band_usd))
+        if floor >= clamp:
+            raise ValueError(
+                "Cost-knob ordering violation: MODULO_MAX_REPORTABLE_USD_MIN ("
+                f"{floor}) >= MODULO_MAX_SELF_REPORTED_USD ({clamp}) — a floor at "
+                "or above the per-node clamp silently disables self-reporting. "
+                "Set MODULO_MAX_REPORTABLE_USD_MIN to a value strictly below "
+                f"MODULO_MAX_SELF_REPORTED_USD (valid range: 0.000001 .. {clamp})."
+            )
+        if floor >= band:
+            raise ValueError(
+                "Cost-knob floor-vs-band violation (BOOT-FATAL): "
+                f"MODULO_MAX_REPORTABLE_USD_MIN ({floor}) >= "
+                f"MODULO_MAX_REPORTABLE_BAND_USD ({band}) — a floor at or above the "
+                "band ceiling omits EVERY plausible self-report. Set "
+                f"MODULO_MAX_REPORTABLE_USD_MIN strictly below {band} (valid "
+                f"range: 0.000001 .. {band})."
+            )
+        if band > clamp:
+            raise ValueError(
+                "Cost-knob knob-below-band violation (BOOT-FATAL): "
+                f"MODULO_MAX_REPORTABLE_BAND_USD ({band}) > "
+                f"MODULO_MAX_SELF_REPORTED_USD ({clamp}) — the out_of_band_high "
+                "marker can never fire because no report can exceed the band. "
+                f"Set MODULO_MAX_REPORTABLE_BAND_USD <= {clamp} (default 50.0)."
+            )
+        return self
+
+    @property
+    def effective_max_self_reported_usd(self) -> Decimal:
+        """The write-path per-node clamp: min-capped at the Numeric(14,6) column cap."""
+        return min(Decimal(str(self.max_self_reported_usd)), Decimal("99999999.999999"))
+
+    @property
+    def effective_max_rate_usd(self) -> Decimal:
+        """The write-path rate_usd bound: min-capped at the Numeric(18,6) column cap."""
+        return min(Decimal(str(self.max_rate_usd)), Decimal("999999999999.999999"))
+
 
 @lru_cache
 def get_settings(_fresh: bool = False) -> Settings:
@@ -476,3 +586,23 @@ def validate_break_glass_boot(settings: Settings) -> None:
             raise RuntimeError("Break-glass boot config assertion FAILED:\n  " + "\n".join(blocking))
     for _is_blocking, message in findings:
         _log.warning("break_glass.boot_config %s", message)
+def run_cost_settings_self_test() -> None:
+    """Boot self-test for the cost knobs — operator-facing surface.
+
+    The guards themselves live in the Settings LOAD path (every process that
+    constructs Settings fails fast identically). This function exists for the
+    interactive-boot surface: it constructs Settings and prints a CLEAR
+    recovery message (the offending knob + the valid range) before exiting
+    when a violating env combination is present, so the operator sees the
+    exact fix rather than a bare pydantic trace.
+    """
+    try:
+        Settings()
+    except Exception as exc:
+        _log.error("cost_settings_self_test.failed")
+        # Operator-facing recovery surface: the plain-print is deliberate so the
+        # offending knob + valid range reach the console even when JSON logs are
+        # not rendered (Fly logs lesson).
+        print(f"ERROR: cost Settings validation failed: {exc}", flush=True)  # noqa: T201
+        raise
+    _log.info("cost_settings_self_test.ok")
