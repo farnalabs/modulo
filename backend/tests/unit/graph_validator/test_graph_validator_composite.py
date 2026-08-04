@@ -139,6 +139,39 @@ async def test_non_dict_sub_graph_skipped() -> None:
     assert not any(code.startswith("COMPOSITE_SUBGRAPH") for code in _codes(result))
 
 
+async def test_non_dict_sub_node_is_error() -> None:
+    """A sub-node that is not a dict emits COMPOSITE_SUBGRAPH_INVALID_NODE."""
+    sub_graph = {
+        "nodes": [{"id": "a", "node_type": "agent"}, "not-a-dict"],
+        "edges": [],
+    }
+    result = await _run_for_sub_graph(sub_graph)
+    assert "COMPOSITE_SUBGRAPH_INVALID_NODE" in _codes(result)
+    assert not result.is_valid
+
+
+async def test_non_dict_sub_edge_is_error() -> None:
+    """A sub-edge that is not a dict emits COMPOSITE_SUBGRAPH_INVALID_EDGE."""
+    sub_graph = {
+        "nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],
+        "edges": [{"source": "a", "target": "b"}, "not-a-dict"],
+    }
+    result = await _run_for_sub_graph(sub_graph)
+    assert "COMPOSITE_SUBGRAPH_INVALID_EDGE" in _codes(result)
+    assert not result.is_valid
+
+
+async def test_non_list_sub_edges_skipped() -> None:
+    """A sub-graph whose 'edges' value is not a list is skipped safely."""
+    sub_graph = {
+        "nodes": [{"id": "a", "node_type": "agent"}],
+        "edges": {"source": "a", "target": "a"},
+    }
+    result = await _run_for_sub_graph(sub_graph)
+    assert result.is_valid
+    assert not any(code.startswith("COMPOSITE_SUBGRAPH") for code in _codes(result))
+
+
 async def test_sub_edge_with_gate_config_is_error() -> None:
     sub_graph = {
         "nodes": [{"id": "a", "node_type": "agent"}, {"id": "b", "node_type": "agent"}],

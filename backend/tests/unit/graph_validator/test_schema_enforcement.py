@@ -282,6 +282,52 @@ def test_array_items_match_accepted():
     assert not errors
 
 
+def test_array_items_non_dict_skipped():
+    """Non-dict items entries are skipped safely (no crash, no error)."""
+    gv = GraphValidator()
+    errors = gv._check_schema_fields(
+        {"type": "array", "items": "string"},
+        {"type": "array", "items": {"type": "string"}},
+    )
+    assert not errors
+
+
+# ===================================================================
+# Test 7b — Additional branch paths in _check_schema_fields
+# ===================================================================
+
+
+def test_nullable_output_list_without_null():
+    """A type-array without 'null' reports per-type mismatches but no null error."""
+    gv = GraphValidator()
+    errors = gv._check_schema_fields(
+        {"type": ["string", "integer"]},
+        {"type": "string"},
+    )
+    assert any("type mismatch 'integer'" in e for e in errors)
+    assert not any("null" in e for e in errors)
+
+
+def test_additional_properties_false_no_extra_fields():
+    """additionalProperties: false with no extra output fields → pass."""
+    gv = GraphValidator()
+    errors = gv._check_schema_fields(
+        {"type": "object", "properties": {"name": {"type": "string"}}},
+        {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False},
+    )
+    assert not errors
+
+
+def test_non_dict_properties_skipped():
+    """Nested property maps that are not dicts are skipped safely."""
+    gv = GraphValidator()
+    errors = gv._check_schema_fields(
+        {"type": "object", "properties": []},
+        {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+    )
+    assert not errors
+
+
 # ===================================================================
 # Test 8 — Version pinning
 # ===================================================================
