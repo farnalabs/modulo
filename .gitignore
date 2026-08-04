@@ -77,9 +77,6 @@ stryker.log
 # Agent worktrees (created by improve-codebase / qa-iterate)
 .agents/worktrees/
 
-# Agent skills (installed via junctions, not committed)
-.agents/skills/
-
 # Local — machine-local tooling, scripts, resources.
 local/
 .local/
