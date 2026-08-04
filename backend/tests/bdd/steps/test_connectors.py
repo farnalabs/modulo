@@ -1808,6 +1808,35 @@ def step_slack_connector(ctx):
                     ],
                     next_cursor=None,
                 )
+            case "user_presence":
+                user = q.filters.get("user")
+                if not user:
+                    raise ValueError("Slack user_presence query requires 'user' filter")
+                return ConnectorResult(
+                    records=[{"user": user, "presence": "active", "online": True}],
+                    next_cursor=None,
+                )
+            case "user_profile":
+                user = q.filters.get("user")
+                if not user:
+                    raise ValueError("Slack user_profile query requires 'user' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "user": user,
+                            "profile": {"display_name": "Alice", "email": "alice@example.com"},
+                        }
+                    ],
+                    next_cursor=None,
+                )
+            case "user_lookup":
+                email = q.filters.get("email")
+                if not email:
+                    raise ValueError("Slack user_lookup query requires 'email' filter")
+                return ConnectorResult(
+                    records=[{"id": "U001", "name": "alice", "profile": {"email": email}}],
+                    next_cursor=None,
+                )
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -1826,6 +1855,50 @@ def step_slack_connector(ctx):
                 if not thread_ts:
                     raise ValueError("Missing 'thread_ts' in thread_reply payload")
                 return {"ok": True, "ts": "888777", "channel": channel, "thread_ts": thread_ts}
+            case "ephemeral_message":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in ephemeral_message payload")
+                user = payload.data.get("user")
+                if not user:
+                    raise ValueError("Missing 'user' in ephemeral_message payload")
+                return {"ok": True, "message_ts": "888666", "channel": channel, "user": user}
+            case "message_update":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in message_update payload")
+                ts = payload.data.get("ts")
+                if not ts:
+                    raise ValueError("Missing 'ts' in message_update payload")
+                return {"ok": True, "ts": ts, "channel": channel}
+            case "message_delete":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in message_delete payload")
+                ts = payload.data.get("ts")
+                if not ts:
+                    raise ValueError("Missing 'ts' in message_delete payload")
+                return {"ok": True, "ts": ts, "channel": channel}
+            case "channel_join":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_join payload")
+                return {"ok": True, "channel": {"id": channel, "name": "general", "is_member": True}}
+            case "channel_leave":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_leave payload")
+                return {"ok": True, "channel": channel}
+            case "channel_archive":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_archive payload")
+                return {"ok": True, "channel": channel}
+            case "channel_unarchive":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in channel_unarchive payload")
+                return {"ok": True, "channel": channel}
             case _:
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
@@ -1931,6 +2004,127 @@ def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
     except Exception as exc:
         ctx["write_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with user "{user}"'))
+def step_slack_query_user(resource, user, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"user": user})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with email "{email}"'))
+def step_slack_query_user_email(resource, email, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"email": email})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and user "{user}" and text "{text}"'))
+def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "user": user, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}" and text "{text}"'))
+def step_slack_update_message(resource, channel, ts, text, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "ts": ts, "text": text},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}"'))
+def step_slack_delete_message(resource, channel, ts, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "ts": ts},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}"'))
+def step_slack_channel_write(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no user'))
+def step_slack_ephemeral_no_user(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Hello"})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
 
 
 @then("the records contain channel metadata")
