@@ -9,10 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
+from tests.unit.rate_limiter.helpers import make_settings
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.core.rate_limiter import RateLimiterRegistry
-from modulo.settings import Settings
 
 
 def _make_request(path="/api/v1/runs", headers=None, client=None, scope=None):
@@ -27,16 +27,9 @@ def _make_request(path="/api/v1/runs", headers=None, client=None, scope=None):
 
 @pytest.fixture
 def middleware():
-    settings = Settings(
-        database_url="postgresql+asyncpg://localhost/test",
-        secret_key="a" * 32,
-        fernet_key="a" * 32,
-        modulo_admin_password="testpass",
-        redis_url="",
-    )
     return RateLimitMiddleware(
         app=FastAPI(),
-        settings=settings,
+        settings=make_settings(redis_url=""),
         registry=MagicMock(spec=RateLimiterRegistry),
     )
 
