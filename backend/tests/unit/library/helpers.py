@@ -24,7 +24,7 @@ def _kebab(name: str) -> str:
 KNOWN_AGENTS: set[str] = {
     _kebab(entry["name"])
     for entry in vars(_agent_defs).values()
-    if isinstance(entry, dict) and entry.get("node_type") == "agent"
+    if isinstance(entry, dict) and entry.get("node_type") == "agent" and "name" in entry
 } | {_kebab(COMPLEXITY_REVIEWER["name"])}
 
 VALID_CONNECTOR_TYPES: set[str] = {

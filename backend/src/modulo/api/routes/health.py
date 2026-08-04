@@ -74,8 +74,8 @@ def _check_break_glass() -> CheckResult:
     """ADVISORY break-glass watchdog exposure — never contributes to readiness.
 
     Re-evaluates the URL/secret-presence boot findings against the current
-    settings; the allow-list/role-posture assertions are fatal at boot and do
-    not recur here.
+    settings; the allow-list/role-posture assertions run (non-fatal) inside
+    ``_run_bootstrap`` at boot and do not recur here.
     """
     settings = get_settings()
     findings = break_glass_boot_findings(settings)
