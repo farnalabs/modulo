@@ -82,9 +82,7 @@ class TestComputeExportHash:
         assert len(h) == 64
 
     def test_rows_affect_hash(self) -> None:
-        assert _compute_export_hash({"accounts": [{"id": "u1"}]}) != _compute_export_hash(
-            {"accounts": [{"id": "u2"}]}
-        )
+        assert _compute_export_hash({"accounts": [{"id": "u1"}]}) != _compute_export_hash({"accounts": [{"id": "u2"}]})
 
     def test_order_independent(self) -> None:
         # Rows are sorted by id before hashing, so bundle insertion order must
@@ -313,18 +311,20 @@ class TestResolveAdminAuth:
             assert _resolve_admin_auth(None) == "__admin_secret__"
 
     def test_non_admin_token_rejected(self) -> None:
-        with patch("modulo.cli.migrate.decode_principal") as mock_decode, patch(
-            "modulo.cli.migrate.get_settings"
-        ) as mock_settings:
+        with (
+            patch("modulo.cli.migrate.decode_principal") as mock_decode,
+            patch("modulo.cli.migrate.get_settings") as mock_settings,
+        ):
             mock_decode.return_value = SimpleNamespace(org_role="member", user_id="u1")
             mock_settings.return_value = MagicMock(secret_key="key")
             with pytest.raises(ClickException, match="not an admin"):
                 _resolve_admin_auth("some.jwt.token")
 
     def test_invalid_token_wrapped_as_click_exception(self) -> None:
-        with patch("modulo.cli.migrate.decode_principal", side_effect=RuntimeError("bad token")), patch(
-            "modulo.cli.migrate.get_settings"
-        ) as mock_settings:
+        with (
+            patch("modulo.cli.migrate.decode_principal", side_effect=RuntimeError("bad token")),
+            patch("modulo.cli.migrate.get_settings") as mock_settings,
+        ):
             mock_settings.return_value = MagicMock(secret_key="key")
             with pytest.raises(ClickException, match="Invalid admin JWT"):
                 _resolve_admin_auth("garbage.jwt.token")
@@ -344,9 +344,10 @@ class TestVerifyAdminAccess:
 
     async def test_non_member_raises(self, org_id: uuid.UUID) -> None:
         account = MagicMock(id=uuid.uuid4())
-        with patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account, patch(
-            "modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock
-        ) as mock_membership:
+        with (
+            patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
+            patch("modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
+        ):
             mock_account.return_value = account
             mock_membership.return_value = None
             with pytest.raises(ClickException, match="does not belong"):
@@ -354,9 +355,10 @@ class TestVerifyAdminAccess:
 
     async def test_non_admin_role_raises(self, org_id: uuid.UUID) -> None:
         account = MagicMock(id=uuid.uuid4())
-        with patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account, patch(
-            "modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock
-        ) as mock_membership:
+        with (
+            patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
+            patch("modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
+        ):
             mock_account.return_value = account
             mock_membership.return_value = MagicMock(role="runner")
             with pytest.raises(ClickException, match="admin-level"):
@@ -718,9 +720,7 @@ class TestImportOrgData:
     @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
     @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_skip_strategy_leaves_existing(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
-        existing = _StubMigrateAccount(
-            id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com"
-        )
+        existing = _StubMigrateAccount(id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com")
         mock_find.return_value = existing
         session = self._session()
         counts = await _import_org_data(session, org_id, [dict(self._RECORD)], "skip")
@@ -731,9 +731,7 @@ class TestImportOrgData:
     @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
     @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
     async def test_overwrite_strategy_updates_existing(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
-        existing = _StubMigrateAccount(
-            id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com"
-        )
+        existing = _StubMigrateAccount(id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com")
         mock_find.return_value = existing
         session = self._session()
         counts = await _import_org_data(session, org_id, [dict(self._RECORD)], "overwrite")
@@ -784,9 +782,7 @@ class TestImportOrgData:
     async def test_mutually_exclusive_flags_raise(self, org_id: uuid.UUID) -> None:
         session = self._session()
         with pytest.raises(ClickException, match="mutually exclusive"):
-            await _import_org_data(
-                session, org_id, [dict(self._RECORD)], "skip", pipelines_only=True, users_only=True
-            )
+            await _import_org_data(session, org_id, [dict(self._RECORD)], "skip", pipelines_only=True, users_only=True)
 
 
 # ── Verify command tests ─────────────────────────────────────────────────────
