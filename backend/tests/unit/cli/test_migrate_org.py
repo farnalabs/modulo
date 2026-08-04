@@ -10,10 +10,13 @@ import pytest
 
 from modulo.cli.migrate_org import (
     _compute_hash,
+    _load_bundle,
     _parse_uuid,
+    _remap_fk,
     _serialise,
     _serialise_row,
     _verify_hash,
+    _write_bundle,
     main,
 )
 from tests.unit.cli.conftest import MockModel
@@ -30,6 +33,13 @@ class TestParseUuid:
     def test_invalid_exits(self) -> None:
         with pytest.raises(SystemExit):
             _parse_uuid("not-a-uuid", "test")
+
+    def test_non_string_attribute_error_exits(self) -> None:
+        # uuid.UUID() on a non-string raises AttributeError, which must also be
+        # converted into a SystemExit rather than escaping as a raw traceback.
+        with pytest.raises(SystemExit) as exc:
+            _parse_uuid(12345, "test")
+        assert "Invalid" in str(exc.value)
 
 
 class TestSerialise:
@@ -52,10 +62,17 @@ class TestSerialise:
         assert _serialise(Decimal("10.5")) == "10.5"
 
     def test_serialise_set(self) -> None:
-        assert _serialise({1, 2, 3}) == [1, 2, 3]
+        # Set ordering is not guaranteed by _serialise; compare as sets.
+        assert set(_serialise({1, 2, 3})) == {1, 2, 3}
 
     def test_serialise_none(self) -> None:
         assert _serialise(None) is None
+
+    def test_serialise_passthrough_unknown(self) -> None:
+        assert _serialise("plain") == "plain"
+        assert _serialise(42) == 42
+        assert _serialise([1, "two"]) == [1, "two"]
+        assert _serialise({"nested": {"k": 1}}) == {"nested": {"k": 1}}
 
 
 class TestSerialiseRow:
@@ -71,6 +88,14 @@ class TestSerialiseRow:
         assert result["ts"] == dt.isoformat()
         assert result["blob"] == "01"
         assert result["null_col"] is None
+
+    def test_handles_decimal_and_set(self) -> None:
+        from decimal import Decimal
+
+        row = MockModel(id=uuid.uuid4(), price=Decimal("19.99"), tags={"a", "b"})
+        result = _serialise_row(row)
+        assert result["price"] == "19.99"
+        assert set(result["tags"]) == {"a", "b"}
 
 
 class TestHash:
@@ -97,6 +122,133 @@ class TestHash:
             "organisation": {"id": "o1"},
         }
         assert _verify_hash(bundle) is False
+
+    def test_verify_hash_missing_key(self) -> None:
+        bundle: dict = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01"},
+            "organisation": {"id": "o1"},
+        }
+        assert _verify_hash(bundle) is False
+
+    def test_compute_hash_excludes_existing_hash_key(self) -> None:
+        # The stored hash must never feed back into itself: _compute_hash strips
+        # the "hash" meta key, so recomputing over a bundle that already carries
+        # its hash must yield the identical value.
+        bundle: dict = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01"},
+            "organisation": {"id": "o1"},
+        }
+        without = _compute_hash(bundle)
+        bundle["__meta__"]["hash"] = without
+        assert _compute_hash(bundle) == without
+
+    def test_compute_hash_unicode_stable(self) -> None:
+        bundle: dict = {
+            "__meta__": {"version": 1, "exported_at": "2024-01-01"},
+            "users": [{"id": "u1", "display_name": "caf\u00e9 \u2014 snowman \u2603"}],
+        }
+        assert _compute_hash(bundle) == _compute_hash(bundle)
+        assert len(_compute_hash(bundle)) == 64
+
+
+# ── FK remapping ─────────────────────────────────────────────────────────────
+
+
+class TestRemapFk:
+    def test_remaps_mapped_fk_columns(self) -> None:
+        id_map = {
+            "11111111-1111-1111-1111-111111111111": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        }
+        row = {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "organisation_id": "22222222-2222-2222-2222-222222222222",
+            "owner_team_id": "11111111-1111-1111-1111-111111111111",
+            "created_by": None,
+            "name": "prod",
+        }
+        result = _remap_fk(row, "stages", id_map)
+        assert result["owner_team_id"] == uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        assert result["created_by"] is None
+        assert result["name"] == "prod"
+        assert result["id"] == "11111111-1111-1111-1111-111111111111"
+        # Unmapped values pass through untouched (as raw strings, not UUIDs).
+        assert result["organisation_id"] == "22222222-2222-2222-2222-222222222222"
+
+    def test_unmapped_value_preserved(self) -> None:
+        row = {"id": "u1", "owner_team_id": "99999999-9999-9999-9999-999999999999"}
+        result = _remap_fk(row, "stages", {"11111111-1111-1111-1111-111111111111": "aaa"})
+        assert result["owner_team_id"] == "99999999-9999-9999-9999-999999999999"
+
+    def test_unknown_table_unchanged(self) -> None:
+        row = {"id": "u1", "owner_team_id": "99999999-9999-9999-9999-999999999999"}
+        assert _remap_fk(row, "no_such_table", {}) == row
+
+    def test_original_row_not_mutated(self) -> None:
+        id_map = {"11111111-1111-1111-1111-111111111111": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+        row = {"id": "u1", "owner_team_id": "11111111-1111-1111-1111-111111111111"}
+        _remap_fk(row, "stages", id_map)
+        assert row["owner_team_id"] == "11111111-1111-1111-1111-111111111111"
+
+
+# ── Bundle loading / writing ─────────────────────────────────────────────────
+
+
+class TestLoadBundle:
+    def test_loads_valid_bundle(self, tmp_path: Path) -> None:
+        bundle: dict = {"__meta__": {"version": 1}, "organisation": {"id": "o1"}}
+        bundle["__meta__"]["hash"] = _compute_hash(bundle)
+        path = tmp_path / "bundle.json"
+        path.write_text(json.dumps(bundle))
+        assert _load_bundle(path) == bundle
+
+    def test_missing_file_exits(self, tmp_path: Path) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _load_bundle(tmp_path / "missing.json")
+        assert "not found" in str(exc.value)
+
+    def test_invalid_json_exits(self, tmp_path: Path) -> None:
+        path = tmp_path / "invalid.json"
+        path.write_text("{not valid json")
+        with pytest.raises(SystemExit) as exc:
+            _load_bundle(path)
+        assert "Failed to read import file" in str(exc.value)
+
+    def test_hash_mismatch_exits(self, tmp_path: Path) -> None:
+        path = tmp_path / "tampered.json"
+        path.write_text(json.dumps({"__meta__": {"hash": "wrong"}, "organisation": {"id": "o1"}}))
+        with pytest.raises(SystemExit) as exc:
+            _load_bundle(path)
+        assert "hash verification failed" in str(exc.value).lower()
+
+
+class TestWriteBundle:
+    def test_creates_parent_dirs(self, tmp_path: Path) -> None:
+        out = tmp_path / "nested" / "dir" / "export.json"
+        bundle = {"__meta__": {"version": 1}, "users": []}
+        _write_bundle(bundle, out)
+        assert out.exists()
+        assert json.loads(out.read_text(encoding="utf-8")) == bundle
+
+    def test_refuses_overwrite_without_force(self, tmp_path: Path) -> None:
+        out = tmp_path / "exists.json"
+        out.write_text("old")
+        with pytest.raises(SystemExit) as exc:
+            _write_bundle({"a": 1}, out)
+        assert "already exists" in str(exc.value)
+        assert out.read_text(encoding="utf-8") == "old"
+
+    def test_overwrites_with_force(self, tmp_path: Path) -> None:
+        out = tmp_path / "exists.json"
+        out.write_text("old")
+        _write_bundle({"a": 1}, out, force=True)
+        assert json.loads(out.read_text(encoding="utf-8")) == {"a": 1}
+
+    def test_existing_directory_path_rejected(self, tmp_path: Path) -> None:
+        # A path that already exists (here, as a directory) must not be silently
+        # overwritten without --force.
+        with pytest.raises(SystemExit) as exc:
+            _write_bundle({"a": 1}, tmp_path)
+        assert "already exists" in str(exc.value)
 
 
 # ── Export command tests ────────────────────────────────────────────────────

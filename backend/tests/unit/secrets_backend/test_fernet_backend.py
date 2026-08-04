@@ -3,6 +3,7 @@
 import asyncio
 import binascii
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,73 +18,47 @@ _SECRET_VALUE = "my-secret-value"
 _ORG_ID = uuid.UUID(int=42)
 
 
-def _set_org_id(session: MagicMock) -> None:
-    """Patch session.execute so that a current_setting query returns _ORG_ID."""
-    real_execute = session.execute
+def _make_session(*, row: Any = None, org_id: uuid.UUID | None = _ORG_ID) -> MagicMock:
+    """Build a mock async session whose execute() answers current_setting queries.
+
+    Non-org queries return *row* from scalar_one_or_none() (None by default).
+    *org_id* is returned for current_setting queries; pass None to simulate a
+    Postgres backend with no RLS context set.
+    """
+    session = MagicMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
 
     async def mock_execute(stmt, *args, **kwargs):
-        compiled = str(stmt)
         result = MagicMock()
-        if "current_setting" in compiled:
-            result.scalar.return_value = str(_ORG_ID)
+        if "current_setting" in str(stmt):
+            result.scalar.return_value = str(org_id) if org_id is not None else None
         else:
-            return await real_execute(stmt, *args, **kwargs)
+            result.scalar_one_or_none.return_value = row
         return result
 
     session.execute = AsyncMock(side_effect=mock_execute)
-
-
-@pytest.fixture
-def mock_session():
-    session = MagicMock()
-    session.add = MagicMock()
-    session.delete = AsyncMock()
-    session.flush = AsyncMock()
-
-    async def default_execute(stmt, *args, **kwargs):
-        result = MagicMock()
-        if "current_setting" in str(stmt):
-            result.scalar.return_value = str(_ORG_ID)
-        else:
-            result.scalar_one_or_none.return_value = MagicMock()
-        return result
-
-    session.execute = AsyncMock(side_effect=default_execute)
     return session
 
 
+@pytest.fixture
+def mock_session() -> MagicMock:
+    return _make_session()
+
+
 class TestGetSecret:
-    async def test_returns_decrypted_value(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        encrypted = backend._fernet.encrypt(_SECRET_VALUE.encode())
+    async def test_returns_decrypted_value(self):
+        encrypted = Fernet(_KEY.encode()).encrypt(_SECRET_VALUE.encode())
         row = MagicMock(spec=Secret)
         row.encrypted_value = encrypted
 
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = row
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session(row=row))
 
         value = await backend.get_secret("some-key")
         assert value == _SECRET_VALUE, f"Expected {_SECRET_VALUE}, got {value}"
 
-    async def test_unknown_key_raises(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = None
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+    async def test_unknown_key_raises(self):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session())
 
         with pytest.raises(KeyError, match="unknown-key"):
             await backend.get_secret("unknown-key")
@@ -94,44 +69,24 @@ class TestGetSecret:
         with pytest.raises(RuntimeError, match="no DB session"):
             await backend.get_secret("some-key")
 
-    async def test_corrupted_data_raises_value_error(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+    async def test_corrupted_data_raises_value_error(self):
         row = MagicMock(spec=Secret)
         row.encrypted_value = b"\x00\x00\x00\x00"
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = row
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session(row=row))
 
         with pytest.raises(ValueError, match="Failed to decrypt secret"):
             await backend.get_secret("corrupted-key")
 
-    async def test_none_encrypted_value_raises_value_error(self, mock_session):
+    async def test_none_encrypted_value_raises_value_error(self):
         """A NULL encrypted_value must raise ValueError, not a raw TypeError."""
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
         row = MagicMock(spec=Secret)
         row.encrypted_value = None
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = row
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session(row=row))
 
         with pytest.raises(ValueError, match="Failed to decrypt secret"):
             await backend.get_secret("null-value-key")
 
-    async def test_old_key_fallback_decrypts(self, mock_session):
+    async def test_old_key_fallback_decrypts(self):
         """Rotation: secrets encrypted with old_key must decrypt via fallback."""
         old_key = Fernet.generate_key().decode()
         old_fernet = Fernet(old_key.encode())
@@ -139,67 +94,54 @@ class TestGetSecret:
         row = MagicMock(spec=Secret)
         row.encrypted_value = encrypted
 
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = row
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
-
-        backend = FernetSecretsBackend(fernet_key=_KEY, old_key=old_key, session=mock_session)
+        backend = FernetSecretsBackend(fernet_key=_KEY, old_key=old_key, session=_make_session(row=row))
         value = await backend.get_secret("rotated-key")
         assert value == _SECRET_VALUE
 
+    async def test_both_keys_fail_raises_value_error(self):
+        """When neither the current nor the rotation key can decrypt, ValueError is raised."""
+        other_key = Fernet.generate_key().decode()
+        encrypted = Fernet(other_key.encode()).encrypt(_SECRET_VALUE.encode())
+        row = MagicMock(spec=Secret)
+        row.encrypted_value = encrypted
+
+        backend = FernetSecretsBackend(
+            fernet_key=_KEY,
+            old_key=Fernet.generate_key().decode(),
+            session=_make_session(row=row),
+        )
+        with pytest.raises(ValueError, match="Failed to decrypt secret"):
+            await backend.get_secret("unreadable-key")
+
 
 class TestSetSecret:
-    async def test_creates_new_row_via_upsert(self, mock_session):
+    async def test_creates_new_row_via_upsert(self):
         """No existing row -> a new Secret is added with the encrypted value."""
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = None
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        session = _make_session()
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
         await backend.set_secret("new-key", _SECRET_VALUE)
 
-        mock_session.flush.assert_called_once()
-        mock_session.add.assert_called_once()
-        added = mock_session.add.call_args[0][0]
+        session.flush.assert_called_once()
+        session.add.assert_called_once()
+        added = session.add.call_args[0][0]
         assert added.key == "new-key"
         assert added.organisation_id == _ORG_ID
         assert backend._fernet.decrypt(added.encrypted_value).decode() == _SECRET_VALUE
 
-    async def test_updates_existing_row_via_upsert(self, mock_session):
+    async def test_updates_existing_row_via_upsert(self):
         """An existing row is re-encrypted in place — no new row is added."""
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
         existing = MagicMock(spec=Secret)
         existing.key = "existing-key"
         existing.organisation_id = _ORG_ID
         existing.encrypted_value = b"stale-ciphertext"
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = existing
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        session = _make_session(row=existing)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
         await backend.set_secret("existing-key", _SECRET_VALUE)
 
-        mock_session.flush.assert_called_once()
-        mock_session.add.assert_not_called()
+        session.flush.assert_called_once()
+        session.add.assert_not_called()
         assert existing.encrypted_value != b"stale-ciphertext"
         assert backend._fernet.decrypt(existing.encrypted_value).decode() == _SECRET_VALUE
 
@@ -219,19 +161,15 @@ class TestSetSecret:
         with pytest.raises((ValueError, binascii.Error)):
             FernetSecretsBackend(fernet_key="not-a-valid-base64-key")
 
-    async def test_no_rls_context_raises(self, mock_session):
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            compiled = str(stmt)
-            if "current_setting" in compiled:
-                result.scalar.return_value = None
-            else:
-                result.scalar_one_or_none.return_value = None
-            return result
+    async def test_invalid_old_key_at_construction_raises(self):
+        """An invalid rotation key must fail fast at construction, like the primary key."""
+        with pytest.raises((ValueError, binascii.Error)):
+            FernetSecretsBackend(fernet_key=_KEY, old_key="not-a-valid-base64-key")
 
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+    async def test_no_rls_context_raises(self):
+        session = _make_session(org_id=None)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
         with pytest.raises(RuntimeError, match="RLS organisation context"):
             await backend.set_secret("new-key", _SECRET_VALUE)
 
@@ -244,23 +182,13 @@ class TestDeleteSecret:
 
         mock_session.flush.assert_called_once()
 
-    async def test_noop_when_missing(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            compiled = str(stmt)
-            if "current_setting" in compiled:
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = None
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+    async def test_noop_when_missing(self):
+        session = _make_session()
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
         await backend.delete_secret("missing-key")
 
-        mock_session.flush.assert_called_once()
+        session.flush.assert_called_once()
 
     async def test_no_session_raises_runtime_error(self):
         backend = FernetSecretsBackend(fernet_key=_KEY)
@@ -281,18 +209,7 @@ class TestSetSession:
 class TestSetSecretTOCTOU:
     @staticmethod
     def _session_with_flush(flush: AsyncMock) -> MagicMock:
-        session = MagicMock()
-        session.add = MagicMock()
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = None
-            return result
-
-        session.execute = AsyncMock(side_effect=mock_execute)
+        session = _make_session()
         session.flush = flush
         return session
 
@@ -368,9 +285,7 @@ class TestOrgIdResolution:
 
 class TestDeleteSecretErrors:
     async def test_error_raises(self):
-        session = MagicMock()
-        session.execute = AsyncMock()
-        _set_org_id(session)
+        session = _make_session()
         session.flush = AsyncMock(side_effect=RuntimeError("db down"))
         backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
@@ -378,9 +293,7 @@ class TestDeleteSecretErrors:
             await backend.delete_secret("some-key")
 
     async def test_cancelled_error_propagates(self):
-        session = MagicMock()
-        session.execute = AsyncMock()
-        _set_org_id(session)
+        session = _make_session()
         session.flush = AsyncMock(side_effect=asyncio.CancelledError())
         backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
@@ -389,9 +302,8 @@ class TestDeleteSecretErrors:
 
 
 class TestGetSecretOrgScoping:
-    async def test_filters_by_org_id(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        _set_org_id(mock_session)
+    async def test_filters_by_org_id(self):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session())
 
         row = MagicMock(spec=Secret)
         row.encrypted_value = backend._fernet.encrypt(_SECRET_VALUE.encode())
@@ -407,7 +319,7 @@ class TestGetSecretOrgScoping:
                 result.scalar_one_or_none.return_value = row
             return result
 
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        backend._session.execute = AsyncMock(side_effect=mock_execute)
 
         value = await backend.get_secret("my-key")
         assert value == _SECRET_VALUE, f"Expected {_SECRET_VALUE}, got {value}"
@@ -416,29 +328,17 @@ class TestGetSecretOrgScoping:
         get_secret_call = [c for c in execute_calls if "organisation_id" in str(c[0])]
         assert len(get_secret_call) > 0, "Expected organisation_id filter in get_secret query"
 
-    async def test_wrong_org_raises_key_error(self, mock_session):
+    async def test_wrong_org_raises_key_error(self):
         """get_secret with key that exists but under a different org should raise KeyError."""
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        _set_org_id(mock_session)
-
-        async def mock_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = None
-            return result
-
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session())
 
         with pytest.raises(KeyError):
             await backend.get_secret("key-from-other-org")
 
 
 class TestDeleteSecretOrgScoping:
-    async def test_filters_by_org_id(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        _set_org_id(mock_session)
+    async def test_filters_by_org_id(self):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session())
 
         execute_calls = []
 
@@ -451,7 +351,7 @@ class TestDeleteSecretOrgScoping:
                 result.scalar_one_or_none.return_value = MagicMock()
             return result
 
-        mock_session.execute = AsyncMock(side_effect=mock_execute)
+        backend._session.execute = AsyncMock(side_effect=mock_execute)
 
         await backend.delete_secret("my-key")
 
@@ -461,17 +361,17 @@ class TestDeleteSecretOrgScoping:
 
 
 class TestOrgIdCaching:
-    async def test_read_org_id_from_session_caches(self, mock_session):
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+    async def test_read_org_id_from_session_caches(self):
+        session = _make_session()
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
-        _set_org_id(mock_session)
         await backend.set_secret("key1", "val1")
 
-        call_count = mock_session.execute.call_count
+        call_count = session.execute.call_count
         await backend.set_secret("key2", "val2")
 
-        assert mock_session.execute.call_count == call_count + 1, (
-            f"Expected {call_count + 1} execute calls, got {mock_session.execute.call_count}"
+        assert session.execute.call_count == call_count + 1, (
+            f"Expected {call_count + 1} execute calls, got {session.execute.call_count}"
         )
 
 
@@ -505,27 +405,14 @@ class TestDBSessionTimeout:
 
 
 class TestSetSessionResetsCache:
-    async def test_set_session_clears_cached_org_id(self, mock_session):
+    async def test_set_session_clears_cached_org_id(self):
         """set_session must drop the cached org id so it is re-read from the new session."""
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
-        _set_org_id(mock_session)
+        session = _make_session()
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
         await backend.set_secret("key1", "val1")
         assert backend._org_id == _ORG_ID
 
-        new_session = MagicMock()
-        new_session.add = MagicMock()
-        new_session.flush = AsyncMock()
-
-        async def new_execute(stmt, *args, **kwargs):
-            result = MagicMock()
-            if "current_setting" in str(stmt):
-                result.scalar.return_value = str(_ORG_ID)
-            else:
-                result.scalar_one_or_none.return_value = None
-            return result
-
-        new_session.execute = AsyncMock(side_effect=new_execute)
-
+        new_session = _make_session()
         backend.set_session(new_session)
         assert backend._session is new_session
         assert backend._org_id is None, "set_session must reset the cached organisation id"

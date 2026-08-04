@@ -93,3 +93,53 @@ Feature: Slack Connector
     Given a Slack connector with valid bot token
     When I write resource "thread_reply" with channel "C001" and thread_ts "123456.000001" and text "A reply"
     Then the write succeeds
+
+  Scenario: Get user presence status
+    Given a Slack connector with valid bot token
+    When I query resource "user_presence" with user "U001"
+    Then the result has records
+
+  Scenario: Get user profile
+    Given a Slack connector with valid bot token
+    When I query resource "user_profile" with user "U001"
+    Then the result has records
+
+  Scenario: Lookup user by email
+    Given a Slack connector with valid bot token
+    When I query resource "user_lookup" with email "alice@example.com"
+    Then the result has records
+
+  Scenario: Post an ephemeral message
+    Given a Slack connector with valid bot token
+    When I write resource "ephemeral_message" with channel "C001" and user "U001" and text "Private note"
+    Then the write succeeds
+
+  Scenario: Update a message
+    Given a Slack connector with valid bot token
+    When I write resource "message_update" with channel "C001" and ts "123456.000001" and text "Edited"
+    Then the write succeeds
+
+  Scenario: Delete a message
+    Given a Slack connector with valid bot token
+    When I write resource "message_delete" with channel "C001" and ts "123456.000001"
+    Then the write succeeds
+
+  Scenario: Join a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_join" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Archive a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_archive" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Unarchive a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_unarchive" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Ephemeral message without user raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "ephemeral_message" with channel "C001" but no user
+    Then the write is an error

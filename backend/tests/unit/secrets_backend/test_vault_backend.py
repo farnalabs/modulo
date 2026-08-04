@@ -69,6 +69,15 @@ class TestVaultSecretsBackend:
         with pytest.raises(KeyError):
             await backend.get_secret("empty-key")
 
+    async def test_get_secret_non_string_value_coerced(self, mock_hvac: MagicMock) -> None:
+        """A non-string stored value is coerced with str() rather than rejected."""
+        backend = _make_backend(mock_hvac)
+        backend._client.secrets.kv.v2.read_secret_version.return_value = {"data": {"data": {"value": 123}}}
+
+        value = await backend.get_secret("numeric-key")
+
+        assert value == "123"
+
     async def test_set_secret_writes_to_vault(self, mock_hvac: MagicMock) -> None:
         backend = _make_backend(mock_hvac)
 

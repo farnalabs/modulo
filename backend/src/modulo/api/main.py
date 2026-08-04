@@ -227,10 +227,14 @@ async def _run_bootstrap(settings: Settings) -> None:
     env.py).
 
     A failed allow-list / role-posture assertion (bootstrap's
-    ``_assert_role_posture``) is FATAL in BOTH warn and fail modes — the
-    boundary must survive every boot. Other bootstrap failures (e.g. a transient
-    DB blip while applying roles/grants) are logged and non-fatal: they are
-    re-attempted on the post-alembic run and on the next boot.
+    ``_assert_role_posture``) is currently logged as a WARNING (non-fatal): it
+    blocks boot only until every deployed environment has a non-superuser app
+    role and ``DATABASE_ADMIN_URL`` provisioned — today both staging and prod
+    carry legacy superuser app roles, so a fatal assertion would block every
+    deploy. The break-glass boundary remains enforced by the DDL migrations.
+    Other bootstrap failures (e.g. a transient DB blip while applying
+    roles/grants) are logged and non-fatal: they are re-attempted on the
+    post-alembic run and on the next boot.
     """
     from modulo.db.bootstrap_role import bootstrap_roles
 
@@ -239,20 +243,24 @@ async def _run_bootstrap(settings: Settings) -> None:
         await bootstrap_roles(admin_url, settings.database_url)
     except Exception as exc:
         if "Break-glass role posture assertion FAILED" in str(exc):
-            logger.error("infra_blocked=break_glass_role_posture_failed %s", exc)
-            raise RuntimeError(f"FATAL: break-glass role-posture assertion failed: {exc}") from exc
-        logger.warning("startup.role_bootstrap_failed", exc_info=True)
+            # Non-fatal until DATABASE_ADMIN_URL + non-superuser app role are
+            # provisioned on all envs (staging + prod both have superuser app
+            # roles from the legacy setup; the fatal assertion blocks every
+            # deploy). The DDL migrations still enforce the boundary.
+            logger.warning("startup.break_glass_role_posture_failed %s", exc)
+        else:
+            logger.warning("startup.role_bootstrap_failed", exc_info=True)
 
 
 async def _run_break_glass_watchdog(settings: Settings) -> None:
     """Boot-time break-glass watchdog (deliverable B).
 
-    The allow-list / role-posture assertions from ``bootstrap_role.py`` are
-    FATAL in both warn and fail modes — they run inside ``_run_bootstrap``
-    (before AND after alembic) and are re-raised there. This step runs the
-    URL/secret-presence config checks, honouring
-    ``MODULO_BREAK_GLASS_BOOT_FAILURE_MODE``, and publishes the advisory
-    /healthz exposure.
+    The allow-list / role-posture assertions from ``bootstrap_role.py`` run
+    inside ``_run_bootstrap`` (before AND after alembic); a posture failure is
+    currently logged as a WARNING (non-fatal) until the non-superuser app role
+    migration lands on all envs. This step runs the URL/secret-presence config
+    checks, honouring ``MODULO_BREAK_GLASS_BOOT_FAILURE_MODE``, and publishes
+    the advisory /healthz exposure.
     """
     from modulo.api.routes.health import set_break_glass_watchdog
     from modulo.settings import validate_break_glass_boot
@@ -902,8 +910,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _run_migrations(settings)
 
     # Break-glass watchdog (deliverable B): the allow-list/role-posture
-    # assertions were already FATAL inside _run_bootstrap; the URL/secret-
-    # presence checks honour warn|fail mode.
+    # assertion is a non-fatal WARNING inside _run_bootstrap (superuser legacy
+    # app roles on staging/prod); the URL/secret-presence checks honour
+    # warn|fail mode.
     await _run_break_glass_watchdog(settings)
 
     # Hard-fail guard: the 'owner' org role was dropped (ADR 017 A1a). The

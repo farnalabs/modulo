@@ -89,9 +89,13 @@ echo "=== Celery removed (PR C cutover) — SAQ system worker owns the scheduler
 
 # ---------------------------------------------------------------------------
 # SAQ workers — restart/backoff wrapper + max-restart guard + PID files.
-# argv markers via `exec -a` (kernel argv immutable; python -m only overwrites
-# sys.argv[0], not /proc/<pid>/cmdline). The `( exec -a ... )` subshell lets
-# the wrapper survive to restart while argv[0] is still the marker.
+# The `( ... )` subshell lets the wrapper survive to restart. DO NOT add
+# `exec -a <marker>` here: rewriting argv[0] makes Python 3.12's getpath unable
+# to resolve its executable (sys.executable becomes empty), so the interpreter
+# falls back to the system prefix and loses the venv site-packages — the worker
+# then dies at import with `No module named 'saq'` / `No module named 'redis'`.
+# Launch with a plain `python3` so the venv prefix resolves. (Regression found
+# on the 2026-08-04 staging deploy.)
 # ---------------------------------------------------------------------------
 echo "=== Starting SAQ runs worker (queue: runs) ==="
 RUNS_RESTARTS=0
@@ -99,7 +103,7 @@ SAQ_RUNS_PID=""
 start_saq_runs() {
     while true; do
         RUNS_START=$(date +%s)
-        ( exec -a runs-worker python3 -m saq modulo.core.saq_worker.runs_settings ) &
+        ( python3 -m saq modulo.core.saq_worker.runs_settings ) &
         SAQ_RUNS_PID=$!
         echo $SAQ_RUNS_PID > /tmp/run-worker.pid
         wait $SAQ_RUNS_PID
@@ -133,7 +137,7 @@ start_saq_system() {
         # for BasicAuth. The plain `python -m saq ... --web` CLI binds 0.0.0.0
         # and applies NO auth — never use it. Runs the system worker (crons +
         # functions) and the web app in the same process.
-        ( exec -a system-worker python3 -m modulo.core.saq_worker ) &
+        ( python3 -m modulo.core.saq_worker ) &
         SAQ_SYSTEM_PID=$!
         echo $SAQ_SYSTEM_PID > /tmp/system-worker.pid
         wait $SAQ_SYSTEM_PID
