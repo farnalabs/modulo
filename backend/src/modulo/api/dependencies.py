@@ -612,7 +612,7 @@ async def get_current_tenant_user_optional(
     break-glass account — live or denied — resolving through this optional path
     is treated as deny and returns ``None``, so webhook routes never grant a
     break-glass account org context or a permission bypass. The account is
-    loaded by PK (``session.get``); if it cannot be read the path folds to
+    loaded by PK (``session.get``); a read failure (exception) folds to
     ``None`` (a DB blip must not fail-open a break-glass principal).
 
     The login-route create_family mint for break-glass logins is DELIBERATELY
