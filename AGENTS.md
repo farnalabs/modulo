@@ -119,17 +119,9 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Task Tracker
 
-The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:
+The authoritative task list lives in **Linear** (farnalabs-modulo workspace, FAR team); delivery phases are tracked as Linear projects/epics. The retired `delivery-plan.json` tracker and its `task.ps1` script are no longer authoritative — do not use them to drive delivery.
 
-```powershell
-../devtools/harness/tools/task.ps1 list                          # show all tasks and current status
-../devtools/harness/tools/task.ps1 show <id>                     # full detail + history for one task
-../devtools/harness/tools/task.ps1 start <id>                    # begin a task (rejects if deps unmet)
-../devtools/harness/tools/task.ps1 complete <id> -Evidence "..."  # mark done with test evidence
-../devtools/harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
-```
-
-The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0–9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
+Run `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`. The `deliver` skill and other skills query Linear through the local MCP server (`Repos/devtools/harness/mcp/linear/server.py`) using tools such as `list_projects`, `list_ready_issues`, `update_ticket_status`, `add_comment`, `create_ticket`, `get_ticket`, `search_tickets`, and `list_states`.
 
 ---
 
