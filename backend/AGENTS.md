@@ -284,3 +284,39 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 ### Pipeline timeout should account for sandbox provisioning + opencode execution time
 
 - Setting `timeout_seconds` on a pipeline node that runs a sandbox agent must account for: (1) E2B sandbox provisioning (~5-15s), (2) dependency installation in the sandbox (~30-120s for pip/uv sync), (3) the opencode agent's own execution loop (varies by task complexity — simple lint fixes take 60-180s, complex rebase + fix cycles take 300-900s), and (4) output collection and sandbox teardown (~5-10s). The recommended minimum for code-generation tasks is 1200s (20 min). Values below 60s are flagged by `GraphValidator._check_sandbox_agent_config` as too short.
+
+
+### FK checks to a table fail with "permission denied for schema public" for every role = corrupt table catalog
+
+On 2026-08-04 the production DB was recreated and the `accounts` table came out
+with a corrupt catalog state: EVERY foreign key referencing `accounts` failed
+with `permission denied for schema public` for EVERY role -- including the
+`postgres` superuser -- while FKs to other tables (e.g. `organisations`) worked
+fine. This broke login and most inserts.
+
+**Diagnostic signature:** grants look correct, direct SELECTs on `accounts`
+work, but any child-table INSERT fails on the FK check with the schema-permission
+error. The quick test is a scratch-table probe: create a TEMP table with an FK
+to `accounts`, INSERT a valid account id -- on the corrupt catalog the FK
+operation fails no matter which role connects.
+
+**What does NOT fix it:** REINDEX TABLE accounts, VACUUM (FULL/ANALYZE)
+accounts, dropping/re-adding the FK constraint, and disabling the tenant
+trigger all leave the corruption in place.
+
+**Root cause:** the table's pg_class/pg_namespace catalog entry was corrupt
+after the DB recreate, so FK checks that must resolve the referenced table
+failed with a schema-permission error regardless of the role.
+
+**Fix:** rebuild the table so it gets a fresh catalog entry -- CREATE TABLE
+accounts_new (LIKE accounts INCLUDING ALL) -> INSERT INTO accounts_new SELECT
+* FROM accounts -> DROP TABLE accounts -> ALTER TABLE accounts_new RENAME TO
+accounts -> re-apply grants/ownership -> re-add all 46 FK constraints. This is
+scripted as a repeatable, version-controlled tool in
+`backend/scripts/repair_accounts_fks.py` (`check` / `rebuild-accounts` /
+`add-fks` / `repair`), including the orphan-row guard (never auto-delete data).
+`check` returns non-zero on any drift between the tool's `ACCOUNTS_FKS`
+snapshot and the live catalog, so a stale snapshot fails loudly. Run the
+rebuild with the app drained / writes quiesced: the pre-checks and the rebuild
+transaction are separate windows, so a concurrent INSERT between them would be
+lost.
