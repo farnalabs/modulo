@@ -22,6 +22,8 @@ def test_no_bare_session_rollback():
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError, OSError):
             continue
+        # Single-pass membership set: nodes that appear inside an ExceptHandler.
+        inside_except = _nodes_within_except_handlers(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Expr):
                 continue
@@ -35,9 +37,7 @@ def test_no_bare_session_rollback():
                 continue
             if func.attr != "rollback":
                 continue
-            # Check if we're inside an exception handler
-            parent = _find_parent_except_handler(tree, node)
-            if parent is not None:
+            if node in inside_except:
                 continue
             violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  {ast.unparse(node.value)[:80]}")
     assert not violations, (
@@ -46,10 +46,14 @@ def test_no_bare_session_rollback():
     )
 
 
-def _find_parent_except_handler(tree, node):
-    for parent_node in ast.walk(tree):
-        if isinstance(parent_node, ast.ExceptHandler):
-            for child in ast.walk(parent_node):
-                if child is node:
-                    return parent_node
-    return None
+def _nodes_within_except_handlers(tree: ast.AST) -> set[ast.AST]:
+    """Return every node (by identity) that appears inside an ExceptHandler.
+
+    Computed once per file so the per-rollback lookup is O(1) instead of
+    repeatedly walking the whole tree for every ``.rollback()`` call.
+    """
+    contained: set[ast.AST] = set()
+    for parent in ast.walk(tree):
+        if isinstance(parent, ast.ExceptHandler):
+            contained.update(ast.walk(parent))
+    return contained
