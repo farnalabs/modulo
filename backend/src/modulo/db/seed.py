@@ -73,4 +73,4 @@ async def seed_system_schemas(session: AsyncSession, org_id: uuid.UUID, account_
             published=True,
         )
         session.add(schema_version)
-        _log.info("seed.system_schema_created", extra={"org_id": str(org_id), "name": spec["name"]})
+        _log.info("seed.system_schema_created", extra={"org_id": str(org_id), "schema_name": spec["name"]})
