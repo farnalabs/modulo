@@ -1837,6 +1837,17 @@ def step_slack_connector(ctx):
                     records=[{"id": "U001", "name": "alice", "profile": {"email": email}}],
                     next_cursor=None,
                 )
+            case "message_search":
+                query = q.filters.get("query")
+                if not query:
+                    raise ValueError("Slack message_search query requires 'query' filter")
+                return ConnectorResult(
+                    records=[
+                        {"ts": "123456", "text": f"match for {query}", "user": "U001", "channel": {"id": "C001"}},
+                        {"ts": "123457", "text": "another match", "user": "U002", "channel": {"id": "C002"}},
+                    ],
+                    next_cursor=None,
+                )
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -1899,6 +1910,21 @@ def step_slack_connector(ctx):
                 if not channel:
                     raise ValueError("Missing 'channel' in channel_unarchive payload")
                 return {"ok": True, "channel": channel}
+            case "schedule_message":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in schedule_message payload")
+                post_at = payload.data.get("post_at")
+                if not post_at:
+                    raise ValueError("Missing 'post_at' in schedule_message payload")
+                return {"ok": True, "channel": channel, "post_at": str(post_at), "scheduled_message_id": "Q1234"}
+            case "file_upload":
+                filename = payload.data.get("filename")
+                if not filename:
+                    raise ValueError("Missing 'filename' in file_upload payload")
+                if payload.data.get("content") is None and payload.data.get("file") is None:
+                    raise ValueError("file_upload payload requires 'content' or 'file'")
+                return {"ok": True, "file": {"id": "F1234", "name": filename, "permalink": "https://.../file"}}
             case _:
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
@@ -2036,6 +2062,108 @@ def step_slack_query_user_email(resource, email, ctx):
     except Exception as exc:
         ctx["query_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" with query "{query}"'))
+def step_slack_query_message_search(resource, query, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={"query": query})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query resource "{resource}" without a query filter'))
+def step_slack_query_message_search_no_query(resource, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource=resource, filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and post_at "{post_at}"'))
+def step_slack_schedule_message(resource, channel, post_at, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "post_at": post_at, "text": "Scheduled"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no post_at'))
+def step_slack_schedule_message_no_post_at(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Scheduled"})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with filename "{filename}" and content "{content}"'))
+def step_slack_file_upload(resource, filename, content, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"filename": filename, "content": content, "channels": "C001"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with filename "{filename}" but no content'))
+def step_slack_file_upload_no_content(resource, filename, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"filename": filename})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
 
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and user "{user}" and text "{text}"'))
