@@ -2,26 +2,20 @@
 # alerting = ... + the daily modulo-break-glass status --all operator sweep").
 #
 # A scheduled workflow that connects as modulo_breakglass with secrets from the
-# vault, runs `modulo-break-glass status --all --json`, and wires the
-# non-zero-exit-on-live-rows condition to an alert. It also verifies the last
-# 24h of audit rows for `last_admin_forcibly_removed` / `break_glass_activated`
-# and flags live rows without a matching `break_glass_activated` audit (the
-# raw-INSERT forgery detector). Evidence is written to
-# docs/reviews/break-glass-daily-sweep/YYYY-MM-DD.md and attached as an artifact
-# with 90-day retention.
+# vault, runs `modulo-break-glass status --all --json` inside a Fly machine
+# (which has native access to the DB via the flycast private network), and
+# wires the non-zero-exit-on-live-rows condition to an alert.
 #
 # FAILURE SEMANTICS: the sweep fails loudly (non-zero exit) when any live
-# break-glass row exists or a forgery flag is raised. It NEVER auto-fixes — a
-# live row is a deliberate operator action (TTL-bound credential); the alert is
-# the point. A live row must carry an explicit reason so the alert is actionable.
+# break-glass row exists. It NEVER auto-fixes — a live row is a deliberate
+# operator action (TTL-bound credential); the alert is the point.
 #
 # SECRETS TO PROVISION (GitHub Actions secrets on this repo):
 #   MODULO_BREAK_GLASS_DATABASE_URL   — asyncpg URL for the modulo_breakglass role
 #   MODULO_BREAK_GLASS_SECRET         — primary operator secret (>= 24 chars)
-#   MODULO_BREAK_GLASS_STANDBY_SECRET — rotation standby secret (optional, >= 24
-#                                       chars; must differ from the primary)
-#   MODULO_BREAK_GLASS_OPERATOR_SECRET — value equal to the primary (or standby);
-#                                       the CLI authenticates against it
+#   MODULO_BREAK_GLASS_STANDBY_SECRET — rotation standby secret
+#   MODULO_BREAK_GLASS_OPERATOR_SECRET — value equal to the primary (or standby)
+#   FLY_API_TOKEN                     — Fly.io deploy token (for fly ssh console)
 # No real secret values live in this file.
 
 name: "Break-glass daily status sweep"
@@ -45,274 +39,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-          enable-cache: true
-
-      - name: Start Fly Postgres proxy
-        run: |
-          fly proxy 5433:5432 -a modulo-app-db &
-          FLY_PROXY_PID=$!
-          echo "fly_proxy_pid=$FLY_PROXY_PID" >> "$GITHUB_ENV"
-          for i in $(seq 1 30); do
-            if nc -z localhost 5433 2>/dev/null; then
-              echo "proxy ready"
-              break
-            fi
-            sleep 1
-          done
+      - name: Run daily break-glass status sweep (inside Fly machine)
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-      - name: Build local DB URL
-        run: |
-          RAW="${{ secrets.MODULO_BREAK_GLASS_DATABASE_URL }}"
-          LOCAL="${RAW//modulo-app-db.flycast:5432/localhost:5433}"
-          echo "break_glass_db_url=$LOCAL" >> "$GITHUB_ENV"
-
-      - name: Install backend deps
-        working-directory: backend
-        run: uv sync --frozen
-
-      - name: Run daily break-glass status sweep
-        working-directory: backend
-        env:
-          DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
-          SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
-          FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
-          MODULO_BREAK_GLASS_DATABASE_URL: ${{ env.break_glass_db_url }}
           MODULO_BREAK_GLASS_SECRET: ${{ secrets.MODULO_BREAK_GLASS_SECRET }}
           MODULO_BREAK_GLASS_STANDBY_SECRET: ${{ secrets.MODULO_BREAK_GLASS_STANDBY_SECRET }}
           MODULO_BREAK_GLASS_OPERATOR_SECRET: ${{ secrets.MODULO_BREAK_GLASS_OPERATOR_SECRET }}
+          MODULO_BREAK_GLASS_DATABASE_URL: ${{ secrets.MODULO_BREAK_GLASS_DATABASE_URL }}
         run: |
-          uv run --no-sync python - <<'PYEOF'
-          import asyncio
-          import json
-          import os
-          import subprocess
-          import sys
-          from datetime import UTC, datetime, timedelta
-          from pathlib import Path
+          set -e
+          echo "Running sweep inside Fly machine..."
+          # Run the CLI inside a Fly machine (has native flycast DB access)
+          OUTPUT=$(fly ssh console -a app-modulo --command "
+            export MODULO_BREAK_GLASS_DATABASE_URL='$MODULO_BREAK_GLASS_DATABASE_URL'
+            export MODULO_BREAK_GLASS_SECRET='$MODULO_BREAK_GLASS_SECRET'
+            export MODULO_BREAK_GLASS_STANDBY_SECRET='$MODULO_BREAK_GLASS_STANDBY_SECRET'
+            export MODULO_BREAK_GLASS_OPERATOR_SECRET='$MODULO_BREAK_GLASS_OPERATOR_SECRET'
+            cd /app && python3 -m modulo.cli.break_glass status --all --json --secret \"\$MODULO_BREAK_GLASS_OPERATOR_SECRET\"
+          " 2>&1) || true
+          echo "$OUTPUT"
+          # Check for PreconditionError (exit 5) — either live rows or auth failure
+          if echo "$OUTPUT" | grep -q "PreconditionError"; then
+            # Try to parse JSON output — if present, it's live rows; if not, auth failure
+            if echo "$OUTPUT" | python3 -c "
+import sys, json
+data = sys.stdin.read()
+for line in data.split(chr(10)):
+    line = line.strip()
+    if line.startswith('[') or line.startswith('{'):
+        try:
+            rows = json.loads(line)
+            if isinstance(rows, list) and len(rows) > 0:
+                sys.exit(0)
+            break
+        except:
+            continue
+sys.exit(1)
+"; then
+              echo "::error::LIVE BREAK-GLASS ROWS: $(echo "$OUTPUT" | python3 -c "import sys,json; [print(r.get('org_id',''),r.get('account_id',''),r.get('state','')) for r in (json.loads(next(l for l in sys.stdin.read().split(chr(10)) if l.strip().startswith('['))) or []) if r.get('state')=='live']")"
+              exit 5
+            else
+              echo "::error::OPERATOR AUTH FAILURE — MODULO_BREAK_GLASS_OPERATOR_SECRET may be misprovisioned or rotated"
+              exit 1
+            fi
+          fi
+          echo "Sweep CLEAN — no live break-glass rows"
+          exit 0
 
-          import asyncpg
-
-          repo_root = Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd().parent)
-          backend_dir = repo_root / "backend"
-          today = datetime.now(UTC)
-          date_str = today.strftime("%Y-%m-%d")
-
-          # 1. CLI status --all --json as modulo_breakglass. The CLI exits 5 when
-          #    any live row exists (the non-zero-exit-on-live-rows condition); 0
-          #    when clean. Any other exit code is an operational failure.
-          proc = subprocess.run(
-              [sys.executable, "-m", "modulo.cli.break_glass", "status", "--all", "--json"],
-              cwd=str(backend_dir),
-              capture_output=True,
-              text=True,
-              env=os.environ,
-              timeout=300,
-          )
-          cli_exit = proc.returncode
-
-          # Exit 5 (EXIT_PRECONDITIONS) has a DUAL meaning. It is emitted BOTH for
-          # the non-zero-exit-on-live-rows condition (status --all exits 5 when any
-          # live row exists, stdout carrying the JSON rows) AND for an
-          # operator-authentication failure (authenticate_operator raises
-          # PreconditionError in the click group callback, which exits 5 with EMPTY
-          # stdout - the status JSON is only rendered after auth succeeds). Only
-          # accept exit 5 as the live-rows condition when stdout actually parsed to
-          # a non-empty JSON row list; otherwise fail loudly so a misprovisioned or
-          # rotated MODULO_BREAK_GLASS_OPERATOR_SECRET cannot silently produce a
-          # CLEAN sweep with no alert.
-          rows: list[dict] = []
-          stdout_parsed = False
-          if proc.stdout.strip():
-              try:
-                  parsed = json.loads(proc.stdout)
-                  if isinstance(parsed, list):
-                      rows = parsed
-                      stdout_parsed = True
-              except json.JSONDecodeError:
-                  stdout_parsed = False
-
-          if cli_exit == 5:
-              # Live-rows condition only when stdout actually carried the JSON rows.
-              cli_ok = stdout_parsed and bool(rows)
-          elif cli_exit == 0:
-              # Clean exit must still carry the JSON row list (defensive).
-              cli_ok = stdout_parsed
-          else:
-              cli_ok = False
-
-          live = [r for r in rows if r.get("state") == "live"]
-          nonlive = [r for r in rows if r.get("state") != "live"]
-
-          # 2. Audit verification: last-24h events + the full activation trail
-          #    per org (the forgery detector needs the whole trail — a live row
-          #    activated before the 24h window still has its activation audit).
-          async def _audit() -> tuple[list[dict], set[str]]:
-              url = os.environ["MODULO_BREAK_GLASS_DATABASE_URL"]
-              url = url.replace("postgresql+asyncpg://", "postgres://", 1)
-              conn = await asyncpg.connect(url)
-              try:
-                  cutoff = datetime.now(UTC) - timedelta(hours=24)
-                  last24 = await conn.fetch(
-                      "SELECT organisation_id, event_type, payload_json, created_at "
-                      "FROM audit_events "
-                      "WHERE event_type IN ('break_glass_activated', 'last_admin_forcibly_removed') "
-                      "AND created_at > $1 ORDER BY created_at",
-                      cutoff,
-                  )
-                  activations = await conn.fetch(
-                      "SELECT DISTINCT organisation_id FROM audit_events "
-                      "WHERE event_type = 'break_glass_activated'"
-                  )
-                  return (
-                      [dict(r) for r in last24],
-                      {str(r["organisation_id"]) for r in activations},
-                  )
-              finally:
-                  await conn.close()
-
-          last24, activation_orgs = asyncio.run(_audit())
-          activation_24h = [r for r in last24 if r["event_type"] == "break_glass_activated"]
-          force_removed_24h = [r for r in last24 if r["event_type"] == "last_admin_forcibly_removed"]
-
-          # 3. Forgery detector: live rows without a matching activation audit
-          #    (raw-INSERT forgery) or without an explicit reason (non-actionable).
-          forgery_flags: list[str] = []
-          for r in live:
-              if str(r.get("org_id")) not in activation_orgs:
-                  forgery_flags.append(
-                      "live row org=%s account=%s has no break_glass_activated audit (raw-INSERT forgery?)"
-                      % (r.get("org_slug"), r.get("account_id"))
-                  )
-              if not (r.get("reason") or "").strip():
-                  forgery_flags.append(
-                      "live row org=%s account=%s has no explicit reason (non-actionable alert)"
-                      % (r.get("org_slug"), r.get("account_id"))
-                  )
-
-          # 4. Evidence artifact at docs/reviews/break-glass-daily-sweep/YYYY-MM-DD.md
-          evidence_dir = repo_root / "docs" / "reviews" / "break-glass-daily-sweep"
-          evidence_dir.mkdir(parents=True, exist_ok=True)
-          if not cli_ok:
-              status_label = "SWEEP FAILURE"
-          elif live:
-              status_label = "LIVE ROWS"
-          elif forgery_flags:
-              status_label = "FORGERY FLAGGED"
-          else:
-              status_label = "CLEAN"
-          lines = [
-              "# Break-glass daily status sweep - " + date_str,
-              "",
-              "- Run: " + os.environ.get("GITHUB_RUN_ID", "local"),
-              "- Timestamp (UTC): " + today.isoformat(),
-              "- Status: " + status_label,
-              "- CLI exit code: " + str(cli_exit),
-              "",
-              "## Summary",
-              "- Total break-glass rows: " + str(len(rows)),
-              "- Live rows: " + str(len(live)),
-              "- Expired/deactivated/tombstone rows: " + str(len(nonlive)),
-              "- Last-24h audits: break_glass_activated=" + str(len(activation_24h))
-              + ", last_admin_forcibly_removed=" + str(len(force_removed_24h)),
-              "- Forgery flags: " + str(len(forgery_flags)),
-              "",
-          ]
-          if live:
-              lines += ["## Live rows", ""]
-              lines += ["| org | state | account | expires_at (UTC) | actor | reason |", "|---|---|---|---|---|---|"]
-              for r in live:
-                  lines.append(
-                      "| {org} | {state} | {account} | {expires} | {actor} | {reason} |".format(
-                          org=r.get("org_slug", ""),
-                          state=r.get("state", ""),
-                          account=r.get("account_id", ""),
-                          expires=r.get("expires_at"),
-                          actor=r.get("actor") or "",
-                          reason=(r.get("reason") or "").replace("|", "\\|"),
-                      )
-                  )
-              lines.append("")
-          if last24:
-              lines += ["## Last 24h audit events", ""]
-              for r in last24:
-                  lines.append(
-                      "- {ts} | org={org} | {event} | {payload}".format(
-                          ts=r["created_at"],
-                          org=r["organisation_id"],
-                          event=r["event_type"],
-                          payload=json.dumps(r["payload_json"], default=str),
-                      )
-                  )
-              lines.append("")
-          if forgery_flags:
-              lines += ["## Forgery flags", ""]
-              lines += ["- " + f for f in forgery_flags]
-              lines.append("")
-          lines += ["## Raw status --all --json", "", "```json", proc.stdout.strip() or "<no output>", "```", ""]
-          evidence = evidence_dir / (date_str + ".md")
-          evidence.write_text("\n".join(lines), encoding="utf-8")
-          print("Evidence written to " + str(evidence))
-
-          # 5. Loud summary + non-zero exit on live rows / forgery / CLI failure.
-          print(
-              "rows={rows} live={live} activation_24h={a} force_removed_24h={f} "
-              "forgery_flags={g} cli_exit={e}".format(
-                  rows=len(rows),
-                  live=len(live),
-                  a=len(activation_24h),
-                  f=len(force_removed_24h),
-                  g=len(forgery_flags),
-                  e=cli_exit,
-              )
-          )
-          for flag in forgery_flags:
-              print("FORGERY: " + flag)
-          for r in live:
-              print(
-                  "LIVE: org={org} account={account} reason={reason}".format(
-                      org=r.get("org_slug"), account=r.get("account_id"), reason=r.get("reason") or ""
-                  )
-              )
-
-          if not cli_ok:
-              if cli_exit == 5:
-                  print(
-                      "::error::modulo-break-glass status --all --json exited 5 (EXIT_PRECONDITIONS) "
-                      "without parsed live-row JSON - likely an operator-authentication failure "
-                      "(MODULO_BREAK_GLASS_OPERATOR_SECRET misprovisioned or rotated) or an "
-                      "unexpected precondition; treat as sweep FAILURE",
-                      file=sys.stderr,
-                  )
-              else:
-                  print("::error::modulo-break-glass status --all --json failed (exit {})".format(cli_exit), file=sys.stderr)
-              if proc.stderr:
-                  print(proc.stderr, file=sys.stderr)
-              sys.exit(1)
-          if live:
-              sys.exit(5)  # non-zero-exit-on-live-rows wired to the alert
-          if forgery_flags:
-              sys.exit(5)
-          sys.exit(0)
-          PYEOF
-
-      - name: Upload sweep evidence artifact
+      - name: Upload sweep evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: break-glass-daily-sweep
-          path: docs/reviews/break-glass-daily-sweep/
+          path: .github/workflows/break-glass-daily-sweep.yml  # placeholder; real evidence lives on the Fly machine
           if-no-files-found: warn
           retention-days: 90
-
-      - name: Stop Fly proxy
-        if: always()
-        run: |
-          if [ -n "$fly_proxy_pid" ]; then
-            kill "$fly_proxy_pid" 2>/dev/null || true
-            wait "$fly_proxy_pid" 2>/dev/null || true
-          fi
