@@ -77,4 +77,6 @@ class TestRunSync:
         await asyncio.to_thread(done.wait, 5)
 
     def test_default_timeout_is_sane(self) -> None:
+        # Intentional invariant: run_sync must have a non-zero default timeout so
+        # backend calls cannot block forever. 30.0 is a deliberate drift-guard.
         assert DEFAULT_TIMEOUT == 30.0
