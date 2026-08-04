@@ -3158,7 +3158,7 @@ V1 SSO (OIDC/SAML) supports group-to-team mapping via claims. On JIT user provis
 
 The My Profile page (`/admin/my-profile`) provides the frontend UI for password change with client-side validation (min length, match confirmation) and error display. Users without a local password (SSO/OIDC/SAML provisioned) cannot use this endpoint.
 
-**Break-glass recovery** — an organisation whose only admin cannot authenticate (forgotten password, SCIM deactivation/demotion of the last admin, role demotion, lost secrets) is recovered via an operator-synthesised, single-use credential consumed through this same login flow. See §7.19. Use-time revalidation TRIMs to outbound webhook dispatch: when the notifier dispatches an event, any webhook endpoint owned by a break-glass account (live or denied) is skipped — fail-closed, per-endpoint — so a webhook created before the deny was active, or forged via a raw DB write, never delivers. (feat(authz): break-glass use-time revalidation at outbound webhook dispatch)
+**Break-glass recovery** — an organisation whose only admin cannot authenticate (forgotten password, SCIM deactivation/demotion of the last admin, role demotion, lost secrets) is recovered via an operator-synthesised, single-use credential consumed through this same login flow. See §7.19. Use-time revalidation TRIMs to outbound webhook dispatch: when the notifier dispatches an event, any webhook endpoint owned by a break-glass account (live or denied) is skipped — fail-closed, per-endpoint — so a webhook created before the deny was active, or forged via a raw DB write, never delivers.
 
 ---
 
