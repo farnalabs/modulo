@@ -58,30 +58,31 @@ jobs:
             cd /app && python3 -m modulo.cli.break_glass status --all --json --secret \"\$MODULO_BREAK_GLASS_OPERATOR_SECRET\"
           " 2>&1) || true
           echo "$OUTPUT"
-          # Check for PreconditionError (exit 5) — either live rows or auth failure
-          if echo "$OUTPUT" | grep -q "PreconditionError"; then
-            # Try to parse JSON output — if present, it's live rows; if not, auth failure
-            if echo "$OUTPUT" | python3 -c "
-import sys, json
-data = sys.stdin.read()
-for line in data.split(chr(10)):
-    line = line.strip()
-    if line.startswith('[') or line.startswith('{'):
-        try:
-            rows = json.loads(line)
-            if isinstance(rows, list) and len(rows) > 0:
-                sys.exit(0)
-            break
-        except:
-            continue
-sys.exit(1)
-"; then
-              echo "::error::LIVE BREAK-GLASS ROWS: $(echo "$OUTPUT" | python3 -c "import sys,json; [print(r.get('org_id',''),r.get('account_id',''),r.get('state','')) for r in (json.loads(next(l for l in sys.stdin.read().split(chr(10)) if l.strip().startswith('['))) or []) if r.get('state')=='live']")"
-              exit 5
-            else
-              echo "::error::OPERATOR AUTH FAILURE — MODULO_BREAK_GLASS_OPERATOR_SECRET may be misprovisioned or rotated"
-              exit 1
-            fi
+          # Live break-glass rows make the CLI raise PreconditionError (exit 5):
+          # it prints the rows as JSON on stdout and an "error: ..." line on
+          # stderr. Detect a JSON array containing a live row in the merged output.
+          if echo "$OUTPUT" | python3 -c "
+          import sys, json
+          data = sys.stdin.read()
+          try:
+              start = data.find('[')
+              if start < 0:
+                  sys.exit(1)
+              rows, _ = json.JSONDecoder().raw_decode(data[start:])
+          except Exception:
+              sys.exit(1)
+          if isinstance(rows, list) and any(r.get('state') == 'live' for r in rows):
+              sys.exit(0)
+          sys.exit(1)
+          "; then
+            echo "::error::LIVE BREAK-GLASS ROWS: $(echo "$OUTPUT" | python3 -c "import sys,json; d=sys.stdin.read(); i=d.find('['); rows,_=json.JSONDecoder().raw_decode(d[i:]) if i>=0 else (None,0); [print(r.get('org_id',''),r.get('account_id',''),r.get('state','')) for r in (rows or []) if r.get('state')=='live']")"
+            exit 5
+          fi
+          # No live rows. If the CLI emitted an error line, the sweep did not run
+          # cleanly — operator/auth failure (PreconditionError without rows).
+          if echo "$OUTPUT" | grep -q "^error:"; then
+            echo "::error::OPERATOR AUTH FAILURE — MODULO_BREAK_GLASS_OPERATOR_SECRET may be misprovisioned or rotated"
+            exit 1
           fi
           echo "Sweep CLEAN — no live break-glass rows"
           exit 0
