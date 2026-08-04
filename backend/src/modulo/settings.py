@@ -71,8 +71,9 @@ class Settings(BaseSettings):
     # role — never the app database_url).
     modulo_break_glass_database_url: str = Field(default="")
     # warn|fail — the URL/secret-presence boot checks are warn-in-warn-mode;
-    # the allow-list/role-posture assertions (bootstrap_role.py) are FATAL in
-    # both modes and are enforced separately at their call site.
+    # the allow-list/role-posture assertions (bootstrap_role.py) are a
+    # non-fatal WARNING at their call site in _run_bootstrap (the boundary is
+    # enforced by the DDL migrations).
     modulo_break_glass_boot_failure_mode: str = Field(default="warn")
 
     # "postgres" (default), "sqlite", "mariadb", or "mysql" — sqlite disables RLS,

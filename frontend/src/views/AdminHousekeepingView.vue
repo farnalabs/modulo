@@ -78,6 +78,7 @@
           <div class="flex items-center gap-3 border-b px-4 py-3">
             <input
               type="checkbox"
+              :aria-label="cat.label"
               :checked="categorySelected(cat.category)"
               :indeterminate.prop="categoryPartial(cat.category)"
               data-testid="hk-category-checkbox"
@@ -102,6 +103,7 @@
           >
             <input
               type="checkbox"
+              :aria-label="c.name"
               :checked="isSelected(c.id)"
               data-testid="hk-candidate-checkbox"
               @change="toggleItem(c.id)"
