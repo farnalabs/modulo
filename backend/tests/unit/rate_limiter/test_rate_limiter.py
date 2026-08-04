@@ -4,6 +4,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.unit.rate_limiter.helpers import make_redis_client
 
 from modulo.core.rate_limiter import (
     WINDOW_SECONDS,
@@ -15,15 +16,8 @@ from modulo.core.rate_limiter import (
 
 @pytest.fixture
 def mock_redis():
-    client = MagicMock()
-    pipe = MagicMock()
-    pipe.zremrangebyscore = MagicMock(return_value=pipe)
-    pipe.zadd = MagicMock(return_value=pipe)
-    pipe.zcard = MagicMock(return_value=pipe)
-    pipe.expire = MagicMock(return_value=pipe)
-    pipe.execute = AsyncMock(return_value=(None, None, 1, True))
-    client.pipeline = MagicMock(return_value=pipe)
-    return client
+    """Sliding-window flavoured Redis mock (module-level shadows the conftest one)."""
+    return make_redis_client()
 
 
 class TestRedisSlidingWindowRateLimiter:
@@ -89,6 +83,22 @@ class TestRedisSlidingWindowRateLimiter:
         now = time.time()
         assert abs(score - now) < 2
         assert ts == str(score)
+
+    async def test_blocks_every_request_when_max_requests_zero(self, mock_redis):
+        """max_requests=0 must block: the current request is recorded before the check."""
+        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        assert await limiter.check("k", max_requests=0) is False
+
+    async def test_window_zero_sets_cutoff_to_now(self, mock_redis):
+        """window_s=0 prunes everything strictly before now but still allows the current request."""
+        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, 1, True))
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        assert await limiter.check("k", max_requests=1, window_s=0) is True
+        pipe = mock_redis.pipeline.return_value
+        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
+        now = time.time()
+        assert abs(cutoff - now) < 2
 
 
 class TestRateLimitRule:
