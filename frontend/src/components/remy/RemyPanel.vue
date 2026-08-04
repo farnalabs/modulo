@@ -12,10 +12,7 @@
       tabindex="0"
       :aria-label="$t('components.remy.RemyPanel.move_panel')"
       @mousedown="startDrag"
-      @keydown.up.prevent="nudgePanel(0, -1)"
-      @keydown.down.prevent="nudgePanel(0, 1)"
-      @keydown.left.prevent="nudgePanel(-1, 0)"
-      @keydown.right.prevent="nudgePanel(1, 0)"
+      @keydown="handleTitlebarKeydown"
     >
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
@@ -443,6 +440,17 @@ function nudgePanel(dx: number, dy: number) {
     x: store.panelPosition.x + dx,
     y: store.panelPosition.y + dy,
   });
+}
+
+function handleTitlebarKeydown(e: KeyboardEvent) {
+  if (e.target instanceof HTMLElement && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+  if (store.panelState !== "floating") return;
+  switch (e.key) {
+    case "ArrowUp": e.preventDefault(); nudgePanel(0, -1); break;
+    case "ArrowDown": e.preventDefault(); nudgePanel(0, 1); break;
+    case "ArrowLeft": e.preventDefault(); nudgePanel(-1, 0); break;
+    case "ArrowRight": e.preventDefault(); nudgePanel(1, 0); break;
+  }
 }
 
 function startResize(e: MouseEvent) {
