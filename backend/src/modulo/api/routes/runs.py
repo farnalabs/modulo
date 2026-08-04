@@ -612,7 +612,7 @@ def _build_fixture_map(
     out = outputs_json or {}
 
     if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
-        for _node_id, node_io in out.items():
+        for node_io in out.values():
             if isinstance(node_io, dict):
                 node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
                 node_output = node_io.get("output", "")
