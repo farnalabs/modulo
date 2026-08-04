@@ -211,6 +211,28 @@ blocking readiness indefinitely.
 
 ---
 
+## Break-glass Admin Recovery
+
+Operator-controlled emergency admin recovery for orgs whose only admin is
+locked out (see `docs/prd.md` §7.19 and
+`docs/operations/break-glass-admin-recovery-runbook.md`). The CLI connects to
+the database as the dedicated `modulo_breakglass` role via
+`MODULO_BREAK_GLASS_DATABASE_URL` — never the application `DATABASE_URL`.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_BREAK_GLASS_ENABLED` | No | from secret presence | Enable CLI `activate` + login-hook consumption. Deactivate/force/status stay operable while secrets + URL are present even when false |
+| `MODULO_BREAK_GLASS_SECRET` | Yes (when ENABLED) | — | Primary operator secret; must differ from `_STANDBY_SECRET`, minimum length |
+| `MODULO_BREAK_GLASS_STANDBY_SECRET` | Yes (when ENABLED) | — | Standby operator secret for rotation |
+| `MODULO_BREAK_GLASS_TTL_MINUTES` | No | `1440` | Default credential TTL in minutes (min 1, ≤ `MODULO_BREAK_GLASS_MAX_TTL_MINUTES`) |
+| `MODULO_BREAK_GLASS_MAX_TTL_MINUTES` | No | `4320` | Hard TTL cap (72h) |
+| `MODULO_BREAK_GLASS_DATABASE_URL` | Yes (when ENABLED) | — | Dedicated `modulo_breakglass` role connection string (BYPASSRLS; never the app `DATABASE_URL`) |
+| `MODULO_BREAK_GLASS_BOOT_FAILURE_MODE` | No | `warn` | `warn` or `fail` for URL/secret-presence checks; the allow-list/role assertions are FATAL in both modes |
+
+Operational procedure: `docs/operations/break-glass-admin-recovery-runbook.md`.
+
+---
+
 ## Full Example (.env)
 
 ```env
