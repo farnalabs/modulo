@@ -1,7 +1,6 @@
 """CompositeTemplate CRUD REST API."""
 
 import logging
-import re
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -15,6 +14,10 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.composite_engine.expander import (
+    _PARAM_PLACEHOLDER_RE,
+    _PROMPT_FIELDS,
+)
 from modulo.db.crud.composite_template import (
     create_composite_template,
     get_composite_template,
@@ -462,14 +465,6 @@ class DetectParamsRequest(BaseModel):
 
 class DetectParamsResponse(BaseModel):
     ports: list[ParameterPort] = Field(default_factory=list)
-
-
-# Placeholder format used by the composite parameter system, e.g.
-# ``{{parameter.tone}}``. Kept in sync with the runtime expander.
-_PARAM_PLACEHOLDER_RE = re.compile(r"\{\{parameter\.(\w+)\}\}")
-
-# Prompt-bearing fields a sub-pipeline node may carry placeholders in.
-_PROMPT_FIELDS = ("prompt", "prompt_template", "agent_prompt")
 
 
 def _detect_parameter_ports(nodes: list[dict[str, Any]]) -> list[ParameterPort]:
