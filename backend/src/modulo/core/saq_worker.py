@@ -295,14 +295,14 @@ async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
 
 async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — purge old webhook trigger events (30-day retention)."""
-    from modulo.core.cleanup_jobs.webhook_dedup_cleanup import cleanup_old_webhook_events
+    from modulo.core.cleanup_jobs.webhook_dedup_cleanup import BATCH_SIZE, cleanup_old_webhook_events
 
     total = 0
     async with _make_session_factory()() as session:
         while True:
             deleted = await cleanup_old_webhook_events(session)
             total += deleted
-            if deleted < 1000:
+            if deleted < BATCH_SIZE:
                 break
     return {"deleted": total}
 
