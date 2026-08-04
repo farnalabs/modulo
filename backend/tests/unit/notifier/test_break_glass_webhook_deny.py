@@ -134,11 +134,15 @@ async def test_reject_skips_orphaned_owner_id(notifier: Notifier) -> None:
 
 async def test_reject_fail_closed_on_db_error(notifier: Notifier) -> None:
     """A DB read error must not fail-open a break-glass endpoint — all endpoints
-    are treated as denied."""
+    are treated as denied, and the owner-read failure counter is emitted."""
     ep = _endpoint(account_id=uuid.uuid4())
-    with patch.object(notifier, "_session_factory", _session_factory([], raise_on_execute=True)):
+    with (
+        patch.object(notifier, "_session_factory", _session_factory([], raise_on_execute=True)),
+        patch("modulo.core.notifier._record_owner_read_failure") as mock_metric,
+    ):
         kept = await notifier._reject_break_glass_owned([ep])
     assert kept == []
+    mock_metric.assert_called_once()
 
 
 async def test_reject_uses_shared_builder_rule(notifier: Notifier) -> None:
