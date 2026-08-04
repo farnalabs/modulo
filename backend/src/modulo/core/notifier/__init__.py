@@ -60,6 +60,33 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
+# Lazy OTel counter — records the fail-closed owner-read drop so a DB blip that
+# suppresses ALL webhook dispatch for an event is observable (review #657 obs 1).
+_owner_read_failures_total: Any = None
+
+
+def _record_owner_read_failure() -> None:
+    """Increment the break-glass owner-read failure counter (no-op when OTel is absent)."""
+    global _owner_read_failures_total
+    if _owner_read_failures_total is None:
+        try:
+            from opentelemetry import metrics
+
+            provider = metrics.get_meter_provider()
+            if provider is None:
+                return
+            meter = provider.get_meter("modulo.notifier", version="0.1.0")
+            _owner_read_failures_total = meter.create_counter(
+                name="modulo_notifier_break_glass_owner_read_failures_total",
+                description="Fail-closed webhook dispatch suppressions from break-glass owner-read DB errors",
+                unit="1",
+            )
+        except Exception:
+            _log.warning("notifier.metrics_owner_read_counter_failed")
+            return
+    _owner_read_failures_total.add(1)
+
+
 MAX_ATTEMPTS = 4  # 1 initial + 3 retries
 MAX_DEAD_LETTERS = 10
 RETRY_DELAYS = [1.0, 5.0, 30.0]
@@ -218,6 +245,7 @@ class Notifier:
         except asyncio.CancelledError:
             raise
         except Exception:
+            _record_owner_read_failure()
             _log.exception(
                 "notifier.break_glass_owner_read_failed",
                 extra={"endpoint_count": len(endpoints)},
@@ -237,21 +265,21 @@ class Notifier:
                 else:
                     kept.append(ep)
                 continue
-            if owner.is_break_glass is True and (
-                is_break_glass_denied(
-                    is_break_glass=owner.is_break_glass,
-                    break_glass_expires_at=owner.break_glass_expires_at,
-                    break_glass_deactivated_at=owner.break_glass_deactivated_at,
-                    active=owner.active,
-                    now=now,
-                )
-                or is_break_glass_live(
-                    is_break_glass=owner.is_break_glass,
-                    break_glass_expires_at=owner.break_glass_expires_at,
-                    break_glass_deactivated_at=owner.break_glass_deactivated_at,
-                    active=owner.active,
-                    now=now,
-                )
+            # Review #657 obs 2: the shared builders already gate on
+            # ``is_break_glass``, so the outer ``owner.is_break_glass is True and
+            # (...`` guard is redundant — the deny decision is single-sourced.
+            if is_break_glass_denied(
+                is_break_glass=owner.is_break_glass,
+                break_glass_expires_at=owner.break_glass_expires_at,
+                break_glass_deactivated_at=owner.break_glass_deactivated_at,
+                active=owner.active,
+                now=now,
+            ) or is_break_glass_live(
+                is_break_glass=owner.is_break_glass,
+                break_glass_expires_at=owner.break_glass_expires_at,
+                break_glass_deactivated_at=owner.break_glass_deactivated_at,
+                active=owner.active,
+                now=now,
             ):
                 _log.warning(
                     "notifier.break_glass_webhook_skipped",
