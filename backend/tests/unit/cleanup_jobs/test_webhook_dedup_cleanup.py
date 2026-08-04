@@ -132,6 +132,12 @@ class TestCleanupOldWebhookEvents:
 
 
 class TestCleanupSchedulerLoop:
+    # ``cleanup_scheduler_loop`` is an infinite ``while True`` loop that only
+    # exits on ``asyncio.CancelledError``. To drive it to termination in these
+    # tests, the mocked ``cleanup_old_webhook_events`` uses
+    # ``asyncio.CancelledError`` as its final side_effect, letting the loop
+    # break naturally after the assertions of interest have been observed.
+
     async def test_drains_batches_then_resets_backoff(self) -> None:
         """Keep deleting until a pass returns fewer than BATCH_SIZE, then sleep."""
         factory = _make_factory(AsyncMock())
