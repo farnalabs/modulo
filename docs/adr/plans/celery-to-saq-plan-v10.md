@@ -3,6 +3,9 @@
 > **Status**: LOCKED — v10 (2026-07-31), after 9 review iterations of the 7-lens `plan-review-iterate` skill.
 > Version-controlled copy of the plan referenced by [ADR 017](../017-celery-to-saq-migration.md) and by the
 > delivery-plan tasks `task-saq-migration-pr-a`, `task-saq-migration-pr-b`, `task-saq-migration-pr-c`.
+>
+> **Superseded — tracker retired.** This plan references task IDs from the retired delivery-plan.json
+> tracker. The tracker is retired (source of truth: Linear); task IDs here are historical references only.
 
 ---
 

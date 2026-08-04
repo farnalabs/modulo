@@ -1,6 +1,10 @@
 # ADR 017 — Celery to SAQ Migration
 
 > Full migration plan: [`docs/adr/plans/celery-to-saq-plan-v10.md`](plans/celery-to-saq-plan-v10.md) (referenced in the delivery-plan tasks `task-saq-migration-pr-a/b/c`).
+>
+> **Superseded — tracker retired.** This ADR references task IDs (`task-saq-migration-pr-a/b/c`) from the
+> retired delivery-plan.json tracker. The tracker is retired (source of truth: Linear); task IDs here are
+> historical references only.
 
 **Date**: 2026-07-31
 **Status**: Accepted
