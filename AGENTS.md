@@ -91,15 +91,15 @@ All code changes MUST be implemented by a subagent in a worktree branch — neve
 |---|---|
 | Single bug fix | Create a worktree branch, spawn a subagent via `Task` tool with the description and implementation prompt. The subagent works inside `.agents/worktrees/<branch>/`, commits, and reports back. |
 | Multiple independent changes (same session) | Spawn parallel subagents, one per change, each with its own worktree. The parent collects results independently. |
-| Multi-task delivery sprint | Use the `deliver` skill (`.agents/skills/deliver/SKILL.md`) which orchestrates parallel subagents autonomously. |
+| Multi-task delivery sprint | Use the `deliver` skill (`../../.agents/skills/deliver/SKILL.md`) which orchestrates parallel subagents autonomously. |
 | QA fix | Spawn a subagent in its own worktree branch. Never apply a fix directly from the QA session. |
 
 The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: All Code Goes Through Subagents** — read it for the rationale and enforcement details.
 
 ## Skills
 
-- **`qa`** — Multi-lens quality review. Invoke with `qa <target-path>`. Runs 7 lenses (correctness, bugs, maintainability, SOLID, DRY, simplification, deps) via parallel subagents, validates findings, and applies fixes. Auto-invokes `lessons-learned` on fixed findings. Path: `.agents/skills/qa/SKILL.md`.
-- **`lessons-learned`** — Extracts recurring patterns from QA findings and codifies them as AGENTS.md guidance at the most specific level of the hierarchy (auto-invoked by `qa` / `qa-iterate`). Standalone: `/lessons-learned <target> <findings>`. Path: `.agents/skills/lessons-learned/SKILL.md`.
+- **`qa`** — Multi-lens quality review. Invoke with `qa <target-path>`. Runs 7 lenses (correctness, bugs, maintainability, SOLID, DRY, simplification, deps) via parallel subagents, validates findings, and applies fixes. Auto-invokes `lessons-learned` on fixed findings. Path: `../../.agents/skills/qa/SKILL.md`.
+- **`lessons-learned`** — Extracts recurring patterns from QA findings and codifies them as AGENTS.md guidance at the most specific level of the hierarchy (auto-invoked by `qa` / `qa-iterate`). Standalone: `/lessons-learned <target> <findings>`. Path: `../../.agents/skills/lessons-learned/SKILL.md`.
 
 ## Delivery Workflow for QA
 
@@ -119,17 +119,7 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Task Tracker
 
-The authoritative task list lives at `../harness/delivery/delivery-plan.json`. Do not edit it directly — use the task script:
-
-```powershell
-../devtools/harness/tools/task.ps1 list                          # show all tasks and current status
-../devtools/harness/tools/task.ps1 show <id>                     # full detail + history for one task
-../devtools/harness/tools/task.ps1 start <id>                    # begin a task (rejects if deps unmet)
-../devtools/harness/tools/task.ps1 complete <id> -Evidence "..."  # mark done with test evidence
-../devtools/harness/tools/task.ps1 block <id> -Evidence "..."    # record a concrete external blocker
-```
-
-The conductor picks the first `pending` task whose entire `dependsOn` array is `completed`. Tasks span phases 0–9 (alpha through v2). Run `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`.
+The source of truth for work items is **Linear** (farnalabs-modulo workspace, FAR team), queried via the local MCP server `harness/mcp/linear/server.py` (or `linear_create_ticket` / `list_ready_issues` MCP tools). The old JSON delivery tracker (`delivery-plan.json`) is retired. Run `/deliver` from the project root to start an autonomous delivery sprint - this invokes the `deliver` skill at `../../.agents/skills/deliver/SKILL.md`.
 
 ---
 
