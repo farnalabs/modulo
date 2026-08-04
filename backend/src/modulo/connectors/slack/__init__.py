@@ -441,11 +441,7 @@ class SlackConnector(ConnectorBase):
         else:
             raw = file_content if isinstance(file_content, bytes) else str(file_content).encode("utf-8")
             files = {"file": (filename, raw, "application/octet-stream")}
-        form_data = {
-            k: v
-            for k, v in data.items()
-            if k not in ("filename", "content", "file")
-        }
+        form_data = {k: v for k, v in data.items() if k not in ("filename", "content", "file")}
         r = await self._call_api("POST", "/files.upload", files=files, data=form_data)
         body: dict[str, Any] = await self._parse_json(r)
         _check_slack_ok(body, "files.upload")
