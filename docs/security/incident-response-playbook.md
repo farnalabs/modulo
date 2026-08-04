@@ -238,7 +238,7 @@ Medium / Low incident detected
 ### 3.4 Eradication
 
 1. **Remove root cause:**
-   - Deploy patched code (hotfix branch → gate → merge per `delivery-plan.md`).
+   - Deploy patched code (hotfix branch → gate → merge through normal CI).
    - Rotate all secrets exposed during the incident.
    - Apply missing security controls (RLS policy, rate limit, input guard).
 2. **Verify eradication:**
