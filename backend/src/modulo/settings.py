@@ -445,6 +445,7 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
     def _validate_cost_knobs(self) -> "Settings":
         """Cost-knob invariants — enforced at Settings LOAD, never log-only.
 
@@ -586,6 +587,8 @@ def validate_break_glass_boot(settings: Settings) -> None:
             raise RuntimeError("Break-glass boot config assertion FAILED:\n  " + "\n".join(blocking))
     for _is_blocking, message in findings:
         _log.warning("break_glass.boot_config %s", message)
+
+
 def run_cost_settings_self_test() -> None:
     """Boot self-test for the cost knobs — operator-facing surface.
 
