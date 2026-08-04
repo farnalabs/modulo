@@ -36,6 +36,12 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
 
+# Trigger types exempt from the org-wide pause. A new trigger type defaults to
+# PAUSED (fail-closed) unless explicitly added here AND it passes trigger_id to
+# create_run (types that create runs without a Trigger row, like scheduled
+# reports / variants, are NOT pause-gated — see the create_run gate comment).
+PAUSE_EXEMPT_TRIGGER_TYPES = frozenset({"manual", "correction"})
+
 _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
 _SANDBOX_CONCURRENCY_MIN = 1
 _SANDBOX_CONCURRENCY_MAX = 100
@@ -61,21 +67,28 @@ async def create_run(
     parent_run_id: uuid.UUID | None = None,
     rate_limit_key: str | None = None,
 ) -> Run:
-    # Org-wide pause kill-switch — the SINGLE authority gate for every
-    # trigger-initiated run (webhook, replay, cron, polling, agent_signal, and
-    # any future trigger type). Manual runs (POST /runs, MCP trigger_pipeline),
-    # test_trigger (trigger_type="manual"), feedback correction, and variant
-    # runs pass (trigger_id None or trigger_type in manual/correction).
-    # Local imports avoid a module-level cycle; the import-linter contract
-    # ``modulo.db.crud.run -> modulo.core.exceptions`` is exempted in
-    # ``.importlinter``.
-    if trigger_id is not None and trigger_type not in ("manual", "correction"):
-        from modulo.db.settings_resolver import org_is_paused
+    # Org-wide pause kill-switch — the SINGLE authority gate for trigger-initiated
+    # runs (webhook, replay, cron, polling, agent_signal). Manual runs (POST /runs,
+    # MCP trigger_pipeline), test_trigger (trigger_type="manual"), feedback
+    # correction, and variant runs pass (trigger_id None or an exempt type).
+    # A NEW trigger type defaults to PAUSED (fail-closed) unless explicitly added
+    # to PAUSE_EXEMPT_TRIGGER_TYPES AND it passes trigger_id — a type that creates
+    # a run WITHOUT a Trigger row (scheduled reports / variants) bypasses the gate
+    # entirely (trigger_id=None) and is intentionally NOT pause-gated.
+    #
+    # Accepted bounded TOCTOU: a run whose gate read ``not paused`` and whose
+    # INSERT commits after the toggle UPDATE lands is an "in-flight before pause"
+    # run — benign, matches GitHub disable-workflow semantics; the pause takes
+    # effect at the next statement boundary. Deliberately NO row locks (reviewed
+    # decision). Read failures from ensure_triggers_resumable PROPAGATE — a DB
+    # error is never fabricated into "paused". ``create_run`` calls
+    # ``ensure_triggers_resumable`` (modulo.db.settings_resolver), which raises
+    # ``TriggersPausedError`` (modulo.core.exceptions); that db->core edge is
+    # exempted under the ``db-does-not-import-core`` contract in ``.importlinter``.
+    if trigger_id is not None and trigger_type not in PAUSE_EXEMPT_TRIGGER_TYPES:
+        from modulo.db.settings_resolver import ensure_triggers_resumable
 
-        if await org_is_paused(session, org_id):
-            from modulo.core.exceptions import TriggersPausedError
-
-            raise TriggersPausedError(trigger_id=trigger_id, org_id=org_id, trigger_type=trigger_type)
+        await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type=trigger_type)
 
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"

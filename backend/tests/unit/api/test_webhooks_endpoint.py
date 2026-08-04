@@ -129,7 +129,7 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    with patch("modulo.api.routes.webhooks.org_is_paused", new_callable=AsyncMock, return_value=False):
+    with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
         yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -233,7 +233,7 @@ def test_receive_webhook_hmac_failure_returns_401(client: TestClient) -> None:
 def test_receive_webhook_paused_org_returns_202_paused(client: TestClient) -> None:
     """Paused org: 202 {"status": "paused"} with NO run_id, engine never called."""
     with (
-        patch("modulo.api.routes.webhooks.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
         patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.webhooks.dispatch_run_sync") as dispatch,
         patch("modulo.api.routes.webhooks.set_rls_org"),
@@ -256,7 +256,7 @@ def test_replay_webhook_paused_org_returns_202_paused(client: TestClient) -> Non
     """Paused org replay: 202 {"status": "paused"}, no run_id, engine never called."""
     event_id = uuid.uuid4()
     with (
-        patch("modulo.api.routes.webhooks.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.webhooks.dispatch_run_sync") as dispatch,
         patch("modulo.api.routes.webhooks.set_rls_org"),
@@ -272,6 +272,58 @@ def test_replay_webhook_paused_org_returns_202_paused(client: TestClient) -> Non
     assert "run_id" not in body
     m.assert_not_called()
     dispatch.assert_not_called()
+
+
+def test_receive_webhook_paused_org_missing_row_returns_202_without_event(client: TestClient) -> None:
+    """Orphan trigger whose org row was HARD-deleted: a paused delivery returns
+    202 {"status": "paused"} but does NOT attempt the TriggerEvent INSERT (the
+    organisations FK would fail -> 503). Fail-closed, no crash."""
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.add = MagicMock()
+
+    trigger_mock = MagicMock()
+    trigger_mock.pipeline_id = uuid.uuid4()
+    trigger_mock.active = True
+    trigger_mock.config_json = {}
+    trigger_result = MagicMock()
+    trigger_result.scalar_one_or_none.return_value = trigger_mock
+    org_missing = MagicMock()
+    org_missing.scalar_one_or_none.return_value = None
+
+    async def _execute(*args: object, **kwargs: object) -> MagicMock:
+        sql = str(args[0]).lower()
+        if "organisations" in sql:
+            return org_missing
+        return trigger_result
+
+    session.execute = _execute
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": str(int(time.time()))},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "paused"}
+    session.add.assert_not_called()
+    m.assert_not_called()
 
 
 def test_receive_webhook_duplicate_returns_400(client: TestClient) -> None:

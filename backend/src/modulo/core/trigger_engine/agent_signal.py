@@ -26,6 +26,7 @@ from modulo.db.crud.run import create_run
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused
 
 _log = logging.getLogger(__name__)
 
@@ -74,6 +75,30 @@ async def fire_agent_signal(
         if str(source_pid) != str_source_pipeline_id:
             continue
         if str(source_nid) != completed_node_id:
+            continue
+
+        # Org-wide pause kill-switch — checked EARLY (before the concurrency
+        # check and snapshot resolution) so a paused org does no wasted snapshot
+        # work and records ``paused`` instead of concurrency_limit_reached /
+        # invalid_snapshot_id. Exactly ONE paused event per blocked signal,
+        # written in the outer transaction. Read failures PROPAGATE (never
+        # fabricate "paused"); the create_run gate below stays the TOCTOU
+        # backstop.
+        if await org_is_paused(session, org_id):
+            await _log_signal_event(
+                session,
+                trigger,
+                org_id,
+                result="paused",
+                error_detail="Org triggers paused",
+            )
+            results.append(
+                {
+                    "trigger_id": str(trigger.id),
+                    "status": "skipped",
+                    "reason": PAUSE_SKIP_REASON,
+                }
+            )
             continue
 
         # Concurrency check — skip if too many active runs on child pipeline.
@@ -223,7 +248,7 @@ async def fire_agent_signal(
                 {
                     "trigger_id": str_trigger_id,
                     "status": "skipped",
-                    "reason": "org_triggers_paused",
+                    "reason": PAUSE_SKIP_REASON,
                 }
             )
             continue

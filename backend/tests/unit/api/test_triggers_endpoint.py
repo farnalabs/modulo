@@ -114,13 +114,14 @@ def test_list_triggers_returns_200(client: TestClient) -> None:
 
 def test_list_triggers_includes_pause_state(client: TestClient) -> None:
     """List response carries top-level triggers_paused / paused_at from a fresh
-    org column-level read."""
+    org column-level read. The read is (triggers_paused, triggers_paused_at,
+    status) — the full predicate the create_run gate applies."""
     trigger = _make_mock_trigger()
     with patch("modulo.api.routes.triggers.set_rls_org"):
         session = _make_mock_session()
         trigger_result = _make_trigger_result([trigger])
         org_result = MagicMock()
-        org_result.one_or_none.return_value = (True, _NOW)
+        org_result.one_or_none.return_value = (True, _NOW, "active")
         # Execute order: require_permission authz read, count, rows, org-state.
         calls = iter([trigger_result, trigger_result, trigger_result, org_result])
 
@@ -139,6 +140,36 @@ def test_list_triggers_includes_pause_state(client: TestClient) -> None:
     body = resp.json()
     assert body["triggers_paused"] is True
     assert body["paused_at"] == _NOW.isoformat()
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_list_triggers_paused_via_non_active_org_status(client: TestClient) -> None:
+    """A suspended/deleted org (status != 'active', triggers_paused column
+    False) must surface as triggers_paused=True — the SAME predicate the gate
+    uses (org_row_is_paused), so the banner and toggle match server truth."""
+    trigger = _make_mock_trigger()
+    with patch("modulo.api.routes.triggers.set_rls_org"):
+        session = _make_mock_session()
+        trigger_result = _make_trigger_result([trigger])
+        org_result = MagicMock()
+        org_result.one_or_none.return_value = (False, None, "suspended")
+        calls = iter([trigger_result, trigger_result, trigger_result, org_result])
+
+        async def _execute(*args: object, **kwargs: object) -> MagicMock:
+            return next(calls)
+
+        session.execute = _execute
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get("/api/v1/triggers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["triggers_paused"] is True
+    assert body["paused_at"] is None
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 

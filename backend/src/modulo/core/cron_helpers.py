@@ -40,7 +40,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.exceptions import TriggersPausedError
-from modulo.db.settings_resolver import org_is_paused, org_row_is_paused
+from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -280,6 +280,28 @@ async def _ingest_saq_error(
 # ---------------------------------------------------------------------------
 
 
+async def _org_is_paused_degraded(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Org-wide pause check for the per-item fire jobs, degraded on pre-migration.
+
+    A ``ProgrammingError`` (missing ``triggers_paused`` column on a pre-migration
+    DB) returns ``False`` (not paused) — mirroring the scheduler's not-paused
+    choice so a legacy schema does NOT turn every cron/polling job into a
+    dead-lettered failure. The read runs inside a SAVEPOINT so the failed
+    statement never poisons the per-item transaction (Postgres aborts a
+    transaction on any statement error; without the savepoint the next query
+    in the same transaction raises PendingRollbackError).
+
+    Any OTHER ``SQLAlchemyError`` propagates so the job fails and SAQ retries —
+    never fabricate "paused" on a DB error.
+    """
+    try:
+        async with session.begin_nested():
+            return await org_is_paused(session, org_id)
+    except ProgrammingError:
+        _log.info("org_pause_check.degraded org=%s (pre-migration schema)", org_id)
+        return False
+
+
 async def fire_cron_trigger(
     *,
     trigger_id: uuid.UUID,
@@ -328,8 +350,10 @@ async def fire_cron_trigger(
         # Org-wide pause (kill-switch) — checked BEFORE the snapshot auto-create
         # so a paused org never produces a snapshot. No paused TriggerEvent here
         # (this is the race backstop only; the create_run gate is the authority).
-        if await org_is_paused(session, org_id):
-            return {"status": "skipped", "reason": "triggers_paused"}
+        # Degraded on a pre-migration ProgrammingError (not-paused) inside a
+        # savepoint so the per-item transaction is never poisoned.
+        if await _org_is_paused_degraded(session, org_id):
+            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
 
         active_count = await _count_active_runs(session, trigger_id)
         if active_count >= trigger.max_concurrent_runs:
@@ -413,7 +437,7 @@ async def fire_cron_trigger(
             # TOCTOU race backstop: the org was paused between the early check
             # and create_run. Skip, no paused TriggerEvent (race backstop only).
             _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
-            return {"status": "skipped", "reason": "triggers_paused"}
+            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
 
         event = await _log_event(
             session,
@@ -493,9 +517,10 @@ async def fire_polling_trigger(
             return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
 
         # Org-wide pause (kill-switch). No paused TriggerEvent here (race
-        # backstop only; the create_run gate is the authority).
-        if await org_is_paused(session, org_id):
-            return {"status": "skipped", "reason": "triggers_paused"}
+        # backstop only; the create_run gate is the authority). Degraded on a
+        # pre-migration ProgrammingError (not-paused) inside a savepoint.
+        if await _org_is_paused_degraded(session, org_id):
+            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
 
         active_count = await _count_active_runs(session, trigger_id)
         if active_count >= trigger.max_concurrent_runs:
@@ -507,6 +532,39 @@ async def fire_polling_trigger(
                 error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
             )
             return {"status": "skipped", "reason": "concurrency_limit", "active_runs": active_count}
+
+        # Daily spend limit check (mirrors fire_cron_trigger) — run BEFORE the
+        # connector query so an over-budget trigger stops polling the external
+        # service instead of running the query every cycle.
+        spend_limit = trigger.daily_spend_limit
+        if spend_limit is not None:
+            from sqlalchemy import func
+
+            from modulo.db.models.run import Run
+
+            today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            cost_result = await session.execute(
+                select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+                    Run.trigger_id == trigger_id,
+                    Run.organisation_id == org_id,
+                    Run.created_at >= today_start,
+                )
+            )
+            today_cost = cost_result.scalar_one()
+            if today_cost is not None and today_cost >= spend_limit:
+                await _log_poll_event(
+                    session,
+                    trigger=trigger,
+                    org_id=org_id,
+                    result="spend_limit_reached",
+                    error_detail=(f"Daily spend limit {spend_limit} reached (today: {today_cost})"),
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "spend_limit",
+                    "daily_spend_limit": str(spend_limit),
+                    "today_cost": str(today_cost),
+                }
 
         conn_result = await session.execute(
             select(ConnectorInstance).where(
@@ -626,7 +684,7 @@ async def fire_polling_trigger(
             )
         except TriggersPausedError:
             _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
-            return {"status": "skipped", "reason": "triggers_paused"}
+            return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
 
         event = await _log_poll_event(
             session,
@@ -915,11 +973,20 @@ async def fire_due_triggers() -> dict[str, Any]:
     if not org_ids:
         return summary
 
-    # Org-wide trigger pause map (kill-switch). A SEPARATE batched read so a
-    # pre-migration DB (no triggers_paused column yet) degrades gracefully:
+    # Org-wide trigger pause map (kill-switch). A SEPARATE batched read (its own
+    # session + transaction) so a pre-migration DB (no triggers_paused column
+    # yet) degrades gracefully AND a read failure never poisons the per-org
+    # tick transactions below:
     #   - ProgrammingError  -> not-paused for every org + ``pause_read=degraded``
-    #                          (preserve pre-migration legacy behaviour)
-    #   - other SQLAlchemyError -> fail-closed: every org paused + ``pause_read=error``
+    #                          (transient pre-migration schema; matches the
+    #                          migration-before-deploy contract). The deploy
+    #                          pipeline migrates before cutover, so treating
+    #                          every org as not-paused during the window is the
+    #                          documented, benign choice.
+    #   - other SQLAlchemyError (DB down / connection error) -> RE-RAISE so the
+    #                          tick FAILS and the SAQ system cron retries. NEVER
+    #                          fabricate "paused" for every org on a DB blip —
+    #                          a pause read failure is not evidence of a pause.
     pause_by_org: dict[uuid.UUID, bool] = {}
     try:
         async with factory() as session, session.begin():
@@ -933,9 +1000,10 @@ async def fire_due_triggers() -> dict[str, Any]:
         summary["pause_read"] = "degraded"
         pause_by_org = {}
     except SQLAlchemyError:
-        _log.exception("fire_due_triggers: pause read failed — fail-closed, treating all orgs as paused")
-        summary["pause_read"] = "error"
-        pause_by_org = dict.fromkeys(org_ids, True)
+        _log.exception(
+            "fire_due_triggers: pause read failed — re-raising so the tick fails and the SAQ system cron retries"
+        )
+        raise
 
     redis_client = AsyncRedis.from_url(
         settings.redis_url,

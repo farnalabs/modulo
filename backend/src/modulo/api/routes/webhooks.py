@@ -33,7 +33,10 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.core.dispatch import dispatch_run_sync
 from modulo.core.exceptions import TriggersPausedError
-from modulo.core.trigger_engine import (
+
+# Deprecated private aliases — kept importable so legacy patch targets and
+# callers referencing the underscore names keep working (M5 public-API fix).
+from modulo.core.trigger_engine import (  # noqa: F401
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
@@ -46,12 +49,16 @@ from modulo.core.trigger_engine import (
     _sha256_hex,
     _verify_hmac,
     _verify_timestamp,
+    sha256_hex,
+    verify_hmac,
+    verify_timestamp,
 )
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
 from modulo.db.rls import set_rls_org
-from modulo.db.settings_resolver import org_is_paused
+from modulo.db.settings_resolver import ensure_triggers_resumable
 
 _log = logging.getLogger(__name__)
 
@@ -130,8 +137,8 @@ async def receive_webhook(
             cfg = trigger.config_json or {}
             hmac_secret: str | None = cfg.get("hmac_secret")
             if hmac_secret is not None:
-                ts = _verify_timestamp(modulo_timestamp)
-                if not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+                ts = verify_timestamp(modulo_timestamp)
+                if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                     raise HmacValidationError()
 
             try:
@@ -139,8 +146,8 @@ async def receive_webhook(
                 # delivery must not touch pipeline_snapshots, webhook_dedup_hashes,
                 # or create a run. The inner catch is the SINGLE writer of the
                 # ``paused`` TriggerEvent; it commits with this transaction.
-                if trigger.active and await org_is_paused(session, org_id):
-                    raise TriggersPausedError(trigger_id=trigger_id, org_id=org_id, trigger_type="webhook")
+                if trigger.active:
+                    await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
                 snapshot = await create_snapshot_from_live_graph(
                     session, pipeline_id=trigger.pipeline_id, account_id=None
@@ -162,11 +169,25 @@ async def receive_webhook(
                     snapshot_id=snapshot.id,
                 )
             except TriggersPausedError:
+                # Safe event write: an orphan trigger whose org row was
+                # HARD-deleted must not attempt the TriggerEvent INSERT (it
+                # would violate the organisations FK -> 503). Fail-closed with
+                # no event row and no crash.
+                org_exists = (
+                    await session.execute(select(Organisation.id).where(Organisation.id == org_id))
+                ).scalar_one_or_none()
+                if org_exists is None:
+                    _log.warning(
+                        "webhooks.receive_webhook: org %s missing — skipping paused event write for trigger %s",
+                        org_id,
+                        trigger_id,
+                    )
+                    return {"status": "paused"}
                 paused_event = TriggerEvent(
                     organisation_id=org_id,
                     trigger_id=trigger.id,
                     trigger_type="webhook",
-                    raw_payload_hash=_sha256_hex(raw_body),
+                    raw_payload_hash=sha256_hex(raw_body),
                     validation_result="paused",
                 )
                 session.add(paused_event)
@@ -300,7 +321,7 @@ async def replay_webhook(
                 # over the stored payload (same check as receive_webhook).
                 hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
-                ts = _verify_timestamp(modulo_timestamp)
+                ts = verify_timestamp(modulo_timestamp)
                 cfg = trigger.config_json or {}
                 hmac_secret: str | None = cfg.get("hmac_secret")
                 if hmac_secret is None:
@@ -314,15 +335,15 @@ async def replay_webhook(
                 stored = payload_row.scalar_one_or_none()
                 if stored is None:
                     raise ReplayNotFoundError(event_id)
-                if not _verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
+                if not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
                     raise HmacValidationError()
 
             try:
                 # Pause pre-check AFTER principal auth / trigger load, BEFORE the
                 # snapshot — a paused org's replay is dropped with a committed
                 # ``paused`` TriggerEvent reusing the ORIGINAL event's hash.
-                if trigger.active and await org_is_paused(session, org_id):
-                    raise TriggersPausedError(trigger_id=trigger_id, org_id=org_id, trigger_type="webhook")
+                if trigger.active:
+                    await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
                 snapshot = await create_snapshot_from_live_graph(
                     session, pipeline_id=trigger.pipeline_id, account_id=None
@@ -342,6 +363,20 @@ async def replay_webhook(
             except TriggersPausedError:
                 from modulo.db.models.trigger_event import TriggerEvent as _TriggerEventModel
 
+                # Safe event write: an orphan trigger whose org row was
+                # HARD-deleted must not attempt the TriggerEvent INSERT (it
+                # would violate the organisations FK -> 503). Fail-closed with
+                # no event row and no crash.
+                org_exists = (
+                    await session.execute(select(Organisation.id).where(Organisation.id == org_id))
+                ).scalar_one_or_none()
+                if org_exists is None:
+                    _log.warning(
+                        "webhooks.replay_webhook: org %s missing — skipping paused event write for trigger %s",
+                        org_id,
+                        trigger_id,
+                    )
+                    return {"status": "paused"}
                 orig_result = await session.execute(
                     select(_TriggerEventModel).where(
                         _TriggerEventModel.id == event_id,

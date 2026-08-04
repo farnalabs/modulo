@@ -9,6 +9,11 @@ from modulo.db.crud.system_config import get_config
 
 _log = logging.getLogger(__name__)
 
+# Canonical skip-reason string for an org-wide trigger pause. Used by every
+# fire path (cron/polling/webhook/agent_signal) and the create_run gate so a
+# paused delivery is reported identically everywhere.
+PAUSE_SKIP_REASON = "triggers_paused"
+
 
 async def get_effective_setting(
     session: AsyncSession,
@@ -108,3 +113,24 @@ async def org_is_paused(session: AsyncSession, org_id: uuid.UUID) -> bool:
         return True
     triggers_paused, status = row
     return org_row_is_paused(status, triggers_paused)
+
+
+async def ensure_triggers_resumable(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    trigger_id: uuid.UUID | None = None,
+    trigger_type: str | None = None,
+) -> None:
+    """Raise ``TriggersPausedError`` if the org is paused/non-active.
+
+    Shared gate helper for every trigger-initiated run path (the ``create_run``
+    authority gate, the webhook engine + route pre-checks, and the cron/polling
+    fire jobs). Reads the org row via :func:`org_is_paused`; READ FAILURES
+    PROPAGATE untouched — never fabricate "paused" on a DB error (the caller
+    decides how to surface the read failure).
+    """
+    if await org_is_paused(session, org_id):
+        from modulo.core.exceptions import TriggersPausedError
+
+        raise TriggersPausedError(trigger_id=trigger_id, org_id=org_id, trigger_type=trigger_type)

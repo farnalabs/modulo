@@ -154,12 +154,13 @@ concurrency management via `max_concurrent_runs`.
 - [x] Idempotent toggle: re-PUTting the current state writes no audit event
 - [x] Toggle audited as `triggers_paused` (payload `{paused: bool}`) with fail-open-with-alert audit (toggle always commits; audit failures loudly logged)
 - [x] `create_run` is the SINGLE authority gate: blocks NEW trigger-initiated runs (webhook/replay/cron/polling/agent_signal) when the org is paused; manual, `test_trigger`, feedback correction, and variant runs pass
-- [x] Paused webhook/replay delivery → HTTP 202 `{"status":"paused"}` with NO `run_id` and exactly one committed `TriggerEvent` with `validation_result='paused'`
+- [x] Paused webhook/replay delivery → HTTP 202 `{"status":"paused"}` with NO `run_id` and exactly one committed `TriggerEvent` with `validation_result='paused'` (skipped entirely if the org row was HARD-deleted — an orphan trigger insert would violate the organisations FK)
 - [x] Cron/polling fire jobs on a paused org → `{"status":"skipped","reason":"triggers_paused"}` (early check + `create_run` race backstop; no paused event from the fire path)
-- [x] Agent signal on a paused org → exactly one `paused` TriggerEvent, result `skipped/org_triggers_paused`
+- [x] Agent signal on a paused org → exactly one `paused` TriggerEvent, result `skipped/triggers_paused`
 - [x] `fire_due_triggers` SKIP-not-defer: cron/polling enqueue skipped for paused orgs while `next_fire_at` still advances; `cron_skipped_paused`/`polling_skipped_paused` counters; scheduled reports still enqueue
-- [x] `list_triggers` returns top-level `triggers_paused` + `paused_at` (fresh column-level read)
-- [x] Migration 0065 adds `organisations.triggers_paused`/`triggers_paused_at` + CHECK and widens `ck_trigger_events_validation_result` to the full 19-value vocabulary
+- [x] `list_triggers` returns top-level `triggers_paused` + `paused_at` reflecting the SAME predicate as the gate (`org_row_is_paused` = `triggers_paused` column OR non-active org `status`) — a suspended/deleted org shows the paused banner
+- [x] Pause read failure handling: scheduler batched read and per-item fire jobs degrade to not-paused on a pre-migration `ProgrammingError` (inside a savepoint for per-item jobs — transaction never poisoned); any other `SQLAlchemyError` RE-RAISES so the tick/job fails and SAQ retries — never fabricate "paused" on a DB error
+- [x] Migration 0065 adds `organisations.triggers_paused`/`triggers_paused_at` + CHECK and widens `ck_trigger_events_validation_result` to the full 19-value vocabulary (dialect-guarded: Postgres `NOT VALID`/`VALIDATE`; SQLite via Alembic batch mode)
 - [x] Validation-result vocabulary extended to 19 values (adds `event_type_not_accepted`, `spend_limit_reached`, `no_pipeline`, `test`, `paused`) — fixes pre-existing IntegrityError on those writes
 
 ## Edge Cases

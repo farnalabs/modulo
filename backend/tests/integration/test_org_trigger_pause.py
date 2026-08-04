@@ -392,7 +392,11 @@ async def test_race_backstop_engine_gate_commits_paused_event(
     body = b'{"event": "push", "ref": "refs/heads/main"}'
     ts = _valid_timestamp()
     sig = _hmac_sign(body, "secret-a-1234567890", int(ts))
-    with patch("modulo.api.routes.webhooks.org_is_paused", new_callable=AsyncMock, return_value=False):
+    # Neutralise ONLY the route pre-check (a no-op = "saw not paused" -> TOCTOU
+    # window opens). The engine's own real gate (ensure_triggers_resumable ->
+    # settings_resolver.org_is_paused) still reads the DB, sees the paused org,
+    # and raises — the route's inner catch then commits the paused event.
+    with patch("modulo.api.routes.webhooks.ensure_triggers_resumable", new_callable=AsyncMock):
         resp = await integration_client.post(
             f"/api/v1/triggers/{trigger_a}/webhook",
             content=body,

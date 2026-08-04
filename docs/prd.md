@@ -1083,8 +1083,10 @@ gate (the authority). Cron/polling fire jobs return `{"status":"skipped",
 "reason":"triggers_paused"}`. Webhook/replay deliveries to a paused org return
 **HTTP 202 `{"status":"paused"}`** with **no `run_id`**, and exactly one
 `TriggerEvent` with `validation_result='paused'` is committed (written
-in-transaction by the route). Agent signals log a single `paused` TriggerEvent
-and skip.
+in-transaction by the route). If the org row has been HARD-deleted (orphan
+trigger), the paused delivery still returns 202 `{"status":"paused"}` but the
+`TriggerEvent` write is skipped (an insert would violate the organisations FK →
+503). Agent signals log a single `paused` TriggerEvent and skip.
 
 **What is NOT paused (documented escape hatches):** running pipelines continue
 against their snapshot to completion; manual runs (`POST /runs`),
@@ -1103,9 +1105,16 @@ unpause). The scheduled-tick audit is counters + summary only (`cron_skipped_pau
 
 **Deploy order is migration-before-code** (0065 adds `organisations.triggers_paused`
 + `triggers_paused_at` and widens `ck_trigger_events_validation_result` to the
-full 19-value vocabulary). Until the migration lands, the scheduler's pause read
-degrades gracefully (`pause_read='degraded'` → treat all orgs as not-paused;
-any other read failure is `pause_read='error'` → fail-closed, all orgs paused).
+full 19-value vocabulary). Until the migration lands, the scheduler's batched
+pause read (a dedicated read in its own session/transaction) degrades on a
+`ProgrammingError` (missing `triggers_paused` column) to treat all orgs as
+not-paused (`pause_read='degraded'` — the transient pre-migration window). Any
+OTHER read failure (DB down / connection error) RE-RAISES so the tick fails and
+the SAQ system cron retries — a pause-read failure is never fabricated into
+"paused" for every org. Per-item cron/polling fire jobs mirror this: a
+`ProgrammingError` on their org-pause read degrades to not-paused inside a
+savepoint (the per-item transaction is never poisoned); any other
+`SQLAlchemyError` propagates so the job fails and SAQ retries.
 
 #### TLS for Webhook Triggers in Alpha
 Alpha webhook trigger is tested with generic HTTP payloads, not GitHub specifically. GitHub requires HTTPS. Local development uses ngrok or similar tunnel — documented in the developer setup guide. The docker-compose ships a commented-out Caddy config for HTTPS termination. GitHub webhooks are a v1 use case deployed behind real TLS.

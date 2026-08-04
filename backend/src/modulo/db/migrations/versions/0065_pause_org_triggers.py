@@ -20,10 +20,19 @@ A defensive ``SELECT`` runs before ``VALIDATE CONSTRAINT`` and raises (without
 mutating rows) if any existing row violates the new vocabulary.
 
 The vocabulary is HARDCODED here — migrations never import app constants.
+
+Multi-backend notes (M7): ``NOT VALID`` / ``VALIDATE CONSTRAINT`` /
+``ALTER TABLE ... ADD/DROP CONSTRAINT`` are Postgres-only. On SQLite
+(dev/tests, ``env.py`` uses ``render_as_batch``) the constraint re-creation
+goes through ``batch_alter_table`` (full table rebuild, which enforces the
+check on existing rows — the SQLite analogue of VALIDATE) and the columns use
+portable ``sa.Boolean`` / ``sa.TIMESTAMP(timezone=True)`` (SQLite ignores the
+timezone flag but accepts the type).
 """
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import bindparam, text
 
@@ -55,59 +64,106 @@ _VALIDATION_RESULT_VALUES = (
 )
 
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
+_ORG_CHECK_CONSTRAINT_NAME = "ck_organisations_triggers_paused_at"
+
+
+def _is_postgres() -> bool:
+    return op.get_bind().dialect.name == "postgresql"
 
 
 def upgrade() -> None:
     conn = op.get_bind()
+    is_postgres = _is_postgres()
 
-    # (a) organisations — additive columns + consistency CHECK.
-    op.execute("ALTER TABLE organisations ADD COLUMN triggers_paused BOOLEAN NOT NULL DEFAULT FALSE")
-    op.execute("ALTER TABLE organisations ADD COLUMN triggers_paused_at TIMESTAMPTZ NULL")
-    op.execute(
-        "ALTER TABLE organisations ADD CONSTRAINT ck_organisations_triggers_paused_at "
-        "CHECK (NOT triggers_paused OR triggers_paused_at IS NOT NULL)"
+    # (a) organisations — additive columns + consistency CHECK. Portable column
+    # types (sa.Boolean / sa.TIMESTAMP(timezone=True)); the CHECK constraint
+    # needs dialect-specific DDL (raw ALTER on Postgres, batch rebuild on
+    # SQLite which cannot ADD CONSTRAINT).
+    op.add_column(
+        "organisations",
+        sa.Column("triggers_paused", sa.Boolean(), nullable=False, server_default=sa.text("false")),
     )
+    op.add_column(
+        "organisations",
+        sa.Column("triggers_paused_at", sa.TIMESTAMP(timezone=True), nullable=True),
+    )
+    if is_postgres:
+        op.execute(
+            f"ALTER TABLE organisations ADD CONSTRAINT {_ORG_CHECK_CONSTRAINT_NAME} "
+            "CHECK (NOT triggers_paused OR triggers_paused_at IS NOT NULL)"
+        )
+    else:
+        with op.batch_alter_table("organisations") as batch:
+            batch.create_check_constraint(
+                _ORG_CHECK_CONSTRAINT_NAME,
+                "NOT triggers_paused OR triggers_paused_at IS NOT NULL",
+            )
 
     # (b) trigger_events — drop the old 14-value constraint and re-add the full
-    # vocabulary as NOT VALID, then validate. ``NOT VALID`` skips the full-table
-    # scan during the ADD; the explicit VALIDATE catches pre-existing offenders.
-    op.execute(f"ALTER TABLE trigger_events DROP CONSTRAINT IF EXISTS {_CHECK_CONSTRAINT_NAME}")
+    # vocabulary. Postgres: ``NOT VALID`` skips the full-table scan during the
+    # ADD; the explicit VALIDATE catches pre-existing offenders. SQLite: batch
+    # mode rebuilds the table and enforces the check on existing rows.
     vocab_sql = ", ".join(f"'{v}'" for v in _VALIDATION_RESULT_VALUES)
-    op.execute(
-        f"ALTER TABLE trigger_events ADD CONSTRAINT {_CHECK_CONSTRAINT_NAME} "
-        f"CHECK (validation_result IN ({vocab_sql})) NOT VALID"
-    )
-
-    # Defensive check — do NOT mutate rows, only surface offenders loudly.
-    # Expanding bind parameter: injection-safe, no string interpolation.
-    bad = (
-        conn.execute(
-            text(
-                "SELECT DISTINCT validation_result FROM trigger_events WHERE validation_result NOT IN :vocab"
-            ).bindparams(bindparam("vocab", expanding=True)),
-            {"vocab": list(_VALIDATION_RESULT_VALUES)},
-        )
-        .scalars()
-        .all()
-    )
-    if bad:
-        raise RuntimeError(
-            "Cannot widen ck_trigger_events_validation_result: existing rows carry "
-            f"out-of-vocabulary validation_result values: {sorted(str(v) for v in bad)}"
+    if is_postgres:
+        op.execute(f"ALTER TABLE trigger_events DROP CONSTRAINT IF EXISTS {_CHECK_CONSTRAINT_NAME}")
+        op.execute(
+            f"ALTER TABLE trigger_events ADD CONSTRAINT {_CHECK_CONSTRAINT_NAME} "
+            f"CHECK (validation_result IN ({vocab_sql})) NOT VALID"
         )
 
-    op.execute(f"ALTER TABLE trigger_events VALIDATE CONSTRAINT {_CHECK_CONSTRAINT_NAME}")
+        # Defensive check — do NOT mutate rows, only surface offenders loudly.
+        # Expanding bind parameter: injection-safe, no string interpolation.
+        bad = (
+            conn.execute(
+                text(
+                    "SELECT DISTINCT validation_result FROM trigger_events WHERE validation_result NOT IN :vocab"
+                ).bindparams(bindparam("vocab", expanding=True)),
+                {"vocab": list(_VALIDATION_RESULT_VALUES)},
+            )
+            .scalars()
+            .all()
+        )
+        if bad:
+            raise RuntimeError(
+                "Cannot widen ck_trigger_events_validation_result: existing rows carry "
+                f"out-of-vocabulary validation_result values: {sorted(str(v) for v in bad)}"
+            )
+
+        op.execute(f"ALTER TABLE trigger_events VALIDATE CONSTRAINT {_CHECK_CONSTRAINT_NAME}")
+    else:
+        with op.batch_alter_table("trigger_events") as batch:
+            batch.drop_constraint(_CHECK_CONSTRAINT_NAME, type_="check")
+            batch.create_check_constraint(
+                _CHECK_CONSTRAINT_NAME,
+                f"validation_result IN ({vocab_sql})",
+            )
 
 
 def downgrade() -> None:
-    op.execute(f"ALTER TABLE trigger_events DROP CONSTRAINT IF EXISTS {_CHECK_CONSTRAINT_NAME}")
-    op.execute(
-        "ALTER TABLE trigger_events ADD CONSTRAINT ck_trigger_events_validation_result "
-        "CHECK (validation_result IN ('accepted', 'passed', 'hmac_failed', "
-        "'schema_validation_failed', 'deduplicated', 'concurrency_limit_reached', "
-        "'flood_rejected', 'timestamp_expired', 'validation_failed', 'rate_limited', "
-        "'no_match', 'condition_met', 'poll_error', 'signal_fired'))"
+    is_postgres = _is_postgres()
+    vocab_sql = (
+        "'accepted', 'passed', 'hmac_failed', 'schema_validation_failed', "
+        "'deduplicated', 'concurrency_limit_reached', 'flood_rejected', "
+        "'timestamp_expired', 'validation_failed', 'rate_limited', 'no_match', "
+        "'condition_met', 'poll_error', 'signal_fired'"
     )
-    op.execute("ALTER TABLE organisations DROP CONSTRAINT IF EXISTS ck_organisations_triggers_paused_at")
-    op.execute("ALTER TABLE organisations DROP COLUMN IF EXISTS triggers_paused_at")
-    op.execute("ALTER TABLE organisations DROP COLUMN IF EXISTS triggers_paused")
+    if is_postgres:
+        op.execute(f"ALTER TABLE trigger_events DROP CONSTRAINT IF EXISTS {_CHECK_CONSTRAINT_NAME}")
+        op.execute(
+            f"ALTER TABLE trigger_events ADD CONSTRAINT {_CHECK_CONSTRAINT_NAME} "
+            f"CHECK (validation_result IN ({vocab_sql}))"
+        )
+        op.execute(f"ALTER TABLE organisations DROP CONSTRAINT IF EXISTS {_ORG_CHECK_CONSTRAINT_NAME}")
+        op.execute("ALTER TABLE organisations DROP COLUMN IF EXISTS triggers_paused_at")
+        op.execute("ALTER TABLE organisations DROP COLUMN IF EXISTS triggers_paused")
+    else:
+        with op.batch_alter_table("trigger_events") as batch:
+            batch.drop_constraint(_CHECK_CONSTRAINT_NAME, type_="check")
+            batch.create_check_constraint(
+                _CHECK_CONSTRAINT_NAME,
+                f"validation_result IN ({vocab_sql})",
+            )
+        with op.batch_alter_table("organisations") as batch:
+            batch.drop_constraint(_ORG_CHECK_CONSTRAINT_NAME, type_="check")
+        op.drop_column("organisations", "triggers_paused_at")
+        op.drop_column("organisations", "triggers_paused")

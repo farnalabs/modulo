@@ -36,6 +36,11 @@ class _MockBegin:
         return False
 
 
+class _MockBeginNested(_MockBegin):
+    """Savepoint-style context manager — the degraded pause check opens one so
+    a ProgrammingError rolls back only the check, never the outer transaction."""
+
+
 class _MockSession:
     """Async session double returning a fixed sequence of execute() results."""
 
@@ -56,6 +61,9 @@ class _MockSession:
 
     def begin(self) -> _MockBegin:
         return self.begin_cm
+
+    def begin_nested(self) -> _MockBeginNested:
+        return _MockBeginNested()
 
     def get_bind(self) -> Any:
         return self._get_bind()
@@ -220,7 +228,7 @@ class TestFireDueTriggers:
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, side_effect=[True, False]) as adv_cron,
             patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True) as adv_poll,
             patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True) as adv_report,
-            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
         ):
             redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
@@ -432,9 +440,10 @@ class TestFireDueTriggers:
         assert enqueue.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_pause_read_sqlalchemy_error_fail_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Other DB error on the pause read -> pause_read='error', all orgs
-        treated as paused (fail-closed)."""
+    async def test_pause_read_sqlalchemy_error_reraises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Other DB error (connection down) on the pause read -> RE-RAISE so the
+        tick fails and the SAQ system cron retries. Never fabricate 'paused'
+        for every org on a DB blip."""
         _patch_env(monkeypatch)
         session = _MockSession(
             [
@@ -464,11 +473,9 @@ class TestFireDueTriggers:
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
         ):
             redis_cls.from_url.return_value = redis_client
-            summary = await ch.fire_due_triggers()
+            with pytest.raises(SQLAlchemyError, match="connection boom"):
+                await ch.fire_due_triggers()
 
-        assert summary["pause_read"] == "error"
-        assert summary["cron_skipped_paused"] == 1
-        assert summary["cron_enqueued"] == 0
         enqueue.assert_not_called()
 
 
@@ -792,6 +799,98 @@ class TestFireCronTriggerSkips:
         assert result["status"] == "skipped"
         assert result["reason"] == "triggers_paused"
         assert session.added == []
+
+    @pytest.mark.asyncio
+    async def test_cron_fire_degrades_on_pause_read_programming_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pre-migration DB: a ProgrammingError from the org pause read degrades
+        to NOT paused (inside a savepoint, so the transaction is never poisoned)
+        and the job proceeds to fire — mirroring the scheduler's not-paused
+        choice, instead of dead-lettering every cron job."""
+        _patch_env(monkeypatch)
+
+        from modulo.db.models.trigger import Trigger
+
+        trigger = MagicMock(spec=Trigger)
+        trigger.id = TRIGGER_A
+        trigger.organisation_id = ORG
+        trigger.pipeline_id = uuid.uuid4()
+        trigger.active = True
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = None
+        trigger.config_json = {}
+
+        lock_result = MagicMock()
+        lock_result.scalar_one.return_value = True
+        trigger_result = MagicMock()
+        trigger_result.scalar_one_or_none.return_value = trigger
+
+        session = _MockSession([lock_result, trigger_result])
+        factory = MagicMock(return_value=session)
+        run_mock = MagicMock()
+        run_mock.id = uuid.uuid4()
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock) as log_event,
+            patch.object(
+                ch,
+                "org_is_paused",
+                new_callable=AsyncMock,
+                side_effect=ProgrammingError("stmt", {}, Exception("column triggers_paused does not exist")),
+            ),
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run_mock),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=TRIGGER_A,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        # Degraded not-paused -> the job proceeds and fires a run.
+        assert result["status"] == "fired"
+        assert log_event.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_cron_fire_propagates_on_pause_read_sqlalchemy_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A plain SQLAlchemyError (DB down / connection error) from the org
+        pause read PROPAGATES so the job fails and SAQ retries — never degraded
+        to not-paused, never fabricated into paused."""
+        _patch_env(monkeypatch)
+
+        from modulo.db.models.trigger import Trigger
+
+        trigger = MagicMock(spec=Trigger)
+        trigger.id = TRIGGER_A
+        trigger.organisation_id = ORG
+        trigger.pipeline_id = uuid.uuid4()
+        trigger.active = True
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = None
+        trigger.config_json = {}
+
+        lock_result = MagicMock()
+        lock_result.scalar_one.return_value = True
+        trigger_result = MagicMock()
+        trigger_result.scalar_one_or_none.return_value = trigger
+
+        session = _MockSession([lock_result, trigger_result])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "org_is_paused", new_callable=AsyncMock, side_effect=SQLAlchemyError("connection boom")),
+            pytest.raises(SQLAlchemyError, match="connection boom"),
+        ):
+            await ch.fire_cron_trigger(
+                trigger_id=TRIGGER_A,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
 
     @pytest.mark.asyncio
     async def test_polling_skips_when_org_triggers_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1511,3 +1610,81 @@ class TestClearReportFailureCounter:
         redis_client.delete = AsyncMock(side_effect=RuntimeError("redis down"))
 
         await ch._clear_report_failure_counter(redis_client, REPORT)
+
+
+# ---------------------------------------------------------------------------
+
+
+class TestCreateRunPauseClassification:
+    """Table test: for every known run trigger_type, the create_run gate's
+    pause classification is correct — webhook/cron/polling/agent_signal are
+    pause-eligible when trigger_id is set; manual/correction are exempt;
+    trigger_id=None bypasses the gate entirely."""
+
+    @pytest.mark.parametrize(
+        ("trigger_type", "pause_eligible"),
+        [
+            ("manual", False),
+            ("webhook", True),
+            ("cron", True),
+            ("polling", True),
+            ("agent_signal", True),
+            ("correction", False),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_known_trigger_types_classified(
+        self, monkeypatch: pytest.MonkeyPatch, trigger_type: str, pause_eligible: bool
+    ) -> None:
+        _patch_env(monkeypatch)
+        from modulo.core.exceptions import TriggersPausedError
+        from modulo.db.crud.run import create_run
+
+        run_number_result = MagicMock()
+        run_number_result.scalar_one.return_value = 0
+        session = _MockSession([run_number_result])
+        with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True):
+            if pause_eligible:
+                with pytest.raises(TriggersPausedError):
+                    await create_run(
+                        session,
+                        org_id=ORG,
+                        pipeline_id=uuid.uuid4(),
+                        snapshot_id=uuid.uuid4(),
+                        trigger_type=trigger_type,
+                        input_payload={},
+                        trigger_id=TRIGGER_A,
+                    )
+            else:
+                run = await create_run(
+                    session,
+                    org_id=ORG,
+                    pipeline_id=uuid.uuid4(),
+                    snapshot_id=uuid.uuid4(),
+                    trigger_type=trigger_type,
+                    input_payload={},
+                    trigger_id=TRIGGER_A,
+                )
+                assert run.id is not None
+
+    @pytest.mark.asyncio
+    async def test_trigger_id_none_bypasses_gate_even_when_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pause-eligible trigger_type with trigger_id=None (a run created
+        without a Trigger row — scheduled reports / variants) bypasses the gate."""
+        _patch_env(monkeypatch)
+        from modulo.db.crud.run import create_run
+
+        run_number_result = MagicMock()
+        run_number_result.scalar_one.return_value = 0
+        session = _MockSession([run_number_result])
+        with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True):
+            run = await create_run(
+                session,
+                org_id=ORG,
+                pipeline_id=uuid.uuid4(),
+                snapshot_id=uuid.uuid4(),
+                trigger_type="cron",
+                input_payload={},
+                trigger_id=None,
+            )
+            assert run.id is not None
