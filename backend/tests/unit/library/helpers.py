@@ -7,7 +7,7 @@ way a hand-maintained list can.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from modulo.core.library.agents import definitions as _agent_defs
 from modulo.core.library.complexity_reviewer import COMPLEXITY_REVIEWER
@@ -74,6 +74,10 @@ def build_valid_document(definition: dict[str, Any]) -> dict[str, Any]:
             document[required] = 1
         elif prop_type == "boolean":
             document[required] = True
+        elif prop_schema.get("format") == "date":
+            document[required] = "2000-01-01"
+        elif prop_schema.get("format") == "date-time":
+            document[required] = "2000-01-01T00:00:00Z"
         else:
             document[required] = "x"
     return document
@@ -98,11 +102,12 @@ def enum_bearing_schemas() -> dict[str, dict[str, list[str]]]:
     """Return ``schema_name -> {property: enum_values}`` from the source."""
     result: dict[str, dict[str, list[str]]] = {}
     for entry in SCHEMAS:
+        definition = cast(dict[str, Any], entry["definition"])
         enums = {
             name: prop_schema["enum"]
-            for name, prop_schema in entry["definition"].get("properties", {}).items()
+            for name, prop_schema in definition.get("properties", {}).items()
             if "enum" in prop_schema
         }
         if enums:
-            result[entry["name"]] = enums
+            result[cast(str, entry["name"])] = enums
     return result
