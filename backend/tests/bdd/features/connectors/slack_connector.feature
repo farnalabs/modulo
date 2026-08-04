@@ -164,6 +164,26 @@ Feature: Slack Connector
     When I write resource "schedule_message" with channel "C001" but no post_at
     Then the write is an error
 
+  Scenario: List scheduled messages
+    Given a Slack connector with valid bot token
+    When I query resource "scheduled_messages" with channel "C001"
+    Then the result has records
+
+  Scenario: List scheduled messages without channel
+    Given a Slack connector with valid bot token
+    When I query resource "scheduled_messages"
+    Then the result has records
+
+  Scenario: Delete a scheduled message
+    Given a Slack connector with valid bot token
+    When I write resource "scheduled_message_delete" with channel "C001" and scheduled_message_id "Q1234"
+    Then the write succeeds
+
+  Scenario: Delete a scheduled message without scheduled_message_id raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "scheduled_message_delete" with channel "C001" but no scheduled_message_id
+    Then the write is an error
+
   Scenario: Upload a file to a channel
     Given a Slack connector with valid bot token
     When I write resource "file_upload" with filename "notes.txt" and content "hello"
