@@ -84,6 +84,8 @@ _EXPECTED_MAPPING = {
     "budget_exceeded": ("warning", "org", "run.budget_exceeded", "org_admin", True, 168),
     "claim_expired": ("info", "org", "hitl.claim_expired", "any_scope", True, 24),
     "hitl_overdue": ("warning", "admin", "hitl.overdue", "org_admin", True, 168),
+    "hitl_gate_removed": ("warning", "admin", "hitl.gate_removed", "org_admin", True, 168),
+    "hitl_gate_removal_denied": ("error", "admin", "hitl.gate_removal_denied", "org_admin", True, 168),
     "eval_regression": ("warning", "org", "eval.regression", "any_scope", True, 336),
     "eval_blocked": ("error", "org", "eval.blocked", "any_scope", True, 168),
     "feedback_pending": ("info", "user", "feedback.pending", "user_only", False, 336),
@@ -105,6 +107,7 @@ async def test_known_event_maps_config(
     dismissible_at_scope: bool,
     ttl_hours: int,
 ) -> None:
+    before = datetime.now(UTC)
     result, mock_create = await _call(mapper, event_type)
     assert result is not None
     mock_create.assert_awaited_once()
@@ -116,6 +119,9 @@ async def test_known_event_maps_config(
     assert kwargs["dismiss_strategy"] == dismiss_strategy
     assert kwargs["dismissible_at_scope"] is dismissible_at_scope
     assert kwargs["target_user_id"] is None
+    expires_at = kwargs["expires_at"]
+    assert expires_at is not None
+    assert (expires_at - before).total_seconds() == pytest.approx(ttl_hours * 3600, abs=30)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +185,24 @@ async def test_hitl_overdue_templates_resolved(mapper: NotificationEventMapper) 
     assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
 
 
+async def test_hitl_gate_removed_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """hitl_gate_removed has no action URL and formats pipeline_name."""
+    _, mock_create = await _call(mapper, "hitl_gate_removed")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "HITL gate weakened — my-pipeline"
+    assert kwargs["body"] == 'A HITL gate on "my-pipeline" was weakened or removed.'
+    assert kwargs["action_url"] is None
+
+
+async def test_hitl_gate_removal_denied_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """hitl_gate_removal_denied is fully static (no payload fields, no action URL)."""
+    _, mock_create = await _call(mapper, "hitl_gate_removal_denied")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "HITL gate removal denied"
+    assert kwargs["body"] == "A non-privileged attempt to weaken a HITL gate was denied."
+    assert kwargs["action_url"] is None
+
+
 async def test_system_announcement_uses_message_payload(mapper: NotificationEventMapper) -> None:
     _, mock_create = await _call(mapper, "system_announcement")
     kwargs = mock_create.await_args.kwargs
@@ -226,20 +250,6 @@ async def test_missing_pipeline_name_key_does_not_crash(mapper: NotificationEven
 # ---------------------------------------------------------------------------
 # Expiry computation
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("event_type", "ttl_hours"),
-    [("hitl_awaiting", 72), ("run_failed", 168), ("claim_expired", 24), ("eval_regression", 336)],
-)
-async def test_expires_at_computed_from_ttl(mapper: NotificationEventMapper, event_type: str, ttl_hours: int) -> None:
-    before = datetime.now(UTC)
-    _, mock_create = await _call(mapper, event_type)
-    kwargs = mock_create.await_args.kwargs
-    expires_at = kwargs["expires_at"]
-    assert expires_at is not None
-    delta = expires_at - before
-    assert delta.total_seconds() == pytest.approx(ttl_hours * 3600, abs=30)
 
 
 async def test_system_announcement_has_no_expiry(mapper: NotificationEventMapper) -> None:
