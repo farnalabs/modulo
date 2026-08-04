@@ -8052,6 +8052,10 @@ export interface components {
         DetectParamsRequest: {
             /** Node Ids */
             node_ids?: string[];
+            /** Nodes */
+            nodes?: {
+                [key: string]: unknown;
+            }[];
         };
         /** DetectParamsResponse */
         DetectParamsResponse: {

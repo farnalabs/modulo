@@ -75,6 +75,7 @@
         <PortDefinitionPanel
           :ports="ports"
           :node-ids="flowNodeIds"
+          :nodes="rawNodes"
           @update:ports="onPortsUpdate"
         />
       </aside>
