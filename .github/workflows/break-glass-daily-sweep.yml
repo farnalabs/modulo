@@ -93,12 +93,35 @@ jobs:
               timeout=300,
           )
           cli_exit = proc.returncode
-          cli_ok = cli_exit in (0, 5)
+
+          # Exit 5 (EXIT_PRECONDITIONS) has a DUAL meaning. It is emitted BOTH for
+          # the non-zero-exit-on-live-rows condition (status --all exits 5 when any
+          # live row exists, stdout carrying the JSON rows) AND for an
+          # operator-authentication failure (authenticate_operator raises
+          # PreconditionError in the click group callback, which exits 5 with EMPTY
+          # stdout - the status JSON is only rendered after auth succeeds). Only
+          # accept exit 5 as the live-rows condition when stdout actually parsed to
+          # a non-empty JSON row list; otherwise fail loudly so a misprovisioned or
+          # rotated MODULO_BREAK_GLASS_OPERATOR_SECRET cannot silently produce a
+          # CLEAN sweep with no alert.
           rows: list[dict] = []
-          try:
-              if proc.stdout.strip():
-                  rows = json.loads(proc.stdout)
-          except json.JSONDecodeError:
+          stdout_parsed = False
+          if proc.stdout.strip():
+              try:
+                  parsed = json.loads(proc.stdout)
+                  if isinstance(parsed, list):
+                      rows = parsed
+                      stdout_parsed = True
+              except json.JSONDecodeError:
+                  stdout_parsed = False
+
+          if cli_exit == 5:
+              # Live-rows condition only when stdout actually carried the JSON rows.
+              cli_ok = stdout_parsed and bool(rows)
+          elif cli_exit == 0:
+              # Clean exit must still carry the JSON row list (defensive).
+              cli_ok = stdout_parsed
+          else:
               cli_ok = False
 
           live = [r for r in rows if r.get("state") == "live"]
@@ -153,7 +176,9 @@ jobs:
           # 4. Evidence artifact at docs/reviews/break-glass-daily-sweep/YYYY-MM-DD.md
           evidence_dir = repo_root / "docs" / "reviews" / "break-glass-daily-sweep"
           evidence_dir.mkdir(parents=True, exist_ok=True)
-          if live:
+          if not cli_ok:
+              status_label = "SWEEP FAILURE"
+          elif live:
               status_label = "LIVE ROWS"
           elif forgery_flags:
               status_label = "FORGERY FLAGGED"
@@ -234,7 +259,16 @@ jobs:
               )
 
           if not cli_ok:
-              print("::error::modulo-break-glass status --all --json failed (exit {})".format(cli_exit), file=sys.stderr)
+              if cli_exit == 5:
+                  print(
+                      "::error::modulo-break-glass status --all --json exited 5 (EXIT_PRECONDITIONS) "
+                      "without parsed live-row JSON - likely an operator-authentication failure "
+                      "(MODULO_BREAK_GLASS_OPERATOR_SECRET misprovisioned or rotated) or an "
+                      "unexpected precondition; treat as sweep FAILURE",
+                      file=sys.stderr,
+                  )
+              else:
+                  print("::error::modulo-break-glass status --all --json failed (exit {})".format(cli_exit), file=sys.stderr)
               if proc.stderr:
                   print(proc.stderr, file=sys.stderr)
               sys.exit(1)
