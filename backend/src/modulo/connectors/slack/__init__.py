@@ -296,7 +296,7 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/users.getPresence", params={"user": user})
         body = await self._parse_json(r)
         _check_slack_ok(body, "users.getPresence")
-        return ConnectorResult(records=[{"user": user, **body}])
+        return ConnectorResult(records=[{"user": user, **{k: v for k, v in body.items() if k != "ok"}}])
 
     async def _get_user_profile(self, q: ConnectorQuery) -> ConnectorResult:
         if "user" not in q.filters:
@@ -308,7 +308,7 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/users.profile.get", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "users.profile.get")
-        return ConnectorResult(records=[{"user": user, **body}])
+        return ConnectorResult(records=[{"user": user, **{k: v for k, v in body.items() if k != "ok"}}])
 
     async def _lookup_user_by_email(self, q: ConnectorQuery) -> ConnectorResult:
         if "email" not in q.filters:

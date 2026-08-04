@@ -2051,10 +2051,10 @@ def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
-        ctx["query_error"] = None
+        ctx["write_error"] = None
     except Exception as exc:
         ctx["write_result"] = None
-        ctx["query_error"] = str(exc)
+        ctx["write_error"] = str(exc)
 
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}" and text "{text}"'))
@@ -2070,10 +2070,10 @@ def step_slack_update_message(resource, channel, ts, text, ctx):
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
-        ctx["query_error"] = None
+        ctx["write_error"] = None
     except Exception as exc:
         ctx["write_result"] = None
-        ctx["query_error"] = str(exc)
+        ctx["write_error"] = str(exc)
 
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and ts "{ts}"'))
@@ -2089,10 +2089,10 @@ def step_slack_delete_message(resource, channel, ts, ctx):
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
-        ctx["query_error"] = None
+        ctx["write_error"] = None
     except Exception as exc:
         ctx["write_result"] = None
-        ctx["query_error"] = str(exc)
+        ctx["write_error"] = str(exc)
 
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}"'))
@@ -2105,10 +2105,10 @@ def step_slack_channel_write(resource, channel, ctx):
     try:
         result = asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = result
-        ctx["query_error"] = None
+        ctx["write_error"] = None
     except Exception as exc:
         ctx["write_result"] = None
-        ctx["query_error"] = str(exc)
+        ctx["write_error"] = str(exc)
 
 
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no user'))
@@ -2121,10 +2121,10 @@ def step_slack_ephemeral_no_user(resource, channel, ctx):
     try:
         asyncio.run(ctx["connector"].write(payload))
         ctx["write_result"] = "unexpected_success"
-        ctx["query_error"] = None
+        ctx["write_error"] = None
     except Exception as exc:
         ctx["write_result"] = None
-        ctx["query_error"] = str(exc)
+        ctx["write_error"] = str(exc)
 
 
 @then("the records contain channel metadata")
