@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Bypass deploy throttle (3h interval)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: deploy-pipeline-${{ github.event.workflow_run.head_branch || github.ref_name }}
@@ -47,6 +53,11 @@ jobs:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           INTERVAL_HOURS: ${{ vars.DEPLOY_INTERVAL_HOURS || 3 }}
         run: |
+          if [ "${{ github.event.inputs.force_deploy }}" = "true" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "Force deploy requested — bypassing throttle."
+            exit 0
+          fi
           LAST=$(gh run list --repo "${{ github.repository }}" \
             --workflow "Deploy: Staging + Prod" \
             --status success --limit 1 \
