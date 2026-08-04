@@ -1,6 +1,7 @@
 """CompositeTemplate CRUD REST API."""
 
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -456,10 +457,59 @@ async def save_composite_editor_endpoint(
 
 class DetectParamsRequest(BaseModel):
     node_ids: list[str] = Field(default_factory=list)
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DetectParamsResponse(BaseModel):
     ports: list[ParameterPort] = Field(default_factory=list)
+
+
+# Placeholder format used by the composite parameter system, e.g.
+# ``{{parameter.tone}}``. Kept in sync with the runtime expander.
+_PARAM_PLACEHOLDER_RE = re.compile(r"\{\{parameter\.(\w+)\}\}")
+
+# Prompt-bearing fields a sub-pipeline node may carry placeholders in.
+_PROMPT_FIELDS = ("prompt", "prompt_template", "agent_prompt")
+
+
+def _detect_parameter_ports(nodes: list[dict[str, Any]]) -> list[ParameterPort]:
+    """Scan *nodes* for ``{{parameter.<name>}}`` placeholders.
+
+    Each unique placeholder yields one ``ParameterPort`` whose
+    ``target_injection.node_id`` points at the first node that referenced it.
+    """
+    ports: list[ParameterPort] = []
+    seen: set[str] = set()
+    for node in nodes:
+        raw_id = node.get("id")
+        node_id = str(raw_id) if raw_id is not None else ""
+        for field in _PROMPT_FIELDS:
+            text = node.get(field)
+            if not isinstance(text, str):
+                continue
+            for name in _PARAM_PLACEHOLDER_RE.findall(text):
+                if name in seen:
+                    continue
+                seen.add(name)
+                ports.append(
+                    ParameterPort(
+                        id=str(uuid.uuid4()),
+                        name=name,
+                        label=name.replace("_", " ").title(),
+                        description=None,
+                        type="string",
+                        required=False,
+                        default_value=None,
+                        multiline=False,
+                        options=None,
+                        target_injection=TargetInjection(
+                            mode="prompt_replace",
+                            node_id=node_id,
+                            injection_point="prompt_template",
+                        ),
+                    )
+                )
+    return ports
 
 
 @handle_db_errors("composite_templates.detect_params_endpoint")
@@ -468,13 +518,15 @@ async def detect_params_endpoint(
     req: DetectParamsRequest,
     principal: TenantPrincipal = Depends(get_current_tenant_user),
 ) -> DetectParamsResponse:
-    """Scan sub-pipeline agent prompts for ``{{parameter.*}}`` placeholders.
+    """Scan sub-pipeline node prompts for ``{{parameter.*}}`` placeholders.
 
-    TODO: Implement actual prompt scanning. Currently returns an empty list.
-    The frontend handles empty results gracefully via its best-effort contract.
+    Best-effort detection: every unique ``{{parameter.<name>}}`` placeholder
+    found on the supplied node definitions (``prompt``, ``prompt_template``,
+    ``agent_prompt`` fields) yields a ``ParameterPort``. Nodes without matches
+    produce no ports, and the frontend merges new ports with existing ones.
     """
     try:
-        return DetectParamsResponse(ports=[])
+        return DetectParamsResponse(ports=_detect_parameter_ports(req.nodes))
     except HTTPException:
         raise
     except Exception:
