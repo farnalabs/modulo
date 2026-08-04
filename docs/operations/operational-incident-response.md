@@ -88,7 +88,7 @@ Medium / Low incident detected
   │
   ├─► Assigned engineer during business hours
   │     Verify severity
-  │     Create delivery-plan task
+  │     Raise a Linear ticket (FAR team)
   │     Schedule fix per SLA
 ```
 
@@ -611,8 +611,8 @@ connection refused) returns HTTP 503.
 | Platform lead (Tier 2) | Business hours + call-out | Mon-Fri 09:00-18:00 UTC |
 | CTO (Tier 3) | By phone | 24/7 (Critical only) |
 
-The on-call roster is maintained in the delivery plan (task
-`task-ops-on-call-roster`). See `Development/Dev-Harness/delivery/delivery-plan.json`.
+The on-call roster is maintained as a Linear issue in the farnalabs-modulo workspace
+(FAR team).
 
 ### 9.2 Contact Methods
 
@@ -685,7 +685,7 @@ Each action item must include:
 | Severity | Yes | High |
 | Due date | Yes | 2026-07-07 |
 | Verification | Yes | Alert fires when connections > 80% in staging |
-| Linked ticket | Recommended | Task ID from delivery plan |
+| Linked ticket | Recommended | Linear issue ID (FAR team) |
 
 ### 10.5 Lessons-Learned Integration
 
@@ -777,4 +777,4 @@ Run this checklist quarterly to ensure operational readiness:
 | Secret management | `docs/security/secret-management.md` |
 | Network egress audit | `docs/operations/network-egress.md` |
 | Product map (behaviour tracking) | `docs/product-map/` |
-| Delivery plan | `Development/Dev-Harness/delivery/delivery-plan.json` |
+| Delivery plan / work items | Linear (farnalabs-modulo workspace, FAR team) |
