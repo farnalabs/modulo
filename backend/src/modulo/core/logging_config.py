@@ -24,6 +24,8 @@ from sqlalchemy.exc import ProgrammingError
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 org_id_var: ContextVar[str | None] = ContextVar("org_id", default=None)
 
+_log = logging.getLogger(__name__)
+
 _SENSITIVE_KEYS: frozenset[str] = frozenset(
     {
         "api_key",
@@ -96,7 +98,6 @@ def _log_async_emit_error(future: asyncio.Task[None]) -> None:
     """Log any unhandled exception from ErrorTrackingLogHandler's async emit."""
     exc = future.exception()
     if exc is not None:
-        _log = logging.getLogger(__name__)
         _log.error("ErrorTrackingLogHandler.async_emit_failed", exc_info=exc)
 
 
@@ -124,7 +125,6 @@ class ErrorTrackingLogHandler(logging.Handler):
 
         limit = getattr(self, "_backlog_limit", 20)
         if self._pending_tasks >= limit:
-            _log = logging.getLogger(__name__)
             _log.warning("ErrorTrackingLogHandler.backlog_full — dropping record")
             return
 
@@ -168,7 +168,7 @@ class ErrorTrackingLogHandler(logging.Handler):
             try:
                 org_uuid = uuid.UUID(org_id)
             except ValueError:
-                logging.getLogger(__name__).warning("Ignoring log event with invalid organisation ID")
+                _log.warning("Ignoring log event with invalid organisation ID")
                 return
 
             message = record.getMessage()
@@ -209,12 +209,11 @@ class ErrorTrackingLogHandler(logging.Handler):
                         await set_rls_org(session, org_uuid)
                         await service.ingest(session, org_uuid, event_data)
                 except ProgrammingError:
-                    logging.getLogger(__name__).exception("Database unavailable while forwarding a log event")
+                    _log.exception("Database unavailable while forwarding a log event")
 
                     raise
 
         except Exception:
-            _log = logging.getLogger(__name__)
             _log.exception("ErrorTrackingLogHandler.ingest_failed")
 
 

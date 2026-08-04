@@ -942,8 +942,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                         ),
                         {"pids": [str(p) for p in pids]},
                     )
-                    for pipeline_id, snapshot_id in snap_result:
-                        latest_snapshots[pipeline_id] = snapshot_id
+                    latest_snapshots = {row[0]: row[1] for row in snap_result}
 
                 for row in cron_rows:
                     summary["cron_due"] += 1
