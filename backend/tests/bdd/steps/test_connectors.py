@@ -2405,6 +2405,26 @@ def step_slack_connector_invalid(ctx):
     ctx["connector"] = mock_connector
 
 
+@given("the Slack connector health check passes")
+def step_slack_health_check_passes(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="Bot is in at least one channel")
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@given("the Slack connector health check reports the bot is not in any channel")
+def step_slack_health_check_not_in_channel(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Bot is not in any channel")
+
+    ctx["connector"].health_check = mock_health_check
+
+
 @then("the health result indicates failure")
 def step_health_result_indicates_failure(ctx):
     result = ctx.get("health_result")

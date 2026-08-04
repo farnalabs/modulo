@@ -5,7 +5,15 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.slack import SlackConnector, _parse_retry_after
+from modulo.connectors.slack import (
+    SlackAPIError,
+    SlackAuthError,
+    SlackConnector,
+    SlackError,
+    SlackNetworkError,
+    SlackRateLimitError,
+    _parse_retry_after,
+)
 
 TOKEN = "xoxb-test-token"
 
@@ -25,6 +33,12 @@ async def test_health_check_ok(connector):
     )
     respx.get("https://slack.com/api/auth.test").mock(
         return_value=httpx.Response(200, json={"ok": True, "user_id": "U001"}),
+    )
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "channels": [{"id": "C001", "name": "general", "is_member": True}]},
+        ),
     )
     result = await connector.health_check()
     assert result.ok is True
@@ -527,6 +541,149 @@ async def test_health_check_revoked_token(connector):
     result = await connector.health_check()
     assert result.ok is False
     assert "token_revoked" in result.detail or "revoked" in result.detail
+
+
+# -- health_check: bot-in-channel verification --
+
+
+@respx.mock
+async def test_health_check_bot_not_in_channel(connector):
+    respx.get("https://slack.com/api/api.test").mock(
+        return_value=httpx.Response(200, json={"ok": True}),
+    )
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "user_id": "U001"}),
+    )
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channels": []}),
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "Bot is not in any channel" in result.detail
+
+
+@respx.mock
+async def test_health_check_membership_check_network_error(connector):
+    respx.get("https://slack.com/api/api.test").mock(
+        return_value=httpx.Response(200, json={"ok": True}),
+    )
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "user_id": "U001"}),
+    )
+    respx.get("https://slack.com/api/conversations.list").mock(
+        side_effect=httpx.ConnectError("Connection refused"),
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "network error" in result.detail
+
+
+@respx.mock
+async def test_health_check_membership_check_api_error(connector):
+    respx.get("https://slack.com/api/api.test").mock(
+        return_value=httpx.Response(200, json={"ok": True}),
+    )
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "user_id": "U001"}),
+    )
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "missing_scope"}),
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "Channel membership check failed" in result.detail
+
+
+# -- domain-specific exception types --
+
+
+def test_domain_exception_types_subclass_value_error():
+    assert issubclass(SlackError, ValueError)
+    assert issubclass(SlackAPIError, SlackError)
+    assert issubclass(SlackRateLimitError, SlackAPIError)
+    assert issubclass(SlackAuthError, SlackAPIError)
+    assert issubclass(SlackNetworkError, SlackError)
+
+
+@respx.mock
+async def test_rate_limit_error_type(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "0"}, text=""),
+    )
+    with pytest.raises(SlackRateLimitError, match="Slack API HTTP 429"):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
+
+
+@respx.mock
+async def test_auth_error_type_401(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(401, text="invalid_auth"),
+    )
+    with pytest.raises(SlackAuthError, match="Slack API HTTP 401"):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
+
+
+@respx.mock
+async def test_auth_error_type_403(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(403, text="Forbidden"),
+    )
+    with pytest.raises(SlackAuthError, match="Slack API HTTP 403"):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
+
+
+@respx.mock
+async def test_network_error_type_http_500(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(500, text="Internal Server Error"),
+    )
+    with pytest.raises(SlackNetworkError, match="Slack API HTTP 500"):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
+
+
+@respx.mock
+async def test_network_error_type_timeout(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        side_effect=httpx.TimeoutException("Timed out"),
+    )
+    with pytest.raises(SlackNetworkError, match="Slack API timeout"):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
+
+
+@respx.mock
+async def test_api_error_type_ok_false(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "not_authed"}),
+    )
+    with pytest.raises(SlackAPIError, match="not_authed"):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
+
+
+@respx.mock
+async def test_api_error_type_invalid_json(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(200, text="not-json"),
+    )
+    with pytest.raises(SlackAPIError, match="invalid JSON"):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
+
+
+@respx.mock
+async def test_verify_scopes_failure_is_auth_error(connector):
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "invalid_auth"}),
+    )
+    with pytest.raises(SlackAuthError, match="Token validation failed"):
+        await connector.verify_scopes()
+
+
+@respx.mock
+async def test_ok_false_errors_are_apis_errors(connector):
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(200, json={"ok": False, "error": "missing_scope"}),
+    )
+    with pytest.raises(SlackAPIError):
+        await connector.query(ConnectorQuery(resource="channels", limit=10))
 
 
 # -- channel_info --
