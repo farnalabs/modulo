@@ -224,7 +224,7 @@ jobs:
       - name: Check deployed SHA
         shell: pwsh
         run: |
-          $expectedSha = "main".Substring(0, 7)
+          $expectedSha = "${{ steps.git.outputs.git-sha }}".Substring(0, 7)
           $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
@@ -354,7 +354,7 @@ jobs:
       - name: Check deployed SHA
         shell: pwsh
         run: |
-          $expectedSha = "main".Substring(0, 7)
+          $expectedSha = "${{ steps.git.outputs.git-sha }}".Substring(0, 7)
           $info = curl -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
