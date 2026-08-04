@@ -39,10 +39,10 @@ class OrgDailyRunCount(OrgScoped):
         Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0"
     )
     # Daily-ledger clamp marker — set by check_and_record_spend when the
-    # started-at-day row is stored at the column ceiling. Migration 0065.
+    # started-at-day row is stored at the column ceiling. Migration 0066.
     clamped: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # Refused amount for the key, set at refusal; survives the run purge.
-    # Migration 0065.
+    # Migration 0066.
     refused_spend_usd: Mapped[Decimal] = mapped_column(
         Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0"
     )

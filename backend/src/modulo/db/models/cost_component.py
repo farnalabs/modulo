@@ -28,7 +28,7 @@ class CostComponent(SoftDeleteMixin, OrgScoped):  # SoftDeleteMixin FIRST (house
     evaluates the implicit ``reported``), required non-null for ``calculated``.
     Unique constraints are PARTIAL unique indexes (compose with soft delete):
     Postgres-only; on SQLite (dev backend) enforcement is delegated to
-    cross-field validation. See migration 0065 for the DDL.
+    cross-field validation. See migration 0066 for the DDL.
     """
 
     __tablename__ = "cost_components"

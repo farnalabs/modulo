@@ -154,6 +154,8 @@ def _extract_reported_cost(
     val = output_json.get("model_cost_raw_usd")
     if val is None:
         val = output_json.get("model_cost_usd")
+    if val is None:
+        return None
     if isinstance(val, bool):
         return None
     try:

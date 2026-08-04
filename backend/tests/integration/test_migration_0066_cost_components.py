@@ -1,4 +1,4 @@
-"""Migration 0065 surface assertions — the FIVE pinned columns, the NULLS NOT
+"""Migration 0066 surface assertions — the FIVE pinned columns, the NULLS NOT
 DISTINCT unique index, the dropped constraint, RLS, and the MIGRATE-role owner.
 
 Runs against the migrated testcontainer (test_initial_migration harness). The

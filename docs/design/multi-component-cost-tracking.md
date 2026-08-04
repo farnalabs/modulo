@@ -4,7 +4,7 @@
 **Owner:** Modulo product
 **Target PRD section:** 8.10 (Cost Controls) + new sub-section
 **Feature flag:** reuse `admin_cost_breakdown` (tier `team`)
-**Related:** ADR 019 (cost formula engine); migration `0065_cost_components`
+**Related:** ADR 019 (cost formula engine); migration `0066_cost_components`
 
 This document is the single implementable reference for the cost-tracking
 feature. The plan body it was derived from is historical. Section numbering
@@ -111,7 +111,7 @@ pattern).
 | `sort_order` | `Integer NOT NULL DEFAULT 0` | |
 
 `formula` is NULLABLE — `NULL` for `self_reported`, required non-null for
-`calculated`. `cost_components` is a BRAND-NEW table (migration 0065), so
+`calculated`. `cost_components` is a BRAND-NEW table (migration 0066), so
 `formula` is simply created nullable. The engine evaluates `reported` for the
 self_reported kind; the stored formula string is dropped for that kind. Seeds
 set `formula = NULL` on `model_tokens`.
@@ -1970,7 +1970,7 @@ Operator guide must state:
   cancelled class runs NO finalize — enumerable ONLY via the operator query.
 - The never-paused cross-process forfeiture class (`cost_components_partial_spend_lost`
   log, run_id only) is NOT in the operator query.
-- A deployment-window flag for migration 0065 (two blocking CREATE INDEX + the
+- A deployment-window flag for migration 0066 (two blocking CREATE INDEX + the
   constraint drop in one transaction; budget a maintenance window at
   production scale). `ix_runs_probe`/`ix_runs_refusal` are plain blocking
   CREATE INDEX on the hottest table.
@@ -2002,33 +2002,37 @@ Operator guide must state:
 
 ### 9.1 Migration — no data loss
 
-New migration `backend/src/modulo/db/migrations/versions/0065_cost_components.py`
-(down_revision `0064_merge_heads_0037`). The REAL tree: the live head is
-`0064_merge_heads_0037` — a MERGE migration (down_revision
+New migration `backend/src/modulo/db/migrations/versions/0066_cost_components.py`
+(down_revision `0065_reconcile_staging_schema`). The REAL tree: the live head is
+`0065_reconcile_staging_schema` (down_revision `0064_merge_heads_0037`) — the
+staging-schema-drift reconciliation migration merged on main (PR #618).
+`0064_merge_heads_0037` is itself a MERGE migration (down_revision
 ("0037_add_scheduled_reports_created_by", "0037_break_glass_enforcement")) that
 merged the two live 0037_* heads. `0063_merge_all_heads.py` carries the
-revision id "0036_merge_all_heads" but is NOT the head. 0065 is a NORMAL
+revision id "0036_merge_all_heads" but is NOT the head. 0066 is a NORMAL
 migration off the ACTUAL head, deployed via the EXISTING `upgrade heads`
-(plural) — NO pin. 0065 off `0064_merge_heads_0037` replaces it as a head — the
-tree STAYS at 1 head. The migration docstring states the REAL tree + the step-0
-command.
+(plural) — NO pin. 0066 was originally authored as 0065 off
+`0064_merge_heads_0037`; after #618 landed on main first it was renumbered to
+0066 with down_revision `0065_reconcile_staging_schema`. 0066 off
+`0065_reconcile_staging_schema` replaces it as a head — the tree STAYS at 1
+head. The migration docstring states the REAL tree + the step-0 command.
 
 **Step-0 head assertion — a REAL, WRAPPER-PINNED check** (runs BEFORE writing
-0065, and POST-authoring):
+0066, and POST-authoring):
 
 ```powershell
 $alembic_heads = uv run python -m alembic heads
 if ($LASTEXITCODE -ne 0) { throw 'uv/alembic command failed (not a head mismatch)' }
 $head_lines = @($alembic_heads | Where-Object { $_ -match '^\S+ \(head\)' })
-if (($head_lines | Select-String '0064_merge_heads_0037').Count -eq 0) { throw 'wrong migration head' }
+if (($head_lines | Select-String '0065_reconcile_staging_schema').Count -eq 0) { throw 'wrong migration head' }
 if ($head_lines.Count -ne 1) { throw 'migration tree is not single-head' }
 ```
 
 The wrapper (1) checks `$LASTEXITCODE` FIRST so a uv/alembic COMMAND failure is
 distinguished from a WRONG-HEAD failure, and (2) asserts the head output is
 EXACTLY ONE line over HEAD-MARKER LINES ONLY (a two-head tree fails). PRE
-asserts `0064_merge_heads_0037` (the current head); POST asserts
-`0065_cost_components` (the new sole head). `check-migration-heads.ps1` still
+asserts `0065_reconcile_staging_schema` (the current head); POST asserts
+`0066_cost_components` (the new sole head). `check-migration-heads.ps1` still
 runs for its duplicate-prefix + multi-head-warning role.
 
 **Migration DDL maintenance-window flag:** 0065 runs in ONE migration and holds
@@ -2039,8 +2043,8 @@ dogfood scale; budget a MAINTENANCE WINDOW at production scale.
 
 The migration steps (upgrade):
 
-0. Step-0 head assertion (above) + `SET search_path` pinned at the top of 0065.
-1. **NULLS NOT DISTINCT org-row pre-flight — the FIRST step of 0065, BEFORE
+0. Step-0 head assertion (above) + `SET search_path` pinned at the top of 0066.
+1. **NULLS NOT DISTINCT org-row pre-flight — the FIRST step of 0066, BEFORE
    any `add_column` AND before `create_table`** (a failing pre-flight leaves
    NOTHING behind):
 
@@ -2105,7 +2109,7 @@ The migration steps (upgrade):
    partial unique indexes + `ix_cost_components_org_enabled_sort`. The
    SUPERUSER ASSUMPTION is stated explicitly next to env.py:52-55:
    `SET ROLE modulo_migrate`, `CREATE POLICY`, and `GRANT` ALL require
-   superuser (or membership) — the whole 0065 run depends on `DATABASE_ADMIN_URL`
+   superuser (or membership) — the whole 0066 run depends on `DATABASE_ADMIN_URL`
    actually being superuser- or owner-privileged. This is TESTED by the
    pre-flight smoke.
 
@@ -2115,15 +2119,15 @@ The migration steps (upgrade):
    `organisations` (the new table's org FK references it). `bootstrap_role.py`
    grants both on every boot (the REFERENCES grant guarded by `to_regclass`
    because the pre-alembic bootstrap runs on a fresh DB where `organisations`
-   does not exist yet), and 0065 re-applies both idempotently right before
+   does not exist yet), and 0066 re-applies both idempotently right before
    `SET ROLE` so a fresh-DB migration works regardless of bootstrap state.
 
    **The POST-CREATE ownership assertion sits between `create_table` and the
-   RLS-enable step:** after create_table, 0065 asserts the created table's
+   RLS-enable step:** after create_table, 0066 asserts the created table's
    owner is `modulo_migrate`, not the app role
    (`SELECT relowner::regrole::text FROM pg_class WHERE oid =
    to_regclass('public.cost_components')` — a hard failure inside the migration
-   if it ran as the app role). Running 0065 as the superuser violates the
+   if it ran as the app role). Running 0066 as the superuser violates the
    "never superuser" rule and FAILS the assertion; running as the app role
    fails it too (the app role must NOT own `cost_components`).
 
@@ -2184,9 +2188,9 @@ first) — re-entrancy covers ONLY the five add_columns; `create_table` /
 `op.drop_constraint` / the CREATE INDEX steps / the RLS enable/policies / the
 GRANT are NOT idempotent. The deploy runbook documents the ACTUAL recovery for
 the drop_constraint→index window — ONE pinned sequence: assess the partial
-state; complete the remainder of 0065's DDL MANUALLY in one transaction (with
-the conditional constraint drop FIRST); `alembic stamp 0065`; verify
-`alembic heads` reports `0065_cost_components` as the sole head and
+state; complete the remainder of 0066's DDL MANUALLY in one transaction (with
+the conditional constraint drop FIRST); `alembic stamp 0066`; verify
+`alembic heads` reports `0066_cost_components` as the sole head and
 `test_migrated_schema_matches_orm_metadata` passes.
 
 **No data backfill of any kind.** Historical runs keep `cost_breakdown = NULL`
@@ -2306,7 +2310,7 @@ subsequent PR off updated main.
    autonomous pipeline). Backward-compatible with the current backend.
 
 2. **PR A1 (backend data-model + engine) — off updated main, started by running
-   the step-0 head assertion FIRST:** migration 0065 off `0064_merge_heads_0037`
+   the step-0 head assertion FIRST:** migration 0066 off `0065_reconcile_staging_schema`
    (step-0 wrapper-pinned); role-safe + multi-backend; `ledger_written` no
    backfill; `ledger_refused_at`; NO `ledger_deferred`/sweep index;
    `org_daily_run_counts.clamped` + `refused_spend_usd` (ORM columns in the
@@ -2314,9 +2318,9 @@ subsequent PR off updated main.
    the FIRST step + the `scripts/` merge helper + the PRODUCTION PRE-FLIGHT
    GATE with the constraint-name catalog assertion + the RLS-owner gate via
    `to_regclass('public.cost_components')` + the post-create ownership assertion
-   inside 0065 (owner `modulo_migrate`) + the MIGRATE-role deploy-wiring
+   inside 0066 (owner `modulo_migrate`) + the MIGRATE-role deploy-wiring
    (`SET ROLE modulo_migrate` around `create_table`) + the SUPERUSER PRIVILEGE
-   SMOKE (pre-flight gate step; mirrors 0065's actual execution order) +
+   SMOKE (pre-flight gate step; mirrors 0066's actual execution order) +
    `SET search_path` pinned + the ORM `__table_args__` parity; `formula`
    NULLABLE for `self_reported`; the daily-spend-limit app-side 422 bounds only;
    NO `ix_runs_deferred`; `ix_runs_probe` + `ix_runs_refusal` (blocking CREATE
@@ -2434,7 +2438,7 @@ register is capped at 15 rows, ONE LINE per row.
 | Ledger + refusal semantics — terminal-only, `ledger_written`/`ledger_refused_at` under FOR UPDATE; refusal PERMANENT + `refused_spend_usd` column (permanent visibility); refusal-window SUM (created-at, current-run-excluded + explicit add, NULL-limit short-circuit, `ix_runs_refusal` index-served, EXPLAIN RANGE-SELECTIVITY gate); run_count semantics; daily-ledger clamp + `clamped`; the `get_cost_report`/dashboard/Quality/`get_anomalies`/CSV-export consumers | product | permanent (v1) | §4.6/§6.1/§9.3 |
 | Cancellation classes + terminal handlers — all terminal handler return shapes pinned (accumulated sets, 4-tuple, by-reference outputs, empty-accumulator normalization); the THREE direct terminal writes routed through `finalize_cost`; the cancelled-class 0→1 scoped to runs WITH A PRIOR PAUSE; never-paused cross-process forfeiture surfaced ONLY via the `cost_components_partial_spend_lost` diagnostic log; the paused-then-cancelled class is operator-query-only | product | permanent (v1) | §4.2/§9.3 |
 | Probe + WATCH + heartbeat + trigger — canary not audit, mechanism budget fixed; the FIVE signals; the org-row WATCH is a WATCH counter not a trigger input; `probe_state:<org_id>` persistence (no RLS, advisory lock, temporal adjacency, single-instance, diagnostic run-ids); heartbeat/staleness ackable; the CANONICAL trigger (the probe rule + the duplicate-terminal flood as hard-gate inputs, with the cooldown + SOFT-line-on-rise as the mitigation; the org-row WATCH + the spend-limit-misfire ticket as WATCH signals; quiet-orgs never trigger); the duplicate-flood false-fire sources named; the probe EXPLAIN gates run under `SET enable_seqscan=off` in a try/finally | product | permanent (v1) | §4.7/§9.3 |
-| Migration + tree + step-0 + gates — the REAL tree (head `0064_merge_heads_0037`); `0065_cost_components` off it; PR-A step 0 = the WRAPPER-PINNED assert (checks `$LASTEXITCODE` first + asserts EXACTLY ONE head line with the revision-id-pattern filter; pre asserts `0064_merge_heads_0037`, post asserts `0065_cost_components`); the upgrade-heads assert (the broadened negative pattern with the POST-MATCH allowlist exemption over every shell script under `deploy/`); the NULLS NOT DISTINCT unique + duplicate pre-flight FIRST + merge helper + constraint-name catalog gate (authoritative copy IN the migration) + RLS-owner `to_regclass` gate + `SET ROLE modulo_migrate` around `create_table` via `DATABASE_ADMIN_URL` + the SUPERUSER PRIVILEGE SMOKE + the partial-apply recovery (manual DDL with the conditional constraint drop FIRST + `alembic stamp 0065`) + the maintenance-window flag | product + infra | permanent (v1) | §9.1/§7.2/§9.4 |
+| Migration + tree + step-0 + gates — the REAL tree (head `0065_reconcile_staging_schema`); `0066_cost_components` off it; PR-A step 0 = the WRAPPER-PINNED assert (checks `$LASTEXITCODE` first + asserts EXACTLY ONE head line with the revision-id-pattern filter; pre asserts `0065_reconcile_staging_schema`, post asserts `0066_cost_components`); the upgrade-heads assert (the broadened negative pattern with the POST-MATCH allowlist exemption over every shell script under `deploy/`); the NULLS NOT DISTINCT unique + duplicate pre-flight FIRST + merge helper + constraint-name catalog gate (authoritative copy IN the migration) + RLS-owner `to_regclass` gate + `SET ROLE modulo_migrate` around `create_table` via `DATABASE_ADMIN_URL` + the SUPERUSER PRIVILEGE SMOKE + the partial-apply recovery (manual DDL with the conditional constraint drop FIRST + `alembic stamp 0065`) + the maintenance-window flag | product + infra | permanent (v1) | §9.1/§7.2/§9.4 |
 | Seeding — the org ENUMERATION runs in system context with NO `set_rls_org` (a negative test mirrors the probe's fixture); `set_rls_org` per seed transaction; idempotent, soft-deleted names skipped | product | permanent (v1) | §3.2/§7.1 |
 | Self-report contract (devtools) — `read_opencode_cost` (fail-soft, band floor 1e-4, the direction-split band, the reuse predicate, the REAL in-band shape assertion writing the `schema_drift` wire flag, plus the drift-vs-transient discriminator); `write_output` 2-way preference + explicit-0 + the drift dict carries NO token_usage; the canonical-path pin + `pin_failed` flag-file transport read SERVER-SIDE via the E2B filesystem API (never the producer wire) + the template-cache exclusion of BOTH the opencode.db path AND `/tmp/opencode-pin-failed`; the golden-schema diff (CI-side, OWNED + DATED for the opencode release cadence); the path smoke = PR-C hard gate | product | permanent (v1) | §5.1–§5.4 |
 | Effort + delivery shape — 1×L+ + 3×M+ + 4×M (derived from the 8-row table; the alternative framings are DELETED); A1/A2 is the DEFAULT delivery shape — the 4-PR chain C → A1 → A2 → B | product | permanent (v1) | §10/§9.4 |

@@ -1,24 +1,30 @@
 """Multi-component cost tracking — cost_components table + run/ledger columns.
 
-Revision ID: 0065_cost_components
-Revises: 0064_merge_heads_0037
+Revision ID: 0066_cost_components
+Revises: 0065_reconcile_staging_schema
 Create Date: 2026-08-04
 
-THE REAL MIGRATION TREE (normative): the live head is ``0064_merge_heads_0037``
-— a MERGE migration (revision id "0064_merge_heads_0037", down_revision
-("0037_add_scheduled_reports_created_by", "0037_break_glass_enforcement")) that
-merged the two live 0037_* heads. ``0063_merge_all_heads.py`` carries the
-revision id "0036_merge_all_heads" but is NOT the head. This migration is a
-NORMAL migration off the ACTUAL head, deployed via the EXISTING ``upgrade
-heads`` (plural) form — NO pin.
+THE REAL MIGRATION TREE (normative): the live head is ``0065_reconcile_staging_schema``
+(revision id "0065_reconcile_staging_schema", down_revision
+"0064_merge_heads_0037") — the staging-schema-drift reconciliation migration
+merged on main (PR #618). ``0064_merge_heads_0037`` is itself a MERGE migration
+(down_revision ("0037_add_scheduled_reports_created_by",
+"0037_break_glass_enforcement")) that merged the two live 0037_* heads, and
+``0063_merge_all_heads.py`` carries the revision id "0036_merge_all_heads" but
+is NOT the head. This migration is a NORMAL migration off the ACTUAL head
+(``0065_reconcile_staging_schema``), deployed via the EXISTING ``upgrade
+heads`` (plural) form — NO pin. It was originally authored as 0065 off
+``0064_merge_heads_0037``; after #618 landed on main first, it was renumbered
+to 0066 with ``down_revision = "0065_reconcile_staging_schema"`` so the tree
+stays single-head.
 
 STEP-0 HEAD ASSERTION (run BEFORE authoring, and again POST-authoring):
     $alembic_heads = uv run python -m alembic heads
     if ($LASTEXITCODE -ne 0) { throw 'uv/alembic command failed (not a head mismatch)' }
     $head_lines = @($alembic_heads | Where-Object { $_ -match '^\\S+ \\(head\\)' })
-    if (($head_lines | Select-String '0064_merge_heads_0037').Count -eq 0) { throw 'wrong migration head' }
+    if (($head_lines | Select-String '0065_reconcile_staging_schema').Count -eq 0) { throw 'wrong migration head' }
     if ($head_lines.Count -ne 1) { throw 'migration tree is not single-head' }
-POST-authoring asserts ``0065_cost_components`` as the new sole head.
+POST-authoring asserts ``0066_cost_components`` as the new sole head.
 
 DDL MAINTENANCE-WINDOW FLAG: this migration runs in ONE transaction and holds
 the ACCESS EXCLUSIVE lock for TWO blocking CREATE INDEX (``ix_runs_probe``,
@@ -37,7 +43,7 @@ table's owner is ``modulo_migrate``, not the app role — the owner-bypasses-RLS
 precondition for ``cost_components`` RLS confinement.
 
 The ``modulo_migrate`` role, ``CREATE POLICY``, and ``GRANT`` all require
-superuser (or membership) on the ``DATABASE_ADMIN_URL`` — the whole 0065 run
+superuser (or membership) on the ``DATABASE_ADMIN_URL`` — the whole 0066 run
 depends on that URL actually being superuser- or owner-privileged (assumption
 stated next to env.py:52-55).
 """
@@ -49,8 +55,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0065_cost_components"
-down_revision: str | None = "0064_merge_heads_0037"
+revision: str = "0066_cost_components"
+down_revision: str | None = "0065_reconcile_staging_schema"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -66,7 +72,7 @@ def _is_postgres(bind: sa.Connection) -> bool:
 
 
 def _preflight_null_distinct_duplicates(bind: sa.Connection) -> None:
-    """FIRST step of 0065, BEFORE any add_column AND before create_table.
+    """FIRST step of 0066, BEFORE any add_column AND before create_table.
 
     Fails LOUDLY when duplicate ``(organisation_id, NULL, run_date)`` rows
     exist (the NULLs-distinct pause+terminal double-record bug may already have
@@ -111,7 +117,7 @@ def _guard_org_daily_unique_constraint(bind: sa.Connection) -> None:
 
 
 def _assert_cost_components_owner_is_migrate(bind: sa.Connection) -> None:
-    """POST-CREATE ownership assertion INSIDE 0065 (after create_table, BEFORE RLS).
+    """POST-CREATE ownership assertion INSIDE 0066 (after create_table, BEFORE RLS).
 
     The created table's owner must be ``modulo_migrate``, not the app role — if
     the migration ran as the app role the owner would bypass RLS and org
@@ -165,7 +171,7 @@ def upgrade() -> None:
     #    public schema + REFERENCES on organisations to create the table's
     #    org FK. bootstrap_role.py grants both on every boot, but the
     #    pre-alembic bootstrap runs on a fresh DB where organisations does not
-    #    exist yet — so 0065 re-applies both grants itself (idempotent)
+    #    exist yet — so 0066 re-applies both grants itself (idempotent)
     #    right before SET ROLE.
     if pg:
         op.execute(f"GRANT CREATE ON SCHEMA public TO {_MIGRATE_ROLE}")

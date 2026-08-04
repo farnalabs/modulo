@@ -124,7 +124,7 @@ class CostComponentBase(BaseModel):
 class CostComponentCreate(CostComponentBase):
     name: str = Field(..., pattern=r"^[a-z][a-z0-9_]{1,63}$")
     display_name: str = Field(..., min_length=1, max_length=MAX_DISPLAY_NAME_LENGTH)
-    kind: CostComponentKind = ...
+    kind: CostComponentKind = Field(...)
     enabled: bool = True
     sort_order: int = 0
 
@@ -189,7 +189,7 @@ def _validate_rate_usd_bound(rate_usd: Decimal | None) -> None:
     if rate_usd is None:
         return
     try:
-        knob = Decimal(str(get_settings().modulo_max_rate_usd))
+        knob = Decimal(str(get_settings().max_rate_usd))
     except Exception:
         raise ValueError("rate knob unavailable: cannot validate rate_usd") from None
     cap = min(knob, _RATE_COLUMN_CAP)

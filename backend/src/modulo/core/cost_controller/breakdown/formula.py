@@ -106,7 +106,7 @@ def _tokenize(formula: str) -> list[_Token]:
 class _Parser:
     """Recursive-descent parser. Raises CostFormulaError on any out-of-grammar form."""
 
-    def __init__(self, tokens: list[_Token], allowed_idents: set[str]) -> None:
+    def __init__(self, tokens: list[_Token], allowed_idents: frozenset[str]) -> None:
         self._tokens = tokens
         self._pos = 0
         self._allowed = allowed_idents
@@ -191,7 +191,7 @@ class _Parser:
         raise CostFormulaError("unexpected_token", f"unexpected token {tok.value!r} in formula")
 
 
-def _compile(formula: str, allowed_idents: set[str]) -> Any:
+def _compile(formula: str, allowed_idents: frozenset[str]) -> Any:
     if len(formula) > MAX_FORMULA_LENGTH:
         raise CostFormulaError(
             "formula_too_long",
@@ -207,7 +207,7 @@ def _compile(formula: str, allowed_idents: set[str]) -> Any:
     return node
 
 
-def validate_formula(formula: str | None, allowed_idents: set[str]) -> None:
+def validate_formula(formula: str | None, allowed_idents: frozenset[str]) -> None:
     """Validate a formula string against the grammar + the identifier allowlist.
 
     Raises :class:`CostFormulaError` on any violation. This is the SINGLE
@@ -244,7 +244,7 @@ def _evaluate(node: Any, params: dict[str, Decimal]) -> Decimal:
 def evaluate_formula(
     formula: str,
     params: dict[str, Decimal],
-    allowed_idents: set[str],
+    allowed_idents: frozenset[str],
 ) -> Decimal:
     """Evaluate a formula against ``params`` (Decimal-typed values).
 

@@ -40,9 +40,9 @@ class Run(OrgScoped):
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
-        # Probe sample query (organisation_id, started_at) — migration 0065.
+        # Probe sample query (organisation_id, started_at) — migration 0066.
         Index("ix_runs_probe", "organisation_id", "started_at"),
-        # Refusal-window SUM predicates (organisation_id, created_at) — migration 0065.
+        # Refusal-window SUM predicates (organisation_id, created_at) — migration 0066.
         Index("ix_runs_refusal", "organisation_id", "created_at"),
     )
 
@@ -76,9 +76,9 @@ class Run(OrgScoped):
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     # Cost breakdown — list of component snapshots (amounts as strings).
-    # NULL for pre-migration runs. Migration 0065.
+    # NULL for pre-migration runs. Migration 0066.
     cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
-    # Ledger guards (migration 0065) — terminal-only spend recording (PR A2).
+    # Ledger guards (migration 0066) — terminal-only spend recording (PR A2).
     ledger_written: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     ledger_refused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)

@@ -15,6 +15,8 @@ failure cannot abort the whole seed.
 from __future__ import annotations
 
 import logging
+import uuid
+from typing import TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,8 +27,20 @@ from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 
+
+class _ComponentSeed(TypedDict):
+    name: str
+    display_name: str
+    kind: str
+    formula: str | None
+    rate_usd: None
+    rate_fallback: str | None
+    report_key: str | None
+    sort_order: int
+
+
 # name -> (kind, formula, rate_usd, rate_fallback, report_key, sort_order)
-DEFAULT_COST_COMPONENTS: list[dict] = [
+DEFAULT_COST_COMPONENTS: list[_ComponentSeed] = [
     {
         "name": "llm_tokens",
         "display_name": "LLM Tokens",
@@ -60,7 +74,7 @@ DEFAULT_COST_COMPONENTS: list[dict] = [
 ]
 
 
-async def seed_cost_components_for_org(session: AsyncSession, org_id: object) -> None:
+async def seed_cost_components_for_org(session: AsyncSession, org_id: uuid.UUID | None) -> None:
     """Seed the default components for a single org (idempotent)."""
     await set_rls_org(session, org_id)
     for spec in DEFAULT_COST_COMPONENTS:
