@@ -640,9 +640,7 @@ async def test_query_tree_next_cursor(connector):
 @respx.mock
 async def test_query_tree_path_traversal_blocked(connector):
     with pytest.raises(ValueError, match="path traversal"):
-        await connector.query(
-            ConnectorQuery(resource="tree", filters={"project": "group/project", "path": "../src"})
-        )
+        await connector.query(ConnectorQuery(resource="tree", filters={"project": "group/project", "path": "../src"}))
 
 
 @respx.mock
@@ -841,6 +839,4 @@ async def test_write_mr_approval_request_requires_users(connector):
 @respx.mock
 async def test_write_mr_approval_request_missing_project(connector):
     with pytest.raises(ValueError, match="Missing required filter"):
-        await connector.write(
-            ConnectorPayload(resource="mr_approval_request", data={"iid": "7", "user_ids": [1]})
-        )
+        await connector.write(ConnectorPayload(resource="mr_approval_request", data={"iid": "7", "user_ids": [1]}))
