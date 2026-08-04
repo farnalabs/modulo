@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.cron_helpers (plan F1) -” fire_due_triggers,
+"""Unit tests for modulo.core.cron_helpers (plan F1) — fire_due_triggers,
 atomic next_fire_at advance, per-item fire jobs, report backoff/deactivate.
 
 Mock/fake based (no real Postgres/Redis). The multi-worker race is covered at
@@ -8,7 +8,9 @@ that gates enqueue) and by a real-Redis two-process integration test.
 
 from __future__ import annotations
 
+import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -119,6 +121,7 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_runs_queue": "runs",
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
+        "fernet_key": "b" * 44,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -130,8 +133,44 @@ def _patch_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FERNET_KEY", "b" * 44)
 
 
+def _make_trigger(**overrides: object) -> MagicMock:
+    """Build a Trigger-like double with defaults for the per-item fire jobs."""
+    from modulo.db.models.trigger import Trigger
+
+    defaults: dict[str, object] = {
+        "id": uuid.uuid4(),
+        "organisation_id": ORG,
+        "pipeline_id": uuid.uuid4(),
+        "active": True,
+        "max_concurrent_runs": 5,
+        "daily_spend_limit": None,
+        "config_json": {},
+        "cron_timezone": None,
+    }
+    defaults.update(overrides)
+    trigger = MagicMock(spec=Trigger)
+    for key, value in defaults.items():
+        setattr(trigger, key, value)
+    return trigger
+
+
+def _mock_result(**kwargs: Any) -> MagicMock:
+    result = MagicMock()
+    for name, value in kwargs.items():
+        getattr(result, name).return_value = value
+    return result
+
+
+def _lock_result(acquired: bool) -> MagicMock:
+    return _mock_result(scalar_one=acquired)
+
+
+def _trigger_result(trigger: Any) -> MagicMock:
+    return _mock_result(scalar_one_or_none=trigger)
+
+
 # ---------------------------------------------------------------------------
-# fire_due_triggers -” atomic advance + enqueue
+# fire_due_triggers — atomic advance + enqueue
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +318,7 @@ class TestFireDueTriggers:
 
 
 # ---------------------------------------------------------------------------
-# fire_report_trigger -” backoff + deactivate-after-5
+# fire_report_trigger — backoff + deactivate-after-5
 # ---------------------------------------------------------------------------
 
 
@@ -376,11 +415,37 @@ class TestFireReportTrigger:
             await ch._handle_report_failure(session, redis_client, REPORT, now)
 
         # The UPDATE must back off next_send_at by exactly +5min (never the
-        # 30s re-enqueue cadence).
+        # 30s re-enqueue cadence). The 300s literal guards REPORT_BACKOFF_SECONDS
+        # itself — asserting against the constant would be tautological.
         assert len(session.executed) == 1
-        stmt, _params = session.executed[0]
-        assert "next_send_at" in str(stmt)
+        backoff_param = session.executed[0][0].compile().params["next_send_at"]
+        assert backoff_param == now + timedelta(seconds=300)
         redis_client.incr.assert_awaited_once_with(ch._report_failure_counter_key(REPORT))
+        redis_client.expire.assert_awaited_once_with(
+            ch._report_failure_counter_key(REPORT),
+            ch._REPORT_FAILURE_COUNTER_TTL,
+        )
+
+    @pytest.mark.asyncio
+    async def test_backoff_applied_when_redis_counter_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A Redis failure while counting must NOT stop the +5min backoff."""
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        redis_client = AsyncMock()
+        redis_client.incr = AsyncMock(side_effect=RuntimeError("redis down"))
+
+        now = ch.datetime.now(ch.UTC)
+        with (
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            await ch._handle_report_failure(session, redis_client, REPORT, now)
+
+        # Best-effort counter: the next_send_at backoff alone stops the every-30s loop.
+        assert len(session.executed) == 1
+        backoff_param = session.executed[0][0].compile().params["next_send_at"]
+        assert backoff_param == now + timedelta(seconds=300)
 
     @pytest.mark.asyncio
     async def test_deactivate_after_5_consecutive_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,14 +463,15 @@ class TestFireReportTrigger:
             redis_cls.from_url.return_value = redis_client
             await ch._handle_report_failure(session, redis_client, REPORT, now)
 
-        # 5th consecutive failure -> UPDATE ... SET active=False.
+        # 5th consecutive failure -> UPDATE ... SET active=False (not just any
+        # UPDATE mentioning the column).
         assert len(session.executed) == 2
         second_stmt, _ = session.executed[1]
-        assert "active" in str(second_stmt)
+        assert second_stmt.compile().params["active"] is False
 
 
 # ---------------------------------------------------------------------------
-# Atomic advance helpers -” SQL shape
+# Atomic advance helpers — SQL shape
 # ---------------------------------------------------------------------------
 
 
@@ -481,23 +547,9 @@ class TestFireCronTriggerSkips:
     async def test_skips_when_trigger_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
 
-        from modulo.db.models.trigger import Trigger
+        trigger = _make_trigger(id=TRIGGER_A, active=False)
 
-        trigger = MagicMock(spec=Trigger)
-        trigger.id = TRIGGER_A
-        trigger.organisation_id = ORG
-        trigger.pipeline_id = uuid.uuid4()
-        trigger.active = False
-        trigger.max_concurrent_runs = 5
-        trigger.daily_spend_limit = None
-        trigger.config_json = {}
-
-        lock_result = MagicMock()
-        lock_result.scalar_one.return_value = True
-        trigger_result = MagicMock()
-        trigger_result.scalar_one_or_none.return_value = trigger
-
-        session = _MockSession([lock_result, trigger_result])
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
         factory = MagicMock(return_value=session)
         with (
             patch.object(ch, "_open_factory", return_value=factory),
@@ -521,25 +573,10 @@ class TestFireCronTriggerSkips:
         _patch_env(monkeypatch)
         from decimal import Decimal
 
-        from modulo.db.models.trigger import Trigger
+        trigger = _make_trigger(id=TRIGGER_A, daily_spend_limit=Decimal("100.00"))
+        cost_result = _mock_result(scalar_one=Decimal("150.00"))
 
-        trigger = MagicMock(spec=Trigger)
-        trigger.id = TRIGGER_A
-        trigger.organisation_id = ORG
-        trigger.pipeline_id = uuid.uuid4()
-        trigger.active = True
-        trigger.max_concurrent_runs = 5
-        trigger.daily_spend_limit = Decimal("100.00")
-        trigger.config_json = {}
-
-        lock_result = MagicMock()
-        lock_result.scalar_one.return_value = True
-        trigger_result = MagicMock()
-        trigger_result.scalar_one_or_none.return_value = trigger
-        cost_result = MagicMock()
-        cost_result.scalar_one.return_value = Decimal("150.00")
-
-        session = _MockSession([lock_result, trigger_result, cost_result])
+        session = _MockSession([_lock_result(True), _trigger_result(trigger), cost_result])
         factory = MagicMock(return_value=session)
         with (
             patch.object(ch, "_open_factory", return_value=factory),
@@ -557,3 +594,683 @@ class TestFireCronTriggerSkips:
 
         assert result["status"] == "skipped"
         assert result["reason"] == "spend_limit"
+
+
+# ---------------------------------------------------------------------------
+# Cron validation + next-fire computation (relocated from cron_scheduler.py)
+# ---------------------------------------------------------------------------
+
+
+class TestCronValidation:
+    def test_valid_expression_returns_none(self) -> None:
+        assert ch.validate_cron_expression("*/30 * * * * *") is None
+
+    def test_invalid_expression_returns_error_message(self) -> None:
+        err = ch.validate_cron_expression("not a cron expression")
+        assert isinstance(err, str)
+        assert err
+
+    def test_invalid_timezone_returns_error_message(self) -> None:
+        err = ch.validate_cron_expression("*/30 * * * * *", timezone="Mars/Olympus")
+        assert "Invalid timezone" in err
+
+
+class TestComputeNextFire:
+    def test_returns_future_timezone_aware_utc(self) -> None:
+        base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+        nf = ch.compute_next_fire("0 9 * * *", after=base)
+        assert nf.tzinfo == UTC
+        assert nf > base
+
+    def test_naive_after_interpreted_as_utc(self) -> None:
+        nf = ch.compute_next_fire("0 9 * * *", after=datetime(2026, 1, 1, 8, 0, 0))
+        assert nf == datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
+
+    def test_honors_configured_timezone(self) -> None:
+        """09:00 America/New_York in January (UTC-5) == 14:00 UTC — a non-UTC
+        trigger must not fire on UTC schedules."""
+        base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+        nf = ch.compute_next_fire("0 9 * * *", after=base, timezone="America/New_York")
+        assert nf == datetime(2026, 1, 1, 14, 0, 0, tzinfo=UTC)
+
+    def test_compute_next_send_returns_next_cron_match(self) -> None:
+        ns = ch.compute_next_send("0 9 * * *", after=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC))
+        assert ns == datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers (relocated from cron_scheduler.py)
+# ---------------------------------------------------------------------------
+
+
+class TestSetRlsOrg:
+    @pytest.mark.asyncio
+    async def test_postgres_sets_config_via_sql(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        org_id = uuid.uuid4()
+
+        await ch._set_rls_org(session, org_id)
+
+        stmt, params = session.executed[0]
+        assert "set_config" in str(stmt)
+        assert params["val"] == str(org_id)
+
+    @pytest.mark.asyncio
+    async def test_non_postgres_sets_session_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        session.info = {}
+        session._get_bind.return_value.dialect.name = "sqlite"
+        org_id = uuid.uuid4()
+
+        await ch._set_rls_org(session, org_id)
+
+        assert session.info["organisation_id"] == org_id
+
+
+class TestCountActiveRuns:
+    @pytest.mark.asyncio
+    async def test_counts_active_runs_excluding_cancellation_requested(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger_id = uuid.uuid4()
+        session = _MockSession([_mock_result(scalar_one=4)])
+
+        count = await ch._count_active_runs(session, trigger_id)
+
+        assert count == 4
+        sql = str(session.executed[0][0])
+        assert "cancellation_requested" in sql
+        # Every active status must be counted, never re-dispatched away.
+        # Resolve the statuses IN() bound param by value so the assertion does
+        # not couple to SQLAlchemy's internal bound-param naming (status_1).
+        expected_active = {"running", "pending", "awaiting_human", "claimed", "waiting_for_lock"}
+        compiled_params = session.executed[0][0].compile().params.values()
+        assert any(
+            set(value) == expected_active for value in compiled_params if isinstance(value, (list, tuple))
+        )
+
+
+class TestLogEvent:
+    @pytest.mark.asyncio
+    async def test_logs_cron_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        trigger = SimpleNamespace(id=uuid.uuid4())
+        org_id = uuid.uuid4()
+        run_id = uuid.uuid4()
+
+        event = await ch._log_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="accepted",
+            run_id=run_id,
+        )
+
+        assert session.added == [event]
+        assert event.trigger_type == "cron"
+        assert event.trigger_id == trigger.id
+        assert event.organisation_id == org_id
+        assert event.validation_result == "accepted"
+        assert event.run_id == run_id
+        assert event.error_detail is None
+
+    @pytest.mark.asyncio
+    async def test_logs_poll_event_with_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        trigger = SimpleNamespace(id=uuid.uuid4())
+
+        event = await ch._log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=uuid.uuid4(),
+            result="poll_error",
+            error_detail="boom",
+        )
+
+        assert session.added == [event]
+        assert event.trigger_type == "polling"
+        assert event.validation_result == "poll_error"
+        assert event.error_detail == "boom"
+
+
+class TestIngestSaqError:
+    @pytest.mark.asyncio
+    async def test_ingests_via_error_tracking_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        factory = MagicMock(return_value=session)
+        service = MagicMock()
+        service.ingest = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock) as set_rls,
+            patch("modulo.core.error_tracking.ErrorIngestionService", return_value=service),
+        ):
+            await ch._ingest_saq_error(
+                session,
+                ORG,
+                function="fire_due_triggers",
+                message="enqueue failed",
+                context={"trigger_id": str(TRIGGER_A)},
+            )
+
+        set_rls.assert_awaited_once_with(session, ORG)
+        service.ingest.assert_awaited_once()
+        payload = service.ingest.await_args.args[2]
+        assert payload["source"] == "saq"
+        assert payload["context_json"]["function"] == "fire_due_triggers"
+        assert payload["context_json"]["trigger_id"] == str(TRIGGER_A)
+
+    @pytest.mark.asyncio
+    async def test_ingest_failure_is_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Error ingestion must never crash the scheduler tick."""
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        factory = MagicMock(return_value=session)
+        service = MagicMock()
+        service.ingest = AsyncMock(side_effect=RuntimeError("ingest down"))
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.core.error_tracking.ErrorIngestionService", return_value=service),
+        ):
+            await ch._ingest_saq_error(session, ORG, function="fire_due_triggers", message="boom")
+
+
+class TestResolveSnapshotId:
+    def test_uses_config_snapshot_id(self) -> None:
+        snapshot_id = uuid.uuid4()
+        row = SimpleNamespace(config_json={"snapshot_id": str(snapshot_id)}, pipeline_id=uuid.uuid4())
+        assert ch._resolve_snapshot_id(row, {}) == snapshot_id
+
+    def test_invalid_config_snapshot_id_returns_none(self) -> None:
+        row = SimpleNamespace(config_json={"snapshot_id": "not-a-uuid"}, pipeline_id=uuid.uuid4())
+        assert ch._resolve_snapshot_id(row, {}) is None
+
+    def test_falls_back_to_latest_snapshot_for_pipeline(self) -> None:
+        pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
+        row = SimpleNamespace(config_json={}, pipeline_id=pipeline_id)
+        assert ch._resolve_snapshot_id(row, {pipeline_id: snapshot_id}) == snapshot_id
+
+    def test_no_snapshot_anywhere_returns_none(self) -> None:
+        row = SimpleNamespace(config_json={}, pipeline_id=uuid.uuid4())
+        assert ch._resolve_snapshot_id(row, {}) is None
+
+
+# ---------------------------------------------------------------------------
+# fire_cron_trigger — success path + remaining skip reasons
+# ---------------------------------------------------------------------------
+
+
+class TestFireCronTrigger:
+    @pytest.mark.asyncio
+    async def test_fires_run_and_updates_last_fired_at_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(config_json={"input_template": {"env": "prod"}})
+        session = _MockSession([_lock_result(True), _trigger_result(trigger), MagicMock()])
+        factory = MagicMock(return_value=session)
+        run = SimpleNamespace(id=uuid.uuid4())
+        event = SimpleNamespace(id=uuid.uuid4())
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock, return_value=event),
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "fired"
+        assert result["run_id"] == str(run.id)
+        assert result["event_id"] == str(event.id)
+        assert result["input_payload"] == {"env": "prod"}
+        create_run.assert_awaited_once()
+        assert create_run.await_args.kwargs["trigger_type"] == "cron"
+        # Default (enqueue-time advance): only last_fired_at is written, never
+        # next_fire_at (that was advanced atomically in fire_due_triggers).
+        final_stmt, _ = session.executed[-1]
+        compiled = str(final_stmt.compile())
+        assert "last_fired_at" in compiled
+        assert "next_fire_at" not in compiled
+
+    @pytest.mark.asyncio
+    async def test_skips_when_trigger_busy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        session = _MockSession([_lock_result(False)])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "trigger_busy"
+
+    @pytest.mark.asyncio
+    async def test_skips_when_concurrency_limit_reached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(max_concurrent_runs=2)
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=2),
+            patch.object(ch, "_log_event", new_callable=AsyncMock) as log_event,
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "concurrency_limit"
+        assert result["active_runs"] == 2
+        log_event.assert_awaited_once()
+        assert log_event.await_args.kwargs["result"] == "concurrency_limit_reached"
+
+    @pytest.mark.asyncio
+    async def test_skips_when_pipeline_missing_for_auto_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock) as log_event,
+            patch(
+                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as make_snapshot,
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "pipeline_not_found"
+        make_snapshot.assert_awaited_once()
+        log_event.assert_awaited_once()
+        assert log_event.await_args.kwargs["result"] == "no_pipeline"
+
+    @pytest.mark.asyncio
+    async def test_advance_next_fire_at_writes_next_fire_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Legacy Celery path: advance_next_fire_at=True recomputes next_fire_at."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(cron_timezone="UTC")
+        session = _MockSession([_lock_result(True), _trigger_result(trigger), MagicMock()])
+        factory = MagicMock(return_value=session)
+        run = SimpleNamespace(id=uuid.uuid4())
+        event = SimpleNamespace(id=uuid.uuid4())
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock, return_value=event),
+            patch.object(ch, "compute_next_fire", return_value=datetime(2026, 1, 1, tzinfo=UTC)) as compute,
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="0 9 * * *",
+                snapshot_id=uuid.uuid4(),
+                advance_next_fire_at=True,
+            )
+
+        assert result["status"] == "fired"
+        compute.assert_called_once()
+        assert compute.call_args.kwargs["timezone"] == "UTC"
+        final_stmt, _ = session.executed[-1]
+        assert "next_fire_at" in str(final_stmt.compile())
+
+
+# ---------------------------------------------------------------------------
+# fire_polling_trigger — full branch matrix
+# ---------------------------------------------------------------------------
+
+
+class TestFirePollingTrigger:
+    def _session(
+        self,
+        trigger: MagicMock,
+        connector_instance: Any,
+    ) -> _MockSession:
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = connector_instance
+        return _MockSession([_lock_result(True), _trigger_result(trigger), conn_result, MagicMock()])
+
+    @pytest.mark.asyncio
+    async def test_fires_run_when_condition_met(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(config_json={"snapshot_id": str(uuid.uuid4())})
+        connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
+        session = self._session(trigger, connector_instance)
+        factory = MagicMock(return_value=session)
+        connector = MagicMock()
+        connector.query = AsyncMock(return_value=SimpleNamespace(records=[{"id": 1}], total=1))
+        backend = MagicMock()
+        backend.get_secret = AsyncMock(return_value=json.dumps({"token": "x"}))
+        run = SimpleNamespace(id=uuid.uuid4())
+        event = SimpleNamespace(id=uuid.uuid4())
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
+            patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
+            patch("modulo.core.trigger_engine.polling.evaluate_condition", return_value=True),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock, return_value=event),
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=connector_instance.id,
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "fired"
+        assert result["run_id"] == str(run.id)
+        create_run.assert_awaited_once()
+        assert create_run.await_args.kwargs["trigger_type"] == "polling"
+        assert create_run.await_args.kwargs["input_payload"]["records"] == [{"id": 1}]
+        # Polling fires set last_fired_at only — next_fire_at was advanced at enqueue time.
+        final_stmt, _ = session.executed[-1]
+        compiled = str(final_stmt.compile())
+        assert "last_fired_at" in compiled
+        assert "next_fire_at" not in compiled
+
+    @pytest.mark.asyncio
+    async def test_returns_error_when_connector_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        session = self._session(trigger, None)
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=uuid.uuid4(),
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "connector_not_found"
+        log_poll.assert_awaited_once()
+        assert log_poll.await_args.kwargs["result"] == "poll_error"
+
+    @pytest.mark.asyncio
+    async def test_returns_error_when_connector_init_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
+        session = self._session(trigger, connector_instance)
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.secrets_backend.create_secrets_backend", side_effect=RuntimeError("no backend")),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=connector_instance.id,
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "connector_init_failed"
+        log_poll.assert_awaited_once()
+        assert "Failed to initialise connector" in log_poll.await_args.kwargs["error_detail"]
+
+    @pytest.mark.asyncio
+    async def test_returns_query_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
+        session = self._session(trigger, connector_instance)
+        factory = MagicMock(return_value=session)
+        connector = MagicMock()
+        connector.query = AsyncMock(side_effect=TimeoutError("timed out"))
+        backend = MagicMock()
+        backend.get_secret = AsyncMock(return_value="{}")
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
+            patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=connector_instance.id,
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "query_timeout"
+        log_poll.assert_awaited_once()
+        assert "timed out after 60s" in log_poll.await_args.kwargs["error_detail"]
+
+    @pytest.mark.asyncio
+    async def test_returns_error_when_query_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
+        session = self._session(trigger, connector_instance)
+        factory = MagicMock(return_value=session)
+        connector = MagicMock()
+        connector.query = AsyncMock(side_effect=RuntimeError("boom"))
+        backend = MagicMock()
+        backend.get_secret = AsyncMock(return_value="{}")
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
+            patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=connector_instance.id,
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "query_failed"
+        assert result["error"] == "boom"
+
+    @pytest.mark.asyncio
+    async def test_returns_no_match_when_condition_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
+        session = self._session(trigger, connector_instance)
+        factory = MagicMock(return_value=session)
+        connector = MagicMock()
+        connector.query = AsyncMock(return_value=SimpleNamespace(records=[], total=0))
+        backend = MagicMock()
+        backend.get_secret = AsyncMock(return_value="{}")
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
+            patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
+            patch("modulo.core.trigger_engine.polling.evaluate_condition", return_value=False),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=connector_instance.id,
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "no_match"
+        log_poll.assert_awaited_once()
+        assert log_poll.await_args.kwargs["result"] == "no_match"
+
+    @pytest.mark.asyncio
+    async def test_returns_error_when_condition_eval_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
+        session = self._session(trigger, connector_instance)
+        factory = MagicMock(return_value=session)
+        connector = MagicMock()
+        connector.query = AsyncMock(return_value=SimpleNamespace(records=[], total=0))
+        backend = MagicMock()
+        backend.get_secret = AsyncMock(return_value="{}")
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
+            patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
+            patch("modulo.core.trigger_engine.polling.evaluate_condition", side_effect=RuntimeError("bad expr")),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=connector_instance.id,
+                poll_query="issues",
+                condition_expression="broken",
+            )
+
+        assert result["status"] == "error"
+        assert result["reason"] == "condition_eval_failed"
+        log_poll.assert_awaited_once()
+        assert log_poll.await_args.kwargs["result"] == "poll_error"
+
+    @pytest.mark.asyncio
+    async def test_invalid_snapshot_id_falls_back_to_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(config_json={"snapshot_id": "not-a-uuid"})
+        connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
+        session = self._session(trigger, connector_instance)
+        factory = MagicMock(return_value=session)
+        connector = MagicMock()
+        connector.query = AsyncMock(return_value=SimpleNamespace(records=[], total=0))
+        backend = MagicMock()
+        backend.get_secret = AsyncMock(return_value="{}")
+        run = SimpleNamespace(id=uuid.uuid4())
+        event = SimpleNamespace(id=uuid.uuid4())
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch("modulo.core.secrets_backend.create_secrets_backend", return_value=backend),
+            patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
+            patch("modulo.core.trigger_engine.polling.evaluate_condition", return_value=True),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock, return_value=event),
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=connector_instance.id,
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "fired"
+        assert create_run.await_args.kwargs["snapshot_id"] == uuid.UUID(int=0)
+
+
+class TestClearReportFailureCounter:
+    @pytest.mark.asyncio
+    async def test_deletes_failure_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+
+        await ch._clear_report_failure_counter(redis_client, REPORT)
+
+        redis_client.delete.assert_awaited_once_with(ch._report_failure_counter_key(REPORT))
+
+    @pytest.mark.asyncio
+    async def test_swallows_redis_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        redis_client = AsyncMock()
+        redis_client.delete = AsyncMock(side_effect=RuntimeError("redis down"))
+
+        await ch._clear_report_failure_counter(redis_client, REPORT)
