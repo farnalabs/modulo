@@ -1,6 +1,6 @@
-"""Idempotency tests for the 0064 staging schema-drift reconciliation migration.
+"""Idempotency tests for the 0065 staging schema-drift reconciliation migration.
 
-0064 must be a no-op on a healthy schema (all three tables present in their
+0065 must be a no-op on a healthy schema (all three tables present in their
 current shape) and must repair a drifted pre-squash schema (missing
 ``mcp_setup_tokens`` / ``lifecycle_maps``, legacy ``scheduled_reports``). These
 tests exercise ``upgrade()`` against a mocked inspect/op surface to assert both
@@ -41,7 +41,7 @@ class _FakeInspector:
 
 @pytest.fixture(scope="module")
 def reconcile_migration() -> ModuleType:
-    return _load_migration("0064_reconcile_staging_schema.py", "migration_0064_reconcile")
+    return _load_migration("0065_reconcile_staging_schema.py", "migration_0065_reconcile")
 
 
 def _run_upgrade(
@@ -136,7 +136,7 @@ class TestReconcileDriftedSchema:
         """Recreated tables must get the same tenant triggers 0005 installs.
 
         0005's ``_create_triggers`` installs ``trg_<table>_<column>_tenant``
-        triggers calling ``enforce_same_organisation()`` for these tables; 0064
+        triggers calling ``enforce_same_organisation()`` for these tables; 0065
         recreates the tables, so it must reinstall the identical triggers or the
         repaired schema would permanently lack the cross-org FK enforcement.
         """
@@ -196,9 +196,8 @@ class TestReconcileDriftedSchema:
 
 class TestReconcileMigrationMetadata:
     def test_down_revision_merges_parallel_heads(self) -> None:
-        migration = _load_migration("0064_reconcile_staging_schema.py", "migration_0064_meta")
-        assert migration.revision == "0064_reconcile_staging_schema"
-        assert migration.down_revision == (
-            "0037_break_glass_enforcement",
-            "0037_add_scheduled_reports_created_by",
-        )
+        migration = _load_migration("0065_reconcile_staging_schema.py", "migration_0065_meta")
+        assert migration.revision == "0065_reconcile_staging_schema"
+        # Chains after the 0037 merge head (0064_merge_heads_0037 from #623),
+        # keeping a single linear head (0065).
+        assert migration.down_revision == "0064_merge_heads_0037"

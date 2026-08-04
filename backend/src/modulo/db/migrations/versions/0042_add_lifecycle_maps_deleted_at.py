@@ -5,7 +5,7 @@ Revises: 0021_add_pipelines_deleted_at
 Create Date: 2026-07-22
 
 DRIFT-TOLERANT: pre-squash staging databases may be missing the entire
-``lifecycle_maps`` table (created later by ``0064_reconcile_staging_schema``).
+``lifecycle_maps`` table (created later by ``0065_reconcile_staging_schema``).
 Skip the ``add_column`` when the table does not exist instead of hard-failing
 ``alembic upgrade heads`` and blocking deploys. On a healthy schema the table
 exists and behaviour is unchanged.

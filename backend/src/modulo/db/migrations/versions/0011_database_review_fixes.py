@@ -15,7 +15,7 @@ and its columns. Pre-squash staging databases lack several 0005 tables
 (``mcp_setup_tokens``, ``lifecycle_maps``) or carry a legacy
 ``scheduled_reports`` shape, which used to hard-fail ``alembic upgrade heads``
 and block every deploy. Missing targets are now skipped with a printed warning
-and repaired by ``0064_reconcile_staging_schema``. On a healthy schema every
+and repaired by ``0065_reconcile_staging_schema``. On a healthy schema every
 guard passes, so behaviour is unchanged.
 
 Revision ID: 0011_database_review_fixes
@@ -36,8 +36,15 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _has_column(bind, table: str, column: str) -> bool:
+    """Return True if ``table.column`` exists in the connected DB."""
+    insp = sa.inspect(bind)
+    return column in {c["name"] for c in insp.get_columns(table)}
+
+
 def upgrade() -> None:
-    _add_missing_indexes()
+    bind = op.get_bind()
+    _add_missing_indexes(bind)
     _add_missing_foreign_keys()
     _fix_column_types()
     _add_trigger_based_fk_checks()
@@ -72,7 +79,7 @@ def _create_index_if_present(bind: Any, index_name: str, table: str, columns: li
     (``mcp_setup_tokens``, ``lifecycle_maps``) or carry a legacy
     ``scheduled_reports`` shape without ``created_by``. Rather than hard-fail
     ``alembic upgrade heads`` and block deploys, skip with a printed warning;
-    ``0064_reconcile_staging_schema`` repairs the drift afterwards.
+    ``0065_reconcile_staging_schema`` repairs the drift afterwards.
     """
     if not _table_exists(bind, table):
         _warn(f"SKIP index {index_name} on {table}: table missing (drift-tolerant)")
