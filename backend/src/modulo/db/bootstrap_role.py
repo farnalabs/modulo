@@ -263,6 +263,13 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         # Grant DML on existing tables.
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{app_user}"')
         await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{bg_user}"')
+        # modulo_migrate owns the SECURITY DEFINER ``lookup_api_key_org``
+        # function (0036 transfers ownership) used by API-key auth. The
+        # function executes as modulo_migrate, so it needs USAGE on schema
+        # public to resolve org_api_keys. Without it, every API-key request
+        # fails with ``UndefinedTableError: relation "org_api_keys" does not
+        # exist`` on DBs that revoke the PUBLIC default schema USAGE.
+        await conn.execute(f'GRANT USAGE ON SCHEMA public TO "{_MIGRATE_ROLE}"')
         await conn.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{app_user}"')
         await conn.execute(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{app_user}"')
         # Grant DML on future tables.
