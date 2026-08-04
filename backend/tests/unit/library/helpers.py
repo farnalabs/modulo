@@ -7,6 +7,7 @@ way a hand-maintained list can.
 
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 from modulo.core.library.agents import definitions as _agent_defs
@@ -52,6 +53,21 @@ VALID_PROPERTY_TYPES = {"string", "number", "integer", "boolean", "object", "arr
 VALID_FORMATS = {"date", "date-time"}
 
 
+def _string_value(prop_schema: dict[str, Any]) -> str:
+    """Pick a string that satisfies *prop_schema*, honoring ``pattern``.
+
+    Patterns are matched by a best-effort literal extraction: all literal
+    characters (alphanumerics, ``_`` and ``-``) are pulled out of the regex.
+    If nothing can be extracted the value falls back to ``"x"``, which the
+    valid-document test will surface loudly for any pattern it cannot satisfy.
+    """
+    pattern = prop_schema.get("pattern")
+    if not pattern:
+        return "x"
+    literal = re.sub(r"[^A-Za-z0-9_-]", "", pattern)
+    return literal or "x"
+
+
 def build_valid_document(definition: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal document that validates against *definition*.
 
@@ -79,7 +95,7 @@ def build_valid_document(definition: dict[str, Any]) -> dict[str, Any]:
         elif prop_schema.get("format") == "date-time":
             document[required] = "2000-01-01T00:00:00Z"
         else:
-            document[required] = "x"
+            document[required] = _string_value(prop_schema)
     return document
 
 
