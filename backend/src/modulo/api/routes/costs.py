@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cost_controller import get_cost_report
+from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.scheduled_report import (
     create_scheduled_report,
@@ -50,17 +50,35 @@ def _coerce_spend_limit_usd(value: Decimal | None) -> float | None:
         return None
 
 
+class CostReportComponent(BaseModel):
+    name: str
+    amount_usd: str
+
+
+class CostReportAnnotations(BaseModel):
+    refused_total_usd: float | None = None
+    clamped_total_usd: float | None = None
+
+
 class CostReportRow(BaseModel):
     entity_id: str
     entity_name: str
     total_spend_usd: float
     total_runs: int
+    components: list[CostReportComponent] = Field(default_factory=list)
+    annotations: CostReportAnnotations = Field(default_factory=CostReportAnnotations)
 
 
 class CostReportResponse(BaseModel):
     period: str
     group_by: str
     items: list[CostReportRow]
+    # PR B reporting buckets — Decimal STRINGS (the NEW buckets are strings;
+    # total_spend_usd stays FLOAT). REPORTING only, never a health gate.
+    org_unassigned_components: str | None = None
+    legacy_total: str | None = None
+    org_total: str | None = None
+    has_more: bool = False
 
 
 class SpendLimitResponse(BaseModel):
@@ -93,6 +111,18 @@ async def get_costs(
                 group_by=group_by,
                 period=period,
             )
+            buckets = {}
+            try:
+                buckets = await build_cost_report_buckets(
+                    session,
+                    org_id=current_user.organisation_id,
+                    period=period,
+                )
+            except Exception:
+                # REPORTING fields only — the ledger lines are the period-total
+                # source; a failure in the runs-based detail aggregation
+                # degrades to empty buckets, never to a 500.
+                _log.exception("get_costs buckets aggregation failed (org_id=%s)", current_user.organisation_id)
     except ProgrammingError:
         _log.exception("get_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
@@ -116,10 +146,30 @@ async def get_costs(
             detail="Internal server error",
         ) from None
 
+    components_by_team = buckets.get("components_by_team", {}) if isinstance(buckets, dict) else {}
+    annotations_by_team = buckets.get("annotations_by_team", {}) if isinstance(buckets, dict) else {}
+    items = []
+    for r in rows:
+        bucket_key = "__org__" if group_by == "org" else r["entity_id"]
+        items.append(
+            CostReportRow(
+                entity_id=r["entity_id"],
+                entity_name=r["entity_name"],
+                total_spend_usd=r["total_spend_usd"],
+                total_runs=r["total_runs"],
+                components=[CostReportComponent(**c) for c in components_by_team.get(bucket_key, [])],
+                annotations=CostReportAnnotations(**(annotations_by_team.get(bucket_key, {}))),
+            )
+        )
+
     return CostReportResponse(
         period=period,
         group_by=group_by,
-        items=[CostReportRow(**r) for r in rows],
+        items=items,
+        org_unassigned_components=buckets.get("org_unassigned_components") if isinstance(buckets, dict) else None,
+        legacy_total=buckets.get("legacy_total") if isinstance(buckets, dict) else None,
+        org_total=buckets.get("org_total") if isinstance(buckets, dict) else None,
+        has_more=bool(buckets.get("has_more", False)) if isinstance(buckets, dict) else False,
     )
 
 

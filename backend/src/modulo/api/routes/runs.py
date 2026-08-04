@@ -202,6 +202,61 @@ async def list_runs_endpoint(
 
 _NAMESPACE_TRACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
+# Union serialization bounds (PR B, plan §6.1): the per-node node_token_usage
+# summary is truncated to the NEWEST N nodes on RunResponse, beyond which a
+# node_count aggregate is emitted; the full union stays on the run row.
+_NODE_TOKEN_USAGE_MAX_NODES = 200
+# Union display clamp — a hostile model_cost_raw_usd cannot reach the UI/money
+# formatter through the union surface; the raw value stays in the stored union
+# for audit. Same clamp value as the breakdown's RAW_REPORTED_DISPLAY_CLAMP.
+_UNION_DISPLAY_CLAMP = Decimal("1000000.0")
+
+
+def _clamp_node_token_usage_union(ntu: dict[str, Any]) -> dict[str, Any]:
+    """Union display clamp for serialization surfaces (RunResponse + MCP).
+
+    ``model_cost_raw_usd`` in each per-node dict is magnitude-clamped at 1e6
+    for display; every other value is preserved verbatim. The stored union is
+    never mutated.
+    """
+    out: dict[str, Any] = {}
+    for nid, node in ntu.items():
+        if not isinstance(node, dict):
+            out[nid] = node
+            continue
+        entry = dict(node)
+        raw = entry.get("model_cost_raw_usd")
+        if raw is not None:
+            try:
+                d = Decimal(str(raw))
+            except (TypeError, ValueError, ArithmeticError):
+                d = None
+            if d is not None:
+                entry["model_cost_raw_usd"] = (
+                    float(d) if d.is_finite() and abs(d) <= _UNION_DISPLAY_CLAMP else float(_UNION_DISPLAY_CLAMP)
+                )
+        out[nid] = entry
+    return out
+
+
+def _serialize_node_token_usage(ntu: dict[str, Any] | None) -> dict[str, Any] | None:
+    """RunResponse serialization of ``node_token_usage``.
+
+    Applies the union display clamp then the per-node truncation bound: when
+    more than ``_NODE_TOKEN_USAGE_MAX_NODES`` nodes are present, only the
+    newest N (dict insertion order — the union appends as nodes complete) are
+    emitted and a ``node_count`` aggregate records the full size.
+    """
+    if not ntu:
+        return None
+    clamped = _clamp_node_token_usage_union(ntu)
+    total = len(clamped)
+    if total <= _NODE_TOKEN_USAGE_MAX_NODES:
+        return clamped
+    kept = dict(list(clamped.items())[-_NODE_TOKEN_USAGE_MAX_NODES:])
+    kept["node_count"] = total
+    return kept
+
 
 class TriggerRunRequest(BaseModel):
     pipeline_id: uuid.UUID
@@ -223,6 +278,10 @@ class RunResponse(BaseModel):
     token_consumption: dict[str, Any] | None = None
     trace_id: str | None = None
     node_token_usage: dict[str, Any] | None = None
+    # Cost breakdown — component snapshots (amounts as strings). NULL for
+    # pre-migration runs; amounts ride the breakdown serializer which owns the
+    # raw_reported display clamp. UNGATED (Free-tier orgs see their own).
+    cost_breakdown: list[dict[str, Any]] | None = None
 
 
 def _build_run_response(run: Any) -> RunResponse:
@@ -251,7 +310,8 @@ def _build_run_response(run: Any) -> RunResponse:
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
         trace_id=trace_id,
-        node_token_usage=run.node_token_usage,
+        node_token_usage=_serialize_node_token_usage(run.node_token_usage),
+        cost_breakdown=run.cost_breakdown,
     )
 
 

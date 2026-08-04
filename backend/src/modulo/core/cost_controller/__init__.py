@@ -7,22 +7,27 @@ Spend limit checks use SELECT FOR UPDATE for atomicity.
 import asyncio
 import uuid
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 
 __all__ = [
+    "build_cost_report_buckets",
     "check_and_record_spend",
     "get_cost_report",
     "get_or_create_daily_count",
 ]
+
+_REPORT_COMPONENT_LIMIT = 500
+_REPORT_QUANT = Decimal("0.000001")
 
 
 def _safe_float(value: Decimal | None) -> float:
@@ -31,6 +36,25 @@ def _safe_float(value: Decimal | None) -> float:
 
 def _safe_int(value: Decimal | int | None) -> int:
     return int(value) if value is not None else 0
+
+
+def _report_since(today: date, period: str) -> date:
+    """Start-of-period date for the report windows (day/week/month/year)."""
+    if period == "day":
+        return today
+    if period == "week":
+        return today - timedelta(days=today.weekday())
+    if period == "month":
+        return date(today.year, today.month, 1)
+    return date(today.year, 1, 1)
+
+
+def _report_amount(value: Decimal) -> str:
+    """Serialize a reporting bucket as a 6dp Decimal string (never float)."""
+    try:
+        return format(value.quantize(_REPORT_QUANT, rounding=ROUND_HALF_UP), "f")
+    except (TypeError, ValueError, ArithmeticError):
+        return "0.000000"
 
 
 async def get_or_create_daily_count(
@@ -255,3 +279,146 @@ async def get_cost_report(
             "total_runs": org_runs,
         }
     ]
+
+
+async def build_cost_report_buckets(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    period: str = "month",
+) -> dict[str, Any]:
+    """PR B: per-component + org reporting buckets over the RUNS table.
+
+    REPORTING fields only — the ledger (``OrgDailyRunCount``) stays the
+    period-total source; these buckets read the runs table, which IS purged at
+    ~90 days by run retention, so they cover only un-purged runs (for a
+    year-to-date report, windows > 90 days show empty buckets — accepted and
+    stated in the operator guide).
+
+    Returns:
+        components_by_team: ``{str(team_id) | "__org__": [{name, amount_usd}]}``
+            where ``component`` is the stable aggregation key (pre-delete and
+            post-recreate amounts combine under one slug).
+        annotations_by_team: ``{str(team_id) | "__org__": {"refused_total_usd",
+            "clamped_total_usd"}}`` — refused reads the ``refused_spend_usd``
+            ledger column (survives the run purge); clamped is the sum of spend
+            over days whose ledger row has ``clamped = true`` and is NOT
+            additive with ``total_spend_usd``.
+        legacy_total: ``Σ run.total_cost_usd`` over scoped runs with
+            ``cost_breakdown IS NULL`` (Decimal string).
+        org_unassigned_components: component-attributed spend from runs with no
+            team (Decimal string).
+        org_total: ``Σ(team components) + org_unassigned_components +
+            legacy_total`` over NON-marker-bearing runs (Decimal string) — the
+            REPORTING invariant, never a health gate.
+        has_more: True when a component bucket was truncated at
+            ``_REPORT_COMPONENT_LIMIT`` (bounded by design).
+    """
+    valid_periods = frozenset({"day", "week", "month", "year"})
+    if period not in valid_periods:
+        raise ValueError(f"Unknown period '{period}'. Expected one of: {', '.join(sorted(valid_periods))}")
+
+    since = _report_since(datetime.now(UTC).date(), period)
+
+    run_result = await session.execute(
+        select(Run.owner_team_id, Run.total_cost_usd, Run.cost_breakdown).where(
+            Run.organisation_id == org_id,
+            Run.started_at.isnot(None),
+            Run.started_at >= since,
+        )
+    )
+    run_rows = run_result.all()
+
+    team_components: dict[uuid.UUID | None, dict[str, Decimal]] = {}
+    legacy_total = Decimal(0)
+
+    for row in run_rows:
+        team_id = row.owner_team_id
+        breakdown = row.cost_breakdown
+        if breakdown is None:
+            try:
+                if row.total_cost_usd is not None:
+                    legacy_total += Decimal(str(row.total_cost_usd))
+            except (TypeError, ValueError, ArithmeticError):
+                continue
+            continue
+        if not isinstance(breakdown, list):
+            continue
+        # Marker-bearing runs (total flat-clamped to column capacity) are
+        # EXCLUDED so the reporting invariant holds exactly.
+        if any(isinstance(e, dict) and e.get("total_clamped") is True for e in breakdown):
+            continue
+        bucket = team_components.setdefault(team_id, {})
+        for entry in breakdown:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("component")
+            if not isinstance(name, str) or not name:
+                continue
+            try:
+                amount = Decimal(str(entry.get("amount_usd", "0")))
+            except (TypeError, ValueError, ArithmeticError):
+                continue
+            bucket[name] = bucket.get(name, Decimal(0)) + amount
+
+    def _serialized(
+        bucket: dict[str, Decimal],
+        limit: int = _REPORT_COMPONENT_LIMIT,
+    ) -> tuple[list[dict[str, str]], bool]:
+        entries = sorted(bucket.items(), key=lambda kv: (-kv[1], kv[0]))
+        truncated = len(entries) > limit
+        return [{"name": name, "amount_usd": _report_amount(amount)} for name, amount in entries[:limit]], truncated
+
+    components_by_team: dict[str, list[dict[str, str]]] = {}
+    has_more = False
+    for team_id, bucket in team_components.items():
+        key = str(team_id) if team_id is not None else "__org__"
+        comps, truncated = _serialized(bucket)
+        components_by_team[key] = comps
+        if truncated:
+            has_more = True
+
+    annotation_result = await session.execute(
+        select(
+            OrgDailyRunCount.team_id,
+            func.sum(OrgDailyRunCount.refused_spend_usd).label("refused_total"),
+            func.sum(
+                case(
+                    (OrgDailyRunCount.clamped.is_(True), OrgDailyRunCount.total_spend_usd),
+                    else_=Decimal(0),
+                )
+            ).label("clamped_total"),
+        )
+        .where(
+            OrgDailyRunCount.organisation_id == org_id,
+            OrgDailyRunCount.run_date >= since,
+        )
+        .group_by(OrgDailyRunCount.team_id)
+    )
+    annotations_by_team: dict[str, dict[str, float | None]] = {}
+    for row in annotation_result.all():
+        key = str(row.team_id) if row.team_id is not None else "__org__"
+        refused = _safe_float(row.refused_total)
+        clamped = _safe_float(row.clamped_total)
+        annotations_by_team[key] = {
+            "refused_total_usd": refused if refused > 0 else None,
+            "clamped_total_usd": clamped if clamped > 0 else None,
+        }
+
+    org_unassigned = Decimal(0)
+    team_sum = Decimal(0)
+    for team_id, bucket in team_components.items():
+        for amount in bucket.values():
+            if team_id is None:
+                org_unassigned += amount
+            else:
+                team_sum += amount
+
+    return {
+        "components_by_team": components_by_team,
+        "annotations_by_team": annotations_by_team,
+        "legacy_total": _report_amount(legacy_total),
+        "org_unassigned_components": _report_amount(org_unassigned),
+        "org_total": _report_amount(team_sum + org_unassigned + legacy_total),
+        "has_more": has_more,
+    }
