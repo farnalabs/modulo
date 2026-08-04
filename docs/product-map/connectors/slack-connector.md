@@ -123,6 +123,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [ ] **No bot-in-channel verification**: health check does not verify bot is in at least one channel
 - [ ] **No domain-specific exception types**: all API and network errors use generic `ValueError` — not domain exceptions like `SlackRateLimitError`, `SlackAuthError`
 - [ ] **No scheduled-message list/delete**: `chat.scheduledMessages.list` / `chat.deleteScheduledMessage` not implemented (schedule-only)
+- [ ] **Legacy `files.upload` endpoint**: `write("file_upload")` uses the legacy `files.upload` method (deprecated in favor of `files.uploadV2`). Still works and is the simplest implementation for small in-memory uploads; track migration to `files.uploadV2` if Slack retires the legacy endpoint.
 
 ### Resolved (2026-08-04)
 
