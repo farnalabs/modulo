@@ -17,7 +17,7 @@ SRC = Path(__file__).resolve().parent.parent.parent / "src" / "modulo"
 
 def _iter_py_files(root: Path):
     for path in root.rglob("*.py"):
-        if "migrations" in path.parts:
+        if "migrations" in path.relative_to(root).parts:
             continue
         yield path
 
