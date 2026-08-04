@@ -157,7 +157,7 @@ async def change_password(
                     raise
                 except Exception:
                     logger.exception("me.change_password")
-                    logging.getLogger(__name__).warning(
+                    logger.warning(
                         "Failed to blacklist previous token family during password change for account %s",
                         current_user.account_id,
                     )
