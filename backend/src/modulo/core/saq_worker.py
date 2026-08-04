@@ -400,11 +400,12 @@ def _system_functions() -> list[Any]:
 def _system_cron_jobs() -> list[CronJob[Any]]:
     """System cron jobs (plan F1) — all knobs explicit."""
     return [
-        # fire_due_triggers: every 30s; the atomic next_fire_at advance makes
-        # multi-machine ticks safe (unique=True only prevents overlap).
+        # fire_due_triggers: every 60s (croniter parses 5-field cron, so the
+        # 30s intent is not achievable — every minute); the atomic next_fire_at
+        # advance makes multi-machine ticks safe (unique=True only prevents overlap).
         CronJob(
             fire_due_triggers,
-            cron="*/30 * * * * *",
+            cron="* * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -414,7 +415,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # dispatcher_reconcile: every 60s (timeout=120 per plan F1).
         CronJob(
             dispatcher_reconcile,
-            cron="0 * * * * *",
+            cron="* * * * *",
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -424,7 +425,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # claim-expiry: every 60s — SAQ cron is the SOLE writer/notifier (F1).
         CronJob(
             claim_expiry,
-            cron="0 * * * * *",
+            cron="* * * * *",
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -434,7 +435,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # retention: hourly (matches the in-process _run_retention_loop cadence).
         CronJob(
             retention_cleanup,
-            cron="0 0 * * * *",
+            cron="0 * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -444,7 +445,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # webhook-dedup cleanup: hourly (matches _CLEANUP_INTERVAL_SECONDS).
         CronJob(
             webhook_dedup_cleanup,
-            cron="0 0 * * * *",
+            cron="0 * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -455,7 +456,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # non-SAQ rows in the sweep itself).
         CronJob(
             stale_run_recovery,
-            cron="0 */5 * * * *",
+            cron="*/5 * * * *",
             unique=True,
             timeout=120,
             heartbeat=30,

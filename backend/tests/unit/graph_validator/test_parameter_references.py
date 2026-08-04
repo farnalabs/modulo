@@ -283,6 +283,46 @@ async def test_set_with_all_schema_params_no_composite_drift():
     assert result.is_valid
 
 
+async def test_set_without_schema_skips_drift_checks():
+    """A node pinned to a set but no schema skips the schema drift checks."""
+    schema_id = uuid.uuid4()
+    set_id = uuid.uuid4()
+    graph = {
+        "nodes": [
+            _node("n1", parameter_set_id=str(set_id)),
+        ],
+        "edges": [],
+    }
+    session = _session_with(
+        set_rows=[_set(set_id, schema_id, schema_version=1, values={"temperature": 0.7})],
+    )
+    result = await _run(graph, session)
+    assert "PARAMETER_SCHEMA_DRIFT" not in _codes(result)
+    assert "PARAMETER_SCHEMA_DRIFT_COMPOSITE" not in _codes(result)
+    assert result.is_valid
+
+
+async def test_non_dict_schema_parameter_skipped():
+    """Schema.parameters entries that are not dicts are ignored for drift."""
+    schema_id = uuid.uuid4()
+    set_id = uuid.uuid4()
+    graph = {
+        "nodes": [
+            _node("n1", parameter_schema_id=str(schema_id), parameter_set_id=str(set_id)),
+        ],
+        "edges": [],
+    }
+    session = _session_with(
+        schema_rows=[
+            _schema(schema_id, version=1, parameters=[{"name": "temperature"}, "bad-param"]),
+        ],
+        set_rows=[_set(set_id, schema_id, schema_version=1, values={"temperature": 0.7})],
+    )
+    result = await _run(graph, session)
+    assert "PARAMETER_SCHEMA_DRIFT_COMPOSITE" not in _codes(result)
+    assert result.is_valid
+
+
 # ---------------------------------------------------------------------------
 # Multiple nodes with mixed validity
 # ---------------------------------------------------------------------------

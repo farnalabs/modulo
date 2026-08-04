@@ -1,5 +1,6 @@
 """Unit tests for GraphValidator."""
 
+import sys
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -246,6 +247,22 @@ async def test_schema_missing_pins_skipped():
     session = _session_returning([])
     result = await GraphValidator().validate(snap, session)
     assert result.is_valid
+
+
+def test_schema_compatibility_matching_schemas_no_issue():
+    """An edge whose output and input pins resolve to the same schema is valid."""
+    schema_id = str(uuid.uuid4())
+    graph = {
+        "nodes": [
+            {"id": "a", "output_schema_pin": {"schema_id": schema_id, "schema_version": "1.0"}},
+            {"id": "b", "input_schema_pin": {"schema_id": schema_id, "schema_version": "1.0"}},
+        ],
+        "edges": [{"source": "a", "target": "b", "type": "normal"}],
+    }
+    result = ValidationResult()
+    GraphValidator()._check_schema_compatibility(graph, result)
+    assert result.is_valid
+    assert not any(i.code == "SCHEMA_INCOMPATIBLE" for i in result.issues)
 
 
 async def test_schema_reject_edges_excluded():
@@ -542,6 +559,34 @@ async def test_nesting_depth_exceeded_is_error():
     result = await GraphValidator().validate(snap, session)
     assert not result.is_valid
     assert any(i.code == "TOPOLOGY_NESTING_EXCEEDED" for i in result.issues)
+
+
+def test_nesting_depth_recursion_guard_caps_depth():
+    """A path longer than the internal recursion budget caps depth at 1000.
+
+    The ``_remaining`` guard in ``_max_depth`` returns 0 once the budget is
+    exhausted so a pathological chain cannot recurse forever. The recursion
+    limit is temporarily raised so the guard (not Python's own RecursionError)
+    bounds the walk.
+    """
+    chain_len = 1005
+    nodes = [{"id": str(i)} for i in range(chain_len)]
+    edges = [{"source": str(i), "target": str(i + 1), "type": "normal"} for i in range(chain_len - 1)]
+    adj: dict[str, list[str]] = {str(n["id"]): [] for n in nodes}
+    for edge in edges:
+        adj[str(edge["source"])].append(str(edge["target"]))
+
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(chain_len * 4)
+    try:
+        result = ValidationResult()
+        GraphValidator()._check_nesting_depth(adj, ["0"], result)
+    finally:
+        sys.setrecursionlimit(old_limit)
+
+    assert not result.is_valid
+    depth_issue = next(i for i in result.issues if i.code == "TOPOLOGY_NESTING_EXCEEDED")
+    assert "1000" in depth_issue.message
 
 
 # ---------------------------------------------------------------------------

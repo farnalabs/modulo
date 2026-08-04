@@ -1848,6 +1848,14 @@ def step_slack_connector(ctx):
                     ],
                     next_cursor=None,
                 )
+            case "scheduled_messages":
+                return ConnectorResult(
+                    records=[
+                        {"id": "Q1234", "channel_id": "C001", "post_at": 1610118217, "text": "Morning standup"},
+                        {"id": "Q1235", "channel_id": "C002", "post_at": 1610118300, "text": "Daily report"},
+                    ],
+                    next_cursor=None,
+                )
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -1925,6 +1933,14 @@ def step_slack_connector(ctx):
                 if payload.data.get("content") is None and payload.data.get("file") is None:
                     raise ValueError("file_upload payload requires 'content' or 'file'")
                 return {"ok": True, "file": {"id": "F1234", "name": filename, "permalink": "https://.../file"}}
+            case "scheduled_message_delete":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in scheduled_message_delete payload")
+                scheduled_message_id = payload.data.get("scheduled_message_id")
+                if not scheduled_message_id:
+                    raise ValueError("Missing 'scheduled_message_id' in scheduled_message_delete payload")
+                return {"ok": True}
             case _:
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
@@ -2166,6 +2182,41 @@ def step_slack_file_upload_no_content(resource, filename, ctx):
         ctx["write_error"] = str(exc)
 
 
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and scheduled_message_id "{id}"'))
+def step_slack_delete_scheduled_message(resource, channel, id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "scheduled_message_id": id},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no scheduled_message_id'))
+def step_slack_delete_scheduled_message_no_id(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and user "{user}" and text "{text}"'))
 def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
     from modulo.connectors.base import ConnectorPayload
@@ -2309,8 +2360,8 @@ def step_slack_query_unknown(resource, ctx):
     import asyncio
 
     try:
-        asyncio.run(ctx["connector"].query(q))
-        ctx["query_result"] = "unexpected_success"
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
         ctx["query_result"] = None
@@ -2352,6 +2403,26 @@ def step_slack_connector_invalid(ctx):
 
     mock_connector.health_check = mock_health_check
     ctx["connector"] = mock_connector
+
+
+@given("the Slack connector health check passes")
+def step_slack_health_check_passes(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="Bot is in at least one channel")
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@given("the Slack connector health check reports the bot is not in any channel")
+def step_slack_health_check_not_in_channel(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Bot is not in any channel")
+
+    ctx["connector"].health_check = mock_health_check
 
 
 @then("the health result indicates failure")
