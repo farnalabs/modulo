@@ -265,7 +265,11 @@ async def _resolve_live_org_role(
     )
 
 
-def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
+def require_target_org_role(
+    permission: str,
+    min_role: str,
+    kill_switch_eligible: bool = True,
+) -> DependsParameter:
     """FastAPI dependency factory — scoped-hybrid reads and mutations.
 
     Passes if the principal is a system admin OR holds a live membership in
@@ -279,6 +283,11 @@ def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
     ``min_role`` must equal the permission's registry-resolved role
     (``PERMISSIONS`` is the single source of truth); a mismatch is a
     configuration error and fails fast at factory-creation time.
+
+    ``kill_switch_eligible`` (default True) mirrors
+    ``require_system_or_org_admin``'s hardcoded ``kill_switch_eligible=False``:
+    pass False for destructive gates (e.g. the org trigger-pause toggle) so the
+    org authz kill-switch can never lift them.
 
     .. code-block:: python
 
@@ -326,7 +335,7 @@ def require_target_org_role(permission: str, min_role: str) -> DependsParameter:
                     detail="Database temporarily unavailable.",
                 ) from None
             try:
-                assert_org_role(role, min_role, permission)
+                assert_org_role(role, min_role, permission, kill_switch_eligible=kill_switch_eligible)
             except PermissionDenied as exc:
                 logger.warning(
                     "permission.denied",

@@ -65,3 +65,46 @@ async def resolve_authz_enforce(
     if value is None:
         return True
     return bool(value)
+
+
+def org_row_is_paused(status: str | None, triggers_paused: bool | None) -> bool:
+    """Pure predicate: is this org row's pause state considered "paused"?
+
+    Returns ``True`` when ``triggers_paused`` is explicitly True, OR when
+    ``status`` is set and not ``"active"`` (a suspended/deleted org blocks
+    triggers the same way a paused one does — fail-closed on non-active orgs).
+
+    A missing row (``status=None``) returns ``False`` here; the query-level
+    helper ``org_is_paused`` handles missing rows (fail-closed).
+    """
+    if triggers_paused is True:
+        return True
+    return bool(status is not None and status != "active")
+
+
+async def org_is_paused(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Return whether the org-wide trigger pause is in effect for *org_id*.
+
+    Dedicated column-level SELECT (``Organisation.triggers_paused`` +
+    ``Organisation.status``) — never the ORM identity map, so a freshly toggled
+    value is observed even on a session that already loaded the org row.
+
+    Fail-closed: a missing row (deleted org) returns ``True`` so its triggers
+    can never fire. Do NOT swallow ``SQLAlchemyError`` — it propagates to the
+    caller, which decides how to surface the read failure.
+
+    Unknown pause state => caller must treat as unavailable; this helper raises
+    on read failure.
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.organisation import Organisation
+
+    result = await session.execute(
+        select(Organisation.triggers_paused, Organisation.status).where(Organisation.id == org_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return True
+    triggers_paused, status = row
+    return org_row_is_paused(status, triggers_paused)

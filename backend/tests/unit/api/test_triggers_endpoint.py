@@ -47,6 +47,9 @@ def _make_trigger_result(triggers: list[MagicMock]) -> MagicMock:
     r.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=triggers)))
     r.scalar_one_or_none = MagicMock(return_value=triggers[0] if triggers else None)
     r.scalar_one = MagicMock(return_value=len(triggers))
+    # The list route's org-state read (trigger pause) uses ``one_or_none`` —
+    # default to "no org row" => not paused.
+    r.one_or_none = MagicMock(return_value=None)
     return r
 
 
@@ -106,6 +109,36 @@ def test_list_triggers_returns_200(client: TestClient) -> None:
     assert body["total"] == 1
     assert len(body["items"]) == 1
     assert body["items"][0]["trigger_type"] == "cron"
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_list_triggers_includes_pause_state(client: TestClient) -> None:
+    """List response carries top-level triggers_paused / paused_at from a fresh
+    org column-level read."""
+    trigger = _make_mock_trigger()
+    with patch("modulo.api.routes.triggers.set_rls_org"):
+        session = _make_mock_session()
+        trigger_result = _make_trigger_result([trigger])
+        org_result = MagicMock()
+        org_result.one_or_none.return_value = (True, _NOW)
+        # Execute order: require_permission authz read, count, rows, org-state.
+        calls = iter([trigger_result, trigger_result, trigger_result, org_result])
+
+        async def _execute(*args: object, **kwargs: object) -> MagicMock:
+            return next(calls)
+
+        session.execute = _execute
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get("/api/v1/triggers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["triggers_paused"] is True
+    assert body["paused_at"] == _NOW.isoformat()
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 

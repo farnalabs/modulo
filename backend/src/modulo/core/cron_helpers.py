@@ -36,8 +36,11 @@ from croniter import croniter
 from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
 from sqlalchemy import select, text
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.exceptions import TriggersPausedError
+from modulo.db.settings_resolver import org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -322,6 +325,12 @@ async def fire_cron_trigger(
         if trigger is None or not trigger.active:
             return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
 
+        # Org-wide pause (kill-switch) — checked BEFORE the snapshot auto-create
+        # so a paused org never produces a snapshot. No paused TriggerEvent here
+        # (this is the race backstop only; the create_run gate is the authority).
+        if await org_is_paused(session, org_id):
+            return {"status": "skipped", "reason": "triggers_paused"}
+
         active_count = await _count_active_runs(session, trigger_id)
         if active_count >= trigger.max_concurrent_runs:
             await _log_event(
@@ -390,15 +399,21 @@ async def fire_cron_trigger(
         config = trigger.config_json or {}
         input_payload = config.get("input_template", {})
 
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="cron",
-            trigger_id=trigger_id,
-            input_payload=input_payload,
-        )
+        try:
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="cron",
+                trigger_id=trigger_id,
+                input_payload=input_payload,
+            )
+        except TriggersPausedError:
+            # TOCTOU race backstop: the org was paused between the early check
+            # and create_run. Skip, no paused TriggerEvent (race backstop only).
+            _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
+            return {"status": "skipped", "reason": "triggers_paused"}
 
         event = await _log_event(
             session,
@@ -476,6 +491,11 @@ async def fire_polling_trigger(
         trigger = result.scalar_one_or_none()
         if trigger is None or not trigger.active:
             return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
+
+        # Org-wide pause (kill-switch). No paused TriggerEvent here (race
+        # backstop only; the create_run gate is the authority).
+        if await org_is_paused(session, org_id):
+            return {"status": "skipped", "reason": "triggers_paused"}
 
         active_count = await _count_active_runs(session, trigger_id)
         if active_count >= trigger.max_concurrent_runs:
@@ -594,15 +614,19 @@ async def fire_polling_trigger(
             "poll_query": poll_query,
         }
 
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="polling",
-            trigger_id=trigger_id,
-            input_payload=input_payload,
-        )
+        try:
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="polling",
+                trigger_id=trigger_id,
+                input_payload=input_payload,
+            )
+        except TriggersPausedError:
+            _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
+            return {"status": "skipped", "reason": "triggers_paused"}
 
         event = await _log_poll_event(
             session,
@@ -872,8 +896,10 @@ async def fire_due_triggers() -> dict[str, Any]:
         "orgs_scanned": 0,
         "cron_due": 0,
         "cron_enqueued": 0,
+        "cron_skipped_paused": 0,
         "polling_due": 0,
         "polling_enqueued": 0,
+        "polling_skipped_paused": 0,
         "report_due": 0,
         "report_enqueued": 0,
         "enqueue_failures": 0,
@@ -889,6 +915,28 @@ async def fire_due_triggers() -> dict[str, Any]:
     if not org_ids:
         return summary
 
+    # Org-wide trigger pause map (kill-switch). A SEPARATE batched read so a
+    # pre-migration DB (no triggers_paused column yet) degrades gracefully:
+    #   - ProgrammingError  -> not-paused for every org + ``pause_read=degraded``
+    #                          (preserve pre-migration legacy behaviour)
+    #   - other SQLAlchemyError -> fail-closed: every org paused + ``pause_read=error``
+    pause_by_org: dict[uuid.UUID, bool] = {}
+    try:
+        async with factory() as session, session.begin():
+            pause_rows = (
+                await session.execute(select(Organisation.id, Organisation.triggers_paused, Organisation.status))
+            ).all()
+        for oid, triggers_paused, status in pause_rows:
+            pause_by_org[oid] = org_row_is_paused(status, triggers_paused)
+    except ProgrammingError:
+        _log.exception("fire_due_triggers: pause-column read failed — treating all orgs as not-paused (legacy schema)")
+        summary["pause_read"] = "degraded"
+        pause_by_org = {}
+    except SQLAlchemyError:
+        _log.exception("fire_due_triggers: pause read failed — fail-closed, treating all orgs as paused")
+        summary["pause_read"] = "error"
+        pause_by_org = dict.fromkeys(org_ids, True)
+
     redis_client = AsyncRedis.from_url(
         settings.redis_url,
         socket_connect_timeout=10,
@@ -899,6 +947,10 @@ async def fire_due_triggers() -> dict[str, Any]:
         q = RedisQueue(redis_client, name=queue_name)
         for org_id in org_ids:
             summary["orgs_scanned"] += 1
+            # Org-wide pause (kill-switch): fire jobs are SKIP-not-defer — the
+            # per-row atomic advance below still moves next_fire_at forward so
+            # unpausing never causes a catch-up storm.
+            org_paused = pause_by_org.get(org_id, False)
             async with factory() as session, session.begin():
                 await _set_rls_org(session, org_id)
                 now = datetime.now(UTC)
@@ -954,6 +1006,12 @@ async def fire_due_triggers() -> dict[str, Any]:
                         raise
                     except Exception:
                         _log.exception("fire_due_triggers: cron advance failed %s", row.id)
+                        continue
+                    if org_paused:
+                        # SKIP-not-defer: the epoch is consumed (advance above)
+                        # but no fire job is enqueued. Counters + summary are the
+                        # scheduled-path audit — no per-trigger TriggerEvent.
+                        summary["cron_skipped_paused"] += 1
                         continue
                     snapshot_id = _resolve_snapshot_id(row, latest_snapshots)
                     try:
@@ -1055,6 +1113,9 @@ async def fire_due_triggers() -> dict[str, Any]:
                     except Exception:
                         _log.exception("fire_due_triggers: polling advance failed %s", row.id)
                         continue
+                    if org_paused:
+                        summary["polling_skipped_paused"] += 1
+                        continue
                     try:
                         job_id = await _enqueue_fire_job_async(
                             q,
@@ -1135,6 +1196,7 @@ async def fire_due_triggers() -> dict[str, Any]:
         with _suppress_aclose():
             await redis_client.aclose()
 
+    _log.info("fire_due_triggers summary: %s", summary)
     return summary
 
 

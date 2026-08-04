@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.exceptions import TriggersPausedError
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
@@ -171,33 +172,58 @@ async def fire_agent_signal(
         # below (which touches the same session) explodes with a misleading
         # "Can't operate on closed transaction" error.
         try:
-            async with session.begin_nested():
-                child_run = await create_run(
+            try:
+                async with session.begin_nested():
+                    child_run = await create_run(
+                        session,
+                        org_id=org_id,
+                        pipeline_id=trigger.pipeline_id,
+                        snapshot_id=snapshot_id,
+                        trigger_type="agent_signal",
+                        trigger_id=trigger.id,
+                        input_payload=input_payload,
+                        parent_run_id=source_run_id,
+                    )
+            except TriggersPausedError:
+                # Pause gate: re-raise so the savepoint rolls back, then let the
+                # outer handler write the single paused event in the outer tx.
+                raise
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log.exception("Failed to create child run for agent signal trigger %s", str_trigger_id)
+                await _log_signal_event(
                     session,
-                    org_id=org_id,
-                    pipeline_id=trigger.pipeline_id,
-                    snapshot_id=snapshot_id,
-                    trigger_type="agent_signal",
-                    trigger_id=trigger.id,
-                    input_payload=input_payload,
-                    parent_run_id=source_run_id,
+                    trigger,
+                    org_id,
+                    result="validation_failed",
+                    error_detail=str(exc)[:200],
                 )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.exception("Failed to create child run for agent signal trigger %s", str_trigger_id)
+                results.append(
+                    {
+                        "trigger_id": str_trigger_id,
+                        "status": "error",
+                        "reason": "create_run_failed",
+                    }
+                )
+                continue
+        except TriggersPausedError:
+            # Org-wide pause (kill-switch). Exactly ONE paused event per blocked
+            # signal, written in the outer transaction (the savepoint already
+            # rolled back the failed child-run insert). No _log.exception spam —
+            # a paused org is an expected condition, not an error.
             await _log_signal_event(
                 session,
                 trigger,
                 org_id,
-                result="validation_failed",
-                error_detail=str(exc)[:200],
+                result="paused",
+                error_detail="Org triggers paused",
             )
             results.append(
                 {
                     "trigger_id": str_trigger_id,
-                    "status": "error",
-                    "reason": "create_run_failed",
+                    "status": "skipped",
+                    "reason": "org_triggers_paused",
                 }
             )
             continue

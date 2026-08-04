@@ -23,12 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.exceptions import TriggersPausedError
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
+from modulo.db.settings_resolver import org_is_paused
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -177,6 +179,11 @@ async def fire_polling_trigger(
             return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
         if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.UTC):
             return {"status": "skipped", "reason": "already_fired_this_cycle"}
+
+        # Org-wide pause (kill-switch). No paused TriggerEvent here (race
+        # backstop only; the create_run gate is the authority).
+        if await org_is_paused(session, org_id):
+            return {"status": "skipped", "reason": "triggers_paused"}
 
         # Concurrency check
         active_count = await _count_active_runs(session, trigger_id)
@@ -345,15 +352,20 @@ async def fire_polling_trigger(
         }
 
         # Create the run
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="polling",
-            trigger_id=trigger_id,
-            input_payload=input_payload,
-        )
+        try:
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="polling",
+                trigger_id=trigger_id,
+                input_payload=input_payload,
+            )
+        except TriggersPausedError:
+            # TOCTOU race backstop: paused between the early check and create_run.
+            _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
+            return {"status": "skipped", "reason": "triggers_paused"}
 
         # Log TriggerEvent — condition_met
         event = await _log_poll_event(

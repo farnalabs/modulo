@@ -10,7 +10,15 @@ Webhook processing pipeline:
   7. Create Run + TriggerEvent in one transaction
   8. Dedup hash committed with run (single atomic unit)
 
-All outcomes (pass and fail) are recorded as a TriggerEvent row.
+All outcomes (pass and fail) are recorded as a TriggerEvent row, with two
+exceptions documented here for accuracy:
+  * Paused deliveries (org-wide kill-switch) do NOT write a TriggerEvent in the
+    engine — the route's in-transaction catch is the single writer and commits
+    a ``validation_result='paused'`` row.
+  * Other failure events (hmac_failed, timestamp_expired, ...) ARE written by
+    the engine, but the caller's transaction may roll them back when it maps
+    the typed exception to an HTTP response (a documented pre-existing
+    limitation, out of scope for the pause feature).
 The caller is responsible for background execution of the created run.
 """
 
@@ -30,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.exceptions import TriggersPausedError
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -37,6 +46,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+from modulo.db.settings_resolver import org_is_paused
 
 _log = logging.getLogger(__name__)
 
@@ -272,6 +282,15 @@ class TriggerEngine:
                 )
                 raise HmacValidationError()
 
+            # Org-wide pause kill-switch. Checked AFTER timestamp+HMAC
+            # validation (an unauthenticated delivery still gets its typed
+            # error) but BEFORE the dedup insert — a paused delivery must not
+            # consume a dedup slot. The engine writes NO TriggerEvent here; the
+            # route's in-transaction catch is the single writer of the
+            # ``paused`` event.
+            if await org_is_paused(session, org_id):
+                raise TriggersPausedError(trigger_id=trigger_id, org_id=org_id, trigger_type="webhook")
+
             # Event type filtering - skip if payload doesn't contain any accepted event
             accepted_events: list[str] | None = cfg.get("accepted_events")
             if accepted_events:
@@ -450,6 +469,12 @@ class TriggerEngine:
                 raise TriggerNotFoundError(event.trigger_id)
             if not trigger.active:
                 raise TriggerInactiveError(event.trigger_id)
+
+            # Org-wide pause kill-switch — a replay is a trigger-initiated run
+            # and must honour the pause. No event write here; the route's
+            # in-transaction catch writes the ``paused`` event.
+            if await org_is_paused(session, org_id):
+                raise TriggersPausedError(trigger_id=event.trigger_id, org_id=org_id, trigger_type="webhook")
 
             # Load raw payload from WebhookPayload
             payload_result = await session.execute(

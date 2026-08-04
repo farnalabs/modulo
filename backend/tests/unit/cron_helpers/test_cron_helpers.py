@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.core import cron_helpers as ch
 
@@ -78,6 +80,26 @@ def _org_result(org_ids: list[uuid.UUID]) -> MagicMock:
     r = MagicMock()
     r.scalars.return_value = org_ids
     return r
+
+
+def _pause_result(org_id: uuid.UUID, paused: bool = False, status: str = "active") -> MagicMock:
+    """Result for the org-wide pause batched read: (id, triggers_paused, status)."""
+    r = MagicMock()
+    r.all.return_value = [(org_id, paused, status)]
+    return r
+
+
+@pytest.fixture(autouse=True)
+def _org_not_paused() -> Generator[None, None, None]:
+    """Default the per-fire-job org-pause check to not-paused.
+
+    fire_cron_trigger/fire_polling_trigger now call ``org_is_paused``; the
+    mocked sessions would otherwise read a MagicMock org row and fail-closed as
+    paused, breaking the existing skip tests. Paused-specific tests override
+    with a nested ``return_value=True`` patch.
+    """
+    with patch.object(ch, "org_is_paused", new_callable=AsyncMock, return_value=False):
+        yield
 
 
 def _rows_result(rows: list[Any]) -> MagicMock:
@@ -181,6 +203,7 @@ class TestFireDueTriggers:
         session = _MockSession(
             [
                 _org_result([ORG]),
+                _pause_result(ORG),
                 _rows_result([_cron_row(TRIGGER_A), _cron_row(TRIGGER_B, snapshot_id=str(uuid.uuid4()))]),
                 _rows_result([_polling_row(TRIGGER_POLL)]),
                 _rows_result([_report_row(REPORT)]),
@@ -227,6 +250,7 @@ class TestFireDueTriggers:
         session = _MockSession(
             [
                 _org_result([ORG]),
+                _pause_result(ORG),
                 _rows_result([_cron_row(TRIGGER_A)]),
                 _rows_result([]),
                 _rows_result([]),
@@ -257,6 +281,7 @@ class TestFireDueTriggers:
         session = _MockSession(
             [
                 _org_result([ORG]),
+                _pause_result(ORG),
                 _rows_result([_cron_row(TRIGGER_A)]),
                 _rows_result([]),
                 _rows_result([]),
@@ -292,6 +317,7 @@ class TestFireDueTriggers:
         session = _MockSession(
             [
                 _org_result([ORG]),
+                _pause_result(ORG),
                 _rows_result([_cron_row(TRIGGER_A, cron_timezone="America/New_York")]),
                 _rows_result([]),
                 _rows_result([]),
@@ -315,6 +341,135 @@ class TestFireDueTriggers:
         assert summary["cron_enqueued"] == 1
         adv_cron.assert_awaited_once()
         assert adv_cron.await_args.args[3] == "America/New_York"
+
+    @pytest.mark.asyncio
+    async def test_paused_org_skips_cron_and_polling_enqueue_with_advance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SKIP-not-defer: paused org -> next_fire_at still advanced, fire jobs
+        NOT enqueued, skip counters incremented, scheduled reports still enqueued."""
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG, paused=True),
+                _rows_result([_cron_row(TRIGGER_A)]),
+                _rows_result([_polling_row(TRIGGER_POLL)]),
+                _rows_result([_report_row(REPORT)]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True) as adv_cron,
+            patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True) as adv_poll,
+            patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True) as adv_report,
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        # Cron + polling skipped but ADVANCED (no catch-up storm on unpause).
+        assert summary["cron_due"] == 1
+        assert summary["cron_skipped_paused"] == 1
+        assert summary["cron_enqueued"] == 0
+        assert summary["polling_due"] == 1
+        assert summary["polling_skipped_paused"] == 1
+        assert summary["polling_enqueued"] == 0
+        # Reports always enqueue during a pause (documented decision).
+        assert summary["report_due"] == 1
+        assert summary["report_enqueued"] == 1
+        adv_cron.assert_awaited_once()
+        adv_poll.assert_awaited_once()
+        adv_report.assert_awaited_once()
+        # Only the report job is enqueued.
+        assert enqueue.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_pause_read_programming_error_degrades_to_not_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pre-migration DB (no triggers_paused column): ProgrammingError on the
+        batched pause read -> pause_read='degraded', all orgs treated as
+        not-paused (legacy behaviour preserved)."""
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _rows_result([_cron_row(TRIGGER_A)]),
+                _rows_result([]),
+                _rows_result([]),
+            ]
+        )
+        original_execute = session.execute
+
+        async def _execute_with_failing_pause(stmt: Any, params: dict[str, Any] | None = None) -> Any:
+            if "triggers_paused" in str(stmt):
+                raise ProgrammingError("stmt", {}, Exception("column triggers_paused does not exist"))
+            return await original_execute(stmt, params)
+
+        session.execute = _execute_with_failing_pause
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["pause_read"] == "degraded"
+        assert summary["cron_skipped_paused"] == 0
+        assert summary["cron_enqueued"] == 1
+        assert enqueue.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_pause_read_sqlalchemy_error_fail_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Other DB error on the pause read -> pause_read='error', all orgs
+        treated as paused (fail-closed)."""
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _rows_result([_cron_row(TRIGGER_A)]),
+                _rows_result([]),
+                _rows_result([]),
+            ]
+        )
+        original_execute = session.execute
+
+        async def _execute_with_failing_pause(stmt: Any, params: dict[str, Any] | None = None) -> Any:
+            if "triggers_paused" in str(stmt):
+                raise SQLAlchemyError("connection boom")
+            return await original_execute(stmt, params)
+
+        session.execute = _execute_with_failing_pause
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["pause_read"] == "error"
+        assert summary["cron_skipped_paused"] == 1
+        assert summary["cron_enqueued"] == 0
+        enqueue.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +749,93 @@ class TestFireCronTriggerSkips:
 
         assert result["status"] == "skipped"
         assert result["reason"] == "spend_limit"
+
+    @pytest.mark.asyncio
+    async def test_skips_when_org_triggers_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Paused org -> fire_cron_trigger returns skipped/triggers_paused with
+        NO event row written."""
+        _patch_env(monkeypatch)
+
+        from modulo.db.models.trigger import Trigger
+
+        trigger = MagicMock(spec=Trigger)
+        trigger.id = TRIGGER_A
+        trigger.organisation_id = ORG
+        trigger.pipeline_id = uuid.uuid4()
+        trigger.active = True
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = None
+        trigger.config_json = {}
+
+        lock_result = MagicMock()
+        lock_result.scalar_one.return_value = True
+        trigger_result = MagicMock()
+        trigger_result.scalar_one_or_none.return_value = trigger
+
+        session = _MockSession([lock_result, trigger_result])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+            patch.object(ch, "org_is_paused", new_callable=AsyncMock, return_value=True),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=TRIGGER_A,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "triggers_paused"
+        assert session.added == []
+
+    @pytest.mark.asyncio
+    async def test_polling_skips_when_org_triggers_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Paused org -> fire_polling_trigger returns skipped/triggers_paused with
+        NO event row written."""
+        _patch_env(monkeypatch)
+
+        from modulo.db.models.trigger import Trigger
+
+        trigger = MagicMock(spec=Trigger)
+        trigger.id = TRIGGER_POLL
+        trigger.organisation_id = ORG
+        trigger.pipeline_id = uuid.uuid4()
+        trigger.active = True
+        trigger.max_concurrent_runs = 5
+        trigger.daily_spend_limit = None
+        trigger.config_json = {}
+
+        lock_result = MagicMock()
+        lock_result.scalar_one.return_value = True
+        trigger_result = MagicMock()
+        trigger_result.scalar_one_or_none.return_value = trigger
+
+        session = _MockSession([lock_result, trigger_result])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_poll_event", new_callable=AsyncMock),
+            patch.object(ch, "org_is_paused", new_callable=AsyncMock, return_value=True),
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=TRIGGER_POLL,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=uuid.uuid4(),
+                poll_query="SELECT 1",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "triggers_paused"
+        assert session.added == []
 
 
 # ---------------------------------------------------------------------------

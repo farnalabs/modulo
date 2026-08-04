@@ -28,6 +28,7 @@ from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 from modulo.core.trigger_engine import TriggerEngine
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
@@ -80,6 +81,18 @@ async def list_triggers(
             offset = (page - 1) * page_size
             q = q.order_by(Trigger.created_at.desc()).offset(offset).limit(page_size)
             rows = (await session.execute(q)).scalars().all()
+
+            # Org-wide trigger pause state — a fresh column-level read (never the
+            # ORM identity map) so the list reflects the latest toggle.
+            org_state = (
+                await session.execute(
+                    select(Organisation.triggers_paused, Organisation.triggers_paused_at).where(
+                        Organisation.id == principal.organisation_id
+                    )
+                )
+            ).one_or_none()
+            org_triggers_paused = bool(org_state[0]) if org_state else False
+            org_paused_at = org_state[1].isoformat() if org_state and org_state[1] else None
     except ProgrammingError:
         _log.exception("triggers.list_triggers")
         raise HTTPException(
@@ -122,6 +135,8 @@ async def list_triggers(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "triggers_paused": org_triggers_paused,
+        "paused_at": org_paused_at,
     }
 
 

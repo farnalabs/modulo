@@ -182,6 +182,22 @@ _RAW_PAYLOAD: dict[str, Any] = {"action": "opened", "number": 42}
 _VALID_32 = "a" * 32
 
 
+@pytest.fixture(autouse=True)
+def _org_not_paused() -> Generator[None, None, None]:
+    """Default engine-level org-pause state to not-paused.
+
+    handle_webhook/replay_event call ``modulo.core.trigger_engine.org_is_paused``
+    and ``create_run`` calls ``modulo.db.settings_resolver.org_is_paused`` (local
+    import) — both must read False or the mocked sessions fail-closed as paused.
+    Paused-specific tests override this with a nested ``return_value=True``.
+    """
+    with (
+        patch("modulo.core.trigger_engine.org_is_paused", new_callable=AsyncMock, return_value=False),
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # TestClient fixture for webhook route tests
 # ---------------------------------------------------------------------------
@@ -267,6 +283,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
     with (
         patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", return_value=snapshot_mock),
         patch("modulo.core.rate_limiter.RateLimiterRegistry.check", return_value=True),
+        patch("modulo.api.routes.webhooks.org_is_paused", new_callable=AsyncMock, return_value=False),
     ):
         yield TestClient(app, raise_server_exceptions=False)
 
@@ -944,6 +961,36 @@ async def test_handle_webhook_rate_limit_pass_through_sets_key() -> None:
     assert mock_create.call_args.kwargs["rate_limit_key"] == '{"repo": "acme/app"}'
 
 
+async def test_handle_webhook_paused_org_raises_and_writes_no_dedup() -> None:
+    """Org-wide pause: handle_webhook raises TriggersPausedError and does NOT
+    attempt the dedup insert (no add, no run, no accepted event)."""
+    from modulo.core.exceptions import TriggersPausedError
+
+    trigger = _make_trigger()
+    session = _make_session(trigger=trigger, active_run_count=0)
+
+    with (
+        patch("modulo.core.trigger_engine.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        pytest.raises(TriggersPausedError) as exc_info,
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    assert exc_info.value.org_id == _ORG
+    assert exc_info.value.trigger_id == trigger.id
+    assert exc_info.value.trigger_type == "webhook"
+    session.add.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # TriggerEngine.replay_event — unit tests
 # ---------------------------------------------------------------------------
@@ -1180,6 +1227,38 @@ async def test_replay_event_rate_limit_exceeded() -> None:
             org_id=_ORG,
             snapshot_id=_SNAP,
         )
+
+
+async def test_replay_event_paused_org_raises() -> None:
+    """Org-wide pause: replay_event raises TriggersPausedError and writes nothing."""
+    from modulo.core.exceptions import TriggersPausedError
+
+    trigger = _make_trigger()
+    event = MagicMock()
+    event.id = uuid.uuid4()
+    event.trigger_id = trigger.id
+    session = _make_replay_session(
+        event=event,
+        trigger=trigger,
+        stored_payload=_make_stored_payload(),
+        active_run_count=0,
+    )
+
+    with (
+        patch("modulo.core.trigger_engine.org_is_paused", new_callable=AsyncMock, return_value=True),
+        pytest.raises(TriggersPausedError) as exc_info,
+    ):
+        await TriggerEngine().replay_event(
+            session,
+            event_id=event.id,
+            org_id=_ORG,
+            snapshot_id=_SNAP,
+        )
+
+    assert exc_info.value.org_id == _ORG
+    assert exc_info.value.trigger_id == event.trigger_id
+    assert exc_info.value.trigger_type == "webhook"
+    session.add.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

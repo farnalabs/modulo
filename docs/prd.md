@@ -1066,6 +1066,47 @@ Operators can view the TriggerEvent log and **replay** any logged event (re-fire
 
 **`retain_payload` storage**: when `retain_payload: true`, the raw webhook payload is stored in a `webhook_payloads` table (`id`, `trigger_event_id`, `payload_ciphertext`, `created_at`, `expires_at`). The payload is encrypted with Fernet (same mechanism as connector credentials, §6.2). `expires_at` is set to `created_at + 7 days` by default (configurable per trigger, max 90 days). A background cleanup job deletes expired rows nightly. Access to stored payloads is restricted to `operator` and `admin` roles — `runner` role cannot retrieve them. Payloads may contain sensitive data from the calling system (API tokens embedded in GitHub webhooks, repository metadata); operators must acknowledge this when enabling `retain_payload`.
 
+#### Org-wide "Pause All Pipeline Triggers" (Kill-Switch)
+
+An org admin can pause **new trigger-initiated runs** org-wide via
+`PUT /api/v1/admin/orgs/{org_id}/triggers/pause` with body `{paused: bool}`
+(dependency `org.triggers.pause.manage`, admin minimum, `kill_switch_eligible=False`
+so the org authz kill-switch can never lift this gate). The toggle is idempotent
+(re-PUTing the current state writes no audit event) and is audited as
+`triggers_paused` with payload `{paused: bool}`; the audit write is
+**fail-open-with-alert** — the toggle ALWAYS commits, a failed audit write is
+loudly logged and never rolls back the toggle.
+
+**What is paused:** any path that creates a NEW trigger-initiated run — webhook,
+replay, cron, polling, and agent_signal — is blocked at the single `create_run`
+gate (the authority). Cron/polling fire jobs return `{"status":"skipped",
+"reason":"triggers_paused"}`. Webhook/replay deliveries to a paused org return
+**HTTP 202 `{"status":"paused"}`** with **no `run_id`**, and exactly one
+`TriggerEvent` with `validation_result='paused'` is committed (written
+in-transaction by the route). Agent signals log a single `paused` TriggerEvent
+and skip.
+
+**What is NOT paused (documented escape hatches):** running pipelines continue
+against their snapshot to completion; manual runs (`POST /runs`),
+`test_trigger`, MCP `trigger_pipeline`, feedback correction, variant runs, and
+**scheduled reports** are never paused. `dispatcher_reconcile` re-dispatches
+only runs that were enqueued before the pause — any path that would create a NEW
+run passes through the `create_run` gate.
+
+**Semantics are SKIP-not-defer:** cron/polling fires that land during a pause
+are dropped, not replayed (the scheduler still advances `next_fire_at` so
+unpausing never triggers a catch-up storm). Webhook events delivered during a
+pause are dropped; recovery is the sender's responsibility (redelivery after
+unpause). The scheduled-tick audit is counters + summary only (`cron_skipped_paused`
+/ `polling_skipped_paused` in the `fire_due_triggers` summary), never per-trigger
+`TriggerEvent` rows.
+
+**Deploy order is migration-before-code** (0065 adds `organisations.triggers_paused`
++ `triggers_paused_at` and widens `ck_trigger_events_validation_result` to the
+full 19-value vocabulary). Until the migration lands, the scheduler's pause read
+degrades gracefully (`pause_read='degraded'` → treat all orgs as not-paused;
+any other read failure is `pause_read='error'` → fail-closed, all orgs paused).
+
 #### TLS for Webhook Triggers in Alpha
 Alpha webhook trigger is tested with generic HTTP payloads, not GitHub specifically. GitHub requires HTTPS. Local development uses ngrok or similar tunnel — documented in the developer setup guide. The docker-compose ships a commented-out Caddy config for HTTPS termination. GitHub webhooks are a v1 use case deployed behind real TLS.
 

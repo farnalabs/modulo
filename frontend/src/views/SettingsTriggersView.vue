@@ -14,6 +14,33 @@
       </Button>
     </header>
 
+    <div
+      v-if="orgTriggersPaused"
+      data-testid="settings-triggers-paused-banner"
+      class="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
+    >
+      <p class="text-sm font-medium">{{ $t('views.SettingsTriggersView.paused_banner_title') }}</p>
+      <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.SettingsTriggersView.paused_banner_body') }}</p>
+      <p v-if="orgPausedAt" class="mt-1 text-xs text-muted-foreground">
+        {{ $t('views.SettingsTriggersView.paused_at_label', { at: formatTimestamp(orgPausedAt) }) }}
+      </p>
+    </div>
+
+    <div v-if="isOrgAdmin" class="mb-4 flex items-center justify-between rounded-lg border bg-card p-4">
+      <div class="pr-4">
+        <p class="text-sm font-medium">{{ $t('views.SettingsTriggersView.pause_all_triggers') }}</p>
+        <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('views.SettingsTriggersView.pause_all_triggers_description') }}</p>
+      </div>
+      <Button
+        data-testid="settings-triggers-pause-all"
+        :variant="orgTriggersPaused ? 'outline' : 'default'"
+        :disabled="pauseToggling"
+        @click="togglePauseAll"
+      >
+        {{ orgTriggersPaused ? $t('views.SettingsTriggersView.resume_triggers') : $t('views.SettingsTriggersView.pause_all_triggers_action') }}
+      </Button>
+    </div>
+
     <LoadingSpinner v-if="!loaded" />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadAll" />
@@ -296,8 +323,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useApi } from '../composables/useApi'
 import { Button } from '@/components/ui/button'
-import { api } from '../lib/api/client'
+import { api, getAccessToken } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -318,6 +346,64 @@ import {
 
 const planStore = usePlanStore()
 const { t } = useI18n()
+
+// Org-wide "pause all triggers" kill-switch (admin-managed). The org's paused
+// state is read from the triggers-list GET top-level fields; the toggle PUTs to
+// the admin endpoint and updates local state from the response.
+function decodeBase64Url(s: string): string {
+  s = s.replace(/-/g, '+').replace(/_/g, '/')
+  const pad = s.length % 4
+  if (pad) s += '='.repeat(4 - pad)
+  return atob(s)
+}
+
+interface JwtPayload {
+  org_role?: string
+  org_id?: string
+}
+
+function readJwtPayload(): JwtPayload | null {
+  const token = getAccessToken()
+  if (!token) return null
+  try {
+    return JSON.parse(decodeBase64Url(token.split('.')[1])) as JwtPayload
+  } catch {
+    return null
+  }
+}
+
+const isOrgAdmin = computed(() => readJwtPayload()?.org_role === 'admin')
+const orgId = computed(() => readJwtPayload()?.org_id ?? '')
+
+const orgTriggersPaused = computed<boolean>(() => Boolean((triggersData.value as { triggers_paused?: boolean } | null)?.triggers_paused ?? false))
+const orgPausedAt = computed<string | null>(() => (triggersData.value as { paused_at?: string | null } | null)?.paused_at ?? null)
+
+const pauseToggling = ref(false)
+
+async function togglePauseAll() {
+  if (pauseToggling.value || !orgId.value) return
+  pauseToggling.value = true
+  try {
+    const { put } = useApi()
+    const res = await put<{ paused: boolean; paused_at: string | null }>(
+      `/api/v1/admin/orgs/${orgId.value}/triggers/pause`,
+      { paused: !orgTriggersPaused.value },
+    )
+    if (res && typeof res.paused === 'boolean') {
+      triggersData.value = {
+        ...(triggersData.value ?? {}),
+        triggers_paused: res.paused,
+        paused_at: res.paused_at ?? null,
+      } as typeof triggersData.value
+    } else {
+      await loadTriggers()
+    }
+  } catch (e: unknown) {
+    error.value = t('views.SettingsTriggersView.failed_to_update_pause', { detail: formatApiError(e) })
+  } finally {
+    pauseToggling.value = false
+  }
+}
 
 interface TriggerItem {
   id: string

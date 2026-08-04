@@ -13,7 +13,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.api.dependencies import require_permission, require_system_or_org_admin
+from modulo.api.dependencies import require_permission, require_system_or_org_admin, require_target_org_role
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import (
     PermissionDenied,
@@ -73,6 +73,33 @@ def _make_error_session() -> MagicMock:
 
     session.execute = _execute
     return session
+
+
+def _make_target_org_session(*, role: str | None, enforce: bool) -> MagicMock:
+    """Session for ``require_target_org_role``: first execute returns the LIVE
+    role, second returns the authz_enforce read."""
+    session = MagicMock()
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    call_count = 0
+
+    async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = role if call_count == 1 else enforce
+        return result
+
+    session.execute = _execute
+    return session
+
+
+def _target_request() -> MagicMock:
+    request = MagicMock()
+    request.path_params = {"org_id": str(_ORG_A)}
+    return request
 
 
 def _make_branching_session(values: dict[uuid.UUID, object]) -> MagicMock:
@@ -240,6 +267,26 @@ class TestSystemOrOrgAdminKillSwitch:
             assert result.org_role == "admin"
         finally:
             reset_authz_enforce(token)
+
+
+class TestPauseRouteKillSwitchImmunity:
+    @pytest.mark.asyncio
+    async def test_pause_dependency_not_lifted_by_enforce_false(self) -> None:
+        """Mirror org.delete immunity: the trigger-pause gate is NEVER lifted by
+        the authz kill-switch (``kill_switch_eligible=False``). A viewer is still
+        403 even when authz.enforce is off for the target org."""
+        dep = require_target_org_role("org.triggers.pause.manage", "admin", kill_switch_eligible=False)
+        session = _make_target_org_session(role="viewer", enforce=False)
+        with pytest.raises(HTTPException) as excinfo:
+            await dep.dependency(request=_target_request(), current_user=_tenant("viewer"), session=session)
+        assert excinfo.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_pause_dependency_org_admin_allowed_when_enforce_off(self) -> None:
+        dep = require_target_org_role("org.triggers.pause.manage", "admin", kill_switch_eligible=False)
+        session = _make_target_org_session(role="admin", enforce=False)
+        result = await dep.dependency(request=_target_request(), current_user=_tenant("admin"), session=session)
+        assert result.account_id == _ACCOUNT
 
 
 class TestContextVarReset:

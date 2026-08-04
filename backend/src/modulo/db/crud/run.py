@@ -61,6 +61,22 @@ async def create_run(
     parent_run_id: uuid.UUID | None = None,
     rate_limit_key: str | None = None,
 ) -> Run:
+    # Org-wide pause kill-switch — the SINGLE authority gate for every
+    # trigger-initiated run (webhook, replay, cron, polling, agent_signal, and
+    # any future trigger type). Manual runs (POST /runs, MCP trigger_pipeline),
+    # test_trigger (trigger_type="manual"), feedback correction, and variant
+    # runs pass (trigger_id None or trigger_type in manual/correction).
+    # Local imports avoid a module-level cycle; the import-linter contract
+    # ``modulo.db.crud.run -> modulo.core.exceptions`` is exempted in
+    # ``.importlinter``.
+    if trigger_id is not None and trigger_type not in ("manual", "correction"):
+        from modulo.db.settings_resolver import org_is_paused
+
+        if await org_is_paused(session, org_id):
+            from modulo.core.exceptions import TriggersPausedError
+
+            raise TriggersPausedError(trigger_id=trigger_id, org_id=org_id, trigger_type=trigger_type)
+
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
     result = await session.execute(
