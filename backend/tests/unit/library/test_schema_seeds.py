@@ -100,7 +100,7 @@ def test_each_property_has_description(entry: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("entry", SCHEMAS, ids=lambda e: e["name"])
 def test_formats_are_known(entry: dict[str, Any]) -> None:
-    for prop_name, prop_schema in entry["definition"]["properties"].items():
+    for prop_name, prop_schema in iter_all_properties(entry["definition"]):
         fmt = prop_schema.get("format")
         if fmt is not None:
             assert fmt in VALID_FORMATS, f"'{entry['name']}.{prop_name}' uses unknown format '{fmt}'"
@@ -190,5 +190,5 @@ def test_rejects_missing_required_field(entry: dict[str, Any]) -> None:
         pytest.skip(f"'{entry['name']}' has no required fields")
     validator = Draft202012Validator(definition)
     document = build_valid_document(definition)
-    document.pop(required[0])
+    document.pop(required[0], None)
     assert not validator.is_valid(document), f"'{entry['name']}' accepted a document missing required '{required[0]}'"
