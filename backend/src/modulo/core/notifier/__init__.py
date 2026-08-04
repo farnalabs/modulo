@@ -34,6 +34,8 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
+from modulo.db.models.account import Account
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.rls import set_rls_org
@@ -185,6 +187,80 @@ class Notifier:
                 subscribed.append(ep)
         return subscribed
 
+    async def _reject_break_glass_owned(self, endpoints: list[NotificationEndpoint]) -> list[NotificationEndpoint]:
+        """Return endpoints whose owning account is NOT a break-glass account.
+
+        Use-time revalidation TRIM to webhook dispatch only (plan v17, API-key +
+        long-lived deny). The mint-marker covers create/update/delete routes, but a
+        webhook endpoint owned by a break-glass account can still exist — created
+        before the deny was active, or via a raw-DB forgery. Re-check at dispatch
+        time and skip those endpoints, fail-closed, with per-endpoint isolation (one
+        bad endpoint never blocks the others).
+
+        The owner rule is the shared ``is_break_glass_denied`` / ``is_break_glass_live``
+        union from ``db.crud.break_glass_deny`` (single-sourced, never duplicated
+        here). Owners are loaded in ONE batched query. An endpoint with no owner
+        (``account_id IS NULL``) has nothing to deny and is kept — likewise an owner
+        reference that is not a ``uuid.UUID`` cannot reference an ``accounts`` row and
+        therefore cannot be a break-glass account. If a real owner cannot be resolved
+        (DB read error, orphaned owner id), the endpoint is treated as denied and
+        skipped — a DB blip must not fail-open a break-glass endpoint.
+        """
+        if not endpoints:
+            return []
+        owner_ids = {ep.account_id for ep in endpoints if isinstance(ep.account_id, uuid.UUID)}
+        if not owner_ids:
+            return list(endpoints)
+        try:
+            async with self._session_factory() as session:
+                result = await session.execute(select(Account).where(Account.id.in_(owner_ids)))
+                owners = {account.id: account for account in result.scalars()}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "notifier.break_glass_owner_read_failed",
+                extra={"endpoint_count": len(endpoints)},
+            )
+            return []
+
+        now = datetime.now(UTC)
+        kept: list[NotificationEndpoint] = []
+        for ep in endpoints:
+            owner = owners.get(ep.account_id) if isinstance(ep.account_id, uuid.UUID) else None
+            if owner is None:
+                if isinstance(ep.account_id, uuid.UUID):
+                    _log.warning(
+                        "notifier.break_glass_owner_missing",
+                        extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
+                    )
+                else:
+                    kept.append(ep)
+                continue
+            if owner.is_break_glass is True and (
+                is_break_glass_denied(
+                    is_break_glass=owner.is_break_glass,
+                    break_glass_expires_at=owner.break_glass_expires_at,
+                    break_glass_deactivated_at=owner.break_glass_deactivated_at,
+                    active=owner.active,
+                    now=now,
+                )
+                or is_break_glass_live(
+                    is_break_glass=owner.is_break_glass,
+                    break_glass_expires_at=owner.break_glass_expires_at,
+                    break_glass_deactivated_at=owner.break_glass_deactivated_at,
+                    active=owner.active,
+                    now=now,
+                )
+            ):
+                _log.warning(
+                    "notifier.break_glass_webhook_skipped",
+                    extra={"endpoint_id": str(ep.id), "org_id": str(ep.organisation_id)},
+                )
+                continue
+            kept.append(ep)
+        return kept
+
     async def _dispatch_inline(
         self,
         org_id: uuid.UUID,
@@ -201,6 +277,7 @@ class Notifier:
         # and in-app notification creation are two independent, always-executed
         # steps.
         endpoints = await self._get_subscribed_endpoints(org_id, event_type, team_id=team_id)
+        endpoints = await self._reject_break_glass_owned(endpoints)
         if not endpoints:
             _log.debug("notifier.no_subscribers", extra={"event_type": event_type, "org_id": str(org_id)})
         results: list[DispatchResult] = []
