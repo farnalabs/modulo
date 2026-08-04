@@ -33,6 +33,7 @@ dmypy.json
 coverage.xml
 htmlcov/
 test-results/
+.hypothesis/
 
 # ruff
 .ruff_cache/
