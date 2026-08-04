@@ -1,8 +1,12 @@
-# Implementation Tracker
+# Delivery Tracking
+
+> **The JSON delivery tracker is retired.** `delivery-plan.json` and `task.ps1` were removed from the
+> repositories (preserved in git history). The source of truth for work items is now **Linear**
+> (farnalabs-modulo workspace, FAR team); delivery phases are tracked as Linear projects/epics.
 
 ## QA Iterate Loop
 
-Uses the `qa-iterate` skill (`qa-iterate <target-path>` from project root) to run multi-lens QA against a code path, fix all critical+major findings, then loop until zero remain. See `Development/Dev-Harness/delivery/delivery-plan.json` for the machine-readable task graph. Checkboxes below track completion.
+Uses the `qa-iterate` skill (`qa-iterate <target-path>` from project root) to run multi-lens QA against a code path, fix all critical+major findings, then loop until zero remain. Work items and their status are tracked in Linear (farnalabs-modulo workspace, FAR team), queried by the `deliver` skill and other skills through the local MCP server (`Repos/devtools/harness/mcp/linear/server.py`) using tools such as `list_projects`, `list_ready_issues`, `update_ticket_status`, `add_comment`, `create_ticket`, `get_ticket`, `search_tickets`, and `list_states`. Checkboxes below track completion.
 
 ### Backend — Core Engine
 - [ ] **Pipeline engine** — `backend/src/modulo/core/pipeline_engine/`
