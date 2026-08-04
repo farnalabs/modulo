@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_execution (shared Celery + SAQ core).
+"""Unit tests for modulo.core.pipeline_execution.
 
 Tests are mock/fake based — no Postgres required. Real Postgres concurrency
 behaviour (two concurrent claims -> exactly one) lives in
@@ -7,7 +7,6 @@ behaviour (two concurrent claims -> exactly one) lives in
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -68,7 +67,6 @@ def _make_settings(**overrides: object) -> MagicMock:
     """Mock Settings with the SAQ/legacy claim staleness plumbing values."""
     base = {
         "run_claim_stale_seconds": 450,
-        "legacy_run_claim_stale_seconds": 180,
         "saq_never_dispatched_window": 300,
         "saq_worker_lost_window": 600,
         "saq_job_heartbeat": 300,
@@ -115,39 +113,6 @@ class TestBuildClaimUpdate:
         stmt = pe.build_claim_update(stale_seconds=450, claim_cap=20)
         sql = _compiled(stmt)
         assert "claim_count <" in sql
-
-
-class TestClaimRun:
-    def test_saq_path_uses_run_claim_stale_seconds(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=("id",))
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1") is True
-        assert engine.conn.params[0]["stale_seconds"] == 450
-        assert engine.conn.params[0]["claim_cap"] == 5
-
-    def test_legacy_path_uses_today_180(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=("id",))
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1", legacy=True) is True
-        assert engine.conn.params[0]["stale_seconds"] == 180
-
-    def test_explicit_stale_seconds_overrides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=("id",))
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1", stale_seconds=120) is True
-        assert engine.conn.params[0]["stale_seconds"] == 120
-
-    def test_returns_false_when_no_row_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=None)
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1") is False
-
-    def test_returns_false_and_logs_on_db_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(raise_on_execute=True)
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        with patch.object(pe._log, "exception") as mock_log:
-            assert pe.claim_run(engine, "run-1", "org-1") is False
-        mock_log.assert_called_once()
 
 
 class TestClaimRunAsync:
@@ -616,99 +581,7 @@ class TestStaleRunRecoverySweep:
 # ---------------------------------------------------------------------------
 
 
-class TestExecuteRun:
-    async def test_skips_when_not_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        with (
-            patch.object(pe, "claim_run", return_value=False) as mock_claim,
-            patch.object(pe, "load_and_setup", AsyncMock()) as mock_load,
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=str(uuid.uuid4()),
-                org_id=str(uuid.uuid4()),
-                legacy_claim=True,
-            )
-
-        mock_claim.assert_called_once()
-        mock_load.assert_not_awaited()
-        mock_complete.assert_not_awaited()
-
-    async def test_executes_pipeline_and_marks_complete(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        run_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        current = SimpleNamespace(input_payload={"hello": "world"})
-        executor = MagicMock()
-        executor.execute = AsyncMock()
-        with (
-            patch.object(pe, "get_settings", lambda: _make_settings()),
-            patch.object(pe, "claim_run", return_value=True),
-            patch.object(pe, "load_and_setup", AsyncMock(return_value=(current, executor))) as mock_load,
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=run_id,
-                org_id=org_id,
-                legacy_claim=True,
-            )
-
-        mock_load.assert_awaited_once()
-        executor.execute.assert_awaited_once_with(
-            run_id=uuid.UUID(run_id),
-            org_id=uuid.UUID(org_id),
-            input_payload=current.input_payload,
-        )
-        mock_complete.assert_awaited_once()
-
-    async def test_marks_complete_even_when_execution_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        run_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        current = SimpleNamespace(input_payload={})
-        executor = MagicMock()
-        executor.execute = AsyncMock(side_effect=RuntimeError("boom"))
-        with (
-            patch.object(pe, "get_settings", lambda: _make_settings()),
-            patch.object(pe, "claim_run", return_value=True),
-            patch.object(pe, "load_and_setup", AsyncMock(return_value=(current, executor))),
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-            patch.object(pe._log, "exception"),
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=run_id,
-                org_id=org_id,
-                legacy_claim=True,
-            )
-
-        mock_complete.assert_awaited_once()
-
-    async def test_repropagates_cancellation(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        run_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        current = SimpleNamespace(input_payload={})
-        executor = MagicMock()
-        executor.execute = AsyncMock(side_effect=asyncio.CancelledError())
-        with (
-            patch.object(pe, "get_settings", lambda: _make_settings()),
-            patch.object(pe, "claim_run", return_value=True),
-            patch.object(pe, "load_and_setup", AsyncMock(return_value=(current, executor))),
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=run_id,
-                org_id=org_id,
-                legacy_claim=True,
-            )
-
-        mock_complete.assert_not_awaited()
+# TestExecuteRun removed in PR C (Celery code path)
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +591,6 @@ class TestExecuteRun:
 
 _SAQ_SETTINGS_ENV = (
     "RUN_CLAIM_STALE_SECONDS",
-    "LEGACY_RUN_CLAIM_STALE_SECONDS",
     "SAQ_JOB_HEARTBEAT",
     "RUN_HEARTBEAT_SECONDS",
     "SAQ_HARD_GATE",
@@ -750,7 +622,6 @@ class TestSaqSettingsDefaults:
             monkeypatch.delenv(var, raising=False)
         s = self._settings(monkeypatch)
         assert s.run_claim_stale_seconds == 450
-        assert s.legacy_run_claim_stale_seconds == 180
         assert s.saq_job_heartbeat == 300
         assert s.run_heartbeat_seconds == 30
         assert s.saq_hard_gate is True

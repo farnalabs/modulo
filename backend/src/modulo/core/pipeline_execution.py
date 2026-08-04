@@ -1,4 +1,4 @@
-"""Shared pipeline execution core for SAQ.
+"""Pipeline execution core for SAQ (PR C of the Celery->SAQ migration).
 
 This module is the single home for the claim / execute / heartbeat / complete /
 stale-sweep logic that was historically embedded in
@@ -8,18 +8,16 @@ PR C of the Celery->SAQ migration). The SAQ workers delegate here.
 NOT here: ``dispatch_run``, cron firing, fire/report jobs.
 
 Engine injection: every entry point takes its engine(s) explicitly so the
-legacy sync claim pool + async execution pool helpers stay usable while the SAQ
-path passes its own async engine. No module-level engine globals.
+async execution path passes its own async engine. No module-level engine globals.
 
 Staleness constants (plan F4 / F1 ordering):
 
-    RUN_CLAIM_STALE_SECONDS        = 450  SAQ runs only
-    LEGACY_RUN_CLAIM_STALE_SECONDS = 180  legacy sync claim helpers
-    SAQ_JOB_HEARTBEAT              = 300  SAQ job heartbeat knob
-    RUN_HEARTBEAT_SECONDS          = 30   DB heartbeat cadence
+    RUN_CLAIM_STALE_SECONDS = 450  SAQ runs only
+    SAQ_JOB_HEARTBEAT       = 300  SAQ job heartbeat knob
+    RUN_HEARTBEAT_SECONDS   = 30   DB heartbeat cadence
 
-Both claim staleness values are configurable via settings (see the F4 Settings
-section in :mod:`modulo.settings`). The legacy sweep windows default to
+Staleness values are configurable via settings (see the F4 Settings section in
+:mod:`modulo.settings`). The legacy sweep windows default to
 never_dispatched=300 / worker_lost=600 (today's beat-sweep values, 5 and 10
 minutes) and stay decoupled from ``RUN_CLAIM_STALE_SECONDS``.
 """
@@ -33,17 +31,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.crud.run import get_run
 
 _log = logging.getLogger(__name__)
 
-# Claim staleness gates (configurable via settings; module defaults are the
-# documented SAQ / legacy values).
+# Claim staleness gates (configurable via settings).
 RUN_CLAIM_STALE_SECONDS = 450
-LEGACY_RUN_CLAIM_STALE_SECONDS = 180
 
 # DB heartbeat cadence (F4). Must stay well below the 300s SAQ sweep threshold.
 RUN_HEARTBEAT_SECONDS = 30
@@ -93,8 +89,7 @@ class SchedulerDBError(Exception):
     """Raised when a scheduler DB query fails transiently.
 
     Relocated from ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1) so
-    the SAQ scheduler modules never import the Celery task module that PR C
-    deletes.
+    the SAQ scheduler modules never import the deleted Celery task module.
     """
 
     pass
@@ -107,21 +102,16 @@ def _make_sync_url(database_url: str) -> str:
     )
 
 
-def _resolve_claim_stale_seconds(*, legacy: bool, stale_seconds: int | None) -> int:
+def _resolve_claim_stale_seconds(*, stale_seconds: int | None) -> int:
     """Resolve the claim staleness window.
 
-    The SAQ path uses ``RUN_CLAIM_STALE_SECONDS`` (450); the legacy Celery path
-    keeps today's 180s window (``interval '3 minutes'``). Both are configurable
-    via settings.
+    Uses ``RUN_CLAIM_STALE_SECONDS`` (450), configurable via settings.
     An explicit ``stale_seconds`` overrides settings (used by tests and by the
     SAQ reconcile path later).
     """
     if stale_seconds is not None:
         return stale_seconds
-    settings = get_settings()
-    if legacy:
-        return int(settings.legacy_run_claim_stale_seconds)
-    return int(settings.run_claim_stale_seconds)
+    return int(get_settings().run_claim_stale_seconds)
 
 
 def build_claim_update(*, stale_seconds: int, claim_cap: int = _DEFAULT_CLAIM_CAP) -> Any:
@@ -154,47 +144,19 @@ def _claim_params(run_id: str, org_id: str, stale_seconds: int, claim_cap: int) 
     return {"rid": run_id, "oid": org_id, "stale_seconds": stale_seconds, "claim_cap": claim_cap}
 
 
-def claim_run(
-    engine: Engine,
-    run_id: str,
-    org_id: str,
-    stale_seconds: int | None = None,
-    *,
-    legacy: bool = False,
-    claim_cap: int = _DEFAULT_CLAIM_CAP,
-) -> bool:
-    """Claim a pending or stale-running run via an atomic SQL update (sync).
-
-    Returns True if the row was claimed, False if already handled or the claim
-    failed. Used by the Celery prefork path (legacy claim window).
-    """
-    window = _resolve_claim_stale_seconds(legacy=legacy, stale_seconds=stale_seconds)
-    try:
-        with engine.connect() as c, c.begin():
-            result = c.execute(
-                build_claim_update(stale_seconds=window, claim_cap=claim_cap),
-                _claim_params(run_id, org_id, window, claim_cap),
-            )
-            return result.fetchone() is not None
-    except Exception:
-        _log.exception("pipeline_execution.claim_failed run=%s", run_id)
-        return False
-
-
 async def claim_run_async(
     aengine: AsyncEngine,
     run_id: str,
     org_id: str,
     stale_seconds: int | None = None,
     *,
-    legacy: bool = False,
     claim_cap: int = _DEFAULT_CLAIM_CAP,
 ) -> bool:
     """Claim a pending or stale-running run via an atomic SQL update (async).
 
-    Same semantics as :func:`claim_run`; used by the SAQ execute path.
+    Used by the SAQ execute path.
     """
-    window = _resolve_claim_stale_seconds(legacy=legacy, stale_seconds=stale_seconds)
+    window = _resolve_claim_stale_seconds(stale_seconds=stale_seconds)
     try:
         async with aengine.connect() as c, c.begin():
             result = await c.execute(
@@ -302,55 +264,6 @@ async def mark_complete(aeng: AsyncEngine, run_id: str, org_id: str) -> None:
         if cur is not None and cur.status == "running":
             cur.status = RUN_COMPLETE_STATUS
             cur.completed_at = datetime.now(UTC)
-
-
-async def execute_run(
-    *,
-    sync_engine: Engine,
-    async_engine: AsyncEngine,
-    run_id: str,
-    org_id: str,
-    legacy_claim: bool = True,
-) -> None:
-    """Execute a single pipeline run from claim through completion.
-
-    Shared by the Celery task and (from PR B) the SAQ ``execute_run`` job.
-    ``legacy_claim`` selects the legacy 180s claim window (Celery) vs the SAQ
-    450s window. ``_task_instance`` is intentionally absent (plan F4: engine
-    injection, no task coupling).
-    """
-    rid = uuid.UUID(run_id)
-    oid = uuid.UUID(org_id)
-
-    claimed = claim_run(sync_engine, str(rid), str(oid), legacy=legacy_claim)
-    if not claimed:
-        _log.warning("Run %s not claimed — already handled or in wrong state", run_id)
-        return
-
-    cur, executor = await load_and_setup(async_engine, rid, oid)
-    if cur is None:
-        return
-
-    heartbeat_task: asyncio.Task[Any] | None = None
-    try:
-        # execute_run is an async coroutine (always a running loop) — the
-        # create-task-without-guard rule targets sync signal/listener code.
-        heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(async_engine, str(rid), str(oid)),
-            name=f"heartbeat-{run_id}",
-        )
-        await executor.execute(run_id=rid, org_id=oid, input_payload=cur.input_payload or {})
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("Pipeline execution failed for run %s", run_id)
-    finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
-
-    await mark_complete(async_engine, str(rid), str(oid))
 
 
 async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:

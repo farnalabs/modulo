@@ -1,7 +1,7 @@
 """Report generators and scheduler.
 
 Registers built-in report generators on import. The scheduler module
-is loaded by Celery via ``include``.
+is loaded by the SAQ worker via ``include`` (Celery removed in PR C).
 """
 
 from modulo.core.reports import cost_report, quality_report  # noqa: F401
