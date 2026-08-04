@@ -80,6 +80,8 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Delete message via `write("message_delete")` — calls `chat.delete` with `channel` and `ts`
 - [x] Upload file to channel via `write("file_upload")` — calls `files.upload` (multipart); `filename` plus exactly one of `content`/`file` required, optional `channels`/`initial_comment`/`thread_ts` passed through. Note: Slack has deprecated `files.upload` in favor of `getUploadURLExternal`/`completeUploadExternal`; legacy endpoint still works and remains the simplest implementation — revisit if Slack retires it.
 - [x] Schedule message via `write("schedule_message")` — calls `chat.scheduleMessage` with `channel` + `post_at` (UNIX timestamp) required
+- [x] List scheduled messages via `query("scheduled_messages")` — calls `chat.scheduledMessages.list`, optional `channel` filter, cursor-based pagination via `response_metadata.next_cursor`
+- [x] Delete scheduled message via `write("scheduled_message_delete")` — calls `chat.deleteScheduledMessage` with `channel` + `scheduled_message_id` required
 
 ### Capability Declaration
 
@@ -122,10 +124,10 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 
 - [ ] **No bot-in-channel verification**: health check does not verify bot is in at least one channel
 - [ ] **No domain-specific exception types**: all API and network errors use generic `ValueError` — not domain exceptions like `SlackRateLimitError`, `SlackAuthError`
-- [ ] **No scheduled-message list/delete**: `chat.scheduledMessages.list` / `chat.deleteScheduledMessage` not implemented (schedule-only)
 
 ### Resolved (2026-08-04)
 
+- [x] ~~**No scheduled-message list/delete**: `chat.scheduledMessages.list` / `chat.deleteScheduledMessage` not implemented (schedule-only)~~ — `query("scheduled_messages")` + `write("scheduled_message_delete")` added.
 - [x] ~~**No file uploads**: cannot upload files or share files in channels (`files.upload`)~~ — `write("file_upload")` added.
 - [x] ~~**No message search**: `search.messages` API not used; agents cannot search across all channels~~ — `query("message_search")` added.
 - [x] ~~**Channel history limited**: only one page of `conversations.history` — full history not accessible via pagination~~ — `query("messages")`/`query("thread_replies")` now forward `q.cursor`.
@@ -136,6 +138,15 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] ~~**No lookup by email**: `users.lookupByEmail` not implemented~~ — `query("user_lookup")` added.
 
 ## QA History
+### 2026-08-04 — improve-architecture: 2 behaviours RESOLVED (scheduled-message list/delete)
+
+**RESOLVED the "No scheduled-message list/delete" known gap** in the Slack connector (`connectors/slack/__init__.py`):
+
+- **Scheduled-message listing** — `query("scheduled_messages")` calls `chat.scheduledMessages.list` with optional `channel` filter and forwards `q.cursor` to the `cursor` param; returns `records` = `scheduled_messages` and `next_cursor` from `response_metadata`.
+- **Scheduled-message deletion** — `write("scheduled_message_delete")` calls `chat.deleteScheduledMessage` with `channel` + `scheduled_message_id` (both required, clear `ValueError` when missing), verified via `_check_slack_ok`.
+
+**Tests:** 10 new unit tests in `test_slack.py` (scheduled_messages happy/channel-filter/cursor-pagination/api-error/http-error, scheduled_message_delete happy/missing-channel/missing-id/api-error/http-error) + 4 new BDD scenarios in `slack_connector.feature` (list scheduled messages, list without channel, delete scheduled message, delete-without-id error) with 2 new step definitions + mock connector extended. **Fixed pre-existing bug** in shared step `step_slack_query_unknown` (`I query resource "{resource}"`) — it discarded the actual query result on success (`query_result = "unexpected_success"`), so non-error scenarios using the bare step could never assert records. Updated product map `connectors/slack-connector.md` (2 behaviours `[ ]`→`[x]`, 1 Known Gap → RESOLVED, BDD count 34→38, QA History). 132/132 slack unit tests + 38/38 slack BDD scenarios pass (18 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (bot-in-channel verification, domain-specific exceptions remain).
+
 ### 2026-08-04 — improve-architecture: 6 behaviours RESOLVED (message search, scheduling, file uploads, history pagination, type filtering)
 
 **RESOLVED 6 behaviours** in the Slack connector (`connectors/slack/__init__.py`):
