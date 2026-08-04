@@ -50,6 +50,27 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      - name: Start Fly Postgres proxy
+        run: |
+          fly proxy 5433:5432 -a modulo-app-db &
+          FLY_PROXY_PID=$!
+          echo "fly_proxy_pid=$FLY_PROXY_PID" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            if nc -z localhost 5433 2>/dev/null; then
+              echo "proxy ready"
+              break
+            fi
+            sleep 1
+          done
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Build local DB URL
+        run: |
+          RAW="${{ secrets.MODULO_BREAK_GLASS_DATABASE_URL }}"
+          LOCAL="${RAW//modulo-app-db.flycast:5432/localhost:5433}"
+          echo "break_glass_db_url=$LOCAL" >> "$GITHUB_ENV"
+
       - name: Install backend deps
         working-directory: backend
         run: uv sync --frozen
@@ -60,7 +81,7 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
           SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
           FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
-          MODULO_BREAK_GLASS_DATABASE_URL: ${{ secrets.MODULO_BREAK_GLASS_DATABASE_URL }}
+          MODULO_BREAK_GLASS_DATABASE_URL: ${{ env.break_glass_db_url }}
           MODULO_BREAK_GLASS_SECRET: ${{ secrets.MODULO_BREAK_GLASS_SECRET }}
           MODULO_BREAK_GLASS_STANDBY_SECRET: ${{ secrets.MODULO_BREAK_GLASS_STANDBY_SECRET }}
           MODULO_BREAK_GLASS_OPERATOR_SECRET: ${{ secrets.MODULO_BREAK_GLASS_OPERATOR_SECRET }}
@@ -287,3 +308,11 @@ jobs:
           path: docs/reviews/break-glass-daily-sweep/
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Stop Fly proxy
+        if: always()
+        run: |
+          if [ -n "$fly_proxy_pid" ]; then
+            kill "$fly_proxy_pid" 2>/dev/null || true
+            wait "$fly_proxy_pid" 2>/dev/null || true
+          fi
