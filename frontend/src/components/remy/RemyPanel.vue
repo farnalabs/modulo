@@ -5,17 +5,17 @@
     :class="panelClasses"
     :style="panelStyle"
   >
-    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -- toolbar role is not recognised by the plugin, but is keyboard-accessible via the arrow-key handlers -->
+    <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -- group role is not recognised by the plugin, but is keyboard-accessible via the arrow-key handlers -->
     <div
       class="remy-titlebar"
-      role="toolbar"
+      role="group"
       tabindex="0"
       :aria-label="$t('components.remy.RemyPanel.move_panel')"
       @mousedown="startDrag"
-      @keydown.up.prevent="nudgePanel(0, -1)"
-      @keydown.down.prevent="nudgePanel(0, 1)"
-      @keydown.left.prevent="nudgePanel(-1, 0)"
-      @keydown.right.prevent="nudgePanel(1, 0)"
+      @keydown.up="onTitlebarKeydown($event, 0, -1)"
+      @keydown.down="onTitlebarKeydown($event, 0, 1)"
+      @keydown.left="onTitlebarKeydown($event, -1, 0)"
+      @keydown.right="onTitlebarKeydown($event, 1, 0)"
     >
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
@@ -437,8 +437,11 @@ function stopDrag() {
   document.removeEventListener("mouseup", stopDrag);
 }
 
-function nudgePanel(dx: number, dy: number) {
+function onTitlebarKeydown(e: KeyboardEvent, dx: number, dy: number) {
+  const target = e.target as HTMLElement;
+  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
   if (store.panelState !== "floating") return;
+  e.preventDefault();
   store.updatePosition({
     x: store.panelPosition.x + dx,
     y: store.panelPosition.y + dy,
