@@ -13,6 +13,10 @@ Trigger ``config_json`` structure::
 
 When ``snapshot_id`` is omitted, the child run falls back to the target
 pipeline's latest snapshot.
+
+Fires are skipped (with a TriggerEvent recorded) when the child pipeline is at
+its ``max_concurrent_runs`` limit, when ``snapshot_id`` is invalid, or when no
+snapshot can be resolved for the child pipeline.
 """
 
 import asyncio
