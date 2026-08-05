@@ -1,5 +1,6 @@
 """Step definitions for Connector Health and connector-related features."""
 
+import asyncio
 import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.connectors.base import HealthResult
+from modulo.connectors.base import ConnectorQuery, HealthResult
 from modulo.connectors.github import _b64decode, _encode_content, _validate_path
 
 # ---------------------------------------------------------------------------
@@ -448,11 +449,9 @@ def step_github_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 def step_github_query_resource_limit(resource, limit, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, limit=limit)
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -465,14 +464,12 @@ def step_github_query_resource_limit(resource, limit, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and path "{path}"'))
 def step_github_query_file_with_filters(resource, repo, path, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(
         resource=resource,
         filters={"repo": repo, "path": path},
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -485,14 +482,12 @@ def step_github_query_file_with_filters(resource, repo, path, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and state "{state}"'))
 def step_github_query_pulls_with_filters(resource, repo, state, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(
         resource=resource,
         filters={"repo": repo, "state": state},
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -505,11 +500,9 @@ def step_github_query_pulls_with_filters(resource, repo, state, ctx):
 
 @when('I query resource "invalid"')
 def step_github_query_invalid(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource="invalid")
-    import asyncio
 
     try:
         asyncio.run(connector.query(q))
@@ -534,7 +527,6 @@ def step_github_write_file(resource, content, path, ctx):
             "message": "Update via Modulo",
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.write(payload))
@@ -554,7 +546,6 @@ def step_github_write_pr(resource, head, base, ctx):
         resource=resource,
         data={"repo": "owner/repo", "head": head, "base": base},
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.write(payload))
@@ -579,7 +570,6 @@ def step_github_write_on_pr(resource, number, ctx):
             "reviewers": ["alice"],
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.write(payload))
@@ -603,7 +593,6 @@ def step_github_write_on_issue(resource, number, ctx):
             "assignees": ["alice"],
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.write(payload))
@@ -616,11 +605,9 @@ def step_github_write_on_issue(resource, number, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and pull number {number:d}'))
 def step_github_query_pr_with_pull_number(resource, repo, number, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, filters={"repo": repo, "pull_number": str(number)})
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -633,11 +620,9 @@ def step_github_query_pr_with_pull_number(resource, repo, number, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with search query "{search_query}"'))
 def step_github_query_search(resource, search_query, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, filters={"q": search_query})
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -650,11 +635,9 @@ def step_github_query_search(resource, search_query, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and branch "{branch}"'))
 def step_github_query_tree_with_branch(resource, repo, branch, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, filters={"repo": repo, "ref": branch})
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -671,11 +654,9 @@ def step_github_query_tree_with_branch(resource, repo, branch, ctx):
     )
 )
 def step_github_query_tree_with_branch_and_path(resource, repo, branch, path, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(resource=resource, filters={"repo": repo, "ref": branch, "path": path})
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -701,7 +682,6 @@ def step_github_write_file_text(resource, content, path, ctx):
             "message": "Update via Modulo",
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.write(payload))
@@ -826,9 +806,7 @@ def step_github_api_returns_error(status_code, reason, ctx):
 
 @then(parsers.parse('the connector raises a ValueError with "{expected}"'))
 def step_connector_raises_value_error(expected, ctx):
-    import asyncio
-
-    from modulo.connectors.base import ConnectorPayload, ConnectorQuery
+    from modulo.connectors.base import ConnectorPayload
 
     connector = ctx["connector"]
     operation = ctx.get("_expected_operation", "query")
@@ -975,10 +953,8 @@ def step_jira_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with issue_key "{key}"'))
 def step_jira_query_issue(resource, key, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"issue_key": key})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -991,10 +967,8 @@ def step_jira_query_issue(resource, key, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with JQL "{jql}"'))
 def step_jira_query_search(resource, jql, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"jql": jql, "max_results": 50})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -1017,7 +991,6 @@ def step_jira_write_issue(resource, summary, project, ctx):
             "issuetype": {"name": "Task"},
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1039,7 +1012,6 @@ def step_jira_update_issue(resource, key, ctx):
             "fields": {"summary": "Updated summary"},
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1052,10 +1024,8 @@ def step_jira_update_issue(resource, key, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without issue_key'))
 def step_jira_query_without_key(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].query(q))
@@ -1068,10 +1038,8 @@ def step_jira_query_without_key(resource, ctx):
 
 @when(parsers.parse('I query field metadata for project "{project}"'))
 def step_jira_query_field_metadata(project, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="field_metadata", filters={"project": project})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -1084,10 +1052,8 @@ def step_jira_query_field_metadata(project, ctx):
 
 @when("I query field metadata without a project")
 def step_jira_query_field_metadata_no_project(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="field_metadata", filters={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].query(q))
@@ -1100,10 +1066,8 @@ def step_jira_query_field_metadata_no_project(ctx):
 
 @when("I query all Jira fields")
 def step_jira_query_fields(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="fields")
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -1116,10 +1080,8 @@ def step_jira_query_fields(ctx):
 
 @when(parsers.parse('I query statuses for project "{project}"'))
 def step_jira_query_statuses(project, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="statuses", filters={"project": project})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -1132,10 +1094,8 @@ def step_jira_query_statuses(project, ctx):
 
 @when("I query statuses without a project")
 def step_jira_query_statuses_no_project(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="statuses", filters={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].query(q))
@@ -1205,7 +1165,6 @@ def step_jira_write_empty_data(resource, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].write(payload))
@@ -1299,7 +1258,6 @@ def step_jira_assign_issue(key, account_id, ctx):
         resource="issue_assign",
         data={"issue_key": key, "account_id": account_id},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1318,7 +1276,6 @@ def step_jira_unassign_issue(key, ctx):
         resource="issue_assign",
         data={"issue_key": key, "account_id": None},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1337,7 +1294,6 @@ def step_jira_update_labels(key, add, remove, ctx):
         resource="issue_label",
         data={"issue_key": key, "add": [add], "remove": [remove]},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1356,7 +1312,6 @@ def step_jira_delete_issue(key, ctx):
         resource="issue_delete",
         data={"issue_key": key},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1578,10 +1533,8 @@ def step_linear_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with id "{id_val}"'))
 def step_linear_query_issue(resource, id_val, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"id": id_val})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -1594,10 +1547,8 @@ def step_linear_query_issue(resource, id_val, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with query "{query_text}"'))
 def step_linear_search(resource, query_text, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"query": query_text})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -1616,7 +1567,6 @@ def step_linear_create_issue(resource, title, team, ctx):
         resource=resource,
         data={"title": title, "teamId": team},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1660,7 +1610,6 @@ def step_linear_update_issue(resource, id_val, ctx):
         resource=resource,
         data={"id": id_val, "title": "Updated title"},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1676,7 +1625,6 @@ def step_linear_issue_state_by_name(issue_id, state, team, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_state", data={"id": issue_id, "state": state, "teamId": team})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1692,7 +1640,6 @@ def step_linear_issue_state_by_id(issue_id, state_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_state", data={"id": issue_id, "stateId": state_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1708,7 +1655,6 @@ def step_linear_issue_state_no_team(issue_id, state, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_state", data={"id": issue_id, "state": state})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1724,7 +1670,6 @@ def step_linear_issue_cycle_by_name(issue_id, cycle, team, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_cycle", data={"id": issue_id, "cycle": cycle, "teamId": team})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1740,7 +1685,6 @@ def step_linear_issue_cycle_by_id(issue_id, cycle_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_cycle", data={"id": issue_id, "cycleId": cycle_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1756,7 +1700,6 @@ def step_linear_issue_cycle_remove(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_cycle", data={"id": issue_id, "cycleId": None})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1772,7 +1715,6 @@ def step_linear_label_create(name, team, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="label", data={"name": name, "teamId": team})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1788,7 +1730,6 @@ def step_linear_label_update(label_id, name, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="label_update", data={"id": label_id, "name": name})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1804,7 +1745,6 @@ def step_linear_label_delete(label_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="label_delete", data={"id": label_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1821,7 +1761,6 @@ def step_linear_issue_label_add(label_ids, issue_id, ctx):
 
     ids = [item.strip() for item in label_ids.split(",") if item.strip()]
     payload = ConnectorPayload(resource="issue_label", data={"id": issue_id, "addLabelIds": ids})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1837,7 +1776,6 @@ def step_linear_issue_label_remove(label_id, issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_label", data={"id": issue_id, "removeLabelIds": [label_id]})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1853,7 +1791,6 @@ def step_linear_issue_label_missing(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_label", data={"id": issue_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1869,7 +1806,6 @@ def step_linear_issue_archive(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_archive", data={"id": issue_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1885,7 +1821,6 @@ def step_linear_issue_archive_trash(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_archive", data={"id": issue_id, "trash": True})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1901,7 +1836,6 @@ def step_linear_issue_delete(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_delete", data={"id": issue_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1917,7 +1851,6 @@ def step_linear_issue_assign_by_id(issue_id, assignee_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id, "assigneeId": assignee_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1933,7 +1866,6 @@ def step_linear_issue_assign_by_email(issue_id, email, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id, "email": email})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1949,7 +1881,6 @@ def step_linear_issue_assign_by_name(issue_id, name, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id, "name": name})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1965,7 +1896,6 @@ def step_linear_issue_unassign(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_unassign", data={"id": issue_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -1981,7 +1911,6 @@ def step_linear_issue_assign_missing(issue_id, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue_assign", data={"id": issue_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2001,7 +1930,6 @@ def step_linear_issue_state_is(state, ctx):
 
 @when("I perform a health check")
 def step_linear_health_check(ctx):
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].health_check())
@@ -2242,12 +2170,10 @@ def step_slack_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with limit {limit:d}'))
 def step_slack_query_resource(resource, limit, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, limit=limit)
     if resource == "messages":
         q.filters["channel"] = "C001"
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2260,10 +2186,8 @@ def step_slack_query_resource(resource, limit, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with channel "{channel}"'))
 def step_slack_query_messages(resource, channel, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"channel": channel})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2276,10 +2200,8 @@ def step_slack_query_messages(resource, channel, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without channel filter'))
 def step_slack_query_messages_no_channel(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].query(q))
@@ -2298,7 +2220,6 @@ def step_slack_post_message(resource, channel, text, ctx):
         resource=resource,
         data={"channel": channel, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2321,7 +2242,6 @@ def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
         resource=resource,
         data={"channel": channel, "thread_ts": thread_ts, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2334,10 +2254,8 @@ def step_slack_post_thread_reply(resource, channel, thread_ts, text, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with user "{user}"'))
 def step_slack_query_user(resource, user, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"user": user})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2350,10 +2268,8 @@ def step_slack_query_user(resource, user, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with email "{email}"'))
 def step_slack_query_user_email(resource, email, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"email": email})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2366,10 +2282,8 @@ def step_slack_query_user_email(resource, email, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with query "{query}"'))
 def step_slack_query_message_search(resource, query, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"query": query})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2382,10 +2296,8 @@ def step_slack_query_message_search(resource, query, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without a query filter'))
 def step_slack_query_message_search_no_query(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].query(q))
@@ -2404,7 +2316,6 @@ def step_slack_schedule_message(resource, channel, post_at, ctx):
         resource=resource,
         data={"channel": channel, "post_at": post_at, "text": "Scheduled"},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2420,7 +2331,6 @@ def step_slack_schedule_message_no_post_at(resource, channel, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Scheduled"})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].write(payload))
@@ -2439,7 +2349,6 @@ def step_slack_file_upload(resource, filename, content, ctx):
         resource=resource,
         data={"filename": filename, "content": content, "channels": "C001"},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2455,7 +2364,6 @@ def step_slack_file_upload_no_content(resource, filename, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"filename": filename})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].write(payload))
@@ -2474,7 +2382,6 @@ def step_slack_delete_scheduled_message(resource, channel, id, ctx):
         resource=resource,
         data={"channel": channel, "scheduled_message_id": id},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2490,7 +2397,6 @@ def step_slack_delete_scheduled_message_no_id(resource, channel, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].write(payload))
@@ -2509,7 +2415,6 @@ def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
         resource=resource,
         data={"channel": channel, "user": user, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2528,7 +2433,6 @@ def step_slack_update_message(resource, channel, ts, text, ctx):
         resource=resource,
         data={"channel": channel, "ts": ts, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2547,7 +2451,6 @@ def step_slack_delete_message(resource, channel, ts, ctx):
         resource=resource,
         data={"channel": channel, "ts": ts},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2563,7 +2466,6 @@ def step_slack_channel_write(resource, channel, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -2579,7 +2481,6 @@ def step_slack_ephemeral_no_user(resource, channel, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"channel": channel, "text": "Hello"})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].write(payload))
@@ -2601,13 +2502,11 @@ def step_records_contain_channel_metadata(ctx):
     parsers.parse('I query resource "{resource}" with channel "{channel}" and oldest "{oldest}" and latest "{latest}"')
 )
 def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(
         resource=resource,
         filters={"channel": channel, "oldest": oldest, "latest": latest},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2620,12 +2519,10 @@ def step_slack_query_messages_with_dates(resource, channel, oldest, latest, ctx)
 
 @when(parsers.parse('I query resource "{resource}" with cursor "{cursor}"'))
 def step_slack_query_with_cursor(resource, cursor, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, cursor=cursor)
     if resource == "messages":
         q.filters["channel"] = "C001"
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2638,10 +2535,8 @@ def step_slack_query_with_cursor(resource, cursor, ctx):
 
 @when(parsers.parse('I query resource "{resource}"'))
 def step_slack_query_unknown(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource)
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2657,7 +2552,6 @@ def step_slack_write_no_channel(resource, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"text": "Hello"})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].write(payload))
@@ -2724,7 +2618,6 @@ def step_slack_non_json_response(ctx):
         return HealthResult(ok=False, detail="Non-JSON response from Slack API")
 
     ctx["connector"].health_check = mock_health_check
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].health_check())
@@ -2934,10 +2827,8 @@ def step_gitlab_connector(ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and state "{state}"'))
 def step_gitlab_query_with_state(resource, project, state, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "state": state})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2950,10 +2841,8 @@ def step_gitlab_query_with_state(resource, project, state, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}"'))
 def step_gitlab_query_project(resource, project, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2966,10 +2855,8 @@ def step_gitlab_query_project(resource, project, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and iid "{iid}"'))
 def step_gitlab_query_with_iid(resource, project, iid, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "iid": iid})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2982,10 +2869,8 @@ def step_gitlab_query_with_iid(resource, project, iid, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" on page "{page}"'))
 def step_gitlab_query_project_page(resource, page, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, cursor=page)
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -2998,10 +2883,8 @@ def step_gitlab_query_project_page(resource, page, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and label_id "{label_id}"'))
 def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "label_id": label_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -3014,10 +2897,8 @@ def step_gitlab_query_with_label_id(resource, project, label_id, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and name "{name}"'))
 def step_gitlab_query_with_name(resource, project, name, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "name": name})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -3030,10 +2911,8 @@ def step_gitlab_query_with_name(resource, project, name, ctx):
 
 @when(parsers.parse('I query GitLab resource "{resource}" with project "{project}" and pipeline_id "{pipeline_id}"'))
 def step_gitlab_query_with_pipeline_id(resource, project, pipeline_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project": project, "pipeline_id": pipeline_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -3049,7 +2928,6 @@ def step_gitlab_write_issue(project, title, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="issue", data={"project": project, "title": title})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3072,7 +2950,6 @@ def step_gitlab_update_issue(iid, project, state_event, ctx):
         resource="issue_update",
         data={"project": project, "iid": iid, "state_event": state_event},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3091,7 +2968,6 @@ def step_gitlab_write_note(iid, project, body, ctx):
         resource="issue_note",
         data={"project": project, "iid": iid, "body": body},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3110,7 +2986,6 @@ def step_gitlab_write_label(iid, project, labels, ctx):
         resource="issue_label",
         data={"project": project, "iid": iid, "labels": labels.split(",")},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3129,7 +3004,6 @@ def step_gitlab_write_project_label(project, name, ctx):
         resource="label",
         data={"project": project, "name": name},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3148,7 +3022,6 @@ def step_gitlab_write_milestone(project, title, ctx):
         resource="milestone",
         data={"project": project, "title": title},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3167,7 +3040,6 @@ def step_gitlab_trigger_pipeline(project, ref, ctx):
         resource="pipeline_run",
         data={"project": project, "ref": ref},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3186,7 +3058,6 @@ def step_gitlab_write_file_delete(project, path, ctx):
         resource="file_delete",
         data={"project": project, "path": path},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3205,7 +3076,6 @@ def step_gitlab_write_file(project, path, ctx):
         resource="file",
         data={"project": project, "path": path, "content": "print('hi')"},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3224,7 +3094,6 @@ def step_gitlab_write_mr_merge(project, iid, ctx):
         resource="mr_merge",
         data={"project": project, "iid": iid},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3243,7 +3112,6 @@ def step_gitlab_write_mr_approve(project, iid, ctx):
         resource="mr_approve",
         data={"project": project, "iid": iid},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3262,7 +3130,6 @@ def step_gitlab_write_mr_comment(project, iid, body, ctx):
         resource="mr_comment",
         data={"project": project, "iid": iid, "body": body},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3275,13 +3142,11 @@ def step_gitlab_write_mr_comment(project, iid, body, ctx):
 
 @when(parsers.parse('I query GitLab tree for project "{project}" with path "{path}" and recursive'))
 def step_gitlab_query_tree_recursive(project, path, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(
         resource="tree",
         filters={"project": project, "path": path, "recursive": True},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -3315,7 +3180,6 @@ def step_gitlab_write_files_batch(project, ctx):
             ],
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3344,7 +3208,6 @@ def step_gitlab_write_files_traversal(project, path, ctx):
             "actions": [{"action": "create", "file_path": path, "content": "x"}],
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3368,7 +3231,6 @@ def step_gitlab_write_mr_approval_request(project, iid, user_ids, ctx):
         resource="mr_approval_request",
         data={"project": project, "iid": iid, "user_ids": parsed_ids},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3395,7 +3257,6 @@ def step_gitlab_write_mr_approval_request_no_users(project, iid, ctx):
         resource="mr_approval_request",
         data={"project": project, "iid": iid},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -3441,7 +3302,6 @@ def step_gitlab_connector_invalid_token(ctx):
 
 @when("I check the connector health")
 def step_gitlab_health_check(ctx):
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].health_check())
@@ -3480,7 +3340,6 @@ def step_gitlab_api_unreachable(ctx):
         return HealthResult(ok=False, detail="Connection refused")
 
     ctx["connector"].health_check = mock_health_check
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].health_check())
@@ -3531,7 +3390,6 @@ def step_gitlab_api_returns_429_issues(ctx):
 
 @then(parsers.parse('the write result is an error with "{message}"'))
 def step_write_result_is_error_with(message, ctx):
-    import asyncio
 
     from modulo.connectors.base import ConnectorPayload
 
@@ -3549,9 +3407,7 @@ def step_write_result_is_error_with(message, ctx):
 
 @then(parsers.parse('the query result is an error with "{message}"'))
 def step_query_result_is_error_with(message, ctx):
-    import asyncio
 
-    from modulo.connectors.base import ConnectorQuery
 
     try:
         result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="issues", filters={"project": "p"})))
@@ -3656,14 +3512,12 @@ def step_gitea_connector(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and state "{state}"'))
 def step_gitea_query_pulls_issues(resource, repo, state, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     connector = ctx["connector"]
     q = ConnectorQuery(
         resource=resource,
         filters={"repo": repo, "state": state},
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.query(q))
@@ -3688,7 +3542,6 @@ def step_gitea_create_pr(resource, title, head, base, ctx):
             "base": base,
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.write(payload))
@@ -3711,7 +3564,6 @@ def step_gitea_create_issue(resource, title, ctx):
             "title": title,
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(connector.write(payload))
@@ -4027,10 +3879,8 @@ def step_monday_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with board_id "{board_id}"'))
 def step_monday_query_with_board_id(resource, board_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"board_id": int(board_id)})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -4043,10 +3893,8 @@ def step_monday_query_with_board_id(resource, board_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with item_id "{item_id}"'))
 def step_monday_query_with_item_id(resource, item_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"item_id": int(item_id)})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -4065,7 +3913,6 @@ def step_monday_create_item(resource, name, board_id, ctx):
         resource=resource,
         data={"board_id": int(board_id), "item_name": name},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -4084,7 +3931,6 @@ def step_monday_update_column_values(resource, item_id, column_values, ctx):
         resource=resource,
         data={"item_id": int(item_id), "column_values": column_values},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -4103,7 +3949,6 @@ def step_monday_change_column_value(resource, item_id, col_id, value, ctx):
         resource=resource,
         data={"item_id": int(item_id), "column_id": col_id, "value": value},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -4122,7 +3967,6 @@ def step_monday_add_update(resource, item_id, body, ctx):
         resource=resource,
         data={"item_id": int(item_id), "body": body},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -4364,10 +4208,8 @@ def step_trello_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with board_id "{board_id}"'))
 def step_trello_query_with_board_id(resource, board_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"board_id": board_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -4380,10 +4222,8 @@ def step_trello_query_with_board_id(resource, board_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with card_id "{card_id}"'))
 def step_trello_query_with_card_id(resource, card_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"card_id": card_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -4402,7 +4242,6 @@ def step_trello_create_card(resource, name, list_id, ctx):
         resource=resource,
         data={"name": name, "idList": list_id},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -4421,7 +4260,6 @@ def step_trello_add_comment(resource, card_id, text, ctx):
         resource=resource,
         data={"card_id": card_id, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5016,10 +4854,8 @@ def step_shortcut_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with workspace "{workspace}"'))
 def step_asana_query_with_workspace(resource, workspace, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"workspace": workspace})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5032,10 +4868,8 @@ def step_asana_query_with_workspace(resource, workspace, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with project_id "{project_id}"'))
 def step_asana_query_with_project_id(resource, project_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"project_id": project_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5048,10 +4882,8 @@ def step_asana_query_with_project_id(resource, project_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with story_id "{story_id}"'))
 def step_shortcut_query_with_story_id(resource, story_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"story_id": story_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5070,7 +4902,6 @@ def step_asana_create_task(resource, name, project, ctx):
         resource=resource,
         data={"name": name, "projects": [project]},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5089,7 +4920,6 @@ def step_shortcut_create_story(resource, name, project_id, ctx):
         resource=resource,
         data={"name": name, "project_id": int(project_id)},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5108,7 +4938,6 @@ def step_asana_add_comment(resource, task_id, text, ctx):
         resource=resource,
         data={"task_id": task_id, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5127,7 +4956,6 @@ def step_shortcut_update_story(resource, story_id, name, ctx):
         resource=resource,
         data={"id": story_id, "name": name},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5175,7 +5003,6 @@ def step_shortcut_add_comment(resource, story_id, text, ctx):
         resource=resource,
         data={"story_id": story_id, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5557,10 +5384,8 @@ def step_google_docs_connector(ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}"'))
 def step_youtrack_query_resource(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource)
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5573,10 +5398,8 @@ def step_youtrack_query_resource(resource, ctx):
 
 @when(parsers.parse('I query resource "pages" with space_id "{space_id}"'))
 def step_confluence_query_pages(space_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="pages", filters={"space_id": space_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5613,10 +5436,8 @@ def step_google_docs_health_401(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with database_id "{db_id}"'))
 def step_notion_query_with_database_id(resource, db_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"database_id": db_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5629,10 +5450,8 @@ def step_notion_query_with_database_id(resource, db_id, ctx):
 
 @when(parsers.parse('I query resource "page" with page_id "{page_id}"'))
 def step_confluence_query_page(page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="page", filters={"page_id": page_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5752,10 +5571,8 @@ def step_google_docs_configured(ctx):
 
 @when(parsers.parse('I query resource "{resource}" with document_id "{document_id}"'))
 def step_google_docs_query_with_document_id(resource, document_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"document_id": document_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5768,10 +5585,8 @@ def step_google_docs_query_with_document_id(resource, document_id, ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}" with query "{query_text}"'))
 def step_youtrack_query_issues(resource, query_text, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"query": query_text})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5784,10 +5599,8 @@ def step_youtrack_query_issues(resource, query_text, ctx):
 
 @when(parsers.parse('I query resource "spaces" with type "{space_type}"'))
 def step_confluence_query_spaces(space_type, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="spaces", filters={"type": space_type})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5800,10 +5613,8 @@ def step_confluence_query_spaces(space_type, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with file_id "{file_id}"'))
 def step_google_docs_query_with_file_id(resource, file_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"file_id": file_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5816,10 +5627,8 @@ def step_google_docs_query_with_file_id(resource, file_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" with page_id "{page_id}"'))
 def step_notion_query_with_page_id(resource, page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"page_id": page_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5832,10 +5641,8 @@ def step_notion_query_with_page_id(resource, page_id, ctx):
 
 @when(parsers.parse('I query resource "content" with cql "{cql}"'))
 def step_confluence_query_content(cql, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="content", filters={"cql": cql})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5848,10 +5655,8 @@ def step_confluence_query_content(cql, ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}" with issue_id "{issue_id}"'))
 def step_youtrack_query_issue(resource, issue_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={"issue_id": issue_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5864,10 +5669,8 @@ def step_youtrack_query_issue(resource, issue_id, ctx):
 
 @when(parsers.parse('I query resource "children" with page_id "{page_id}"'))
 def step_confluence_query_children(page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="children", filters={"page_id": page_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5880,10 +5683,8 @@ def step_confluence_query_children(page_id, ctx):
 
 @when(parsers.parse('I query YouTrack resource "{resource}" without issue_id'))
 def step_youtrack_query_without_id(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].query(q))
@@ -5896,10 +5697,8 @@ def step_youtrack_query_without_id(resource, ctx):
 
 @when(parsers.parse('I query resource "labels" with page_id "{page_id}"'))
 def step_confluence_query_labels(page_id, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="labels", filters={"page_id": page_id})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -5912,10 +5711,8 @@ def step_confluence_query_labels(page_id, ctx):
 
 @when(parsers.parse('I query resource "{resource}" without database_id filter'))
 def step_notion_query_without_database_id(resource, ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource=resource, filters={})
-    import asyncio
 
     try:
         asyncio.run(ctx["connector"].query(q))
@@ -5934,7 +5731,6 @@ def step_youtrack_write_issue(resource, summary, project, ctx):
         resource=resource,
         data={"summary": summary, "project": {"id": project}},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5953,7 +5749,6 @@ def step_confluence_create_page(space_id, title, ctx):
         resource="page",
         data={"spaceId": space_id, "title": title, "body": {"representation": "storage", "value": "<p>Content</p>"}},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5975,7 +5770,6 @@ def step_notion_write_page(resource, db_id, title, ctx):
             "properties": {"Name": {"title": [{"text": {"content": title}}]}},
         },
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -5991,7 +5785,6 @@ def step_google_docs_write_document(resource, title, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"title": title})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -6010,7 +5803,6 @@ def step_confluence_add_label(page_id, label, ctx):
         resource="label",
         data={"page_id": page_id, "label": label},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -6026,7 +5818,6 @@ def step_google_docs_write_document_update(resource, document_id, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource=resource, data={"document_id": document_id, "text": text})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -6045,7 +5836,6 @@ def step_youtrack_update_issue(resource, issue_id, ctx):
         resource=resource,
         data={"id": issue_id, "summary": "Updated summary"},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -6064,7 +5854,6 @@ def step_youtrack_write_comment(resource, issue_id, text, ctx):
         resource=resource,
         data={"issue_id": issue_id, "text": text},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -6254,7 +6043,6 @@ def step_datadog_connector_invalid(ctx):
 
 @when("the connector checks health")
 def step_datadog_health_check(ctx):
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].health_check())
@@ -6266,10 +6054,8 @@ def step_datadog_health_check(ctx):
 
 @when("the connector queries monitors")
 def step_datadog_query_monitors(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="monitors")
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -6282,10 +6068,8 @@ def step_datadog_query_monitors(ctx):
 
 @when("the connector queries events")
 def step_datadog_query_events(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="events")
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -6298,10 +6082,8 @@ def step_datadog_query_events(ctx):
 
 @when("the connector queries timeseries metrics")
 def step_datadog_query_metrics(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="metrics")
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -6314,10 +6096,8 @@ def step_datadog_query_metrics(ctx):
 
 @when("the connector queries dashboards")
 def step_datadog_query_dashboards(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="dashboards")
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -6330,10 +6110,8 @@ def step_datadog_query_dashboards(ctx):
 
 @when("the connector searches logs")
 def step_datadog_search_logs(ctx):
-    from modulo.connectors.base import ConnectorQuery
 
     q = ConnectorQuery(resource="logs")
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].query(q))
@@ -6349,7 +6127,6 @@ def step_datadog_write_event(title, text, ctx):
     from modulo.connectors.base import ConnectorPayload
 
     payload = ConnectorPayload(resource="event", data={"title": title, "text": text})
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -6368,7 +6145,6 @@ def step_datadog_create_monitor(monitor_type, ctx):
         resource="monitor",
         data={"query": "avg(last_5m):cpu > 90", "type": monitor_type},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))
@@ -6387,7 +6163,6 @@ def step_datadog_mute_monitor(ctx):
         resource="monitor_status",
         data={"monitor_id": 42, "status": "Muted"},
     )
-    import asyncio
 
     try:
         result = asyncio.run(ctx["connector"].write(payload))

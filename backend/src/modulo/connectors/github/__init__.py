@@ -77,9 +77,14 @@ def _b64encode(content: str) -> str:
 
 
 def _b64decode(content: str) -> str:
-    """Decode a base64 ``content`` field returned by GitHub's Contents API."""
+    """Decode a base64 ``content`` field returned by GitHub's Contents API.
+
+    GitHub wraps base64 payloads at 60 columns with ``\\n`` line breaks, so
+    whitespace is stripped before decoding — ``validate=True`` would otherwise
+    reject the line breaks.
+    """
     try:
-        return base64.b64decode(content, validate=True).decode("utf-8")
+        return base64.b64decode("".join(content.split()), validate=True).decode("utf-8")
     except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
         raise ValueError(f"GitHub file content is not valid base64: {exc}") from exc
 
@@ -308,7 +313,8 @@ class GitHubConnector(ConnectorBase):
                 path = self._require_filter(q.filters, "path", "file")
                 _validate_path(path, q.resource)
                 ref = q.filters.get("ref", "main")
-                r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
+                contents_url = f"/repos/{owner_repo}/contents/{quote(path, safe='/')}"
+                r = await self._call_api("GET", contents_url, params={"ref": ref})
                 record = await self._parse_json(r)
                 if (
                     isinstance(record, dict)
@@ -323,6 +329,7 @@ class GitHubConnector(ConnectorBase):
                 path_prefix = q.filters.get("path")
                 if path_prefix is not None:
                     _validate_path(path_prefix, q.resource)
+                    path_prefix = path_prefix.replace("\\", "/")
                 tree_params: dict[str, Any] = {}
                 if q.filters.get("recursive", True):
                     tree_params["recursive"] = 1
@@ -504,7 +511,7 @@ class GitHubConnector(ConnectorBase):
                 }
                 if "sha" in payload.data:
                     body["sha"] = payload.data["sha"]
-                r = await self._call_api("PUT", f"/repos/{owner_repo}/contents/{path}", json=body)
+                r = await self._call_api("PUT", f"/repos/{owner_repo}/contents/{quote(path, safe='/')}", json=body)
                 return await self._parse_json_object(r)
             case "issue":
                 owner_repo = self._require_write_filter(payload.data, "repo", "issue")

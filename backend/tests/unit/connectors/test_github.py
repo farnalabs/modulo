@@ -745,6 +745,47 @@ async def test_query_file_adds_decoded_content(connector):
 
 
 @respx.mock
+async def test_query_file_decodes_newline_wrapped_base64(connector):
+    payload_bytes = b"Hello, world!" * 20
+    content = base64.b64encode(payload_bytes).decode()
+    wrapped = "\n".join(content[i : i + 60] for i in range(0, len(content), 60)) + "\n"
+    payload = {"name": "wrapped.txt", "content": wrapped, "encoding": "base64"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/wrapped.txt").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "wrapped.txt"})
+    )
+    assert result.records[0]["decoded_content"] == payload_bytes.decode()
+
+
+@respx.mock
+async def test_query_file_percent_encodes_path(connector):
+    payload = {"name": "notes.txt", "content": base64.b64encode(b"hi").decode(), "encoding": "base64"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/docs/my%20notes.txt").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "docs/my notes.txt"})
+    )
+    assert result.records[0]["name"] == "notes.txt"
+
+
+@respx.mock
+async def test_write_file_percent_encodes_path(connector):
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/docs/my%20notes.txt").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "abc"}})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={"repo": "owner/repo", "path": "docs/my notes.txt", "content": "SGVsbG8="},
+        )
+    )
+    assert str(route.calls.last.request.url).endswith("/repos/owner/repo/contents/docs/my%20notes.txt")
+
+
+@respx.mock
 async def test_query_file_skips_decoded_content_without_base64_encoding(connector):
     payload = {"name": "raw.txt", "content": "not-base64", "encoding": "utf-8"}
     respx.get("https://api.github.com/repos/owner/repo/contents/raw.txt").mock(
@@ -920,6 +961,24 @@ async def test_query_tree_path_filter_limits_entries(connector):
         ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "path": "src"})
     )
     assert {r["path"] for r in result.records} == {"src", "src/main.py", "src/util/helper.py"}
+
+
+@respx.mock
+async def test_query_tree_path_filter_normalizes_backslashes(connector):
+    body = {
+        "tree": [
+            {"path": "src", "type": "tree"},
+            {"path": "src/main.py", "type": "blob"},
+            {"path": "tests/test_main.py", "type": "blob"},
+        ]
+    }
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "path": "src\\main.py"})
+    )
+    assert {r["path"] for r in result.records} == {"src/main.py"}
 
 
 @respx.mock
