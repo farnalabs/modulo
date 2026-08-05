@@ -5,7 +5,18 @@ import { createPinia, setActivePinia } from 'pinia'
 const mockGet = vi.hoisted(() => vi.fn().mockImplementation((path: string) => {
   if (path === '/api/v1/admin/costs') {
     return Promise.resolve({
-      data: { org_total_usd: 4250.0, teams: [{ team_id: 'team-1', team_name: 'Alpha', cost_usd: 2500.0, limit_usd: 5000.0 }, { team_id: 'team-2', team_name: 'Beta', cost_usd: 1750.0, limit_usd: null }] },
+      data: {
+        period: 'month',
+        group_by: 'team',
+        items: [
+          { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 2500.0, total_runs: 12, components: [{ name: 'llm_tokens', amount_usd: '2000.000000' }, { name: 'sandbox_infra', amount_usd: '500.000000' }], annotations: { refused_total_usd: null, clamped_total_usd: null } },
+          { entity_id: 'team-2', entity_name: 'Beta', total_spend_usd: 1750.0, total_runs: 10, components: [], annotations: { refused_total_usd: 12.5, clamped_total_usd: 80.0 } },
+        ],
+        org_total: '4250.000000',
+        legacy_total: '0.000000',
+        org_unassigned_components: '0.000000',
+        has_more: false,
+      },
       error: undefined,
     })
   }

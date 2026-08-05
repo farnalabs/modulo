@@ -741,7 +741,7 @@ def step_github_write_returns_error(status_code, reason, ctx):
 
 
 # ============================================================================
-# connectors/jira_connector.feature  —  13 scenarios
+# connectors/jira_connector.feature  —  34 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/connectors/jira_connector.feature")
@@ -817,6 +817,82 @@ def step_jira_connector(ctx):
                     total=1,
                     metadata={"project": project},
                 )
+            case "issue_attachments":
+                key = q.filters.get("issue_key", "")
+                if not key:
+                    raise ValueError("Jira issue_attachments query requires 'issue_key' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "10000", "filename": "spec.pdf", "mimeType": "application/pdf", "size": 1234},
+                        {"id": "10001", "filename": "notes.txt", "mimeType": "text/plain", "size": 88},
+                    ],
+                    total=2,
+                )
+            case "issue_remote_links":
+                key = q.filters.get("issue_key", "")
+                if not key:
+                    raise ValueError("Jira issue_remote_links query requires 'issue_key' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "id": "10001",
+                            "object": {"url": "https://example.com/pr/42", "title": "PR #42"},
+                        }
+                    ],
+                    total=1,
+                )
+            case "project_components":
+                project = q.filters.get("project", "")
+                if not project:
+                    raise ValueError("Jira project_components query requires 'project' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "10000", "name": "Backend", "lead": {"displayName": "Alice"}},
+                        {"id": "10001", "name": "Frontend", "lead": {"displayName": "Bob"}},
+                    ],
+                    total=2,
+                    metadata={"project": project},
+                )
+            case "project_versions":
+                project = q.filters.get("project", "")
+                if not project:
+                    raise ValueError("Jira project_versions query requires 'project' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "10000", "name": "1.0.0", "released": True},
+                        {"id": "10001", "name": "1.1.0", "released": False},
+                    ],
+                    total=2,
+                    metadata={"project": project},
+                )
+            case "attachments":
+                issue_key = q.filters.get("issue_key", "")
+                if not issue_key:
+                    raise ValueError("Jira attachments query requires 'issue_key' filter")
+                return ConnectorResult(
+                    records=[
+                        {"id": "20001", "filename": "a.txt", "mimeType": "text/plain", "size": 5},
+                        {"id": "20002", "filename": "b.png", "mimeType": "image/png", "size": 9},
+                    ],
+                    total=2,
+                )
+            case "attachment":
+                attachment_id = q.filters.get("attachment_id", "")
+                if not attachment_id:
+                    raise ValueError("Jira attachment query requires 'attachment_id' filter")
+                import base64 as _b64
+
+                return ConnectorResult(
+                    records=[
+                        {
+                            "attachment_id": attachment_id,
+                            "content": _b64.b64encode(b"PDF data").decode("ascii"),
+                            "encoding": "base64",
+                            "content_type": "application/octet-stream",
+                        }
+                    ],
+                    total=1,
+                )
             case _:
                 raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
 
@@ -835,6 +911,47 @@ def step_jira_connector(ctx):
                 }
             case "issue_delete":
                 return {"issue_key": payload.data.get("issue_key"), "deleted": True}
+            case "issue_attachment":
+                issue_key = payload.data.get("issue_key", "")
+                if not issue_key:
+                    raise ValueError("Jira issue attachment requires 'issue_key' in data")
+                if "filename" not in payload.data:
+                    raise ValueError("Jira issue attachment requires 'filename' in data")
+                if payload.data.get("content") is None and payload.data.get("file") is None:
+                    raise ValueError("Jira issue attachment requires 'content' or 'file' in data")
+                return [
+                    {
+                        "id": "10000",
+                        "filename": payload.data.get("filename"),
+                        "size": len(payload.data.get("content", payload.data.get("file", ""))),
+                    }
+                ]
+            case "issue_remote_link":
+                issue_key = payload.data.get("issue_key", "")
+                if not issue_key:
+                    raise ValueError("Jira issue_remote_link requires 'issue_key' in data")
+                if "url" not in payload.data:
+                    raise ValueError("Jira issue_remote_link requires 'url' in data")
+                return {"id": "10001", "object": {"url": payload.data.get("url"), "title": payload.data.get("title")}}
+            case "remote_link_delete":
+                issue_key = payload.data.get("issue_key", "")
+                if not issue_key:
+                    raise ValueError("Jira remote_link_delete requires 'issue_key' in data")
+                if "link_id" not in payload.data:
+                    raise ValueError("Jira remote_link_delete requires 'link_id' in data")
+                return {"issue_key": issue_key, "link_id": payload.data.get("link_id"), "deleted": True}
+            case "attachment":
+                issue_key = payload.data.get("issue_key")
+                if not issue_key:
+                    raise ValueError("Jira attachment requires 'issue_key' in data")
+                if "filename" not in payload.data:
+                    raise ValueError("Jira attachment requires 'filename' in data")
+                if payload.data.get("content") is None and payload.data.get("file") is None:
+                    raise ValueError("Jira attachment requires 'content' or 'file' in data")
+                return {
+                    "issue_key": issue_key,
+                    "attachments": [{"id": "20001", "filename": payload.data.get("filename")}],
+                }
             case _:
                 raise ValueError(f"Unsupported Jira write: {payload.resource!r}")
 
@@ -1266,6 +1383,370 @@ def step_jira_write_returns_deletion(key, ctx):
     assert result is not None, "No write result"
     assert result.get("issue_key") == key, f"Expected issue_key {key} but got {result}"
     assert result.get("deleted") is True, f"Expected deleted confirmation but got {result}"
+
+
+@when(parsers.parse('I query attachments on issue "{key}"'))
+def step_jira_query_attachments(key, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="issue_attachments", filters={"issue_key": key})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I upload attachment "{filename}" to issue "{key}" with content'))
+def step_jira_upload_attachment(filename, key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="issue_attachment",
+        data={"issue_key": key, "filename": filename, "content": "hello world"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I upload attachment "{filename}" with content "{content}" to issue "{key}"'))
+def step_jira_upload_attachment_with_content(filename, content, key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="attachment",
+        data={"issue_key": key, "filename": filename, "content": content},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I upload an attachment to issue "{key}" without content'))
+def step_jira_upload_attachment_no_content(key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="issue_attachment",
+        data={"issue_key": key, "filename": "notes.txt"},
+    )
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I upload attachment "{filename}" with no content to issue "{key}"'))
+def step_jira_upload_attachment_with_no_content(filename, key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="attachment",
+        data={"issue_key": key, "filename": filename},
+    )
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the result lists issue attachments")
+def step_jira_result_lists_attachments(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected attachment records but got {result.records}"
+    assert all("filename" in record for record in result.records), (
+        f"Expected filename in every attachment but got {result.records}"
+    )
+
+
+@then("the write returns an uploaded attachment")
+def step_jira_write_returns_attachment(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert isinstance(result, list) and result, f"Expected an attachment list but got {result}"
+    assert result[0].get("filename"), f"Expected filename in upload result but got {result}"
+
+
+@when(parsers.parse('I list remote links on issue "{key}"'))
+def step_jira_list_remote_links(key, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="issue_remote_links", filters={"issue_key": key})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records list issue remote links")
+def step_jira_records_remote_links(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected remote link records but got {result.records}"
+    record = result.records[0]
+    assert "object" in record, f"Expected remote link object in {record}"
+    assert record["object"].get("url"), f"Expected remote link url in {record}"
+
+
+@when(parsers.parse('I add remote link "{url}" to issue "{key}"'))
+def step_jira_add_remote_link(url, key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="issue_remote_link",
+        data={"issue_key": key, "url": url, "title": "PR #42"},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the write returns the created remote link")
+def step_jira_write_returns_remote_link(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert result.get("object", {}).get("url"), f"Expected remote link url in result but got {result}"
+
+
+@when(parsers.parse('I delete remote link "{link_id}" from issue "{key}"'))
+def step_jira_delete_remote_link(link_id, key, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="remote_link_delete",
+        data={"issue_key": key, "link_id": link_id},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then(parsers.parse('the write returns remote link deletion for "{key}"'))
+def step_jira_write_returns_remote_link_deletion(key, ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    assert result.get("issue_key") == key, f"Expected issue_key {key} but got {result}"
+    assert result.get("deleted") is True, f"Expected deleted confirmation but got {result}"
+
+
+@when(parsers.parse('I query components for project "{project}"'))
+def step_jira_query_components(project, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="project_components", filters={"project": project})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query components without a project")
+def step_jira_query_components_no_project(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="project_components", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the result lists project components")
+def step_jira_result_lists_components(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected component records but got {result.records}"
+    assert all("name" in record for record in result.records), (
+        f"Expected name in every component but got {result.records}"
+    )
+
+
+@when(parsers.parse('I query versions for project "{project}"'))
+def step_jira_query_versions(project, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="project_versions", filters={"project": project})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query versions without a project")
+def step_jira_query_versions_no_project(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="project_versions", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the result lists project versions")
+def step_jira_result_lists_versions(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected version records but got {result.records}"
+    assert all("name" in record for record in result.records), (
+        f"Expected name in every version but got {result.records}"
+    )
+
+
+@when(parsers.parse('I query attachments for issue "{key}"'))
+def step_jira_query_attachments_for_issue(key, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="attachments", filters={"issue_key": key})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query attachments without an issue key")
+def step_jira_query_attachments_without_key(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="attachments", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query attachment "{attachment_id}"'))
+def step_jira_query_attachment(attachment_id, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="attachment", filters={"attachment_id": attachment_id})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query attachment content without an id")
+def step_jira_query_attachment_without_id(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="attachment", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the write returns the uploaded attachment")
+def step_jira_write_returns_uploaded_attachment(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No write result"
+    attachments = result.get("attachments")
+    assert attachments, f"Expected uploaded attachment but got {result}"
+    assert attachments[0].get("filename"), f"Expected attachment filename but got {attachments}"
+
+
+@then("the records include attachment files")
+def step_jira_records_include_attachments(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected attachment records but got {result.records}"
+    assert all("filename" in record for record in result.records), f"Expected filenames in {result.records}"
+
+
+@then("the attachment content is returned")
+def step_jira_attachment_content_returned(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    record = result.records[0]
+    assert record.get("content"), f"Expected attachment content but got {record}"
+    assert record.get("encoding") == "base64", f"Expected base64 encoding but got {record}"
+    assert record.get("attachment_id"), f"Expected attachment_id but got {record}"
 
 
 # ============================================================================

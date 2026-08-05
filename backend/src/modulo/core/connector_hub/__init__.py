@@ -454,10 +454,16 @@ def _build_connector(
         case "linear":
             return LinearConnector(api_key=_get_cred(creds, "api_key", type_id))
         case "jira":
-            instance = config.get("instance") or config.get("base_url")
-            if not instance:
+            instance = config.get("instance", "")
+            base_url = config.get("base_url")
+            if not instance and not base_url:
                 raise ValueError("JiraConnector requires 'instance' or 'base_url' in config_json")
-            return JiraConnector(instance=instance, creds=creds)
+            return JiraConnector(
+                instance=instance,
+                creds=creds,
+                base_url=base_url,
+                api_version=config.get("api_version", 3),
+            )
         case "slack":
             return SlackConnector(bot_token=_get_cred(creds, "bot_token", type_id))
         case "sharepoint":

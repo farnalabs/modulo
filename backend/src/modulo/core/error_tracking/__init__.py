@@ -6,8 +6,12 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import os
 import re
 import secrets
+import time
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -34,6 +38,16 @@ _HMAC_KEY_TTL = 3600
 # Module-level alert engine (lazy-initialised)
 _alert_engine: AlertEngine | None = None
 _alert_engine_lock = asyncio.Lock()
+
+# SAQ retry-storm detection (plan F1 probe 6 / F3a): claims beyond the FIRST are
+# re-claims; past this threshold a run is in a retry storm worth alerting on.
+SAQ_RETRY_STORM_CLAIM_THRESHOLD = 3
+
+# Missed-fire alert (plan F1 probe 6): only triggers with a cadence >= 1h are
+# probed (sub-minute/sub-hour cadences are fire-and-forget in fire_due_triggers).
+SAQ_MISSED_FIRE_MIN_PERIOD_SECONDS = 3600
+SAQ_MISSED_FIRE_GRACE_SECONDS = 300  # grace above period before alerting
+_MISSED_FIRE_COOLDOWN_SECONDS = 6 * 3600  # re-alert at most once per 6h window
 
 
 def _normalize_stacktrace(stacktrace: str) -> str:
@@ -280,3 +294,217 @@ async def _dispatch_forwarders(
                 "dispatch_forwarders.failed",
                 extra={"type": type_name, "org_id": str(org_id)},
             )
+
+
+# ---------------------------------------------------------------------------
+# SAQ alerting layer (plan F1 probe 6 / F3a)
+#
+# Two standalone alert emitters, both firing error_events with source='saq':
+#
+#   * :func:`emit_saq_retry_storm_alert` — claim_count retry-storm detection.
+#     Called from the claim path (pipeline_execution.claim_run_async) so a run
+#     that is being re-claimed in a loop surfaces an error_event.
+#   * :func:`check_missed_fire_alerts` — missed-fire probe for low-cadence
+#     triggers (period >= 1h). Runnable from the system cron.
+# ---------------------------------------------------------------------------
+
+
+async def emit_saq_retry_storm_alert(
+    aengine: Any,
+    org_id: Any,
+    run_id: str,
+    claim_count: int,
+) -> None:
+    """Fire an error_event (source='saq') for a SAQ retry storm.
+
+    A run whose ``claim_count`` crossed :data:`SAQ_RETRY_STORM_CLAIM_THRESHOLD`
+    is being repeatedly re-claimed (each re-claim rotates the claim token, so
+    the original executor is superseded each time). Best-effort: a failure never
+    propagates to the claim path.
+    """
+    if claim_count < SAQ_RETRY_STORM_CLAIM_THRESHOLD:
+        return
+    message = f"SAQ retry storm: run {run_id} re-claimed {claim_count} times"
+    fingerprint = ErrorIngestionService.fingerprint(message=message, source="saq")
+    try:
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from modulo.db.rls import set_rls_org
+
+        org_uuid = uuid.UUID(str(org_id))
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await create_error_event(
+                session,
+                org_id=org_uuid,
+                fingerprint=fingerprint,
+                level="error",
+                message=message,
+                source="saq",
+                context_json={"run_id": str(run_id), "claim_count": claim_count},
+                environment=os.environ.get("MODULO_ENV", "development"),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("error_tracking.saq_retry_storm_alert_failed run=%s", run_id)
+
+
+def _trigger_period_seconds(
+    trigger_type: str,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+    config_json: dict[str, Any] | None,
+    now: datetime,
+) -> int | None:
+    """Best-effort fixed schedule cadence (seconds) for a cron/polling trigger.
+
+    Cron cadence is the gap between two consecutive scheduled fires (the next
+    fire after the previous one); polling cadence is ``poll_interval_seconds``.
+    An uncomputable cadence returns None (the trigger is skipped by the
+    missed-fire probe).
+    """
+    try:
+        if trigger_type == "polling":
+            interval = (config_json or {}).get("poll_interval_seconds")
+            if not interval:
+                return None
+            return max(int(interval), 1)
+        if trigger_type == "cron" and cron_expression:
+            from zoneinfo import ZoneInfo
+
+            from croniter import croniter
+
+            tz = ZoneInfo(cron_timezone or "UTC")
+            local_now = now.astimezone(tz)
+            iterator = croniter(cron_expression, local_now - timedelta(seconds=1))
+            prev = iterator.get_prev(datetime).astimezone(UTC)
+            nxt = iterator.get_next(datetime).astimezone(UTC)
+            return max(int((nxt - prev).total_seconds()), 1)
+        return None
+    except Exception:
+        return None
+
+
+_missed_fire_cooldowns: dict[str, float] = {}
+
+
+def _missed_fire_cooldown_ok(org_id: str, trigger_id: Any) -> bool:
+    key = f"{org_id}:{trigger_id}"
+    last = _missed_fire_cooldowns.get(key)
+    return last is None or (time.monotonic() - last) >= _MISSED_FIRE_COOLDOWN_SECONDS
+
+
+def _mark_missed_fire_cooldown(org_id: str, trigger_id: Any) -> None:
+    _missed_fire_cooldowns[f"{org_id}:{trigger_id}"] = time.monotonic()
+
+
+async def check_missed_fire_alerts(
+    aengine: Any,
+    *,
+    grace_seconds: int = SAQ_MISSED_FIRE_GRACE_SECONDS,
+    org_id: uuid.UUID | None = None,
+) -> int:
+    """Missed-fire probe (plan F1 probe 6) — alert for silent low-cadence triggers.
+
+    For every active cron/polling trigger whose cadence is >= 1h, alert when
+    ``last_fired_at`` is NULL or older than ``cadence + grace_seconds``. Emits
+    one error_event (source='saq') per affected trigger, throttled by an
+    in-memory cooldown so a dead trigger alerts once per 6h window instead of
+    every cron tick. Runs per-org under RLS; pass ``org_id`` to probe a single
+    org (system context) or None to scan all orgs.
+
+    Returns the number of alerts emitted.
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.organisation import Organisation
+    from modulo.db.models.trigger import Trigger
+
+    emitted = 0
+    now = datetime.now(UTC)
+    try:
+        async with aengine.connect() as c:
+            if org_id is not None:
+                org_ids: list[uuid.UUID] = [org_id]
+            else:
+                result = await c.execute(select(Organisation.id))
+                org_ids = [row[0] for row in result.all()]
+        if not org_ids:
+            return 0
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from modulo.db.rls import set_rls_org
+
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        for oid in org_ids:
+            oid_uuid = uuid.UUID(str(oid))
+            async with factory() as session, session.begin():
+                await set_rls_org(session, oid_uuid)
+                result = await session.execute(
+                    select(
+                        Trigger.id,
+                        Trigger.trigger_type,
+                        Trigger.cron_expression,
+                        Trigger.cron_timezone,
+                        Trigger.config_json,
+                        Trigger.last_fired_at,
+                        Trigger.created_at,
+                    ).where(
+                        Trigger.organisation_id == oid_uuid,
+                        Trigger.active.is_(True),
+                        Trigger.deleted_at.is_(None),
+                        Trigger.trigger_type.in_(("cron", "polling")),
+                    )
+                )
+                rows = result.all()
+            for row in rows:
+                period = _trigger_period_seconds(
+                    row.trigger_type,
+                    row.cron_expression,
+                    row.cron_timezone,
+                    row.config_json,
+                    now,
+                )
+                if period is None or period < SAQ_MISSED_FIRE_MIN_PERIOD_SECONDS:
+                    continue
+                if row.last_fired_at is not None and row.last_fired_at >= now - timedelta(
+                    seconds=period + grace_seconds
+                ):
+                    continue
+                if row.last_fired_at is None and (
+                    row.created_at is None or row.created_at >= now - timedelta(seconds=period + grace_seconds)
+                ):
+                    # A brand-new trigger that has not yet had its first scheduled
+                    # fire is not "missed" — only probe it once it is old enough.
+                    continue
+                if not _missed_fire_cooldown_ok(str(oid_uuid), row.id):
+                    continue
+                _mark_missed_fire_cooldown(str(oid_uuid), row.id)
+                message = f"Trigger {row.id} ({row.trigger_type}) has not fired for >= {period}s"
+                fingerprint = ErrorIngestionService.fingerprint(message=message, source="saq")
+                async with factory() as session, session.begin():
+                    await set_rls_org(session, oid_uuid)
+                    await create_error_event(
+                        session,
+                        org_id=oid_uuid,
+                        fingerprint=fingerprint,
+                        level="error",
+                        message=message,
+                        source="saq",
+                        context_json={
+                            "trigger_id": str(row.id),
+                            "trigger_type": row.trigger_type,
+                            "period_seconds": period,
+                        },
+                        environment=os.environ.get("MODULO_ENV", "development"),
+                    )
+                emitted += 1
+        return emitted
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("error_tracking.missed_fire_check_failed")
+        return 0

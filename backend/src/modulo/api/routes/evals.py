@@ -770,7 +770,6 @@ async def compare_evals(
             ) from None
 
     results_by_eval_a: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_a}
-
     results_by_eval_b: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_b}
 
     compared: list[dict[str, Any]] = []

@@ -72,7 +72,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_job_heartbeat": 300,
         "run_heartbeat_seconds": 30,
         "saq_worker_db_pool_size": 2,
-        "saq_redis_pool_size": 20,
+        "saq_redis_pool_size": 50,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -139,8 +139,15 @@ class TestClaimRunAsync:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         engine = _AsyncEngine()
-        assert await pe.claim_run_async(engine, "run-1", "org-1") is True  # type: ignore[arg-type]
+        with patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()) as storm:
+            claim_token = await pe.claim_run_async(engine, "run-1", "org-1")  # type: ignore[arg-type]
+        assert claim_token is not None
         assert calls[0]["params"]["stale_seconds"] == 450  # type: ignore[index]
+        # Every claim rotates to a fresh per-claim token (plan F3a), returned to
+        # the caller so it can fence completion/heartbeat against successors.
+        assert "claim_token=:tok" in calls[0]["stmt"]  # type: ignore[index]
+        assert calls[0]["params"]["tok"] == claim_token  # type: ignore[index]
+        storm.assert_awaited_once()
 
     async def test_async_claim_false_when_no_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
@@ -162,7 +169,7 @@ class TestClaimRunAsync:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         engine = _AsyncEngine()
-        assert await pe.claim_run_async(engine, "run-1", "org-1") is False  # type: ignore[arg-type]
+        assert await pe.claim_run_async(engine, "run-1", "org-1") is None  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +198,7 @@ class TestMarkComplete:
             patch.object(pe, "get_run", AsyncMock(return_value=run)),
             patch.object(pe, "async_sessionmaker") as mock_factory,
             patch.object(pe, "set_rls_org", AsyncMock()),
+            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -212,6 +220,7 @@ class TestMarkComplete:
             patch.object(pe, "get_run", AsyncMock(return_value=run)),
             patch.object(pe, "async_sessionmaker") as mock_factory,
             patch.object(pe, "set_rls_org", AsyncMock()),
+            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -234,6 +243,7 @@ class TestMarkComplete:
             patch.object(pe, "get_run", AsyncMock(return_value=None)) as mock_get_run,
             patch.object(pe, "async_sessionmaker") as mock_factory,
             patch.object(pe, "set_rls_org", AsyncMock()) as mock_set_rls,
+            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -316,6 +326,7 @@ class TestHeartbeat:
     async def test_heartbeat_loop_uses_configured_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
         heartbeat_mock = AsyncMock()
         monkeypatch.setattr(pe, "heartbeat_once", heartbeat_mock)
+        monkeypatch.setattr(pe, "_read_current_claim_token", AsyncMock(return_value="tok-a"))
         monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock(side_effect=[None, KeyboardInterrupt()]))
         engine = MagicMock()
 
@@ -324,6 +335,8 @@ class TestHeartbeat:
 
         assert pe.asyncio.sleep.await_count == 2
         assert pe.asyncio.sleep.await_args.args[0] == 45  # type: ignore[union-attr]
+        # Every heartbeat is fenced with the executor's claim token (plan F3a).
+        heartbeat_mock.assert_awaited_with(engine, "run-1", "org-1", job=None, claim_token="tok-a")
 
 
 # ---------------------------------------------------------------------------
@@ -332,14 +345,76 @@ class TestHeartbeat:
 
 
 class TestStaleRunRecoverySweep:
+    """The sweep is now scoped PER-ORG via set_config('app.organisation_id')
+    (the RLS no-op fix, spec §9.4) — the org enumeration runs first in system
+    context, then the four UPDATE branches run once per org."""
+
+    org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
+
+    def _result(self, rows: list[Any] | None = None, rowcount: int = 0) -> Any:
+        r = MagicMock()
+        r.rowcount = rowcount
+        r.all = MagicMock(return_value=rows or [])
+        return r
+
+    def _engine(self, statements: list[str] | None = None, params: list[dict[str, object]] | None = None) -> Any:
+        statements = statements if statements is not None else []
+        params = params if params is not None else []
+
+        class _AsyncResult:
+            def __init__(self, rows: list[Any] | None = None, rowcount: int = 0) -> None:
+                self.rowcount = rowcount
+                self._rows = rows or []
+
+            def all(self) -> list[Any]:
+                return self._rows
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, bind: dict[str, object] | None = None) -> _AsyncResult:
+                statements.append(str(stmt))
+                params.append(bind or {})
+                if "SELECT id FROM organisations" in str(stmt):
+                    return _AsyncResult(rows=[self._org_row()])
+                if "RETURNING id, organisation_id" in str(stmt):
+                    return _AsyncResult(rowcount=1, rows=[self._stranded_row()])
+                return _AsyncResult(rowcount=self._rowcount)
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        return _AsyncEngine()
+
+    def _org_row(self) -> tuple[uuid.UUID]:
+        return self.org_row
+
+    def _stranded_row(self) -> Any:
+        row = MagicMock()
+        row.id = uuid.uuid4()
+        row.organisation_id = uuid.uuid4()
+        return row
+
     async def test_uses_legacy_300_600_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         statements: list[str] = []
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncResult:
             rowcount = 0
 
+            def __init__(self, is_org: bool = False) -> None:
+                self._is_org = is_org
+
             def all(self) -> list[Any]:
-                return []
+                return [org_row] if self._is_org else []
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -353,7 +428,7 @@ class TestStaleRunRecoverySweep:
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
                 statements.append(str(stmt))
-                return _AsyncResult()
+                return _AsyncResult(is_org="SELECT id FROM organisations" in str(stmt))
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -367,25 +442,20 @@ class TestStaleRunRecoverySweep:
         assert result["worker_lost_swept"] == 0
         assert result["capacity_timeout_swept"] == 0
         assert result["stranded_capacity_redispatched"] == 0
-        assert len(statements) == 4
-        never_sql = statements[0]
-        stranded_sql = statements[1]
-        capacity_sql = statements[2]
-        lost_sql = statements[3]
-        assert "never_dispatched" in never_sql
-        assert "RETURNING id, organisation_id" in stranded_sql
-        assert "org_capacity_limited" in stranded_sql
-        assert "pipeline_capacity" in stranded_sql
-        assert "capacity_timeout" in capacity_sql
-        assert "worker_lost" in lost_sql
-        assert ":nd_window" in never_sql
-        assert ":redispatch_ttl" in stranded_sql
-        assert ":fail_ttl" in stranded_sql
-        assert ":ttl" in capacity_sql
-        assert ":wl_window" in lost_sql
-        # never_dispatched must not kill reason-marked capacity-blocked runs.
-        assert "org_capacity_limited" in never_sql
-        assert "pipeline_capacity" in never_sql
+        # Per-org: org enumeration + set_config + the four UPDATE branches.
+        assert len(statements) == 6
+        joined = " ".join(statements)
+        assert "never_dispatched" in joined
+        assert "RETURNING id, organisation_id" in joined
+        assert "org_capacity_limited" in joined
+        assert "pipeline_capacity" in joined
+        assert "capacity_timeout" in joined
+        assert "worker_lost" in joined
+        assert ":nd_window" in joined
+        assert ":redispatch_ttl" in joined
+        assert ":fail_ttl" in joined
+        assert ":ttl" in joined
+        assert ":wl_window" in joined
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
@@ -394,7 +464,10 @@ class TestStaleRunRecoverySweep:
             rowcount = 1
 
             def all(self) -> list[Any]:
-                return []
+                return self._rows if self._is_org else []
+
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
+        _rows: list[Any] = []
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -408,7 +481,14 @@ class TestStaleRunRecoverySweep:
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
                 params_seen.append(params or {})
-                return _AsyncResult()
+                r = _AsyncResult()
+                if "SELECT id FROM organisations" in str(stmt):
+                    r._is_org = True
+                    r._rows = [org_row]
+                else:
+                    r._is_org = False
+                    r._rows = []
+                return r
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -423,11 +503,13 @@ class TestStaleRunRecoverySweep:
         assert result["never_dispatched_swept"] == 1
         assert result["worker_lost_swept"] == 1
         assert result["capacity_timeout_swept"] == 1
-        assert params_seen[0]["nd_window"] == 300
-        assert params_seen[1]["redispatch_ttl"] == pe._STRANDED_REDISPATCH_TTL_MINUTES
-        assert params_seen[1]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
-        assert params_seen[2]["ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
-        assert params_seen[3]["wl_window"] == 900
+        # params: [0]=enumeration, [1]=set_config, [2]=nd_window, [3]=redispatch,
+        # [4]=capacity, [5]=wl.
+        assert params_seen[2]["nd_window"] == 300
+        assert params_seen[3]["redispatch_ttl"] == pe._STRANDED_REDISPATCH_TTL_MINUTES
+        assert params_seen[3]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[4]["ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[5]["wl_window"] == 900
 
     async def test_stranded_capacity_blocked_run_is_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A stale-heartbeat capacity-marked pending run is re-dispatched, not failed."""
@@ -458,6 +540,8 @@ class TestStaleRunRecoverySweep:
                 return self
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                if "SELECT id FROM organisations" in str(stmt):
+                    return _AsyncResult(rows=[self.org_row])
                 if "RETURNING id, organisation_id" in str(stmt):
                     return _AsyncResult(rowcount=1, rows=[_Row()])
                 return _AsyncResult()
@@ -466,6 +550,7 @@ class TestStaleRunRecoverySweep:
             def connect(self) -> _AsyncConn:
                 return _AsyncConn()
 
+        _AsyncConn.org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with patch.object(pe, "_re_dispatch_capacity_blocked", new=redispatch_mock):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
@@ -485,7 +570,9 @@ class TestStaleRunRecoverySweep:
             rowcount = 0
 
             def all(self) -> list[Any]:
-                return []
+                return [org_row] if self._is_org else []
+
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -498,7 +585,9 @@ class TestStaleRunRecoverySweep:
                 return self
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
-                return _AsyncResult()
+                r = _AsyncResult()
+                r._is_org = "SELECT id FROM organisations" in str(stmt)
+                return r
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -520,7 +609,9 @@ class TestStaleRunRecoverySweep:
             rowcount = 0
 
             def all(self) -> list[Any]:
-                return []
+                return [org_row] if self._is_org else []
+
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -534,7 +625,9 @@ class TestStaleRunRecoverySweep:
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
                 params_seen.append(params or {})
-                return _AsyncResult()
+                r = _AsyncResult()
+                r._is_org = "SELECT id FROM organisations" in str(stmt)
+                return r
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -548,7 +641,7 @@ class TestStaleRunRecoverySweep:
         assert result["capacity_timeout_swept"] == 0
         # The stranded branch bounds its window with the same fail_ttl as the
         # capacity_timeout branch so the two never overlap.
-        assert params_seen[1]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[3]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
         redispatch_mock.assert_not_awaited()
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -605,6 +698,7 @@ _SAQ_SETTINGS_ENV = (
     "SAQ_WORKER_LOST_WINDOW",
     "SAQ_WORKER_DB_POOL_SIZE",
     "SAQ_REDIS_POOL_SIZE",
+    "SAQ_WORKER_CONCURRENCY",
 )
 
 
@@ -635,14 +729,17 @@ class TestSaqSettingsDefaults:
         assert s.saq_never_dispatched_window == 300
         assert s.saq_worker_lost_window == 600
         assert s.saq_worker_db_pool_size == 10
-        assert s.saq_redis_pool_size == 20
+        assert s.saq_redis_pool_size == 50
+        assert s.saq_worker_concurrency == 5
 
     def test_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RUN_CLAIM_STALE_SECONDS", "500")
         monkeypatch.setenv("SAQ_REDIS_POOL_SIZE", "8")
+        monkeypatch.setenv("SAQ_WORKER_CONCURRENCY", "8")
         s = self._settings(monkeypatch)
         assert s.run_claim_stale_seconds == 500
         assert s.saq_redis_pool_size == 8
+        assert s.saq_worker_concurrency == 8
 
     def test_test_pause_refused_outside_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import ValidationError
@@ -782,7 +879,8 @@ def _saq_settings(**overrides: object) -> MagicMock:
         "redis_url": "redis://localhost:6379/0",
         "saq_auth_password": "hunter2",
         "saq_auth_username": "modulo-saq",
-        "saq_redis_pool_size": 20,
+        "saq_redis_pool_size": 50,
+        "saq_worker_concurrency": 5,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -795,7 +893,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.runs_settings()
         assert settings["queue"].name == "runs"
-        assert settings["concurrency"] == 20
+        assert settings["concurrency"] == 5
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
@@ -807,13 +905,13 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.system_settings()
         assert settings["queue"].name == "system"
-        assert settings["concurrency"] == 20
+        assert settings["concurrency"] == 5
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
         assert settings["timers"] == {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
         # PR B-2: system crons wired (fire_due_triggers, reconcile, claim-expiry,
-        # retention, webhook-dedup, stale recovery).
+        # retention, webhook-dedup, stale recovery) + the cost probe (PR A2).
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "fire_due_triggers",
@@ -822,6 +920,7 @@ class TestSaqWorkerSettings:
             "retention_cleanup",
             "webhook_dedup_cleanup",
             "stale_run_recovery",
+            "cost_probe",
         }
         assert settings["after_process"] is not None
 
@@ -859,4 +958,4 @@ class TestSaqWorkerSettings:
         sw.runs_settings()
         assert captured["socket_connect_timeout"] == 10
         assert captured["socket_keepalive"] is True
-        assert captured["max_connections"] == 20
+        assert captured["max_connections"] == 50

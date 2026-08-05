@@ -85,10 +85,16 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
         case "linear":
             return LinearConnector(api_key=creds["api_key"])
         case "jira":
-            instance = config.get("instance", config.get("base_url", ""))
-            if not instance:
-                raise ValueError("JiraConnector requires 'instance' in config_json")
-            return JiraConnector(instance=instance, creds=creds)
+            instance = config.get("instance", "")
+            base_url = config.get("base_url")
+            if not instance and not base_url:
+                raise ValueError("JiraConnector requires 'instance' or 'base_url' in config_json")
+            return JiraConnector(
+                instance=instance,
+                creds=creds,
+                base_url=base_url,
+                api_version=config.get("api_version", 3),
+            )
         case "slack":
             return SlackConnector(bot_token=creds["bot_token"])
         case _:
@@ -444,7 +450,9 @@ async def _daily_spend_limit_reached(
     limit = trigger.daily_spend_limit
     if limit is None:
         return None
-    today_start = datetime.datetime.now(datetime.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    from modulo.core.cost_controller import created_at_day_start
+
+    today_start = created_at_day_start()
     cost_result = await session.execute(
         select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
             Run.trigger_id == trigger.id,

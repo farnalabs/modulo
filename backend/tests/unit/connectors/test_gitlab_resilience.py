@@ -9,6 +9,9 @@ from modulo.connectors.gitlab import GitLabConnector
 
 TOKEN = "glpat_test_token"
 _API = "https://gitlab.com/api/v4"
+_TOKEN_INFO = "https://gitlab.com/oauth/token/info"
+_SELF_TOKEN_INFO = "https://gitlab.example.com/oauth/token/info"
+_FULL_SCOPES = {"scope": ["read_api", "write_repository", "api"]}
 
 
 @pytest.fixture()
@@ -174,6 +177,7 @@ async def test_health_check_uses_single_client_session(connector):
     """Health check should use one client for both /user and /projects calls."""
     respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "myuser"
@@ -293,6 +297,7 @@ async def test_health_check_ok_with_rate_limit_headers(connector):
             headers={"RateLimit-Limit": "600", "RateLimit-Remaining": "599"},
         )
     )
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await connector.health_check()
     assert result.ok is True
 
@@ -302,6 +307,7 @@ async def test_health_check_no_rate_limit_headers_ok(connector):
     """No RateLimit-* headers (unrestricted api scope) should pass health."""
     respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await connector.health_check()
     assert result.ok is True
 
@@ -403,6 +409,7 @@ async def test_self_hosted_health_check_reports_version(connector):
     respx.get("https://gitlab.example.com/api/v4/version").mock(
         return_value=httpx.Response(200, json={"version": "16.9.2-ee", "revision": "deadbeef"})
     )
+    respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
     assert result.detail == "myuser (GitLab 16.9.2-ee)"
@@ -419,6 +426,7 @@ async def test_self_hosted_health_check_version_probe_failure_non_fatal(connecto
     respx.get("https://gitlab.example.com/api/v4/version").mock(
         return_value=httpx.Response(403, json={"error": "forbidden"})
     )
+    respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
     assert result.detail == "myuser"
@@ -435,6 +443,7 @@ async def test_self_hosted_health_check_version_probe_non_object_body_non_fatal(
     respx.get("https://gitlab.example.com/api/v4/version").mock(
         return_value=httpx.Response(200, json=["unexpected", "array"])
     )
+    respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
     assert result.detail == "myuser"
@@ -449,6 +458,7 @@ async def test_self_hosted_health_check_version_probe_network_error_non_fatal(co
     )
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
     respx.get("https://gitlab.example.com/api/v4/version").mock(side_effect=httpx.ConnectError("Connection refused"))
+    respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
     assert result.detail == "myuser"
@@ -459,6 +469,7 @@ async def test_hosted_health_check_does_not_probe_version(connector):
     """The hosted gitlab.com endpoint is not probed for /version."""
     respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "myuser"
@@ -478,3 +489,46 @@ def test_validate_path_helpers():
         raise AssertionError(f"path {bad!r} was not rejected")
     with pytest.raises(ValueError):
         _validate_path("", "file")
+
+
+@respx.mock
+async def test_health_check_token_info_deprecated_scopes_alias(connector):
+    """The deprecated plural ``scopes`` field is honoured as an alias for ``scope``."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scopes": ["read_api"]}))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "write_repository" in result.detail
+
+
+@respx.mock
+async def test_health_check_token_info_string_scopes(connector):
+    """Some self-hosted deployments return the scope as a space-separated string."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": "api read_api"}))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+def test_instance_root_derivation():
+    """_instance_root strips a versioned API path and keeps reverse-proxy mounts."""
+    from modulo.connectors.gitlab import _instance_root
+
+    assert _instance_root("https://gitlab.com/api/v4") == "https://gitlab.com"
+    assert _instance_root("https://gitlab.com/api/v4/") == "https://gitlab.com"
+    assert _instance_root("https://gitlab.example.com/api/v3") == "https://gitlab.example.com"
+    assert _instance_root("https://gitlab.example.com/gitlab/api/v4") == "https://gitlab.example.com/gitlab"
+    assert _instance_root("https://gitlab.example.com") == "https://gitlab.example.com"
+
+
+def test_effective_scopes_api_superset():
+    """api scope expands to cover read_api and write_repository."""
+    from modulo.connectors.gitlab import REQUIRED_SCOPES, _effective_scopes
+
+    assert REQUIRED_SCOPES - _effective_scopes(frozenset({"api"})) == frozenset()
+    assert REQUIRED_SCOPES - _effective_scopes(frozenset({"read_api"})) == frozenset({"api", "write_repository"})
+    assert REQUIRED_SCOPES - _effective_scopes(frozenset({"read_api", "write_repository"})) == frozenset({"api"})
+    assert REQUIRED_SCOPES - _effective_scopes(frozenset({"read_api", "api"})) == frozenset()

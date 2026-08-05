@@ -272,8 +272,9 @@ def build_telemetry(
             )
         telemetry.node_count += 1
 
-    # missing_report_keys — enabled report_keys present in ZERO eligible node
-    # outputs (absent when no eligible sandbox nodes).
+    # missing_report_keys — enabled report_keys not present in any reported node
+    # output. Populated regardless of eligible sandbox node count; the eligible-
+    # node gate is applied at breakdown render (see aggregate.py).
     reported_keys = set(telemetry.reported)
     for rk in consuming:
         if rk not in reported_keys:

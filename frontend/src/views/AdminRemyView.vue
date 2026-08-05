@@ -320,6 +320,7 @@
             <textarea
               v-model="systemPrompt"
               rows="8"
+              :aria-label="$t('views.AdminRemyView.system_prompt')"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
               :placeholder="$t('views.AdminRemyView.you_are_a_helpful_ai_assistant')"
               data-testid="remy-system-prompt"
@@ -355,6 +356,7 @@
             <textarea
               v-model="guidance"
               rows="5"
+              :aria-label="$t('views.AdminRemyView.additional_guidance')"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
               :placeholder="$t('views.AdminRemyView.additional_instructions')"
               data-testid="remy-guidance"

@@ -87,6 +87,7 @@ def _make_run(
     total_cost_usd: Decimal | None = None,
     total_tokens: int | None = None,
     node_token_usage: dict[str, Any] | None = None,
+    cost_breakdown: list[dict[str, Any]] | None = None,
 ) -> MagicMock:
     r = MagicMock()
     r.id = _RUN_ID
@@ -100,6 +101,7 @@ def _make_run(
     r.total_cost_usd = total_cost_usd
     r.total_tokens = total_tokens
     r.node_token_usage = node_token_usage
+    r.cost_breakdown = cost_breakdown
     return r
 
 
