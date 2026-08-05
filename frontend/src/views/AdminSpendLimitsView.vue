@@ -2,6 +2,7 @@
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
+    { label: 'Cost Components', to: '/admin/costs/components' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
@@ -140,8 +141,32 @@ interface SpendLimitData {
 }
 
 interface CostReportData {
-  org_total_usd: number
-  teams: Array<{ team_id: string; team_name: string; cost_usd: number; limit_usd: number | null }>
+  period: string
+  group_by: string
+  items: Array<{
+    entity_id: string
+    entity_name: string
+    total_spend_usd: number
+    total_runs: number
+    components: Array<{ name: string; amount_usd: string }>
+  }>
+  org_unassigned_components?: string | null
+  legacy_total?: string | null
+  org_total?: string | null
+  has_more?: boolean
+}
+
+interface TeamCostItem {
+  team_id: string
+  team_name: string
+  cost_usd: number
+  limit_usd: number | null
+}
+
+function parseDecimalString(value: string | null | undefined): number | null {
+  if (value == null) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
 }
 
 interface TeamRow {
@@ -175,11 +200,22 @@ watch(() => limitsData.value, (data) => {
 
 const { data: costsResp, loading: costsLoading, error: costsError } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/costs'),
-  { initialValue: { org_total_usd: 0, teams: [] } }
+  { initialValue: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0' } }
 )
 
-const orgTotalCost = computed(() => (costsResp.value as CostReportData)?.org_total_usd ?? 0)
-const teamCosts = computed(() => (costsResp.value as CostReportData)?.teams ?? [])
+const orgTotalCost = computed(() => {
+  const resp = costsResp.value as CostReportData | null
+  return parseDecimalString(resp?.org_total) ?? 0
+})
+const teamCosts = computed<TeamCostItem[]>(() => {
+  const resp = costsResp.value as CostReportData | null
+  return (resp?.items ?? []).map((item) => ({
+    team_id: item.entity_id,
+    team_name: item.entity_name,
+    cost_usd: item.total_spend_usd,
+    limit_usd: null,
+  }))
+})
 
 const savingOrg = ref(false)
 const orgSaveError = ref<string | null>(null)

@@ -2,6 +2,7 @@
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
+    { label: 'Cost Components', to: '/admin/costs/components' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
@@ -241,16 +242,39 @@ import PageTabs from "../components/PageTabs.vue"
 
 const planStore = usePlanStore()
 
-interface TeamCostItem {
-  team_id: string
-  team_name: string
-  cost_usd: number
-  limit_usd: number | null
+interface CostReportComponent {
+  name: string
+  amount_usd: string
+}
+
+interface CostReportAnnotations {
+  refused_total_usd?: number | null
+  clamped_total_usd?: number | null
+}
+
+interface CostReportRow {
+  entity_id: string
+  entity_name: string
+  total_spend_usd: number
+  total_runs: number
+  components: CostReportComponent[]
+  annotations: CostReportAnnotations | null
 }
 
 interface CostReportData {
-  org_total_usd: number
-  teams: TeamCostItem[]
+  period: string
+  group_by: string
+  items: CostReportRow[]
+  org_unassigned_components?: string | null
+  legacy_total?: string | null
+  org_total?: string | null
+  has_more?: boolean
+}
+
+function parseDecimalString(value: string | null | undefined): number | null {
+  if (value == null) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
 }
 
 interface TeamLimitData {
@@ -282,7 +306,7 @@ interface TeamBudgetRow {
 
 const { data: costsData, loading: costsLoading, error: costsError, load: loadCosts } = useDataFetch(
   () => (api as any).GET('/api/v1/admin/costs'),
-  { initialValue: { org_total_usd: 0, teams: [] } }
+  { initialValue: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0' } }
 )
 
 const totalSpend = ref(0)
@@ -291,10 +315,10 @@ const teamCostMap = ref<Record<string, number>>({})
 watch(() => costsData.value, (data) => {
   if (data) {
     const resp = data as CostReportData
-    totalSpend.value = resp.org_total_usd ?? 0
+    totalSpend.value = parseDecimalString(resp.org_total) ?? 0
     const map: Record<string, number> = {}
-    for (const tc of resp.teams ?? []) {
-      map[tc.team_id] = tc.cost_usd
+    for (const item of resp.items ?? []) {
+      map[item.entity_id] = item.total_spend_usd
     }
     teamCostMap.value = map
   }

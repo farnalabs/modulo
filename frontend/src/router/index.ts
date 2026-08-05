@@ -87,6 +87,7 @@ const AdminUsersView = () => import('../views/AdminUsersView.vue')
 const AdminSpendLimitsView = () => import('../views/AdminSpendLimitsView.vue')
 const AdminCostBreakdownView = () => import('../views/AdminCostBreakdownView.vue')
 const AdminCostControlsView = () => import('../views/AdminCostControlsView.vue')
+const CostComponentsView = () => import('../views/CostComponentsView.vue')
 const AdminConnectorsView = () => import('../views/AdminConnectorsView.vue')
 const AdminNodeCategoriesView = () => import('../views/AdminNodeCategoriesView.vue')
 const AdminViewsView = () => import('../views/AdminViewsView.vue')
@@ -321,6 +322,11 @@ const router = createRouter({
       path: '/admin/costs/controls',
       name: 'admin-costs-controls',
       component: AdminCostControlsView,
+    },
+    {
+      path: '/admin/costs/components',
+      name: 'admin-costs-components',
+      component: CostComponentsView,
     },
     {
       path: '/admin/audit',

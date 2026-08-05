@@ -187,8 +187,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     if log_content_r.status_code == 200:
                         content = log_content_r.text
                         if content:
-                            for line in content.splitlines():
-                                all_lines.append(f"  {line}")
+                            all_lines.extend(f"  {line}" for line in content.splitlines())
                 all_lines.append("")
 
             return CIRunLog(

@@ -31,6 +31,7 @@ def _make_mock_run(
     error_code: str | None = None,
     node_token_usage: dict | None = None,
     outputs_json: dict | None = None,
+    cost_breakdown: list | None = None,
 ) -> MagicMock:
     run = MagicMock()
     run.id = uuid.uuid4()
@@ -43,6 +44,7 @@ def _make_mock_run(
     run.error_code = error_code
     run.node_token_usage = node_token_usage
     run.outputs_json = outputs_json
+    run.cost_breakdown = cost_breakdown
     return run
 
 
@@ -184,8 +186,8 @@ class TestGetRunStatus(_AuthContext):
         run = _make_mock_run(
             status="running",
             node_token_usage={
-                "node_a": {"tokens_in": 10, "tokens_out": 5},
-                "node_c": {"tokens_in": 2, "tokens_out": 5},
+                "node_a": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "cost_usd": 0.02},
+                "node_c": {"input_tokens": 2, "output_tokens": 5, "total_tokens": 7, "cost_usd": 0.0},
             },
             outputs_json={"node_a": {"result": "ok"}, "node_b": {"result": "nope"}},
         )
@@ -196,9 +198,33 @@ class TestGetRunStatus(_AuthContext):
         result = await get_run_status(run_id=str(run.id), detail=True)
 
         assert result["nodes"] == [
-            {"node_id": "node_a", "status": "completed", "tokens": 15, "has_output": True},
-            {"node_id": "node_b", "status": "completed", "tokens": 0, "has_output": True},
-            {"node_id": "node_c", "status": "processed", "tokens": 7, "has_output": False},
+            {
+                "node_id": "node_a",
+                "status": "completed",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "cost_usd": 0.02,
+                "has_output": True,
+            },
+            {
+                "node_id": "node_b",
+                "status": "completed",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0,
+                "has_output": True,
+            },
+            {
+                "node_id": "node_c",
+                "status": "processed",
+                "input_tokens": 2,
+                "output_tokens": 5,
+                "total_tokens": 7,
+                "cost_usd": 0.0,
+                "has_output": False,
+            },
         ]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -316,10 +342,12 @@ class TestCancelRun(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.db.crud.run.get_run")
     @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server.finalize_cancelled_run")
     @patch("modulo.api.mcp_server._session")
     async def test_run_not_found_when_request_cancellation_returns_none(
         self,
         mock_session: AsyncMock,
+        mock_finalize_cancelled: AsyncMock,
         mock_request_cancellation: AsyncMock,
         mock_get_run: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -338,10 +366,12 @@ class TestCancelRun(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.db.crud.run.get_run")
     @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server.finalize_cancelled_run")
     @patch("modulo.api.mcp_server._session")
     async def test_success_requests_cancellation(
         self,
         mock_session: AsyncMock,
+        mock_finalize_cancelled: AsyncMock,
         mock_request_cancellation: AsyncMock,
         mock_get_run: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -356,6 +386,8 @@ class TestCancelRun(_AuthContext):
 
         assert result == {"run_id": str(run.id), "cancellation_requested": True}
         mock_request_cancellation.assert_awaited_once()
+        # A STREAMED (non-paused) run is routed through finalize_cost.
+        mock_finalize_cancelled.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.db.crud.run.get_run")

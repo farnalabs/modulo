@@ -330,85 +330,98 @@ async def stale_run_recovery_sweep(
     wl_window = worker_lost_window if worker_lost_window is not None else settings.saq_worker_lost_window
     stranded_rows: list[Any] = []
     try:
+        # Collect all org ids FIRST in system context (organisations is the
+        # root table — the app role owns it, owner bypasses RLS). The sweep's
+        # run queries are then scoped PER-ORG via set_config('app.organisation_id')
+        # so they are visible under RLS — the pre-existing sweep never called
+        # set_rls_org, so under RLS it matched ZERO rows and never recovered
+        # anything (Side Effects minor 14, spec §9.4).
         async with async_engine.connect() as conn, conn.begin():
-            never_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
-                    "WHERE status = 'pending' "
-                    "AND created_at < now() - (:nd_window * interval '1 second') "
-                    "AND dispatched_at IS NULL "
-                    "AND cancellation_requested = false "
-                    "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
-                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
-                ),
-                {"nd_window": nd_window},
-            )
-            never_count = never_result.rowcount
+            org_result = await conn.execute(text("SELECT id FROM organisations"))
+            org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
 
-            # Re-dispatch stranded capacity-blocked runs. Runs demoted to
-            # ``pending`` with a capacity marker are normally retried by the
-            # in-process ``PipelineExecutor._retry_pending`` loop, which
-            # refreshes ``heartbeat_at`` per attempt. A stale heartbeat is the
-            # fence that proves that loop is GONE (worker died): only then is
-            # the run re-dispatched so it re-enters claim -> execute ->
-            # _check_capacity. Runs already past the capacity_timeout TTL are
-            # excluded — they fail below, they are not resurrected forever. The
-            # heartbeat stamp both fences against a live loop and backs off the
-            # sweep when the re-dispatch defers (capacity still full) instead of
-            # hot-looping every cron tick.
-            stranded_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET heartbeat_at = now() "
-                    "WHERE status = 'pending' "
-                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
-                    "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
-                    "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
-                    "AND cancellation_requested = false "
-                    "RETURNING id, organisation_id"
-                ),
-                {
-                    "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
-                    "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
-                },
-            )
-            stranded_rows = list(stranded_result.all())
-            stranded_count = len(stranded_rows)
+        if not org_ids:
+            return {
+                "never_dispatched_swept": 0,
+                "worker_lost_swept": 0,
+                "capacity_timeout_swept": 0,
+                "stranded_capacity_redispatched": 0,
+                "redispatch_outcomes": {},
+            }
 
-            # Durable backstop for capacity-blocked runs. The in-process retry
-            # accelerator (PipelineExecutor._retry_pending) handles normal slot
-            # pickup; this branch terminal-fails reason-marked pending runs that
-            # outlived the TTL (e.g. stranded by a worker restart). Anchored on
-            # created_at — the re-dispatch cycle rewrites updated_at/last marker.
-            capacity_timeout_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
-                    "WHERE status = 'pending' "
-                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
-                    "AND created_at < now() - (:ttl * interval '1 minute') "
-                    "AND cancellation_requested = false"
-                ),
-                {"ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
-            )
-            capacity_timeout_count = capacity_timeout_result.rowcount
+        never_count = 0
+        lost_count = 0
+        capacity_timeout_count = 0
+        stranded_count = 0
+        for org_id in org_ids:
+            async with async_engine.connect() as conn, conn.begin():
+                await conn.execute(
+                    text("SELECT set_config('app.organisation_id', :val, true)"),
+                    {"val": str(org_id)},
+                )
+                never_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
+                        "WHERE status = 'pending' "
+                        "AND created_at < now() - (:nd_window * interval '1 second') "
+                        "AND dispatched_at IS NULL "
+                        "AND cancellation_requested = false "
+                        "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
+                        "AND (dispatcher IS NULL OR dispatcher != 'saq')"
+                    ),
+                    {"nd_window": nd_window},
+                )
+                never_count += never_result.rowcount or 0
 
-            lost_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
-                    "WHERE status = 'running' "
-                    "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
-                    "AND claim_count >= 5 "
-                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
-                ),
-                {"wl_window": wl_window},
-            )
-            lost_count = lost_result.rowcount
+                stranded_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET heartbeat_at = now() "
+                        "WHERE status = 'pending' "
+                        "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                        "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
+                        "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
+                        "AND cancellation_requested = false "
+                        "RETURNING id, organisation_id"
+                    ),
+                    {
+                        "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
+                        "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
+                    },
+                )
+                org_stranded_rows = list(stranded_result.all())
+                stranded_count += len(org_stranded_rows)
+                stranded_rows.extend(org_stranded_rows)
 
-        # Re-dispatch AFTER the sweep transaction commits so dispatch_run's own
-        # sessions (and the row lock the UPDATE held) never overlap a live
+                capacity_timeout_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
+                        "WHERE status = 'pending' "
+                        "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                        "AND created_at < now() - (:ttl * interval '1 minute') "
+                        "AND cancellation_requested = false"
+                    ),
+                    {"ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
+                )
+                capacity_timeout_count += capacity_timeout_result.rowcount or 0
+
+                lost_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
+                        "WHERE status = 'running' "
+                        "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
+                        "AND claim_count >= 5 "
+                        "AND (dispatcher IS NULL OR dispatcher != 'saq')"
+                    ),
+                    {"wl_window": wl_window},
+                )
+                lost_count += lost_result.rowcount or 0
+
+        # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
+        # own sessions (and the row lock the UPDATE held) never overlap a live
         # transaction.
         redispatch_outcomes: dict[str, int] = {}
         for row in stranded_rows:
