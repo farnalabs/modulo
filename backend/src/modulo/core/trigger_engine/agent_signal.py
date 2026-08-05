@@ -7,9 +7,9 @@ run is fired with the completed node's output as input. Fire logic lives in
 Trigger config_json structure::
 
     {
-        "source_pipeline_id": "<uuid>",   # pipeline to watch
-        "source_node_id": "<node_id>",    # node within source pipeline to watch
-        "snapshot_id": "<uuid>",          # snapshot for child run (optional)
+        "source_pipeline_id": "<uuid>",   # required: pipeline to watch
+        "source_node_id": "<node_id>",    # required: node within source pipeline to watch
+        "snapshot_id": "<uuid>",          # optional: snapshot for child run
     }
 """
 
