@@ -80,7 +80,7 @@ def test_get_run_stats_postgres_uses_percentile_cont_sql() -> None:
     session = _make_session("postgresql")
     captured: list = []
     now = datetime.now(UTC)
-    day_row = MagicMock(day=now.date(), count=2, success=1, failed=1, avg_duration=100.0)
+    day_row = MagicMock(day=now.date(), run_count=2, success=1, failed=1, avg_duration=100.0)
     overall_row = MagicMock(p50=100.0, p95=250.0, p99=500.0, avg_duration=150.0)
     session.execute = AsyncMock(
         side_effect=_postgres_execute(
@@ -120,7 +120,7 @@ def test_get_run_stats_postgres_empty_percentile_group_returns_none() -> None:
     session = _make_session("postgresql")
     captured: list = []
     now = datetime.now(UTC)
-    day_row = MagicMock(day=now.date(), count=1, success=0, failed=0, avg_duration=None)
+    day_row = MagicMock(day=now.date(), run_count=1, success=0, failed=0, avg_duration=None)
     overall_row = MagicMock(p50=None, p95=None, p99=None, avg_duration=None)
     session.execute = AsyncMock(
         side_effect=_postgres_execute(
@@ -146,7 +146,7 @@ def test_get_run_stats_postgres_single_row_returns_that_value() -> None:
     session = _make_session("postgresql")
     captured: list = []
     now = datetime.now(UTC)
-    day_row = MagicMock(day=now.date(), count=1, success=1, failed=0, avg_duration=42.0)
+    day_row = MagicMock(day=now.date(), run_count=1, success=1, failed=0, avg_duration=42.0)
     overall_row = MagicMock(p50=42.0, p95=42.0, p99=42.0, avg_duration=42.0)
     session.execute = AsyncMock(
         side_effect=_postgres_execute(

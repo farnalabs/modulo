@@ -531,7 +531,7 @@ async def _get_run_stats_postgres(
             await session.execute(
                 select(
                     day,
-                    func.count().label("count"),
+                    func.count().label("run_count"),
                     func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
                     func.sum(
                         case((Run.status.in_(("failed", "cancelled", "eval_failed", "expired")), 1), else_=0)
@@ -546,7 +546,7 @@ async def _get_run_stats_postgres(
         ).all()
     )
 
-    total = sum(int(row.count) for row in day_rows)
+    total = sum(int(row.run_count) for row in day_rows)
     if total == 0:
         return _empty_run_stats()
 
@@ -604,7 +604,7 @@ async def _get_run_stats_postgres(
         "p95_duration_ms": int(p95) if p95 is not None else None,
         "p99_duration_ms": int(p99) if p99 is not None else None,
         "runs_by_day": [
-            {"date": str(row.day), "count": int(row.count), "success": int(row.success), "failed": int(row.failed)}
+            {"date": str(row.day), "count": int(row.run_count), "success": int(row.success), "failed": int(row.failed)}
             for row in sorted(day_rows, key=lambda r: r.day)
         ],
         "failure_by_reason": [
