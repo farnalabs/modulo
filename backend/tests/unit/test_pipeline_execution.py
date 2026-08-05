@@ -897,6 +897,7 @@ class TestSaqWorkerSettings:
         # retention, webhook-dedup, stale recovery) + the cost probe (PR A2).
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
+            "analytics_facts_maintenance",
             "fire_due_triggers",
             "dispatcher_reconcile",
             "claim_expiry",
