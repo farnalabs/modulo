@@ -119,9 +119,9 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Task Tracker
 
-The `delivery-plan.json` tracker and its `task.ps1` script are **retired** (removed from the repo; `task.ps1` no longer exists). Work items now live in **Linear** (workspace `farnalabs-modulo`, team `FAR`), queried via the local MCP server at `Repos/devtools/harness/mcp/linear/server.py`. Available tools: `list_projects`, `list_ready_issues`, `update_ticket_status`, `add_comment`, `create_ticket`, `get_ticket`, `search_tickets`, `list_states`.
+The authoritative task list lives in **Linear** (farnalabs-modulo workspace, FAR team); delivery phases are tracked as Linear projects/epics. The retired `delivery-plan.json` tracker and its `task.ps1` script are no longer authoritative — do not use them to drive delivery.
 
-The conductor picks the next ready issue (dependencies completed) and runs `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `Repos/devtools/agents/.agents/skills/deliver/SKILL.md`.
+Run `/deliver` from the project root to start an autonomous delivery sprint — this invokes the `deliver` skill at `.agents/skills/deliver/SKILL.md`. The `deliver` skill and other skills query Linear through the local MCP server (`Repos/devtools/harness/mcp/linear/server.py`) using tools such as `list_projects`, `list_ready_issues`, `update_ticket_status`, `add_comment`, `create_ticket`, `get_ticket`, `search_tickets`, and `list_states`.
 
 ---
 

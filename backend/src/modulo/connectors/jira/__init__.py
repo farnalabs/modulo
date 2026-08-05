@@ -406,8 +406,8 @@ class JiraConnector(ConnectorBase):
                 if "issue_key" not in payload.data:
                     raise ValueError("Jira issue label requires 'issue_key' in data")
                 issue_key = payload.data["issue_key"]
-                add_labels = payload.data.get("add") or []
-                remove_labels = payload.data.get("remove") or []
+                add_labels = self._coerce_label_list(payload.data.get("add"), "add")
+                remove_labels = self._coerce_label_list(payload.data.get("remove"), "remove")
                 if not add_labels and not remove_labels:
                     raise ValueError("Jira issue_label requires 'add' and/or 'remove' in data")
                 target_labels = await self._compute_target_labels(issue_key, add_labels, remove_labels)
@@ -450,6 +450,9 @@ class JiraConnector(ConnectorBase):
         Accepts ``account_id`` (direct), ``email`` or ``display_name`` (looked up
         via the Jira user-search API), or an explicit ``unassign`` flag / ``null``
         ``account_id`` to clear the assignee. Returns ``None`` to unassign.
+
+        Precedence (highest first): ``account_id`` (incl. explicit ``null``),
+        then ``email``, then ``display_name``, then the ``unassign`` flag.
         """
         if "account_id" in data:
             if data["account_id"] is None:
@@ -470,6 +473,21 @@ class JiraConnector(ConnectorBase):
             return None
         raise ValueError("Jira issue_assign requires 'account_id', 'email', 'display_name', or 'unassign' in data")
 
+    @staticmethod
+    def _coerce_label_list(value: Any, name: str) -> list[str]:
+        """Validate an ``add``/``remove`` label value is a list of strings.
+
+        Guards against a bare string being iterated character-by-character as
+        if it were a list of labels.
+        """
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError(f"Jira issue_label {name} must be a list of strings, got {type(value).__name__}")
+        if not all(isinstance(item, str) for item in value):
+            raise ValueError(f"Jira issue_label {name} must contain only strings")
+        return value
+
     async def _compute_target_labels(
         self,
         issue_key: str,
@@ -481,6 +499,10 @@ class JiraConnector(ConnectorBase):
         Jira's ``labels`` field is a *set* — PUT replaces the full list. To make
         ``issue_label`` a true add/remove (not a replace), the current labels are
         fetched first and the target set computed from them.
+
+        Note: this read-modify-write has an inherent TOCTOU window (GET then
+        PUT). It is acceptable for Jira's API, which offers no atomic label
+        mutation.
         """
         r = await self._call_api("GET", f"/issue/{issue_key}")
         body = await self._parse_json(r)
