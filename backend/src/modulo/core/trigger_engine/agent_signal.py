@@ -49,8 +49,11 @@ async def fire_agent_signal(
     ``config_json->>'source_pipeline_id'`` + ``source_node_id`` match the
     completed pipeline + node. Creates a child pipeline run for each match.
 
-    Returns a list of ``{trigger_id, run_id, status}`` dicts describing each
-    attempted fire.
+    Returns a list of ``{trigger_id, run_id, status, reason, ...}`` dicts, one
+    per attempted fire. ``run_id`` is present only on successful fires
+    (``status='fired'``); skipped/error entries carry a ``reason`` (e.g.
+    ``concurrency_limit``, ``invalid_snapshot_id``, ``no_snapshot``,
+    ``create_run_failed``) instead.
     """
     results: list[dict[str, Any]] = []
 
