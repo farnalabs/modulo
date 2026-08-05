@@ -269,7 +269,19 @@ async def _ingest_saq_error(
 
     Runs in its own session/transaction (the caller's transaction stays intact)
     and never raises — error ingestion must not crash the scheduler tick.
+
+    If ``org_id`` is the nil UUID (system error without tenant context), the
+    error is logged and skipped — the ``error_events`` FK constraint requires a
+    real organisation row.
     """
+    if org_id == SYSTEM_ORG_ID:
+        _log.error(
+            "SAQ system error (no tenant context) — skipping DB ingest: function=%s message=%s",
+            function,
+            message,
+        )
+        return
+
     import os
 
     try:
