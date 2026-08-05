@@ -322,9 +322,9 @@ class TestEventLoopStallRefusal:
                 return _Conn()
 
         with patch.object(pe, "_maybe_alert_retry_storm", AsyncMock()) as storm:
-            claimed = await pe.claim_run_async(_Engine(), str(_RUN_ID), str(_ORG))  # type: ignore[arg-type]
+            claim_token = await pe.claim_run_async(_Engine(), str(_RUN_ID), str(_ORG))  # type: ignore[arg-type]
 
-        assert claimed is False
+        assert claim_token is None
         storm.assert_not_awaited()
 
 

@@ -128,7 +128,11 @@ async def test_terminal_release_deletes_key() -> None:
 
 @pytest.mark.asyncio
 async def test_mark_complete_releases_terminal_key() -> None:
-    """The run-level key is DEL'd when the run is marked complete (plan F3a)."""
+    """The run-level key is DEL'd when the run is marked complete (plan F3a).
+
+    A matching claim token (the executor owns the current claim) both completes
+    the run AND releases the E2B idempotency key.
+    """
     run = SimpleNamespace(status="running", completed_at=None, claim_token="tok-a")
     session = MagicMock()
     session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -144,7 +148,37 @@ async def test_mark_complete_releases_terminal_key() -> None:
         patch.object(pe, "e2b_idempotency_enabled", return_value=True),
         patch.object(pe, "e2b_dispatch_release_terminal", AsyncMock()) as release,
     ):
-        await pe.mark_complete(MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()))  # type: ignore[arg-type]
+        await pe.mark_complete(  # type: ignore[arg-type]
+            MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()), claim_token="tok-a"
+        )
 
     assert run.status == "complete"
     release.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_complete_superseded_skips_write_and_does_not_del_key() -> None:
+    """A superseded original (claim token rotated by a successor) must skip the
+    completion write AND must not DEL the successor's live E2B dispatch key."""
+    run = SimpleNamespace(status="running", completed_at=None, claim_token="tok-b")
+    session = MagicMock()
+    session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
+    session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch.object(pe, "get_run", AsyncMock(return_value=run)),
+        patch.object(pe, "async_sessionmaker", return_value=factory),
+        patch.object(pe, "set_rls_org", AsyncMock()),
+        patch.object(pe, "e2b_idempotency_enabled", return_value=True),
+        patch.object(pe, "e2b_dispatch_release_terminal", AsyncMock()) as release,
+    ):
+        await pe.mark_complete(  # type: ignore[arg-type]
+            MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()), claim_token="tok-a"
+        )
+
+    assert run.status == "running"  # completion write fenced out
+    assert run.completed_at is None
+    release.assert_not_awaited()

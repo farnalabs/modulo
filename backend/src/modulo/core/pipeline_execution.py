@@ -232,12 +232,17 @@ async def claim_run_async(
     stale_seconds: int | None = None,
     *,
     claim_cap: int = _DEFAULT_CLAIM_CAP,
-) -> bool:
+) -> str | None:
     """Claim a pending or stale-running run via an atomic SQL update (async).
 
     Used by the SAQ execute path. Rotates ``runs.claim_token`` to a fresh
     per-claim value (plan F3a) so a superseded original executor can detect it
     was replaced.
+
+    Returns the fresh claim token when the row was claimed, or ``None`` when
+    the run is not claimable (or the claim failed). The token is threaded into
+    ``heartbeat_loop``/``mark_complete`` so a superseded original can neither
+    complete the run out from under a successor nor DEL its E2B dispatch key.
     """
     window = _resolve_claim_stale_seconds(stale_seconds=stale_seconds)
     claim_token = uuid.uuid4().hex
@@ -250,12 +255,12 @@ async def claim_run_async(
             claimed = result.fetchone() is not None
         if claimed:
             await _maybe_alert_retry_storm(aengine, run_id, org_id)
-        return claimed
+        return claim_token if claimed else None
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("pipeline_execution.claim_failed run=%s", run_id)
-        return False
+        return None
 
 
 async def set_rls_org(session: Any, org_id: uuid.UUID) -> None:
@@ -673,13 +678,18 @@ async def claim_resume_run_async(
     org_id: str,
     *,
     claim_cap: int = SAQ_RUN_CLAIM_CAP,
-) -> bool:
+) -> str | None:
     """Claim an awaiting_human/claimed (or stale-running) run for resume.
 
     Idempotent: a second claimer finds the row already ``running`` with a fresh
     heartbeat and loses the atomic UPDATE. The gate decision itself is committed
     by the caller (HITL endpoints / recover-node) before dispatch. Rotates
     ``runs.claim_token`` to a fresh per-claim value (plan F3a).
+
+    Returns the fresh claim token when the row was claimed, or ``None`` when it
+    is not claimable (or the claim failed) — threaded into ``heartbeat_loop``/
+    ``mark_complete`` so a superseded original cannot complete the run or DEL
+    the successor's E2B dispatch key.
     """
     stale_seconds = int(get_settings().run_claim_stale_seconds)
     claim_token = uuid.uuid4().hex
@@ -689,12 +699,13 @@ async def claim_resume_run_async(
                 build_resume_claim_update(stale_seconds=stale_seconds, claim_cap=claim_cap, claim_token=claim_token),
                 _resume_claim_params(run_id, org_id, stale_seconds, claim_cap, claim_token),
             )
-            return result.fetchone() is not None
+            claimed = result.fetchone() is not None
+        return claim_token if claimed else None
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("pipeline_execution.resume_claim_failed run=%s", run_id)
-        return False
+        return None
 
 
 async def resume_run(
@@ -717,8 +728,8 @@ async def resume_run(
     rid = uuid.UUID(run_id)
     oid = uuid.UUID(org_id)
 
-    claimed = await claim_resume_run_async(async_engine, str(rid), str(oid), claim_cap=claim_cap)
-    if not claimed:
+    claim_token = await claim_resume_run_async(async_engine, str(rid), str(oid), claim_cap=claim_cap)
+    if not claim_token:
         _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
         return {"status": "not_claimed"}
 
@@ -729,7 +740,7 @@ async def resume_run(
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
         heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(async_engine, str(rid), str(oid), job=job),
+            heartbeat_loop(async_engine, str(rid), str(oid), job=job, claim_token=claim_token),
             name=f"resume-heartbeat-{rid}",
         )
         await executor.resume(run_id=rid, org_id=oid, resume_data=resume_data or {})
@@ -743,7 +754,7 @@ async def resume_run(
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
-    await mark_complete(async_engine, str(rid), str(oid))
+    await mark_complete(async_engine, str(rid), str(oid), claim_token=claim_token)
     return {"status": "complete"}
 
 

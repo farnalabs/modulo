@@ -140,11 +140,13 @@ class TestClaimRunAsync:
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         engine = _AsyncEngine()
         with patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()) as storm:
-            assert await pe.claim_run_async(engine, "run-1", "org-1") is True  # type: ignore[arg-type]
+            claim_token = await pe.claim_run_async(engine, "run-1", "org-1")  # type: ignore[arg-type]
+        assert claim_token is not None
         assert calls[0]["params"]["stale_seconds"] == 450  # type: ignore[index]
-        # Every claim rotates to a fresh per-claim token (plan F3a).
+        # Every claim rotates to a fresh per-claim token (plan F3a), returned to
+        # the caller so it can fence completion/heartbeat against successors.
         assert "claim_token=:tok" in calls[0]["stmt"]  # type: ignore[index]
-        assert calls[0]["params"]["tok"]  # type: ignore[index]
+        assert calls[0]["params"]["tok"] == claim_token  # type: ignore[index]
         storm.assert_awaited_once()
 
     async def test_async_claim_false_when_no_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,7 +169,7 @@ class TestClaimRunAsync:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         engine = _AsyncEngine()
-        assert await pe.claim_run_async(engine, "run-1", "org-1") is False  # type: ignore[arg-type]
+        assert await pe.claim_run_async(engine, "run-1", "org-1") is None  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

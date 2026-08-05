@@ -212,8 +212,8 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     oid = uuid.UUID(org_id)
     job = ctx.get("job")
 
-    claimed = await claim_run_async(aeng, run_id, org_id)
-    if not claimed:
+    claim_token = await claim_run_async(aeng, run_id, org_id)
+    if not claim_token:
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
 
@@ -224,7 +224,7 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
         heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(aeng, run_id, org_id, job=job),
+            heartbeat_loop(aeng, run_id, org_id, job=job, claim_token=claim_token),
             name=f"saq-heartbeat-{rid}",
         )
         await executor.execute(run_id=rid, org_id=oid, input_payload=run.input_payload or {})
@@ -238,7 +238,7 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
-    await mark_complete(aeng, run_id, org_id)
+    await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
     return {"status": "complete"}
 
 
