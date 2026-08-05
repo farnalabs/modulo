@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import random
+import re
 import time
 from typing import Any, cast
 from urllib.parse import quote
@@ -23,6 +24,12 @@ _GITLAB_API = "https://gitlab.com/api/v4"
 
 REQUIRED_SCOPES = frozenset({"read_api", "write_repository", "api"})
 
+# GitLab's ``api`` scope grants full API access, subsuming the read and
+# repository-write scopes — a token declaring ``api`` satisfies them all.
+_SCOPE_SUPERSETS: dict[str, frozenset[str]] = {
+    "api": frozenset({"read_api", "write_repository"}),
+}
+
 # GitLab RateLimit-* headers reported on API responses
 _RATE_LIMIT_HEADERS = (
     "RateLimit-Limit",
@@ -40,6 +47,32 @@ _MAX_DELAY = 30.0
 
 # Actions accepted by the Commits API for multi-file (batch) operations
 _COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move", "chmod"})
+
+
+def _instance_root(base_url: str) -> str:
+    """Derive the GitLab instance root from an API base URL.
+
+    The Doorkeeper token-introspection endpoint (``/oauth/token/info``) lives
+    at the instance root, *outside* the versioned API path — i.e.
+    ``https://gitlab.com/oauth/token/info`` rather than
+    ``https://gitlab.com/api/v4/oauth/token/info``. Strip a trailing
+    ``/api/vN`` segment when present so the root is correct for both hosted and
+    self-hosted instances (including those mounted under a reverse-proxy path).
+    """
+    root = base_url.rstrip("/")
+    return re.sub(r"/api/v\d+$", "", root) or root
+
+
+def _effective_scopes(declared: frozenset[str]) -> frozenset[str]:
+    """Expand declared scopes through the known superset relations.
+
+    ``api`` implies ``read_api`` and ``write_repository`` on GitLab, so a token
+    declaring only ``api`` satisfies all of ``REQUIRED_SCOPES``.
+    """
+    effective = set(declared)
+    for scope in declared:
+        effective.update(_SCOPE_SUPERSETS.get(scope, ()))
+    return frozenset(effective)
 
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
@@ -168,7 +201,7 @@ def _safe_json(response: httpx.Response) -> Any:
 
 
 def _safe_json_object(response: httpx.Response) -> dict[str, Any]:
-    return cast(dict[str, Any], _safe_json(response))
+    return cast("dict[str, Any]", _safe_json(response))
 
 
 def _project_path(project_id: str) -> str:
@@ -352,7 +385,7 @@ class GitLabConnector(ConnectorBase):
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         try:
-            return cast(dict[str, Any], response.json())
+            return cast("dict[str, Any]", response.json())
         except json.JSONDecodeError as exc:
             raise ValueError(f"GitLab API invalid response: {exc}") from exc
 
@@ -368,6 +401,40 @@ class GitLabConnector(ConnectorBase):
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
+
+    async def _missing_scopes(self, client: httpx.AsyncClient) -> frozenset[str]:
+        """Return the required scopes the token does not declare.
+
+        Reads the token's declared scopes from the instance ``/oauth/token/info``
+        endpoint (best-effort, reusing the open *client*). When the endpoint is
+        unavailable (older self-hosted versions return 404), unreachable, or
+        returns no usable scope list, returns an empty set so the health check
+        degrades to the endpoint probes already performed.
+        """
+        root = _instance_root(self._base_url)
+        try:
+            r = await client.get(f"{root}/oauth/token/info")
+        except (httpx.RequestError, ValueError):
+            return frozenset()
+        if not r.is_success:
+            return frozenset()
+        try:
+            info = r.json()
+        except json.JSONDecodeError:
+            return frozenset()
+        if not isinstance(info, dict):
+            return frozenset()
+        raw = info.get("scope", info.get("scopes"))
+        if raw is None:
+            return frozenset()
+        if isinstance(raw, str):
+            raw = raw.split()
+        if not isinstance(raw, (list, tuple)):
+            return frozenset()
+        declared = frozenset(s for s in raw if isinstance(s, str) and s)
+        if not declared:
+            return frozenset()
+        return REQUIRED_SCOPES - _effective_scopes(declared)
 
     @staticmethod
     def _result(records: list[dict[str, Any]], response: httpx.Response, total: int | None = None) -> ConnectorResult:
@@ -429,6 +496,22 @@ class GitLabConnector(ConnectorBase):
                                 version = version_info.get("version")
                     except (httpx.RequestError, ValueError):
                         version = None
+
+                # Scope verification — read the token's declared scopes from the
+                # Doorkeeper token-introspection endpoint so the
+                # write_repository/api scopes can be reported individually
+                # instead of only being inferred from endpoint HTTP status.
+                missing_scopes = await self._missing_scopes(client)
+
+            if missing_scopes:
+                return HealthResult(
+                    ok=False,
+                    detail=(
+                        "Missing scopes: "
+                        + ", ".join(sorted(missing_scopes))
+                        + f". Required: {', '.join(sorted(REQUIRED_SCOPES))}"
+                    ),
+                )
 
             detail = username
             if version:

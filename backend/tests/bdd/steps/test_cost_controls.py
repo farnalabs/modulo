@@ -175,10 +175,12 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
 
     mock_org_count = MagicMock()
     mock_org_count.total_spend_usd = org_spent
+    mock_org_count.refused_spend_usd = Decimal(0)
     mock_org_count.run_count = 5
 
     mock_team_count = MagicMock()
     mock_team_count.total_spend_usd = team_spent
+    mock_team_count.refused_spend_usd = Decimal(0)
     mock_team_count.run_count = 3
 
     mock_session = AsyncMock()
@@ -200,10 +202,22 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
     ):
         org_limit_result = MagicMock()
         org_limit_result.scalar_one_or_none.return_value = org_limit
+        org_sum_result = MagicMock()
+        org_sum_result.scalar_one.return_value = org_spent
         team_limit_result = MagicMock()
         team_limit_result.scalar_one_or_none.return_value = team_limit
+        team_sum_result = MagicMock()
+        team_sum_result.scalar_one.return_value = team_spent
 
-        mock_execute.side_effect = [org_limit_result, team_limit_result] if team_id else [org_limit_result]
+        if team_id:
+            mock_execute.side_effect = [
+                org_limit_result,
+                org_sum_result,
+                team_limit_result,
+                team_sum_result,
+            ]
+        else:
+            mock_execute.side_effect = [org_limit_result, org_sum_result]
 
         import asyncio
 

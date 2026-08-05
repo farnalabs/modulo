@@ -276,4 +276,4 @@ def dispatch_run_sync(run_id: str, org_id: str, **kwargs: Any) -> tuple[str, str
     thread.join()
     if "error" in result:
         raise result["error"]
-    return cast(tuple[str, str | None], result["value"])
+    return cast("tuple[str, str | None]", result["value"])

@@ -262,7 +262,7 @@ the daily-sweep signal wired to alerting (§8).
 ## 8. Monitoring / detection
 
 Runtime detection is a **daily operator sweep** (the always-on external
-consumer is a scheduled follow-up delivery-plan task):
+consumer is a scheduled follow-up task, tracked in Linear):
 
 - **Executor:** a GitHub Actions scheduled workflow (or a harness scheduled
   task), connecting as `modulo_breakglass` with secrets from the vault.

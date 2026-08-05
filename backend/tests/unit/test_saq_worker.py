@@ -139,6 +139,36 @@ class TestQueueDerivation:
             assert sw.system_settings()["queue"].name == "system"
 
 
+class TestMaxConcurrentOps:
+    """``max_concurrent_ops`` must always leave reserve connections (FAR-88).
+
+    The old ``max(pool_size - 5, 5)`` clamp gave zero reserve at pool 5
+    (max_ops == pool) and could exceed the pool below 5; the semaphore must
+    always stay strictly below the connection budget.
+    """
+
+    @pytest.mark.parametrize(
+        ("pool_size", "expected"),
+        [
+            (1, 1),
+            (3, 2),
+            (5, 4),
+            (20, 15),
+            (50, 45),
+        ],
+    )
+    def test_reserve_clamp(self, pool_size: int, expected: int) -> None:
+        assert sw._max_concurrent_ops(pool_size) == expected
+
+    def test_never_exhausts_pool(self) -> None:
+        # For every pool in the settings' valid range (ge=1, le=50) the
+        # semaphore must never equal or exceed the connection budget.
+        for pool_size in range(1, 51):
+            assert sw._max_concurrent_ops(pool_size) <= pool_size
+        for pool_size in range(2, 51):
+            assert sw._max_concurrent_ops(pool_size) < pool_size
+
+
 class TestSystemWebRunner:
     """run_system_web must bind 127.0.0.1 AND map auth into AUTH_PASSWORD/AUTH_USER."""
 
@@ -219,10 +249,12 @@ class TestExecuteResumeWrappers:
         ctx: dict = {"job": MagicMock()}
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=True) as claim,
+            patch(
+                "modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-claim"
+            ) as claim,
             patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
             patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
-            patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock),
+            patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock) as heartbeat,
         ):
             run = MagicMock()
             run.input_payload = {"a": 1}
@@ -237,12 +269,15 @@ class TestExecuteResumeWrappers:
         claim.assert_awaited_once()
         executor.execute.assert_awaited_once()
         complete.assert_awaited_once()
+        assert complete.await_args.kwargs["claim_token"] == "tok-claim"
+        heartbeat.assert_called_once()
+        assert heartbeat.call_args.kwargs["claim_token"] == "tok-claim"
 
     @pytest.mark.asyncio
     async def test_execute_run_not_claimed_returns_early(self) -> None:
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=False),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=None),
             patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
         ):
             result = await sw.execute_run(

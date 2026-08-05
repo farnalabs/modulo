@@ -87,7 +87,7 @@ def render_sql(predicate: ColumnElement[bool]) -> str:
     Future chunks (login-hook CAS WHERE) compile the SAME builder output here
     so the SQL-text rule and the ORM JOIN rule can never diverge.
     """
-    return str(predicate.compile(dialect=cast(Callable[[], Dialect], postgresql.dialect)()))
+    return str(predicate.compile(dialect=cast("Callable[[], Dialect]", postgresql.dialect)()))
 
 
 def is_break_glass_denied(

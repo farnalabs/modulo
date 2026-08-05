@@ -51,6 +51,23 @@ def _parse_link_header(response: httpx.Response) -> dict[str, str]:
     return {rel: url for url, rel in _LINK_HEADER_RE.findall(link_value)}
 
 
+def _validate_path(path: Any, resource: str) -> str:
+    """Validate a repository file path before it reaches the GitHub API.
+
+    Rejects absolute paths and ``..`` segments locally so a path traversal
+    attempt is blocked with a fast, unambiguous error instead of relying only
+    on GitHub's server-side validation.
+    """
+    if not isinstance(path, str) or not path:
+        raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'path'")
+    if path.startswith(("/", "\\")):
+        raise ValueError(f"GitHub resource {resource!r}: path must be relative: {path!r}")
+    normalized = path.replace("\\", "/")
+    if any(segment == ".." for segment in normalized.split("/")):
+        raise ValueError(f"GitHub resource {resource!r}: path traversal blocked: {path!r}")
+    return path
+
+
 class GitHubConnector(ConnectorBase):
     """Read/write GitHub via the REST API.
 
@@ -62,6 +79,8 @@ class GitHubConnector(ConnectorBase):
     Supported query resources:
       "repos"           — list repositories accessible to the token
       "file"            — read a file; filters: {"repo": "owner/repo", "path": "...", "ref": "main"}
+      "tree"            — recursive file/directory listing; filters: {"repo": "owner/repo",
+                         "ref": "main", "path": "subdir", "recursive": true}
       "pulls"           — list pull requests; filters: {"repo": ..., "state": "open", "sort": ..., "direction": ...}
       "pr_commits"      — list commits on a PR; filters: {"repo": ..., "pull_number": ...}
       "pr_files"        — list changed files on a PR; filters: {"repo": ..., "pull_number": ...}
@@ -182,7 +201,7 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"GitHub API returned invalid JSON: {response.text[:200]}") from exc
 
     async def _parse_json_object(self, response: httpx.Response) -> dict[str, Any]:
-        return cast(dict[str, Any], await self._parse_json(response))
+        return cast("dict[str, Any]", await self._parse_json(response))
 
     @staticmethod
     def _parse_scopes_from_headers(response: httpx.Response) -> set[str]:
@@ -251,10 +270,33 @@ class GitHubConnector(ConnectorBase):
                 return ConnectorResult(records=data, total=len(data), next_cursor=links.get("next"))
             case "file":
                 owner_repo = self._require_filter(q.filters, "repo", "file")
-                path = self._require_filter(q.filters, "path", "file")
+                path = _validate_path(self._require_filter(q.filters, "path", "file"), "file")
                 ref = q.filters.get("ref", "main")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
                 return ConnectorResult(records=[await self._parse_json(r)])
+            case "tree":
+                owner_repo = self._require_filter(q.filters, "repo", "tree")
+                path_filter = _validate_path(q.filters["path"], "tree") if "path" in q.filters else None
+                ref = q.filters.get("ref", "main")
+                commit_r = await self._call_api("GET", f"/repos/{owner_repo}/commits/{ref}")
+                commit_body = await self._parse_json_object(commit_r)
+                tree_sha = commit_body.get("sha")
+                if not isinstance(tree_sha, str) or not tree_sha:
+                    raise ValueError(f"GitHub tree query could not resolve ref {ref!r} to a commit SHA")
+                tree_params: dict[str, Any] = {}
+                if q.filters.get("recursive", True):
+                    tree_params["recursive"] = "1"
+                tree_r = await self._call_api(
+                    "GET",
+                    f"/repos/{owner_repo}/git/trees/{tree_sha}",
+                    params=tree_params,
+                )
+                body = await self._parse_json_object(tree_r)
+                entries: list[dict[str, Any]] = cast(list[dict[str, Any]], body.get("tree", []))
+                if path_filter is not None:
+                    path_prefix = path_filter.rstrip("/") + "/"
+                    entries = [e for e in entries if e.get("path", "").startswith(path_prefix)]
+                return ConnectorResult(records=entries, total=len(entries))
             case "pulls":
                 owner_repo = self._require_filter(q.filters, "repo", "pulls")
                 state = q.filters.get("state", "open")
@@ -377,7 +419,7 @@ class GitHubConnector(ConnectorBase):
                         params[key] = q.filters[key]
                 r = await self._call_api("GET", "/search/issues", params=params)
                 body = await self._parse_json_object(r)
-                items = cast(list[dict[str, Any]], body.get("items", []))
+                items = cast("list[dict[str, Any]]", body.get("items", []))
                 links = _parse_link_header(r)
                 return ConnectorResult(records=items, total=body.get("total_count"), next_cursor=links.get("next"))
             case _:
@@ -405,7 +447,7 @@ class GitHubConnector(ConnectorBase):
         match payload.resource:
             case "file":
                 owner_repo = self._require_write_filter(payload.data, "repo", "file")
-                path = self._require_write_filter(payload.data, "path", "file")
+                path = _validate_path(self._require_write_filter(payload.data, "path", "file"), "file")
                 body: dict[str, Any] = {
                     "message": payload.data.get("message", "Update via Modulo"),
                     "content": self._require_write_filter(payload.data, "content", "file"),

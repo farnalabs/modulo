@@ -213,14 +213,12 @@ async def apply_gated_edge_diff(
     old_norm = [copy.deepcopy(_normalize_edge(e)) for e in (copy.deepcopy(old_edges) if old_edges else [])]
     new_norm = [copy.deepcopy(_normalize_edge(e)) for e in (copy.deepcopy(new_edges) if new_edges else [])]
 
-    old_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for e in old_norm:
-        if e["hitl_gate_config"] is None:
-            continue
-        old_by_key[_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"])] = e
-    new_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for e in new_norm:
-        new_by_key[_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"])] = e
+    old_by_key = {
+        _topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e
+        for e in old_norm
+        if e["hitl_gate_config"] is not None
+    }
+    new_by_key = {_topo_key(e["source_node_id"], e["target_node_id"], e["edge_type"]): e for e in new_norm}
 
     weakened: list[EdgeWeakening] = []
     for key, old_edge in old_by_key.items():

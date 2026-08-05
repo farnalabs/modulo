@@ -2,14 +2,19 @@
 
 Two worker processes (plan F1/F2):
 
-* ``runs_settings`` — queue ``runs``, concurrency 5 (derived from SAQ_WORKER_CONCURRENCY), no web UI. Executes
+* ``runs_settings`` — queue ``runs``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
+  decoupled from Redis pool size), no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
-* ``system_settings`` — queue ``system``, concurrency 5 (derived from SAQ_WORKER_CONCURRENCY), web UI on 8081 bound
+* ``system_settings`` — queue ``system``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
+  decoupled from Redis pool size), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
   webhook-dedup cleanup, stale_run_recovery.
+
+Accepted design target: concurrency 5 per worker x up to 5 machines = up to 25
+concurrent runs (recorded in ADR 017).
 
 Staging uses the SAME workers on dedicated queue names so a staging worker can
 never dequeue production system jobs: ``staging_runs_settings`` (queue
@@ -42,7 +47,8 @@ import asyncio
 import contextlib
 import logging
 import os
-import signal
+import sys
+import time
 import uuid
 from typing import Any
 
@@ -88,6 +94,28 @@ def _get_async_engine() -> AsyncEngine:
     return _ASYNC_ENGINE
 
 
+def _max_concurrent_ops(pool_size: int) -> int:
+    """Clamp SAQ's ``max_concurrent_ops`` strictly below the Redis pool size.
+
+    The semaphore must never exhaust all available connections — leaving
+    reserve connections for SAQ operations that bypass the semaphore
+    (``schedule``, ``sweep``, ``dequeue``, ``notify``). The old
+    ``max(pool_size - 5, 5)`` clamp was broken: at pool_size 5 it allowed
+    ``max_ops == pool_size`` (zero reserve) and for pool_size < 5 it allowed
+    ``max_ops > pool_size`` — the exact 'Too many connections' exhaustion it
+    claims to prevent.
+
+    The correct clamp always leaves at least one reserve connection: small
+    pools (2-5) reserve 1, larger pools keep the historical 5-connection
+    margin. A pool of 1 gets the whole single connection.
+    """
+    if pool_size <= 1:
+        return pool_size
+    if pool_size <= 5:
+        return pool_size - 1
+    return pool_size - 5
+
+
 def _build_queue(queue_name: str) -> RedisQueue:
     """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2).
 
@@ -98,15 +126,71 @@ def _build_queue(queue_name: str) -> RedisQueue:
     """
     settings = get_settings()
     pool_size = settings.saq_redis_pool_size
-    # Leave reserve connections for semaphore-exempt SAQ operations.
-    max_ops = max(pool_size - 5, 5)
+    max_ops = _max_concurrent_ops(pool_size)
     redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
         settings.redis_url,
         socket_connect_timeout=10,
         socket_keepalive=True,
         max_connections=pool_size,
     )
+    _check_redis_connection(redis_client)
     return RedisQueue(redis_client, name=queue_name, max_concurrent_ops=max_ops)
+
+
+def _check_redis_connection(redis_client: aioredis.Redis, max_retries: int = 3) -> None:
+    """Validate Redis connectivity on worker startup with exponential backoff.
+
+    Synchronous — called from the settings factory before the event loop is
+    available. Uses the sync Redis ping under the hood (``aioredis`` wraps
+    ``redis-py``'s sync client). Logs a warning and retries up to
+    ``max_retries`` times with exponential backoff instead of immediately
+    crashing.
+    """
+    import redis as sync_redis
+
+    last_exc: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            redis_client.ping()
+            _log.info("Redis connection validated (attempt %d/%d)", attempt, max_retries)
+            return
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, OSError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = 2**attempt
+                _log.warning(
+                    "Redis ping failed (attempt %d/%d): %s — retrying in %ds",
+                    attempt,
+                    max_retries,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+    _log.error(
+        "Redis unreachable after %d attempts: %s — worker proceeding anyway",
+        max_retries,
+        last_exc,
+    )
+
+
+def _probe_database() -> None:
+    """Run a lightweight DB probe (``SELECT 1``) on worker startup.
+
+    Uses a synchronous SQLAlchemy connection with a short timeout. Non-fatal —
+    the DB may recover before the first real job arrives. Logs a warning on
+    failure.
+    """
+    from sqlalchemy import create_engine, text
+
+    settings = get_settings()
+    sync_url = str(settings.database_url).replace("+asyncpg", "+psycopg2").replace("+aiomysql", "+pymysql")
+    try:
+        engine = create_engine(sync_url, connect_args={"connect_timeout": 5}, pool_pre_ping=True)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        _log.info("Database connection probe passed")
+    except Exception as exc:
+        _log.warning("Database probe failed (non-fatal): %s — DB may recover before first job", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +212,8 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     oid = uuid.UUID(org_id)
     job = ctx.get("job")
 
-    claimed = await claim_run_async(aeng, run_id, org_id)
-    if not claimed:
+    claim_token = await claim_run_async(aeng, run_id, org_id)
+    if not claim_token:
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
 
@@ -140,7 +224,7 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
         heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(aeng, run_id, org_id, job=job),
+            heartbeat_loop(aeng, run_id, org_id, job=job, claim_token=claim_token),
             name=f"saq-heartbeat-{rid}",
         )
         await executor.execute(run_id=rid, org_id=oid, input_payload=run.input_payload or {})
@@ -154,7 +238,7 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
-    await mark_complete(aeng, run_id, org_id)
+    await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
     return {"status": "complete"}
 
 
@@ -390,7 +474,7 @@ async def _after_process_hook(ctx: dict[str, Any]) -> None:
 def _make_session_factory() -> Any:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=False)
+    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=True)
 
 
 def _runs_functions() -> list[tuple[str, Any]]:
@@ -490,9 +574,12 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
         # separately by the heartbeat/staleness alert), unique=True so a second
         # overlapping instance cannot double-advance probe_state (§4.7).
+        # NOTE: must be the 5-field form "*/5 * * * *" — croniter parses a
+        # 6-field expression ("0 */5 * * * *") differently and the probe fires
+        # per-5-hours instead of per-5-minutes (bug class #680).
         CronJob(
             cost_probe,
-            cron="0 */5 * * * *",
+            cron="*/5 * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -554,6 +641,8 @@ def run_system_web() -> None:
     os.environ["AUTH_PASSWORD"] = settings.saq_auth_password or ""
     os.environ["AUTH_USER"] = settings.saq_auth_username or "admin"
 
+    _probe_database()
+
     worker = Worker(**system_settings())
     loop = asyncio.new_event_loop()
 
@@ -576,6 +665,11 @@ def run_system_web() -> None:
         try:
             await worker.queue.connect()
             await worker.start()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("SAQ system worker failed to start — exiting gracefully")
+            sys.exit(1)
         finally:
             await worker.queue.disconnect()
 
@@ -586,7 +680,7 @@ def run_system_web() -> None:
     app = create_app([queue])
     app.on_shutdown.append(_shutdown)
 
-    loop.create_task(_worker_start()).add_done_callback(lambda _: signal.raise_signal(signal.SIGTERM))
+    loop.create_task(_worker_start()).add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
     web.run_app(app, host=_SYSTEM_WEB_HOST, port=_SYSTEM_WEB_PORT, loop=loop)
 
 
