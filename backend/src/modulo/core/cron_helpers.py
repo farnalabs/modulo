@@ -1269,6 +1269,12 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
     so a genuinely-executing run is never matched. Only a run stuck in the
     pre-node setup window (or a wedged worker with a live heartbeat) stays
     eligible this long.
+
+    Caveat: the age gate counts from ``started_at`` only and does NOT account
+    for graph-compile time, so a legitimately slow run (slow graph compile +
+    max-length first node, zero checkpoints in between) could be false-failed.
+    ``SAQ_CLAIMED_NODELESS_MINUTES`` must be tuned to exceed worst-case
+    compile + first-node duration.
     """
     from sqlalchemy import and_
     from sqlalchemy import exists as sa_exists

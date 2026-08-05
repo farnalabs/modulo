@@ -1075,14 +1075,24 @@ class TestZombieWatchdog:
     @pytest.mark.asyncio
     async def test_fails_stalled_run_after_grace(self) -> None:
         exec_task = asyncio.create_task(asyncio.sleep(999))
+        stall = asyncio.Event()
         with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail:
             await pe.zombie_watchdog(  # type: ignore[arg-type]
-                MagicMock(), "run-1", "org-1", asyncio.Event(), exec_task=exec_task, grace_seconds=0.01
+                MagicMock(),
+                "run-1",
+                "org-1",
+                asyncio.Event(),
+                exec_task=exec_task,
+                stall_requested=stall,
+                grace_seconds=0.01,
             )
         # Cancellation is requested (may still be unwinding); let it land.
         assert exec_task.cancelling() or exec_task.cancelled()
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_stalled"
+        # The stall signal fires BEFORE fail_run_terminal so the wrapper can
+        # tell a watchdog-initiated cancellation from a worker shutdown.
+        assert stall.is_set()
         with contextlib.suppress(asyncio.CancelledError):
             await exec_task
         assert exec_task.cancelled()
@@ -1143,6 +1153,80 @@ class TestRunExecutorWithWatchdog:
         assert started == ["started"]
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_stalled"
+
+    @pytest.mark.asyncio
+    async def test_watchdog_fail_write_completes_despite_cancellation_race(self) -> None:
+        """Regression: watchdog cancels the executor while still mid-``fail_run_terminal``.
+
+        The CancelledError lands in ``run_executor_with_watchdog`` ~1 event-loop
+        step after ``exec_task.cancel()`` — while the watchdog is still inside
+        its ``fail_run_terminal`` DB transaction. The wrapper must await the
+        watchdog to completion (so the terminal write commits) and swallow the
+        cancellation, NOT cancel the watchdog mid-write and leak a
+        ``CancelledError`` into the SAQ worker. ``fail_run_terminal`` here is a
+        real-async substitute with real ``await`` steps so the cancellation
+        lands while the write is in flight.
+        """
+        executor = MagicMock()
+
+        async def _hang() -> None:
+            await asyncio.sleep(999)
+
+        failed: list[str] = []
+
+        async def _slow_fail(*args: Any, **kwargs: Any) -> bool:
+            for _ in range(5):
+                await asyncio.sleep(0.001)
+            failed.append(kwargs["error_code"])
+            return True
+
+        engine = MagicMock()
+        for _ in range(10):
+            with (
+                patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.02)),
+                patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+                patch.object(pe, "fail_run_terminal", _slow_fail),
+            ):
+                result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                    engine,
+                    run_id=str(uuid.uuid4()),
+                    org_id=str(uuid.uuid4()),
+                    executor=executor,
+                    job=None,
+                    execute_fn=_hang,
+                )
+        assert result == {"status": "complete"}
+        assert failed == ["executor_stalled"] * 10
+
+    @pytest.mark.asyncio
+    async def test_worker_shutdown_cancellation_reraises(self) -> None:
+        executor = MagicMock()
+
+        async def _hang() -> None:
+            await asyncio.sleep(999)
+
+        engine = MagicMock()
+        with (
+            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=60)),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+        ):
+            task = asyncio.create_task(
+                pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                    engine,
+                    run_id=str(uuid.uuid4()),
+                    org_id=str(uuid.uuid4()),
+                    executor=executor,
+                    job=None,
+                    execute_fn=_hang,
+                )
+            )
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        # Worker shutdown is NOT a watchdog stall — the run is never terminal-failed.
+        fail.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_executor_exception_logged_and_completes(self) -> None:

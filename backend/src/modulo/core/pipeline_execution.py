@@ -468,6 +468,7 @@ async def zombie_watchdog(
     first_progress: asyncio.Event,
     *,
     exec_task: asyncio.Task[Any],
+    stall_requested: asyncio.Event | None = None,
     grace_seconds: int | None = None,
 ) -> None:
     """Fail a claimed-but-nodeless run when no node dispatches in time.
@@ -483,9 +484,11 @@ async def zombie_watchdog(
     capacity-deferral back to ``pending``) the watchdog stands down — a
     capacity-deferred run is NOT failed. If the window elapses with the
     executor still running and zero node progress, the watchdog cancels the
-    executor task and terminal-fails the run (``executor_stalled``). Cancelling
-    the executor FIRST ensures a late-returning ``execute`` cannot overwrite the
-    failure through ``finalize_cost``.
+    executor task, signals *stall_requested* (so the wrapper can tell a
+    watchdog-initiated cancellation from a worker shutdown), and terminal-fails
+    the run (``executor_stalled``). Cancelling the executor FIRST ensures a
+    late-returning ``execute`` cannot overwrite the failure through
+    ``finalize_cost``.
     """
     if grace_seconds is None:
         grace_seconds = int(get_settings().saq_setup_grace_seconds)
@@ -506,6 +509,8 @@ async def zombie_watchdog(
         grace_seconds,
     )
     exec_task.cancel()
+    if stall_requested is not None:
+        stall_requested.set()
     await fail_run_terminal(
         aeng,
         run_id,
@@ -543,7 +548,11 @@ async def run_executor_with_watchdog(
       this is the fix for the 30h+ zombies seen on app.modulo.run.
     * An ``asyncio.CancelledError`` raised by the executor task is swallowed
       ONLY when the watchdog caused it (the run is already terminal); a worker
-      shutdown cancellation re-raises.
+      shutdown cancellation re-raises. Because the watchdog is still inside its
+      ``fail_run_terminal`` DB write when this handler runs, it is awaited to
+      completion here before the ``finally`` block cancels it — cancelling the
+      watchdog mid-write would abort the terminal-fail transaction and leave
+      the run ``running`` forever.
 
     Returns ``{"status": "complete"}`` — the caller still runs
     ``mark_complete`` (a no-op once the run is terminal).
@@ -551,6 +560,7 @@ async def run_executor_with_watchdog(
     rid = uuid.UUID(run_id)
 
     first_progress = asyncio.Event()
+    stall_requested = asyncio.Event()
     if executor is not None:
         executor.on_first_progress = first_progress.set
 
@@ -559,7 +569,14 @@ async def run_executor_with_watchdog(
 
     exec_task = asyncio.create_task(_execute(), name=f"saq-exec-{rid}")
     watchdog_task = asyncio.create_task(
-        zombie_watchdog(aeng, run_id, org_id, first_progress, exec_task=exec_task),
+        zombie_watchdog(
+            aeng,
+            run_id,
+            org_id,
+            first_progress,
+            exec_task=exec_task,
+            stall_requested=stall_requested,
+        ),
         name=f"saq-zombie-watchdog-{rid}",
     )
     heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
@@ -569,10 +586,19 @@ async def run_executor_with_watchdog(
     try:
         await exec_task
     except asyncio.CancelledError:
-        # Distinguish watchdog-initiated cancellation (watchdog task completed
-        # normally after failing the run) from worker shutdown (which cancels
-        # the watchdog task too, so it is cancelled/done-absent).
-        if watchdog_task.done() and not watchdog_task.cancelled():
+        # Distinguish watchdog-initiated cancellation from worker shutdown:
+        # the watchdog cancels ONLY the executor task and signals
+        # ``stall_requested`` as it starts failing the run. Await it to
+        # completion so its ``fail_run_terminal`` transaction commits before
+        # the ``finally`` below cancels the watchdog — otherwise the terminal
+        # write is aborted, the run stays ``running``, and a stray
+        # ``CancelledError`` leaks into the SAQ worker. A genuine
+        # ``fail_run_terminal`` error propagates so the reconcile net remains
+        # the backstop instead of ``mark_complete`` wrongly succeeding the run.
+        if stall_requested.is_set():
+            if watchdog_task is not None and not watchdog_task.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog_task
             _log.warning("run_executor_with_watchdog: execution cancelled by zombie watchdog for run %s", rid)
         else:
             raise
