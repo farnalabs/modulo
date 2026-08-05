@@ -112,16 +112,19 @@ async def get_costs(
                 period=period,
             )
             buckets = {}
+            # REPORTING fields only — the ledger lines are the period-total
+            # source; a failure in the runs-based detail aggregation
+            # degrades to empty buckets, never to a 500. DB/HTTP/cancel errors
+            # still propagate to the outer handlers below.
             try:
                 buckets = await build_cost_report_buckets(
                     session,
                     org_id=current_user.organisation_id,
                     period=period,
                 )
+            except (SQLAlchemyError, HTTPException, asyncio.CancelledError):
+                raise  # outer handlers map these to the canonical 501/503/4xx responses
             except Exception:
-                # REPORTING fields only — the ledger lines are the period-total
-                # source; a failure in the runs-based detail aggregation
-                # degrades to empty buckets, never to a 500.
                 _log.exception("get_costs buckets aggregation failed (org_id=%s)", current_user.organisation_id)
     except ProgrammingError:
         _log.exception("get_costs ProgrammingError (org_id=%s)", current_user.organisation_id)
