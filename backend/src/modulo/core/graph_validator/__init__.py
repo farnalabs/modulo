@@ -706,9 +706,9 @@ class GraphValidator:
         # Handle nullable (array of types)
         if isinstance(in_type, list):
             if isinstance(out_type, list):
-                for ot in out_type:
-                    if ot not in in_type:
-                        errors.append(f"{path}: output type '{ot}' not in input types {in_type}")
+                errors.extend(
+                    f"{path}: output type '{ot}' not in input types {in_type}" for ot in out_type if ot not in in_type
+                )
             elif out_type not in in_type:
                 errors.append(f"{path}: output type '{out_type}' not in input types {in_type}")
             return errors
@@ -747,9 +747,11 @@ class GraphValidator:
 
         if isinstance(out_properties, dict) and isinstance(in_properties, dict):
             in_required = in_field.get("required", [])
-            for req_field in in_required:
-                if req_field not in out_properties:
-                    errors.append(f"{path}.{req_field}: required field missing in output")
+            errors.extend(
+                f"{path}.{req_field}: required field missing in output"
+                for req_field in in_required
+                if req_field not in out_properties
+            )
 
             for field_name in set(out_properties) & set(in_properties):
                 sub_errors = self._check_schema_fields(
@@ -867,9 +869,7 @@ class GraphValidator:
 
         required = schema_definition.get("required", [])
 
-        for field_name in required:
-            if field_name not in payload:
-                errors.append(f"Missing required field '{field_name}'")
+        errors.extend(f"Missing required field '{field_name}'" for field_name in required if field_name not in payload)
 
         for field_name, field_def in properties.items():
             if not isinstance(field_def, dict):
