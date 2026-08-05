@@ -354,8 +354,15 @@
             Go to Dashboard
           </router-link>
         </div>
-        <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning" data-testid="onboarding-wizard-run-empty-warning">
-          {{ emptyRunWarning }}
+        <div v-if="emptyRunWarning" class="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning" data-testid="onboarding-wizard-run-empty-warning">
+          <span>{{ emptyRunWarning }}</span>
+          <button
+            class="shrink-0 text-xs font-medium underline underline-offset-2 hover:text-warning"
+            data-testid="onboarding-wizard-dismiss-empty-warning"
+            @click="dismissEmptyRunWarning"
+          >
+            {{ $t('views.OnboardingWizard.cancel') }}
+          </button>
         </div>
         <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success">
           Pipeline started! <router-link :to="{ name: 'dashboard' }" class="underline">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
@@ -399,6 +406,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -407,6 +415,8 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 type ConnectorItem = components['schemas']['ConnectorResponse']
+
+const { t } = useI18n()
 
 interface DraftSchema {
   name: string
@@ -662,11 +672,16 @@ async function createPipeline() {
   }
 }
 
+function buildRunInputPayload(): Record<string, unknown> {
+  return {}
+}
+
 async function runPipeline() {
   if (!wizardState.createdPipelineId) return
-  if (!confirmEmptyRun.value) {
+  const inputPayload = buildRunInputPayload()
+  if (Object.keys(inputPayload).length === 0 && !confirmEmptyRun.value) {
     confirmEmptyRun.value = true
-    emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
+    emptyRunWarning.value = t('views.OnboardingWizard.confirm_empty_run_warning')
     return
   }
   emptyRunWarning.value = null
@@ -678,16 +693,21 @@ async function runPipeline() {
     const { error: err } = await api.POST('/api/v1/runs', {
       body: {
         pipeline_id: wizardState.createdPipelineId,
-        input_payload: {},
+        input_payload: inputPayload,
       },
     })
     if (err) throw err
-    runResult.value = 'Pipeline started successfully.'
+    runResult.value = t('views.OnboardingWizard.pipeline_started_successfully')
   } catch (e) {
-    pipelineRunError.value = e instanceof Error ? e.message : 'Failed to start pipeline'
+    pipelineRunError.value = e instanceof Error ? e.message : t('views.OnboardingWizard.failed_to_start_pipeline')
   } finally {
     runningPipeline.value = false
   }
+}
+
+function dismissEmptyRunWarning() {
+  confirmEmptyRun.value = false
+  emptyRunWarning.value = null
 }
 
 function nextStep() {
@@ -707,10 +727,7 @@ function skipToEnd() {
 }
 
 watch(() => wizardState.pipelineDescription, () => {
-  if (confirmEmptyRun.value) {
-    confirmEmptyRun.value = false
-    emptyRunWarning.value = null
-  }
+  if (confirmEmptyRun.value) dismissEmptyRunWarning()
 })
 
 watch(currentStep, (step) => {

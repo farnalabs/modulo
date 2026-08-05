@@ -34,4 +34,64 @@ describe('OnboardingWizard', () => {
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('SDLC Onboarding')
   })
+
+  async function mountAtDoneStep() {
+    const wrapper = mount(OnboardingWizard, {
+      global: {
+        stubs: { RouterLink: true },
+      },
+    })
+    await nextTick()
+    const vm = wrapper.vm as any
+    vm.wizardState.createdPipelineId = 'pipeline-1'
+    vm.wizardState.createdPipelineName = 'Test Pipeline'
+    vm.currentStep = 6
+    await nextTick()
+    return wrapper
+  }
+
+  it('guards against a silent empty-input run with a two-click confirmation', async () => {
+    const wrapper = await mountAtDoneStep()
+    const { api } = await import('../lib/api/client')
+    const runButton = wrapper.find('[data-testid="onboarding-wizard-run-pipeline-now"]')
+
+    await runButton.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="onboarding-wizard-run-empty-warning"]').exists()).toBe(true)
+    expect(api.POST).not.toHaveBeenCalledWith('/api/v1/runs', expect.anything())
+
+    await runButton.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="onboarding-wizard-run-empty-warning"]').exists()).toBe(false)
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({ body: expect.objectContaining({ input_payload: {} }) }))
+  })
+
+  it('dismisses the empty-run warning via the Cancel affordance without running', async () => {
+    const wrapper = await mountAtDoneStep()
+    const { api } = await import('../lib/api/client')
+    const runButton = wrapper.find('[data-testid="onboarding-wizard-run-pipeline-now"]')
+
+    await runButton.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="onboarding-wizard-run-empty-warning"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="onboarding-wizard-dismiss-empty-warning"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="onboarding-wizard-run-empty-warning"]').exists()).toBe(false)
+    expect(api.POST).not.toHaveBeenCalledWith('/api/v1/runs', expect.anything())
+  })
+
+  it('resets the empty-run warning when the pipeline description is edited', async () => {
+    const wrapper = await mountAtDoneStep()
+    const runButton = wrapper.find('[data-testid="onboarding-wizard-run-pipeline-now"]')
+
+    await runButton.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="onboarding-wizard-run-empty-warning"]').exists()).toBe(true)
+
+    const vm = wrapper.vm as any
+    vm.wizardState.pipelineDescription = 'edited'
+    await nextTick()
+    expect(wrapper.find('[data-testid="onboarding-wizard-run-empty-warning"]').exists()).toBe(false)
+  })
 })
