@@ -452,9 +452,11 @@ def _rewire_edges(
         target = str(edge.get("target"))
         source_ids = _resolve_endpoint(source, leaf_map, composite_map, endpoint="exit")
         target_ids = _resolve_endpoint(target, leaf_map, composite_map, endpoint="entry")
-        for src in source_ids:
-            for tgt in target_ids:
-                rewired.append(_rewire_edge_metadata(edge, src, tgt, leaf_map=leaf_map, composite_map=composite_map))
+        rewired.extend(
+            _rewire_edge_metadata(edge, src, tgt, leaf_map=leaf_map, composite_map=composite_map)
+            for src in source_ids
+            for tgt in target_ids
+        )
     return rewired
 
 
