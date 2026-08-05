@@ -474,7 +474,7 @@ async def _after_process_hook(ctx: dict[str, Any]) -> None:
 def _make_session_factory() -> Any:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=False)
+    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=True)
 
 
 def _runs_functions() -> list[tuple[str, Any]]:
