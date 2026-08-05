@@ -59,6 +59,7 @@ class TestFunctionsWiring:
             "webhook_dedup_cleanup",
             "stale_run_recovery",
             "cost_probe",
+            "analytics_facts_maintenance",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]

@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.33
-**Date**: 2026-07-10
+**Version**: 0.34
+**Date**: 2026-08-05
 **Status**: Pre-development
 **Changelog**:
+- v0.34 — §8.32 Analytics: rolling-window run/cost/quality series (Last 24h/7d/30d/90d) over a retained `run_daily_facts` table, typed-params query surface (no query language in this delivery), per-org `analytics_page` feature gate. ADR 020.
 - v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (search_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
@@ -4111,6 +4112,48 @@ Metrics surfaced in the map UI:
 | Map diff view (version comparison) | Team |
 
 Lifecycle Maps are a core onboarding and documentation feature. The base feature (create, view, navigate stages) is Community-tier. Advanced features (version history, team scoping, analytics) are Team-tier.
+
+---
+
+### 8.32 Analytics
+
+Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one row per terminal run, written on every finalize path and backfilled by a daily maintenance cron. Facts survive the 90-day run purge, so dimensioned run history outlives the `runs` rows it was derived from.
+
+#### 8.32.1 Rolling-Window Semantics
+
+Dashboards report over **rolling windows**: **Last 24h / 7d / 30d / 90d** — each window is the N×24h period ending now (timezone-agnostic). Every value is shown with a **period arrow** (delta) that is **period-scoped and same-source/same-window**: a "Last 7d" delta compares the current 7d window against the *previous* 7d window, using the same metric from the same source. Rolling windows eliminate the partial-period bias of calendar-month widgets (a month widget shows 3 days of data on the 3rd).
+
+The facts table keeps both the source run's `created_at` instant (rolling precision for the 24h window) and the UTC attributed day `run_date` (the day-level bucket key).
+
+#### 8.32.2 Query Surface — Typed Params Only
+
+**No query language in this delivery — structured typed params are the surface** (`group_by`, optional dimension, filters, date range ≤ 365d, limit). A syntax/expression query mode is **deferred until a pre-rolled dependency slots in** — it is never hand-rolled ad hoc. The backend is the sole bucketing authority: day/ISO-week bucketing and zero-fill happen server-side; the client only renders.
+
+#### 8.32.3 Launch-Forward Coverage
+
+Analytics coverage is **launch-forward**: the feature reports "data since \<date\>" (the date the maintenance cron first backfilled), because facts are only available from when the writer started recording — historical runs before the launch date are not reconstructed.
+
+#### 8.32.4 Run-Count Denominators
+
+Three distinct run-count denominators exist and are never conflated:
+
+| Denominator | Source | Meaning |
+|---|---|---|
+| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed) |
+| **Ledger count** | `org_daily_run_counts` | Terminal runs with `total_cost_usd > 0` that passed the spend ledger |
+| **Summary count** | `runs` | All runs (including pending/running/awaiting_human) |
+
+The analytics dashboard uses the **facts count** for run volume and success rate; the spend ledger's counts are used by cost dashboards; the summary count is used by the live dashboard widgets. "Number of runs" must always state which denominator it uses.
+
+#### 8.32.5 Dimensions and Filters
+
+Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omitted = overall) and filters: `trigger_type`, `status`, `pipeline_id`, `folder_id`, fixed `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). Timezone is fixed UTC.
+
+#### 8.32.6 Flag / Gating
+
+| Component | Tier |
+|---|---|
+| Analytics page + endpoint | Team (`analytics_page` feature flag, default off until the frontend ships) |
 
 ---
 
