@@ -72,7 +72,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_job_heartbeat": 300,
         "run_heartbeat_seconds": 30,
         "saq_worker_db_pool_size": 2,
-        "saq_redis_pool_size": 20,
+        "saq_redis_pool_size": 50,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -715,7 +715,7 @@ class TestSaqSettingsDefaults:
         assert s.saq_never_dispatched_window == 300
         assert s.saq_worker_lost_window == 600
         assert s.saq_worker_db_pool_size == 10
-        assert s.saq_redis_pool_size == 20
+        assert s.saq_redis_pool_size == 50
 
     def test_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RUN_CLAIM_STALE_SECONDS", "500")
@@ -862,7 +862,7 @@ def _saq_settings(**overrides: object) -> MagicMock:
         "redis_url": "redis://localhost:6379/0",
         "saq_auth_password": "hunter2",
         "saq_auth_username": "modulo-saq",
-        "saq_redis_pool_size": 20,
+        "saq_redis_pool_size": 50,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -875,7 +875,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.runs_settings()
         assert settings["queue"].name == "runs"
-        assert settings["concurrency"] == 20
+        assert settings["concurrency"] == 50
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
@@ -887,7 +887,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.system_settings()
         assert settings["queue"].name == "system"
-        assert settings["concurrency"] == 20
+        assert settings["concurrency"] == 50
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
@@ -940,4 +940,4 @@ class TestSaqWorkerSettings:
         sw.runs_settings()
         assert captured["socket_connect_timeout"] == 10
         assert captured["socket_keepalive"] is True
-        assert captured["max_connections"] == 20
+        assert captured["max_connections"] == 50
