@@ -1140,6 +1140,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
     run.langgraph_thread_id = str(uuid.uuid4())
+    run.status = "awaiting_human"
 
     final_run = MagicMock()
     final_run.status = "awaiting_human"
@@ -1181,7 +1182,7 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
             return_value=session_factory,
         ),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run) as mock_update,
+        patch("modulo.core.cost_controller.finalize.update_run_status", return_value=final_run) as mock_update,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
@@ -1196,6 +1197,10 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
-    assert result is final_run
+    # PR A2 finalization contract: after finalize_cost, execute re-fetches the
+    # run via get_run in a fresh session and returns THAT object (executor.py
+    # finalization tail), so the awaited run's status reflects the transition.
+    assert result is run
+    assert result.status == "awaiting_human"
     final_update_call = mock_update.call_args_list[-1]
     assert final_update_call.args[2] == "awaiting_human"

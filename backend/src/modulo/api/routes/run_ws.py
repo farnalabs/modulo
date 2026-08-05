@@ -39,7 +39,9 @@ from modulo.settings import get_settings
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
 
-_TERMINAL_STATUSES = {"complete", "failed", "cancelled"}
+# The canonical terminal-status set (spec §4.2) — reconciled so an eval_failed
+# run is detected as terminal at WS connect time instead of subscribing forever.
+_TERMINAL_STATUSES = {"complete", "failed", "cancelled", "eval_failed"}
 
 
 @router.websocket("/{run_id}/ws")
