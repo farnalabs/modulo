@@ -61,7 +61,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_job_heartbeat": 300,
         "saq_run_retries": 5,
         "saq_retry_delay": 60,
-        "saq_redis_pool_size": 20,
+        "saq_redis_pool_size": 50,
     }
     base.update(overrides)
     return MagicMock(**base)
