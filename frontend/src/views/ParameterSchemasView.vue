@@ -272,6 +272,7 @@
                           <input
                             v-model="(param.options ?? [])[oi]"
                             type="text"
+                            :aria-label="$t('views.ParameterSchemasView.param_options')"
                             class="flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                             placeholder="Option value"
                           />
@@ -300,12 +301,14 @@
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                       />
                       <input
+                        :id="'paramschema-param-default-' + idx"
                         v-else-if="param.type === 'number'"
                         v-model.number="param.default_value"
                         type="number"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
                       />
                       <select
+                        :id="'paramschema-param-default-' + idx"
                         v-else-if="param.type === 'boolean'"
                         v-model="param.default_value"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
@@ -315,6 +318,7 @@
                         <option :value="false">false</option>
                       </select>
                       <select
+                        :id="'paramschema-param-default-' + idx"
                         v-else-if="param.type === 'select' && param.options?.length"
                         v-model="param.default_value"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
@@ -446,6 +450,7 @@
                 />
                 <input
                   v-else-if="param.type === 'number'"
+                  :id="'paramschema-set-value-' + param.name"
                   v-model.number="setForm.values[param.name]"
                   type="number"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
@@ -454,6 +459,7 @@
                 />
                 <select
                   v-else-if="param.type === 'boolean'"
+                  :id="'paramschema-set-value-' + param.name"
                   v-model="setForm.values[param.name]"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 >
@@ -463,6 +469,7 @@
                 </select>
                 <select
                   v-else-if="param.type === 'select'"
+                  :id="'paramschema-set-value-' + param.name"
                   v-model="setForm.values[param.name]"
                   class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 >
@@ -471,6 +478,7 @@
                 </select>
                 <div v-else-if="param.type === 'model_backend_ref'">
                   <select
+                    :id="'paramschema-set-value-' + param.name"
                     v-model="setForm.values[param.name]"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   >
@@ -480,6 +488,7 @@
                 </div>
                 <div v-else-if="param.type === 'schema_ref'">
                   <select
+                    :id="'paramschema-set-value-' + param.name"
                     v-model="setForm.values[param.name]"
                     class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                   >
@@ -584,18 +593,21 @@
               />
               <input
                 v-else-if="param.type === 'string'"
+                :id="'paramschema-validate-value-' + param.name"
                 v-model="validateValues[param.name]"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               />
               <input
                 v-else-if="param.type === 'number'"
+                :id="'paramschema-validate-value-' + param.name"
                 v-model.number="validateValues[param.name]"
                 type="number"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               />
               <select
                 v-else-if="param.type === 'boolean'"
+                :id="'paramschema-validate-value-' + param.name"
                 v-model="validateValues[param.name]"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               >
@@ -605,6 +617,7 @@
               </select>
               <select
                 v-else-if="param.type === 'select'"
+                :id="'paramschema-validate-value-' + param.name"
                 v-model="validateValues[param.name]"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               >

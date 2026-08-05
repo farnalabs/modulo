@@ -4,11 +4,24 @@
 # A scheduled workflow that connects as modulo_breakglass with secrets from the
 # vault, runs `modulo-break-glass status --all --json` inside a Fly machine
 # (which has native access to the DB via the flycast private network), and
-# wires the non-zero-exit-on-live-rows condition to an alert.
+# wires the non-zero-exit-on-live-rows condition to an alert. It also verifies
+# the last 24h of audit rows for `last_admin_forcibly_removed` /
+# `break_glass_activated` and flags live rows without a matching
+# `break_glass_activated` audit (the raw-INSERT forgery detector). Evidence is
+# written to docs/reviews/break-glass-daily-sweep/YYYY-MM-DD.md and attached as
+# an artifact with 90-day retention.
 #
 # FAILURE SEMANTICS: the sweep fails loudly (non-zero exit) when any live
-# break-glass row exists. It NEVER auto-fixes — a live row is a deliberate
-# operator action (TTL-bound credential); the alert is the point.
+# break-glass row exists or a forgery flag is raised. It NEVER auto-fixes — a
+# live row is a deliberate operator action (TTL-bound credential); the alert is
+# the point. A live row must carry an explicit reason so the alert is
+# actionable. The step ALSO fails loudly on any transport failure (flyctl not
+# installed, no SSH key registered for the app, machine unreachable/timeout)
+# and on any CLI failure (including an operator-authentication failure caused by
+# a misprovisioned or rotated MODULO_BREAK_GLASS_OPERATOR_SECRET) — a broken
+# sweep must never masquerade as a CLEAN result. Decision is made on the REMOTE
+# COMMAND'S EXIT CODE (0 = clean, 5 + JSON rows = live, 5 without JSON = auth
+# failure, anything else = failure), never by grepping output text.
 #
 # SECRETS TO PROVISION (GitHub Actions secrets on this repo):
 #   MODULO_BREAK_GLASS_DATABASE_URL   — asyncpg URL for the modulo_breakglass role
@@ -36,6 +49,7 @@ jobs:
   sweep:
     name: modulo-break-glass status --all sweep
     runs-on: ubicloud-standard-2
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -47,51 +61,370 @@ jobs:
           MODULO_BREAK_GLASS_OPERATOR_SECRET: ${{ secrets.MODULO_BREAK_GLASS_OPERATOR_SECRET }}
           MODULO_BREAK_GLASS_DATABASE_URL: ${{ secrets.MODULO_BREAK_GLASS_DATABASE_URL }}
         run: |
-          set -e
-          echo "Running sweep inside Fly machine..."
-          # Run the CLI inside a Fly machine (has native flycast DB access)
-          OUTPUT=$(fly ssh console -a app-modulo --command "
-            export MODULO_BREAK_GLASS_DATABASE_URL='$MODULO_BREAK_GLASS_DATABASE_URL'
-            export MODULO_BREAK_GLASS_SECRET='$MODULO_BREAK_GLASS_SECRET'
-            export MODULO_BREAK_GLASS_STANDBY_SECRET='$MODULO_BREAK_GLASS_STANDBY_SECRET'
-            export MODULO_BREAK_GLASS_OPERATOR_SECRET='$MODULO_BREAK_GLASS_OPERATOR_SECRET'
-            cd /app && python3 -m modulo.cli.break_glass status --all --json --secret \"\$MODULO_BREAK_GLASS_OPERATOR_SECRET\"
-          " 2>&1) || true
-          echo "$OUTPUT"
-          # Live break-glass rows make the CLI raise PreconditionError (exit 5):
-          # it prints the rows as JSON on stdout and an "error: ..." line on
-          # stderr. Detect a JSON array containing a live row in the merged output.
-          if echo "$OUTPUT" | python3 -c "
-          import sys, json
-          data = sys.stdin.read()
-          try:
-              start = data.find('[')
-              if start < 0:
-                  sys.exit(1)
-              rows, _ = json.JSONDecoder().raw_decode(data[start:])
-          except Exception:
-              sys.exit(1)
-          if isinstance(rows, list) and any(r.get('state') == 'live' for r in rows):
-              sys.exit(0)
-          sys.exit(1)
-          "; then
-            echo "::error::LIVE BREAK-GLASS ROWS: $(echo "$OUTPUT" | python3 -c "import sys,json; d=sys.stdin.read(); i=d.find('['); rows,_=json.JSONDecoder().raw_decode(d[i:]) if i>=0 else (None,0); [print(r.get('org_id',''),r.get('account_id',''),r.get('state','')) for r in (rows or []) if r.get('state')=='live']")"
-            exit 5
-          fi
-          # No live rows. If the CLI emitted an error line, the sweep did not run
-          # cleanly — operator/auth failure (PreconditionError without rows).
-          if echo "$OUTPUT" | grep -q "^error:"; then
-            echo "::error::OPERATOR AUTH FAILURE — MODULO_BREAK_GLASS_OPERATOR_SECRET may be misprovisioned or rotated"
-            exit 1
-          fi
-          echo "Sweep CLEAN — no live break-glass rows"
-          exit 0
+          set -euo pipefail
 
-      - name: Upload sweep evidence
+          # flyctl must be present for `fly ssh console` (mirrors deploy.yml).
+          echo "::group::Install flyctl"
+          curl -fsSL https://fly.io/install.sh | sh
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          fly version
+          echo "::endgroup::"
+
+          # ── Remote sweep script (self-contained; runs inside the Fly machine with
+          #    native flycast DB access: status CLI + raw-INSERT forgery detector).
+          #    Delivered base64-encoded so its quotes/heredocs survive the remote shell. ──
+          SWEEP_SCRIPT_B64="$(base64 -w0 <<'SWEEP_PYEOF'
+          """modulo-break-glass daily sweep - runs INSIDE the Fly app machine.
+
+          Invoked by .github/workflows/break-glass-daily-sweep.yml via
+          `fly ssh console -C ...`. The machine has native flycast access to the DB, so
+          this runs the status CLI as modulo_breakglass plus the raw-INSERT forgery
+          detector (audit verification) against the same private-network Postgres.
+
+          Emits a single compact JSON envelope on stdout and exits:
+            0  CLEAN               - no live rows, no forgery flags, CLI ok
+            5  LIVE ROWS / FORGERY - the non-zero-exit-on-live-rows alert condition
+            1  SWEEP FAILURE       - CLI failure, operator-auth failure, or audit-DB failure
+          """
+
+          import asyncio
+          import json
+          import os
+          import subprocess
+          import sys
+          from datetime import UTC, datetime, timedelta
+
+          import asyncpg
+
+
+          def _run_cli() -> subprocess.CompletedProcess:
+              return subprocess.run(
+                  [sys.executable, "-m", "modulo.cli.break_glass", "status", "--all", "--json"],
+                  capture_output=True,
+                  text=True,
+                  timeout=300,
+              )
+
+
+          def _parse_rows(stdout: str) -> tuple[list, bool]:
+              try:
+                  parsed = json.loads(stdout)
+              except json.JSONDecodeError:
+                  return [], False
+              return (parsed, True) if isinstance(parsed, list) else ([], False)
+
+
+          async def _audit(url: str) -> tuple[list[dict], set[str]]:
+              conn = await asyncpg.connect(url.replace("postgresql+asyncpg://", "postgres://", 1))
+              try:
+                  cutoff = datetime.now(UTC) - timedelta(hours=24)
+                  last24 = await conn.fetch(
+                      "SELECT organisation_id, event_type, payload_json, created_at "
+                      "FROM audit_events "
+                      "WHERE event_type IN ('break_glass_activated', 'last_admin_forcibly_removed') "
+                      "AND created_at > $1 ORDER BY created_at",
+                      cutoff,
+                  )
+                  activations = await conn.fetch(
+                      "SELECT DISTINCT organisation_id FROM audit_events "
+                      "WHERE event_type = 'break_glass_activated'"
+                  )
+                  return [dict(r) for r in last24], {str(r["organisation_id"]) for r in activations}
+              finally:
+                  await conn.close()
+
+
+          def main() -> int:
+              try:
+                  proc = _run_cli()
+              except Exception as exc:
+                  print(json.dumps({
+                      "status": "SWEEP FAILURE",
+                      "cli_exit": None,
+                      "error": "CLI failed to start: %s" % exc,
+                      "timestamp_utc": datetime.now(UTC).isoformat(),
+                  }, default=str))
+                  return 1
+
+              cli_exit = proc.returncode
+              rows, stdout_parsed = _parse_rows(proc.stdout)
+
+              # Exit 5 (EXIT_PRECONDITIONS) has a DUAL meaning: live-rows (status --all
+              # exits 5 when any live row exists, stdout carrying the JSON rows) AND
+              # operator-authentication failure (click group callback exits 5 with EMPTY
+              # stdout). Only accept exit 5 as the live-rows condition when stdout parsed
+              # to a non-empty JSON row list; otherwise fail loudly so a misprovisioned
+              # or rotated operator secret cannot silently produce a CLEAN sweep.
+              if cli_exit == 5:
+                  cli_ok = stdout_parsed and bool(rows)
+              elif cli_exit == 0:
+                  cli_ok = stdout_parsed
+              else:
+                  cli_ok = False
+
+              live = [r for r in rows if r.get("state") == "live"]
+              nonlive = [r for r in rows if r.get("state") != "live"]
+
+              last24: list[dict] = []
+              activation_orgs: set[str] = set()
+              audit_error: str | None = None
+              try:
+                  last24, activation_orgs = asyncio.run(_audit(os.environ["MODULO_BREAK_GLASS_DATABASE_URL"]))
+              except Exception as exc:
+                  audit_error = str(exc)
+
+              activation_24h = [r for r in last24 if r.get("event_type") == "break_glass_activated"]
+              force_removed_24h = [r for r in last24 if r.get("event_type") == "last_admin_forcibly_removed"]
+
+              # Raw-INSERT forgery detector: live rows without a matching activation audit
+              # (raw-INSERT forgery) or without an explicit reason (non-actionable alert).
+              forgery_flags: list[str] = []
+              for r in live:
+                  if str(r.get("org_id")) not in activation_orgs:
+                      forgery_flags.append(
+                          "live row org=%s account=%s has no break_glass_activated audit (raw-INSERT forgery?)"
+                          % (r.get("org_slug"), r.get("account_id"))
+                      )
+                  if not (r.get("reason") or "").strip():
+                      forgery_flags.append(
+                          "live row org=%s account=%s has no explicit reason (non-actionable alert)"
+                          % (r.get("org_slug"), r.get("account_id"))
+                      )
+
+              if not cli_ok:
+                  status, exit_code = "SWEEP FAILURE", 1
+              elif live:
+                  status, exit_code = "LIVE ROWS", 5
+              elif forgery_flags:
+                  status, exit_code = "FORGERY FLAGGED", 5
+              elif audit_error:
+                  status, exit_code = "SWEEP FAILURE", 1
+              else:
+                  status, exit_code = "CLEAN", 0
+
+              envelope = {
+                  "status": status,
+                  "exit_code": exit_code,
+                  "cli_exit": cli_exit,
+                  "rows": rows,
+                  "live": live,
+                  "nonlive": nonlive,
+                  "last24_audits": last24,
+                  "activation_24h_count": len(activation_24h),
+                  "force_removed_24h_count": len(force_removed_24h),
+                  "forgery_flags": forgery_flags,
+                  "audit_error": audit_error,
+                  "timestamp_utc": datetime.now(UTC).isoformat(),
+              }
+              print(json.dumps(envelope, default=str))
+              if proc.stderr:
+                  print(proc.stderr, file=sys.stderr)
+              return exit_code
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          SWEEP_PYEOF
+          )"
+
+          # ── Remote environment: secrets are exported on the machine. Each value is
+          #    base64-encoded so ANY character (quotes, spaces, newlines in a DB URL
+          #    password, etc.) survives the remote command string. The CLI reads
+          #    MODULO_BREAK_GLASS_OPERATOR_SECRET from the environment, so no `--secret`
+          #    is passed on argv. The trailing `echo __SWEEP_RC__=$?` captures the REMOTE
+          #    command's true exit code, independent of how flyctl propagates status. ──
+          b64() { printf '%s' "$1" | base64 -w0; }
+
+          REMOTE_CMD="$(
+            printf '%s; ' \
+              "export MODULO_BREAK_GLASS_DATABASE_URL=\$(printf '%s' '$(b64 "$MODULO_BREAK_GLASS_DATABASE_URL")' | base64 -d)" \
+              "export MODULO_BREAK_GLASS_SECRET=\$(printf '%s' '$(b64 "$MODULO_BREAK_GLASS_SECRET")' | base64 -d)" \
+              "export MODULO_BREAK_GLASS_STANDBY_SECRET=\$(printf '%s' '$(b64 "$MODULO_BREAK_GLASS_STANDBY_SECRET")' | base64 -d)" \
+              "export MODULO_BREAK_GLASS_OPERATOR_SECRET=\$(printf '%s' '$(b64 "$MODULO_BREAK_GLASS_OPERATOR_SECRET")' | base64 -d)" \
+              "cd /app && python3 -c \"\$(printf '%s' '$SWEEP_SCRIPT_B64' | base64 -d)\""
+            printf '%s\n' "echo __SWEEP_RC__=\$?"
+          )"
+
+          # ── Run the sweep inside a Fly machine. flyctl's stderr is captured separately
+          #    so a transport failure (missing key, unreachable machine, timeout, flyctl
+          #    absent) is distinguishable from the remote sweep's own output/exit code.
+          #    NO `|| true` here - the fly failure is detected below and fails the step
+          #    loudly. ──
+          FLY_STDERR="$(mktemp)"
+          set +e
+          SWEEP_OUTPUT="$(fly ssh console -a app-modulo -q --command "$REMOTE_CMD" 2>"$FLY_STDERR")"
+          SWEEP_FLY_RC=$?
+          set -e
+          SWEEP_FLY_ERR="$(cat "$FLY_STDERR" 2>/dev/null || true)"
+          rm -f "$FLY_STDERR"
+
+          # Surface the raw transport output (no secrets travel in the payload; secrets
+          # only ever appear base64-encoded inside the command string).
+          echo "===== fly ssh console output ====="
+          printf '%s\n' "$SWEEP_OUTPUT"
+          echo "===== flyctl stderr (exit ${SWEEP_FLY_RC}) ====="
+          printf '%s\n' "$SWEEP_FLY_ERR"
+
+          # ── Decide the outcome from the remote exit code + JSON envelope, render the
+          #    evidence markdown, and exit 0/5/1 accordingly. The exit code of this
+          #    python step becomes the step's result. The captured output is passed via
+          #    a temp file (not an env var) so arbitrarily large row sets are safe. ──
+          SWEEP_OUTPUT_FILE="$(mktemp)"
+          printf '%s' "$SWEEP_OUTPUT" > "$SWEEP_OUTPUT_FILE"
+          SWEEP_OUTPUT_FILE="$SWEEP_OUTPUT_FILE" \
+          SWEEP_FLY_RC="$SWEEP_FLY_RC" \
+          SWEEP_FLY_ERR="$SWEEP_FLY_ERR" \
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          from datetime import UTC, datetime
+          from pathlib import Path
+
+          with open(os.environ["SWEEP_OUTPUT_FILE"], encoding="utf-8") as _f:
+              output = _f.read()
+          fly_rc = os.environ.get("SWEEP_FLY_RC", "")
+          fly_err = os.environ.get("SWEEP_FLY_ERR", "").strip()
+          now = datetime.now(UTC)
+          date_str = now.strftime("%Y-%m-%d")
+
+          # 1. Remote exit-code marker (emitted last by the remote shell) - the remote
+          #    command's true exit code, independent of flyctl's own propagation.
+          sweep_rc = None
+          for line in output.splitlines():
+              if line.startswith("__SWEEP_RC__="):
+                  value = line.split("=", 1)[1]
+                  if value.strip().isdigit():
+                      sweep_rc = int(value.strip())
+
+          # 2. Envelope = everything before the marker line.
+          envelope = None
+          lines = output.splitlines()
+          marker_index = None
+          for i in range(len(lines) - 1, -1, -1):
+              if lines[i].startswith("__SWEEP_RC__="):
+                  marker_index = i
+                  break
+          body = "\n".join(lines[:marker_index]).strip() if marker_index is not None else output.strip()
+          if body:
+              try:
+                  parsed = json.loads(body)
+                  if isinstance(parsed, dict):
+                      envelope = parsed
+              except json.JSONDecodeError:
+                  envelope = None
+
+          reason = ""
+          if envelope is None:
+              if sweep_rc is None:
+                  reason = "Fly transport failed (flyctl exit=%s): %s" % (fly_rc or "unknown", fly_err)
+              else:
+                  reason = "Remote sweep exited %s but emitted no parseable JSON envelope" % sweep_rc
+              status = "SWEEP FAILURE"
+          else:
+              status = envelope.get("status", "SWEEP FAILURE")
+              if status == "SWEEP FAILURE":
+                  reason = envelope.get("error") or "see evidence for details"
+
+          rows = (envelope or {}).get("rows", [])
+          live = (envelope or {}).get("live", [])
+          nonlive = (envelope or {}).get("nonlive", [])
+          last24 = (envelope or {}).get("last24_audits", [])
+          forgery = (envelope or {}).get("forgery_flags", [])
+          cli_exit = (envelope or {}).get("cli_exit")
+          activation_24h = (envelope or {}).get("activation_24h_count", 0)
+          force_removed_24h = (envelope or {}).get("force_removed_24h_count", 0)
+          audit_error = (envelope or {}).get("audit_error")
+          timestamp_utc = (envelope or {}).get("timestamp_utc", now.isoformat())
+
+          # 3. Evidence artifact at docs/reviews/break-glass-daily-sweep/YYYY-MM-DD.md
+          workspace = Path(os.environ.get("GITHUB_WORKSPACE") or Path.cwd())
+          evidence_dir = workspace / "docs" / "reviews" / "break-glass-daily-sweep"
+          evidence_dir.mkdir(parents=True, exist_ok=True)
+          md = [
+              "# Break-glass daily status sweep - " + date_str,
+              "",
+              "- Run: " + os.environ.get("GITHUB_RUN_ID", "local"),
+              "- Timestamp (UTC): " + timestamp_utc,
+              "- Status: " + status,
+              "- Remote sweep exit code: " + (str(sweep_rc) if sweep_rc is not None else "n/a"),
+              "- CLI exit code: " + (str(cli_exit) if cli_exit is not None else "n/a"),
+              "",
+              "## Summary",
+              "- Total break-glass rows: " + str(len(rows)),
+              "- Live rows: " + str(len(live)),
+              "- Expired/deactivated/tombstone rows: " + str(len(nonlive)),
+              "- Last-24h audits: break_glass_activated=" + str(activation_24h)
+              + ", last_admin_forcibly_removed=" + str(force_removed_24h),
+              "- Forgery flags: " + str(len(forgery)),
+              "",
+          ]
+          if live:
+              md += ["## Live rows", ""]
+              md += ["| org | state | account | expires_at (UTC) | actor | reason |", "|---|---|---|---|---|---|"]
+              for r in live:
+                  md.append("| {org} | {state} | {account} | {expires} | {actor} | {reason} |".format(
+                      org=r.get("org_slug", ""), state=r.get("state", ""), account=r.get("account_id", ""),
+                      expires=r.get("expires_at"), actor=r.get("actor") or "",
+                      reason=(r.get("reason") or "").replace("|", "\\|")))
+              md.append("")
+          if last24:
+              md += ["## Last 24h audit events", ""]
+              for r in last24:
+                  md.append("- {ts} | org={org} | {event} | {payload}".format(
+                      ts=r.get("created_at"), org=r.get("organisation_id"), event=r.get("event_type"),
+                      payload=json.dumps(r.get("payload_json"), default=str)))
+              md.append("")
+          if forgery:
+              md += ["## Forgery flags", ""]
+              md += ["- " + f for f in forgery]
+              md.append("")
+          if audit_error:
+              md += ["## Audit verification error", "", "- " + audit_error, ""]
+          if reason:
+              md += ["## Failure reason", "", "- " + reason, ""]
+          md += [
+              "## Raw status --all --json", "", "```json", json.dumps(rows, indent=2, default=str), "```", "",
+              "## Raw sweep envelope", "", "```json",
+              json.dumps(envelope if envelope is not None else {"status": status, "reason": reason},
+                         indent=2, default=str),
+              "```", "",
+          ]
+          evidence_path = evidence_dir / (date_str + ".md")
+          evidence_path.write_text("\n".join(md), encoding="utf-8")
+          print("Evidence written to " + str(evidence_path))
+
+          # 4. Loud summary + non-zero exit on live rows / forgery / sweep failure.
+          print("status={s} rows={rows} live={live} activation_24h={a} force_removed_24h={f} "
+                "forgery_flags={g} cli_exit={e} remote_rc={r}".format(
+              s=status, rows=len(rows), live=len(live), a=activation_24h, f=force_removed_24h,
+              g=len(forgery), e=cli_exit if cli_exit is not None else "n/a",
+              r=sweep_rc if sweep_rc is not None else "n/a"))
+          for flag in forgery:
+              print("FORGERY: " + flag)
+          for r in live:
+              print("LIVE: org={org} account={account} reason={reason}".format(
+                  org=r.get("org_slug"), account=r.get("account_id"), reason=r.get("reason") or ""))
+
+          if status == "LIVE ROWS":
+              print("::error::LIVE BREAK-GLASS ROWS: %d live break-glass row(s) exist - see evidence artifact" % len(live))
+              sys.exit(5)
+          elif status == "FORGERY FLAGGED":
+              print("::error::FORGERY FLAGGED: %d forgery flag(s) - raw-INSERT forgery or non-actionable live row" % len(forgery))
+              sys.exit(5)
+          elif status == "CLEAN":
+              print("Sweep CLEAN - no live break-glass rows")
+              sys.exit(0)
+          else:
+              print("::error::break-glass daily sweep FAILED: " + (reason or "unknown sweep failure"))
+              sys.exit(1)
+          PYEOF
+      - name: Upload sweep evidence artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: break-glass-daily-sweep
-          path: .github/workflows/break-glass-daily-sweep.yml  # placeholder; real evidence lives on the Fly machine
+          path: docs/reviews/break-glass-daily-sweep/
           if-no-files-found: warn
           retention-days: 90

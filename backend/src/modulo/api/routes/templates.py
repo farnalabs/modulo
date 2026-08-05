@@ -198,13 +198,8 @@ async def create_pipeline_from_template_endpoint(
             from modulo.db.models.pipeline_edge import PipelineEdge
 
             persisted_edges: list[PipelineEdge] = []
-            node_id_by_label: dict[str, str] = {}
-            for n in resolved_nodes:
-                node_id_by_label[n["label"]] = n["id"]
 
-            source_map: dict[str, str] = {}
-            for i, n in enumerate(graph_nodes):
-                source_map[n.get("id", str(i))] = resolved_nodes[i]["id"]
+            source_map = {n.get("id", str(i)): resolved_nodes[i]["id"] for i, n in enumerate(graph_nodes)}
 
             for edge in edges:
                 source_id = source_map.get(edge.get("source_node_id", ""))

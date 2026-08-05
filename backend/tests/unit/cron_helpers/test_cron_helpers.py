@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.cron_helpers (plan F1) -” fire_due_triggers,
+"""Unit tests for modulo.core.cron_helpers (plan F1) — fire_due_triggers,
 atomic next_fire_at advance, per-item fire jobs, report backoff/deactivate.
 
 Mock/fake based (no real Postgres/Redis). The multi-worker race is covered at
@@ -170,7 +170,7 @@ def _trigger_result(trigger: Any) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# fire_due_triggers -” atomic advance + enqueue
+# fire_due_triggers — atomic advance + enqueue
 # ---------------------------------------------------------------------------
 
 
@@ -318,7 +318,7 @@ class TestFireDueTriggers:
 
 
 # ---------------------------------------------------------------------------
-# fire_report_trigger -” backoff + deactivate-after-5
+# fire_report_trigger — backoff + deactivate-after-5
 # ---------------------------------------------------------------------------
 
 
@@ -471,7 +471,7 @@ class TestFireReportTrigger:
 
 
 # ---------------------------------------------------------------------------
-# Atomic advance helpers -” SQL shape
+# Atomic advance helpers — SQL shape
 # ---------------------------------------------------------------------------
 
 
@@ -682,8 +682,13 @@ class TestCountActiveRuns:
         sql = str(session.executed[0][0])
         assert "cancellation_requested" in sql
         # Every active status must be counted, never re-dispatched away.
-        statuses = session.executed[0][0].compile().params["status_1"]
-        assert set(statuses) == {"running", "pending", "awaiting_human", "claimed", "waiting_for_lock"}
+        # Resolve the statuses IN() bound param by value so the assertion does
+        # not couple to SQLAlchemy's internal bound-param naming (status_1).
+        expected_active = {"running", "pending", "awaiting_human", "claimed", "waiting_for_lock"}
+        compiled_params = session.executed[0][0].compile().params.values()
+        assert any(
+            set(value) == expected_active for value in compiled_params if isinstance(value, (list, tuple))
+        )
 
 
 class TestLogEvent:
