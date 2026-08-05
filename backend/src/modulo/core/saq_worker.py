@@ -574,9 +574,12 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
         # separately by the heartbeat/staleness alert), unique=True so a second
         # overlapping instance cannot double-advance probe_state (§4.7).
+        # NOTE: must be the 5-field form "*/5 * * * *" — croniter parses a
+        # 6-field expression ("0 */5 * * * *") differently and the probe fires
+        # per-5-hours instead of per-5-minutes (bug class #680).
         CronJob(
             cost_probe,
-            cron="0 */5 * * * *",
+            cron="*/5 * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
