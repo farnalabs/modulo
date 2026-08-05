@@ -144,6 +144,51 @@ def test_infer_schema_returns_200(client: TestClient) -> None:
     assert "Inferred from" in data["suggestion_name"]
 
 
+def test_infer_schema_forwards_filters_to_sampling(client: TestClient) -> None:
+    """The request ``sample_query.filters`` must reach the connector sampling call."""
+    ci = _make_mock_connector_instance()
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+    expected_schema = {"type": "object", "properties": {}}
+    filters = {"state": "open", "labels": ["bug"]}
+
+    with (
+        patch("modulo.api.routes.schemas.get_connector_instance", return_value=ci),
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch(
+            "modulo.api.routes.schemas.ConnectorHub.sample",
+            return_value=[{"id": "1"}],
+        ) as mock_sample,
+        patch("modulo.api.routes.schemas.SchemaInferenceService.infer", return_value=expected_schema),
+        patch("modulo.api.routes.schemas.ConnectorHub.initialise"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/infer",
+            json={
+                "connector_instance_id": str(_CONNECTOR_ID),
+                "sample_query": {
+                    "resource": "issues",
+                    "filters": filters,
+                    "limit": 5,
+                },
+            },
+        )
+
+    assert resp.status_code == 200
+    mock_sample.assert_awaited_once()
+    assert mock_sample.await_args.kwargs["filters"] == filters
+    assert mock_sample.await_args.kwargs["limit"] == 5
+
+
 def test_infer_schema_connector_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.schemas.get_connector_instance", return_value=None),

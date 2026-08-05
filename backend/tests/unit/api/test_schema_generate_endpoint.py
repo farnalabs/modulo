@@ -230,13 +230,45 @@ def test_generate_schema_missing_description_returns_422(client: TestClient) -> 
     assert resp.status_code == 422
 
 
-@pytest.mark.xfail(reason="pre-existing mock issue — AsyncSession.execute returns coroutine instead of iterable")
 def test_generate_schema_invalid_examples_type_returns_422(client: TestClient) -> None:
     resp = client.post(
         "/api/v1/schemas/generate",
         json={"description": "A profile", "examples": "not a list"},
     )
     assert resp.status_code == 422
+
+
+def test_generate_schema_forwards_examples_to_generation_service(client: TestClient) -> None:
+    """The request ``examples`` field must reach SchemaGenerationService.generate."""
+    mb = _make_mock_model_backend()
+    page_result = MagicMock(items=[mb], total=1, page=1, page_size=1)
+    backend_id = uuid.uuid4()
+    expected_schema = {"type": "object", "properties": {}}
+    examples = [{"name": "Alice", "email": "alice@example.com"}]
+
+    with (
+        patch("modulo.api.routes.schemas.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.schemas.set_rls_org"),
+        patch("modulo.api.routes.schemas.ModelBackendHub.initialise"),
+        patch(
+            "modulo.api.routes.schemas.ModelBackendHub.backend_ids",
+            new_callable=PropertyMock(return_value=frozenset({backend_id})),
+        ),
+        patch("modulo.api.routes.schemas.ModelBackendHub.get", return_value=MagicMock()),
+        patch(
+            "modulo.api.routes.schemas.SchemaGenerationService.generate",
+            return_value=expected_schema,
+        ) as mock_generate,
+        patch("modulo.api.routes.schemas.create_secrets_backend"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/generate",
+            json={"description": "A profile", "examples": examples},
+        )
+
+    assert resp.status_code == 200
+    mock_generate.assert_awaited_once()
+    assert mock_generate.await_args.kwargs["examples"] == examples
 
 
 def test_generate_schema_extra_fields_accepted(client: TestClient) -> None:
