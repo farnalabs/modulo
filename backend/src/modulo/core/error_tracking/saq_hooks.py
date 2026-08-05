@@ -97,7 +97,7 @@ def _classify(function: str, status: Any, error: str | None, kwargs: dict[str, A
     run_id = kwargs.get("run_id")
     org_id = kwargs.get("org_id")
 
-    is_run_job = function.endswith("execute_run") or function.endswith("resume_run")
+    is_run_job = function.endswith(("execute_run", "resume_run"))
     if is_run_job and run_id:
         return {
             "action": "fail_run",

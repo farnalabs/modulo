@@ -117,7 +117,7 @@ async def list_feature_flags(
         cache_key = f"feature-flags:{current_user.organisation_id}"
         cached = await redis.get(cache_key)
         if cached:
-            return cast(dict[str, Any], json.loads(cached))
+            return cast("dict[str, Any]", json.loads(cached))
     except Exception:
         logger.warning("feature-flags.cache_read_failed", exc_info=True)
     finally:

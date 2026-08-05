@@ -114,8 +114,6 @@ class SchedulerDBError(Exception):
     the SAQ scheduler modules never import the deleted Celery task module.
     """
 
-    pass
-
 
 def _make_sync_url(database_url: str) -> str:
     """Convert async DB URL to sync by replacing async driver with sync equivalent."""

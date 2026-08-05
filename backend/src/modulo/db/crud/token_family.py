@@ -139,7 +139,7 @@ async def consume_break_glass_credential(
         )
     )
     result = cast(
-        CursorResult[Any],
+        "CursorResult[Any]",
         await session.execute(
             text(statement).bindparams(
                 bg_new_hash=new_password_hash,

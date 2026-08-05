@@ -39,7 +39,7 @@ async def list_tiers_endpoint(
         cache_key = f"tiers:{current_user.organisation_id}"
         cached = await redis.get(cache_key)
         if cached:
-            return typing.cast(dict[str, Any], json.loads(cached))
+            return typing.cast("dict[str, Any]", json.loads(cached))
     except Exception:
         logger.warning("tiers.cache_read_failed", exc_info=True)
     finally:

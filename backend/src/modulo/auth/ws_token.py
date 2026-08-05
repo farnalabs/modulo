@@ -70,7 +70,7 @@ async def consume_ws_token(
         decoded = json.loads(data.decode()) if isinstance(data, bytes) else json.loads(data)
         if not isinstance(decoded, dict):
             raise ValueError("WS token payload must be an object")
-        return cast(dict[str, Any], decoded)
+        return cast("dict[str, Any]", decoded)
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
         _log.error("ws_token.corrupt_data", extra={"error": str(exc)})
         raise WsTokenConsumeError(f"Corrupt WS token data: {exc}") from exc

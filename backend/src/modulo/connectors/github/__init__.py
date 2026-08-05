@@ -182,7 +182,7 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"GitHub API returned invalid JSON: {response.text[:200]}") from exc
 
     async def _parse_json_object(self, response: httpx.Response) -> dict[str, Any]:
-        return cast(dict[str, Any], await self._parse_json(response))
+        return cast("dict[str, Any]", await self._parse_json(response))
 
     @staticmethod
     def _parse_scopes_from_headers(response: httpx.Response) -> set[str]:
@@ -377,7 +377,7 @@ class GitHubConnector(ConnectorBase):
                         params[key] = q.filters[key]
                 r = await self._call_api("GET", "/search/issues", params=params)
                 body = await self._parse_json_object(r)
-                items = cast(list[dict[str, Any]], body.get("items", []))
+                items = cast("list[dict[str, Any]]", body.get("items", []))
                 links = _parse_link_header(r)
                 return ConnectorResult(records=items, total=body.get("total_count"), next_cursor=links.get("next"))
             case _:
