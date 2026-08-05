@@ -174,3 +174,40 @@ def test_registry_has_expected_identifiers() -> None:
 def test_calculated_allowed_excludes_reported() -> None:
     assert "reported" not in CALCULATED_ALLOWED_IDENTS
     assert frozenset({"reported"}) == SELF_REPORTED_ALLOWED_IDENTS
+
+
+def test_validate_formula_none_is_noop() -> None:
+    validate_formula(None, _SANDBOX)
+
+
+def test_newline_inside_formula_is_unexpected_character() -> None:
+    # The tokenizer's catch-all '.' does not match a newline, so the regex
+    # fails to match -> the unexpected_character path fires.
+    with pytest.raises(CostFormulaError) as exc_info:
+        validate_formula("1\n", _SANDBOX)
+    assert exc_info.value.code == "unexpected_character"
+
+
+def test_missing_rparen_is_unexpected_token() -> None:
+    with pytest.raises(CostFormulaError) as exc_info:
+        validate_formula("(1 + 2", _SANDBOX)
+    assert exc_info.value.code == "unexpected_token"
+
+
+def test_trailing_operator_is_unexpected_token() -> None:
+    with pytest.raises(CostFormulaError) as exc_info:
+        validate_formula("1 +", _SANDBOX)
+    assert exc_info.value.code == "unexpected_token"
+    assert "end of formula" in str(exc_info.value)
+
+
+def test_stray_operator_in_primary_is_unexpected_token() -> None:
+    with pytest.raises(CostFormulaError) as exc_info:
+        validate_formula("1 + * 2", _SANDBOX)
+    assert exc_info.value.code == "unexpected_token"
+
+
+def test_non_finite_param_result_is_eval_error() -> None:
+    with pytest.raises(CostFormulaError) as exc_info:
+        evaluate_formula("wall_clock_hours", {"wall_clock_hours": Decimal("Infinity")}, _SANDBOX)
+    assert exc_info.value.code == "eval_error"
