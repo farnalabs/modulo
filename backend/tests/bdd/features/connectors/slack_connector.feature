@@ -193,3 +193,15 @@ Feature: Slack Connector
     Given a Slack connector with valid bot token
     When I write resource "file_upload" with filename "notes.txt" but no content
     Then the write is an error
+
+  Scenario: Health check passes when bot is in a channel
+    Given a Slack connector with valid bot token
+    And the Slack connector health check passes
+    When I perform a health check
+    Then the health result is ok
+
+  Scenario: Health check reports when bot is not in any channel
+    Given a Slack connector with valid bot token
+    And the Slack connector health check reports the bot is not in any channel
+    When I perform a health check
+    Then the health result is not ok

@@ -125,3 +125,13 @@ class TestConstructorOverrides:
         with TestClient(app) as client:
             resp = client.post("/mcp/messages")
         assert resp.status_code == 429
+
+    def test_registry_error_fails_open(self):
+        """When registry.check raises (e.g. Redis outage), request passes through."""
+        mock_registry = MagicMock(spec=RateLimiterRegistry)
+        mock_registry.check = AsyncMock(side_effect=RuntimeError("redis unavailable"))
+        app = _make_app(registry=mock_registry)
+        with TestClient(app) as client:
+            resp = client.post("/api/v1/runs")
+        assert resp.status_code == 200
+        assert resp.json() == {"id": "run-1"}
