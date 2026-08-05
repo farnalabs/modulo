@@ -59,6 +59,11 @@ from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
+from modulo.core.cost_controller.breakdown.constants import (
+    MAX_REPORTABLE_BAND_USD,
+    MAX_REPORTABLE_USD_MIN,
+)
+from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.input_truncation import truncate_input
@@ -82,6 +87,128 @@ _MAX_ERROR_MSG = 500
 _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
+
+# The raw_reported display clamp for the node-output surface: the RAW value
+# rides for audit, the SEPARATE clamped display field is what the UI/money
+# formatter renders.
+_NODE_OUTPUT_DISPLAY_CLAMP = 1e6
+
+
+def _effective_self_reported_cap() -> float:
+    """The per-node clamp ceiling (Settings knob, min-capped at the column cap).
+
+    devtools' ``read_opencode_cost`` uses the CONSTANTS default via this name;
+    the backend node_runner clamp is AUTHORITATIVE — the executor re-applies
+    the Settings-knob clamp (effective value min-capped at the column cap) when
+    it extracts ``model_cost_usd`` from the node output, so a devtools-side
+    default drift can never bypass the knob.
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().effective_max_self_reported_usd)
+    except Exception:
+        _log.debug("sandbox_cost.self_reported_cap_lookup_failed; using default", exc_info=True)
+        from modulo.core.cost_controller.breakdown.constants import MAX_SELF_REPORTED_USD
+
+        return float(MAX_SELF_REPORTED_USD)
+
+
+def _extract_reported_cost(
+    output_json: Any,
+    *,
+    max_reportable_usd_min: float | None = None,
+    max_reportable_band_usd: float | None = None,
+    per_node_cap: float | None = None,
+) -> tuple[float, float, bool, bool] | None:
+    """Tri-state + BAND extraction — the SINGLE extraction authority.
+
+    Returns ``(raw, clamped, was_clamped, out_of_band_high)`` ONLY for a
+    POSITIVE finite numeric ``model_cost_usd`` (> 0). ``None`` for absent key,
+    non-dict, non-numeric, NaN/Inf, negative, zero, or bool (bool rejected
+    explicitly). ``None`` => the key is NOT written.
+
+    The raw input is read from ``model_cost_raw_usd`` WHEN PRESENT (the
+    producer's pre-clamp value — devtools writes it), falling back to
+    ``model_cost_usd`` for legacy producers. The flags derive from the TRUE raw.
+
+    CLAMP ORDER (pinned): the value is clamped at the per-node cap
+    (``_effective_self_reported_cap()``, min-capped at the column cap) AND at
+    the BAND CEILING (``MAX_REPORTABLE_BAND_USD`` = 50.0). Because band <
+    per-node cap (50 < 10000), ``min(min(raw, cap), band) == min(min(raw,
+    band), cap)`` — the final value is IDENTICAL regardless of clamp order.
+    ``was_clamped = clamped != raw`` (ANY clamp — band OR per-node);
+    ``out_of_band_high = raw > band``.
+
+    SCHEMA-DRIFT FLAG READ AT THE TOP: the devtools-emitted ``schema_drift``
+    producer-wire key (the FATAL minimal dict ``{"schema_drift": true}``
+    forwarded by write_output) returns ``None`` (no report) when truthy — a
+    drifted-schema node reports NO cost. The COUNTER INCREMENT does NOT happen
+    here (the provenance gate is evaluated in ``_enrich_union``, PR A2, where
+    the frozen node-type map is in scope).
+    """
+    if not isinstance(output_json, dict):
+        return None
+    if output_json.get("schema_drift"):
+        return None
+    val = output_json.get("model_cost_raw_usd")
+    if val is None:
+        val = output_json.get("model_cost_usd")
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return None
+    try:
+        val_f = float(val)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not (math.isfinite(val_f) and val_f > 0):
+        return None
+    floor = float(max_reportable_usd_min) if max_reportable_usd_min is not None else float(MAX_REPORTABLE_USD_MIN)
+    if val_f < floor:
+        return None
+    raw = val_f
+    cap = per_node_cap if per_node_cap is not None else _effective_self_reported_cap()
+    clamped = min(raw, cap)
+    band = float(max_reportable_band_usd) if max_reportable_band_usd is not None else float(MAX_REPORTABLE_BAND_USD)
+    out_of_band_high = False
+    if clamped > band:
+        clamped = band
+        out_of_band_high = True
+        record_out_of_band("cost_out_of_band_high")
+        _log.warning(
+            "cost_components_out_of_band_high",
+            extra={"direction": "cost_out_of_band_high", "raw": raw, "clamped": clamped},
+        )
+    was_clamped = clamped != raw
+    return raw, clamped, was_clamped, out_of_band_high
+
+
+def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
+    """Build the node-output model-cost fields (audit + display + flags).
+
+    Returns an EMPTY dict when the node carries no report (the keys are ABSENT
+    — ``0.0`` is NEVER written as a report). When a report exists the fields
+    are: ``model_cost_usd`` (clamped), ``model_cost_raw_usd`` (pre-clamp, for
+    audit), ``model_cost_display_usd`` (clamped-at-1e6 — the UI/money formatter
+    renders THIS field, so the raw value never reaches the money path),
+    ``model_cost_clamped`` and ``model_cost_out_of_band_high`` (BOTH written
+    UNCONDITIONALLY — true/false explicitly, derived from the TRUE raw so a
+    legacy or hostile marker already on the node output can never survive).
+    """
+    extracted = _extract_reported_cost(output_json)
+    if extracted is None:
+        return {}
+    raw, clamped, was_clamped, out_of_band_high = extracted
+    display = min(clamped, _NODE_OUTPUT_DISPLAY_CLAMP)
+    return {
+        "model_cost_usd": clamped,
+        "model_cost_raw_usd": raw,
+        "model_cost_display_usd": display,
+        "model_cost_clamped": was_clamped,
+        "model_cost_out_of_band_high": out_of_band_high,
+    }
+
 
 # Per-run agent runtime cost: E2B sandbox hourly rate (USD) used to estimate
 # sandbox_agent node cost from wall-clock time. E2B bills per-second sandbox
@@ -920,6 +1047,7 @@ def make_sandbox_agent_fn(
                                     "exit_code": exit_code,
                                     "wall_clock_time_ms": int(elapsed * 1000),
                                     "cost_estimate_usd": _cost_estimate_usd,
+                                    **_build_model_cost_fields(output_json),
                                     "output_json": output_json,
                                     "agent_stdout": agent_stdout,
                                     "agent_stderr": agent_stderr,
@@ -931,6 +1059,7 @@ def make_sandbox_agent_fn(
                             "summary": "Output failed schema validation",
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "cost_estimate_usd": _cost_estimate_usd,
+                            **_build_model_cost_fields(output_json),
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
                         },
@@ -961,6 +1090,7 @@ def make_sandbox_agent_fn(
                             "exit_code": exit_code,
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "cost_estimate_usd": _cost_estimate_usd,
+                            **_build_model_cost_fields(output_json),
                             "output_json": output_json,
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
@@ -972,6 +1102,7 @@ def make_sandbox_agent_fn(
                     "summary": result_summary,
                     "wall_clock_time_ms": int(elapsed * 1000),
                     "cost_estimate_usd": _cost_estimate_usd,
+                    **_build_model_cost_fields(output_json),
                     "agent_stdout": agent_stdout,
                     "agent_stderr": agent_stderr,
                 },
@@ -1023,6 +1154,7 @@ def make_sandbox_agent_fn(
                             "exit_code": -1,
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "cost_estimate_usd": _cost_estimate_usd,
+                            **_build_model_cost_fields(_exc_output_json),
                             "agent_stdout": _exc_stdout,
                             "agent_stderr": _exc_stderr,
                         },
@@ -1033,6 +1165,7 @@ def make_sandbox_agent_fn(
                     "summary": "Sandbox agent execution failed",
                     "wall_clock_time_ms": int(elapsed * 1000),
                     "cost_estimate_usd": _cost_estimate_usd,
+                    **_build_model_cost_fields(_exc_output_json),
                     "agent_stdout": _exc_stdout,
                     "agent_stderr": _exc_stderr,
                 },

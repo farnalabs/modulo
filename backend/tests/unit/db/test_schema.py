@@ -11,6 +11,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "chat_sessions",
         "composite_templates",
         "connector_instances",
+        "cost_components",
         "dismissals",
         "environment_profiles",
         "error_events",
