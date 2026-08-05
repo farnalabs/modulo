@@ -53,7 +53,7 @@ class _MockSession:
         return self._get_bind()
 
     async def get(self, model: Any, pk: Any) -> SimpleNamespace:
-        return SimpleNamespace(max_concurrent_runs=5)
+        return SimpleNamespace(max_concurrent_runs=5, status="running")
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         self.executed.append((stmt, params))
@@ -76,7 +76,14 @@ def _rows_result(rows: list[Any]) -> MagicMock:
     return r
 
 
-def _run_row(run_id: uuid.UUID, status: str, *, dispatched: bool = True, stale: bool = True) -> SimpleNamespace:
+def _run_row(
+    run_id: uuid.UUID,
+    status: str,
+    *,
+    dispatched: bool = True,
+    stale: bool = True,
+    nodeless: bool = False,
+) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     return SimpleNamespace(
         id=run_id,
@@ -84,6 +91,11 @@ def _run_row(run_id: uuid.UUID, status: str, *, dispatched: bool = True, stale: 
         status=status,
         dispatched_at=datetime.now(UTC) if dispatched else None,
         heartbeat_at=heartbeat,
+        # Non-None by default (has finalised node output → NOT nodeless); a
+        # nodeless zombie has never finalised any node.
+        node_token_usage=None if nodeless else {},
+        outputs_json=None if nodeless else {},
+        started_at=datetime.now(UTC) - timedelta(minutes=60) if nodeless else datetime.now(UTC) - timedelta(minutes=1),
     )
 
 
@@ -92,6 +104,7 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_runs_queue": "runs",
         "saq_reenqueue_window": 600,
         "saq_job_heartbeat": 300,
+        "saq_claimed_nodeless_minutes": 45,
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
     }
@@ -225,6 +238,58 @@ class TestReconcilePredicateMatrix:
         assert summary["skipped"] == 1
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_running_nodeless_fresh_heartbeat_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A claimed-but-nodeless zombie (running + FRESH heartbeat + zero node
+        output after the nodeless window) is terminal-failed, never re-dispatched.
+        The fresh heartbeat keeps it invisible to the stale branch — that is the
+        primary hang mechanism this branch closes."""
+        summary, reenqueue, ingest, _ = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)],
+        )
+        assert summary["nodeless_failed"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_running_with_node_output_not_nodeless(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run that finalised node output is NOT nodeless — a stale-heartbeat
+        one still takes the worker-lost re-dispatch repair, never the fail."""
+        summary, reenqueue, _, _ = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_RUNNING, "running", stale=True, nodeless=False)],
+        )
+        assert summary["repaired"] == 1
+        assert summary["nodeless_failed"] == 0
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+
+    @pytest.mark.asyncio
+    async def test_nodeless_age_gate_requires_staleness(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Age-gate unit check: a nodeless-but-recently-started run is NOT
+        matched (the predicate age gate protects a legitimate long first node)."""
+        row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
+        row.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        assert ch._is_nodeless_zombie_row(row, 45) is False
+
+    @pytest.mark.asyncio
+    async def test_nodeless_with_recent_start_falls_through_to_job_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A nodeless run that started recently (age gate not elapsed) is not
+        failed by the nodeless branch; with a fresh heartbeat and no other
+        branch matching, it is skipped (job exists) rather than failed."""
+        row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
+        row.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        summary, reenqueue, _, _ = await _run_reconcile(
+            monkeypatch,
+            [row],
+            queue_job_result=SimpleNamespace(id="saq:job:runs:run:x"),
+        )
+        assert summary["nodeless_failed"] == 0
+        assert summary["skipped"] == 1
+        reenqueue.assert_not_awaited()
 
 
 class TestReconcileRedisFailSafe:

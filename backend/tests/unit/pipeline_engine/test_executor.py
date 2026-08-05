@@ -536,6 +536,40 @@ async def test_execute_seeds_state_with_run_context():
     assert captured_state["artifacts"] == []
 
 
+async def test_execute_fires_on_first_progress_once():
+    """_stream_graph fires on_first_progress exactly once — at the FIRST node
+    dispatch — so the execute_run zombie watchdog stands down once real node
+    work begins (pipeline_execution.zombie_watchdog)."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    events = [
+        {"event": "on_chain_start", "name": "node-a", "data": {}},
+        {"event": "on_chain_end", "name": "node-a", "data": {"output": {"status": "ok"}}},
+    ]
+    compiled = _mock_compiled(events)
+    registry = _mock_registry()
+    progress: list[str] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor.on_first_progress = lambda: progress.append("first")
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert progress == ["first"]
+
+
 # ---------------------------------------------------------------------------
 # PipelineExecutor.execute — run not found
 # ---------------------------------------------------------------------------

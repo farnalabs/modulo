@@ -7,6 +7,8 @@ behaviour (two concurrent claims -> exactly one) lives in
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -946,3 +948,207 @@ class TestSaqWorkerSettings:
         assert captured["socket_connect_timeout"] == 10
         assert captured["socket_keepalive"] is True
         assert captured["max_connections"] == 50
+
+
+# ---------------------------------------------------------------------------
+# Zombie-run protection — fail_run_terminal / zombie_watchdog /
+# run_executor_with_watchdog (2026-08-05)
+# ---------------------------------------------------------------------------
+
+
+class TestFailRunTerminal:
+    async def _session_patch(self) -> Any:
+        session = MagicMock()
+        session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
+        session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        return session, factory
+
+    @pytest.mark.asyncio
+    async def test_fails_running_run(self) -> None:
+        run = SimpleNamespace(status="running", completed_at=None, error_code=None, error_detail=None)
+        _session, factory = await self._session_patch()
+        with (
+            patch.object(pe, "get_run", AsyncMock(return_value=run)),
+            patch.object(pe, "async_sessionmaker") as mock_factory,
+            patch.object(pe, "set_rls_org", AsyncMock()),
+        ):
+            mock_factory.return_value = factory
+            ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
+                MagicMock(),
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                error_code="executor_stalled",
+                error_detail="boom",
+            )
+        assert ok is True
+        assert run.status == "failed"
+        assert run.error_code == "executor_stalled"
+        assert run.error_detail == "boom"
+        assert run.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_noop_for_non_running(self) -> None:
+        for status in ("pending", "complete", "failed", "awaiting_human"):
+            run = SimpleNamespace(status=status, completed_at=None)
+            _session, factory = await self._session_patch()
+            with (
+                patch.object(pe, "get_run", AsyncMock(return_value=run)),
+                patch.object(pe, "async_sessionmaker") as mock_factory,
+                patch.object(pe, "set_rls_org", AsyncMock()),
+            ):
+                mock_factory.return_value = factory
+                ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
+                    MagicMock(),
+                    str(uuid.uuid4()),
+                    str(uuid.uuid4()),
+                    error_code="executor_stalled",
+                    error_detail="boom",
+                )
+            assert ok is False
+            assert run.status == status
+
+    @pytest.mark.asyncio
+    async def test_noop_when_run_missing(self) -> None:
+        _session, factory = await self._session_patch()
+        with (
+            patch.object(pe, "get_run", AsyncMock(return_value=None)),
+            patch.object(pe, "async_sessionmaker") as mock_factory,
+            patch.object(pe, "set_rls_org", AsyncMock()),
+        ):
+            mock_factory.return_value = factory
+            ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
+                MagicMock(),
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                error_code="executor_stalled",
+                error_detail="boom",
+            )
+        assert ok is False
+
+
+class TestZombieWatchdog:
+    @pytest.mark.asyncio
+    async def test_stands_down_on_first_progress(self) -> None:
+        first = asyncio.Event()
+        first.set()
+        exec_task = asyncio.create_task(asyncio.sleep(999))
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail:
+            await pe.zombie_watchdog(  # type: ignore[arg-type]
+                MagicMock(), "run-1", "org-1", first, exec_task=exec_task, grace_seconds=0.01
+            )
+        assert not exec_task.cancelled()
+        fail.assert_not_awaited()
+        exec_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await exec_task
+
+    @pytest.mark.asyncio
+    async def test_stands_down_when_executor_done(self) -> None:
+        async def _done() -> None:
+            return None
+
+        exec_task = asyncio.create_task(_done())
+        await exec_task
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail:
+            await pe.zombie_watchdog(  # type: ignore[arg-type]
+                MagicMock(), "run-1", "org-1", asyncio.Event(), exec_task=exec_task, grace_seconds=0.01
+            )
+        fail.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fails_stalled_run_after_grace(self) -> None:
+        exec_task = asyncio.create_task(asyncio.sleep(999))
+        with patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail:
+            await pe.zombie_watchdog(  # type: ignore[arg-type]
+                MagicMock(), "run-1", "org-1", asyncio.Event(), exec_task=exec_task, grace_seconds=0.01
+            )
+        # Cancellation is requested (may still be unwinding); let it land.
+        assert exec_task.cancelling() or exec_task.cancelled()
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "executor_stalled"
+        with contextlib.suppress(asyncio.CancelledError):
+            await exec_task
+        assert exec_task.cancelled()
+
+
+class TestRunExecutorWithWatchdog:
+    @pytest.mark.asyncio
+    async def test_runs_execute_fn_and_returns_complete(self) -> None:
+        executor = MagicMock()
+        ran: list[str] = []
+
+        async def _execute() -> None:
+            ran.append("executed")
+
+        engine = MagicMock()
+        with (
+            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock),
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_execute,
+            )
+        assert result == {"status": "complete"}
+        assert ran == ["executed"]
+        # on_first_progress was wired to an asyncio.Event.set callable.
+        assert callable(executor.on_first_progress)
+
+    @pytest.mark.asyncio
+    async def test_watchdog_cancels_hung_executor_and_fails_run(self) -> None:
+        executor = MagicMock()
+        started: list[str] = []
+
+        async def _hang() -> None:
+            started.append("started")
+            await asyncio.sleep(999)
+
+        engine = MagicMock()
+        with (
+            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_hang,
+            )
+        assert result == {"status": "complete"}
+        assert started == ["started"]
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "executor_stalled"
+
+    @pytest.mark.asyncio
+    async def test_executor_exception_logged_and_completes(self) -> None:
+        executor = MagicMock()
+
+        async def _boom() -> None:
+            raise RuntimeError("boom")
+
+        engine = MagicMock()
+        with (
+            patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
+            patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock),
+        ):
+            result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
+                engine,
+                run_id=str(uuid.uuid4()),
+                org_id=str(uuid.uuid4()),
+                executor=executor,
+                job=None,
+                execute_fn=_boom,
+            )
+        assert result == {"status": "complete"}

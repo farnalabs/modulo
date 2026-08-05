@@ -28,6 +28,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -77,6 +78,17 @@ _DEFAULT_CLAIM_CAP = 5
 # SAQ run claim cap (plan F6a) — distinct per-claim value; SAQ retries reuse the
 # same saq_job_id, so the cap bounds re-claims on an at-most-once boundary.
 SAQ_RUN_CLAIM_CAP = 20
+
+# Zombie-run error codes (2026-08-05). A claimed run that never dispatches a
+# node must be TERMINAL-FAILED (never left 'running' with a live heartbeat):
+#   - ``executor_setup_failed``: load_and_setup / executor setup raised (e.g.
+#     a DB OperationalError during checkpointer or graph setup) before any node
+#     could run.
+#   - ``executor_stalled``: the execute_run zombie watchdog found the executor
+#     still running with zero node progress after SAQ_SETUP_GRACE_SECONDS and
+#     cancelled it.
+EXECUTOR_SETUP_FAILED_ERROR_CODE = "executor_setup_failed"
+EXECUTOR_STALLED_ERROR_CODE = "executor_stalled"
 
 
 def get_settings() -> Any:
@@ -264,6 +276,174 @@ async def mark_complete(aeng: AsyncEngine, run_id: str, org_id: str) -> None:
         if cur is not None and cur.status == "running":
             cur.status = RUN_COMPLETE_STATUS
             cur.completed_at = datetime.now(UTC)
+
+
+async def fail_run_terminal(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    error_code: str,
+    error_detail: str,
+) -> bool:
+    """Terminal-fail a claimed-but-stuck run (zombie protection).
+
+    Only transitions a run that is currently ``running`` (a run already
+    terminal, or capacity-deferred back to ``pending``, is left untouched —
+    the capacity machinery owns pending runs). Idempotent and safe against a
+    concurrent claimer: the ``running`` guard plus the row write inside the
+    transaction means a second claimer that already reset the run to
+    ``running`` simply overwrites with the same failure.
+    """
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, uuid.UUID(org_id))
+        cur = await get_run(session, uuid.UUID(run_id))
+        if cur is None or cur.status != "running":
+            return False
+        cur.status = "failed"
+        cur.error_code = error_code
+        cur.error_detail = error_detail[:5000]
+        cur.completed_at = datetime.now(UTC)
+    _log.warning(
+        "run.terminal_failed run=%s error_code=%s",
+        run_id,
+        error_code,
+    )
+    return True
+
+
+async def zombie_watchdog(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    first_progress: asyncio.Event,
+    *,
+    exec_task: asyncio.Task[Any],
+    grace_seconds: int | None = None,
+) -> None:
+    """Fail a claimed-but-nodeless run when no node dispatches in time.
+
+    The heartbeat loop starts before ``executor.execute`` so a run hung in the
+    pre-node setup window (checkpointer setup, graph compile, connector hub
+    init, a DB ``OperationalError``) would otherwise stay ``running`` forever
+    with a fresh heartbeat. This watchdog bounds that window: it waits up to
+    *grace_seconds* (default ``SAQ_SETUP_GRACE_SECONDS``) for the executor to
+    signal first progress (first node dispatched via ``on_first_progress``).
+
+    If the executor task finishes first (completion, exception, or
+    capacity-deferral back to ``pending``) the watchdog stands down — a
+    capacity-deferred run is NOT failed. If the window elapses with the
+    executor still running and zero node progress, the watchdog cancels the
+    executor task and terminal-fails the run (``executor_stalled``). Cancelling
+    the executor FIRST ensures a late-returning ``execute`` cannot overwrite the
+    failure through ``finalize_cost``.
+    """
+    if grace_seconds is None:
+        grace_seconds = int(get_settings().saq_setup_grace_seconds)
+    try:
+        await asyncio.wait_for(first_progress.wait(), timeout=grace_seconds)
+        return
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        raise
+
+    if exec_task.done():
+        return
+
+    _log.warning(
+        "zombie_watchdog.stalled run=%s no node dispatched within %ds — cancelling executor and failing run",
+        run_id,
+        grace_seconds,
+    )
+    exec_task.cancel()
+    await fail_run_terminal(
+        aeng,
+        run_id,
+        org_id,
+        error_code=EXECUTOR_STALLED_ERROR_CODE,
+        error_detail=(
+            f"Executor dispatched no node within {grace_seconds}s setup grace (claimed-but-nodeless zombie watchdog)"
+        ),
+    )
+
+
+async def run_executor_with_watchdog(
+    aeng: AsyncEngine,
+    *,
+    run_id: str,
+    org_id: str,
+    executor: Any,
+    job: Any,
+    execute_fn: Callable[[], Awaitable[Any]],
+) -> dict[str, Any]:
+    """Run ``execute_fn`` under the DB heartbeat loop + zombie watchdog.
+
+    Shared by ``saq_worker.execute_run`` and ``resume_run``. Expected flow:
+
+    * The caller has already claimed the run (``status='running'``) and loaded
+      the executor via :func:`load_and_setup`.
+    * The executor must expose ``on_first_progress`` (a no-arg callable); this
+      helper wires it to an :class:`asyncio.Event` that the zombie watchdog
+      waits on. The executor calls it when the first node dispatches.
+    * The heartbeat loop starts concurrently (as today) and keeps the run alive
+      during legitimate node execution.
+    * If no progress is signalled within ``SAQ_SETUP_GRACE_SECONDS`` the
+      watchdog cancels the executor and fails the run (``executor_stalled``) —
+      this is the fix for the 30h+ zombies seen on app.modulo.run.
+    * An ``asyncio.CancelledError`` raised by the executor task is swallowed
+      ONLY when the watchdog caused it (the run is already terminal); a worker
+      shutdown cancellation re-raises.
+
+    Returns ``{"status": "complete"}`` — the caller still runs
+    ``mark_complete`` (a no-op once the run is terminal).
+    """
+    rid = uuid.UUID(run_id)
+
+    first_progress = asyncio.Event()
+    if executor is not None:
+        executor.on_first_progress = first_progress.set
+
+    async def _execute() -> Any:
+        return await execute_fn()
+
+    exec_task = asyncio.create_task(_execute(), name=f"saq-exec-{rid}")
+    watchdog_task = asyncio.create_task(
+        zombie_watchdog(aeng, run_id, org_id, first_progress, exec_task=exec_task),
+        name=f"saq-zombie-watchdog-{rid}",
+    )
+    heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
+        heartbeat_loop(aeng, run_id, org_id, job=job),
+        name=f"saq-heartbeat-{rid}",
+    )
+    try:
+        await exec_task
+    except asyncio.CancelledError:
+        # Distinguish watchdog-initiated cancellation (watchdog task completed
+        # normally after failing the run) from worker shutdown (which cancels
+        # the watchdog task too, so it is cancelled/done-absent).
+        if watchdog_task.done() and not watchdog_task.cancelled():
+            _log.warning("run_executor_with_watchdog: execution cancelled by zombie watchdog for run %s", rid)
+        else:
+            raise
+    except Exception:
+        _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
+    finally:
+        if watchdog_task is not None:
+            watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog_task
+        if exec_task is not None and not exec_task.done():
+            exec_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await exec_task
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+    return {"status": "complete"}
 
 
 async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
@@ -534,8 +714,9 @@ async def resume_run(
     Claims the run via :func:`claim_resume_run_async`, loads the executor, and
     streams the graph from the checkpoint with *resume_data* as the gate
     decision (plan F6a). Mirrors :func:`execute_run`'s cancellation-safe
-    heartbeat/complete structure: the heartbeat loop is cancelled in ``finally``
-    and completion is written by :func:`mark_complete` (genuine completion only).
+    heartbeat/complete structure and shares the zombie watchdog: a resume that
+    hangs in the pre-stream setup window (checkpointer reload, graph compile)
+    is terminal-failed by :func:`zombie_watchdog` instead of running forever.
     """
     rid = uuid.UUID(run_id)
     oid = uuid.UUID(org_id)
@@ -545,26 +726,31 @@ async def resume_run(
         _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
         return {"status": "not_claimed"}
 
-    run, executor = await load_and_setup(async_engine, rid, oid)
-    if run is None:
-        return {"status": "missing"}
-
-    heartbeat_task: asyncio.Task[Any] | None = None
     try:
-        heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(async_engine, str(rid), str(oid), job=job),
-            name=f"resume-heartbeat-{rid}",
-        )
-        await executor.resume(run_id=rid, org_id=oid, resume_data=resume_data or {})
+        run, executor = await load_and_setup(async_engine, rid, oid)
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.exception("resume_run failed for run %s", rid)
-    finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
+        _log.exception("resume_run: load_and_setup failed for run %s", rid)
+        await fail_run_terminal(
+            async_engine,
+            str(rid),
+            str(oid),
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="load_and_setup failed during resume (pre-stream setup)",
+        )
+        return {"status": "setup_failed"}
+    if run is None:
+        return {"status": "missing"}
+
+    await run_executor_with_watchdog(
+        async_engine,
+        run_id=str(rid),
+        org_id=str(oid),
+        executor=executor,
+        job=job,
+        execute_fn=lambda: executor.resume(run_id=rid, org_id=oid, resume_data=resume_data or {}),
+    )
 
     await mark_complete(async_engine, str(rid), str(oid))
     return {"status": "complete"}

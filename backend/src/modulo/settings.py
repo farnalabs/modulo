@@ -124,6 +124,23 @@ class Settings(BaseSettings):
     saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
     saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
     saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
+    # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
+    # least one node within this setup window or the execute_run zombie watchdog
+    # fails it. Covers the pre-node hang window: checkpointer setup, graph
+    # compile, connector/model-backend hub init, and the first astream_events
+    # super-step. MUST exceed any legitimate pre-first-node setup but stay well
+    # below the run_claim_stale_seconds claim fence so the watchdog wins before
+    # a stale-heartbeat re-claim can double-execute the hung run.
+    saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
+    # heartbeat but ZERO LangGraph checkpoints for its thread after this many
+    # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
+    # normally fails it at SAQ_SETUP_GRACE_SECONDS; this branch catches the case
+    # where the worker process itself is wedged and cannot run the watchdog).
+    # MUST exceed the pipeline's max node timeout so a legitimate long first
+    # node (which writes its first checkpoint only after completing) is never
+    # failed. Default 45 min > the 1800s node timeout used by agent pipelines.
+    saq_claimed_nodeless_minutes: int = Field(default=45, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
