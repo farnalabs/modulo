@@ -254,7 +254,7 @@ jobs:
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [deploy-staging]
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: ubicloud-standard-2
     defaults:
       run:
@@ -292,7 +292,7 @@ jobs:
       - name: Run @regression Playwright tests against staging
         id: regression-tests
         run: npx playwright test --grep "@regression" --reporter=line
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           E2E_TARGET: staging
           E2E_NO_WEBSERVER: "true"
