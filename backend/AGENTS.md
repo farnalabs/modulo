@@ -2,6 +2,10 @@
 
 ## Lessons Learned
 
+### nginx /mcp SSE proxy: never set `Connection ""` on the /mcp location
+
+- The `/mcp` endpoint streams responses (SSE) through the Fly proxy. Setting `proxy_set_header Connection "";` on the `/mcp` location in `deploy/fly/nginx.conf` causes MCP tools to stall indefinitely via the Fly global load balancer — this regression was tried before and reverted. Keep `proxy_buffering off` + `proxy_request_buffering on` + `proxy_http_version 1.1` on `/mcp`, but do NOT set `Connection ""` there (unlike `/api/` and `/healthz`). PR #673 added `proxy_http_version 1.1` + `proxy_request_buffering on` to all proxy blocks and deliberately left `Connection ""` off `/mcp` for exactly this reason. See the `/mcp` block comment in `deploy/fly/nginx.conf`.
+
 ### SQL: raw f-strings are SQL injection
 
 - `text(f"SELECT ... WHERE id = '{value}'")` creates SQL injection vectors even for internal use. Always use parameterized queries: `text("SELECT ... WHERE id = :val").bindparams(val=value)` or SQLAlchemy ORM expressions. This was the single most common critical finding across codebase QA — files across all layers (CRUD, routes, aggregations, analysis) used interpolated values in SQL text.
