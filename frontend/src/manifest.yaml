@@ -478,6 +478,17 @@ routes:
         <<: *team
         deprecated: false
 
+    /admin/costs/components:
+        name: admin-costs-components
+        breadcrumb: Cost Components
+        parent: /admin/costs
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 4
+        type: form_page
+        <<: *team
+        deprecated: false
+
     /admin/connectors:
         name: admin-connectors
         breadcrumb: Connectors

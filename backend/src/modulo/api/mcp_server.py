@@ -54,6 +54,7 @@ from modulo.auth.oauth import (
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.core.cost_controller.breakdown.constants import RAW_REPORTED_DISPLAY_CLAMP
 from modulo.core.cost_controller.finalize import finalize_cancelled_run
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 
@@ -100,6 +101,109 @@ from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
+
+_MCP_SANITIZE_STRING_MAX = 256
+_MCP_BREAKDOWN_KEYS = frozenset(
+    {
+        "component",
+        "display_name",
+        "source",
+        "formula_applied",
+        "rate_usd",
+        "amount_usd",
+        "basis",
+        "missing_self_report",
+        "error",
+        "total_clamped",
+    }
+)
+
+
+def _sanitize_mcp_string(value: str) -> str:
+    """Truncate an agent-controlled string to 256 chars + strip control chars."""
+    cleaned = "".join(ch for ch in value if ch == "\t" or ord(ch) >= 32)
+    return cleaned[:_MCP_SANITIZE_STRING_MAX]
+
+
+def _clamp_mcp_number(value: float) -> float:
+    """Magnitude-clamp any numeric field that can carry a hostile raw value
+    (e.g. ``basis.raw_reported`` of 1e300) at 1e6 for display — the MCP surface
+    cannot render 1e300. Mirrors the breakdown serializer's display clamp."""
+    try:
+        d = Decimal(str(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return 0.0
+    if not d.is_finite() or abs(d) > RAW_REPORTED_DISPLAY_CLAMP:
+        return float(RAW_REPORTED_DISPLAY_CLAMP)
+    return float(d)
+
+
+def _sanitize_mcp_basis_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_mcp_string(value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return _clamp_mcp_number(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_mcp_basis_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_mcp_basis_value(v) for v in value]
+    if value is None:
+        return None
+    return _sanitize_mcp_string(str(value))
+
+
+def _sanitize_cost_breakdown(breakdown: Any) -> list[dict[str, Any]]:
+    """MCP whole-resource sanitize of a run's ``cost_breakdown``.
+
+    Every agent-controlled string — ``component``, ``display_name``,
+    ``formula_applied``, and recursively every string in ``basis`` — is
+    truncated to 256 chars + stripped of control chars; numeric/boolean fields
+    are type-validated; out-of-shape keys are stripped. Numeric fields that can
+    carry a hostile raw magnitude (``basis.raw_reported`` /
+    ``basis.per_node_raw``) are magnitude-clamped at 1e6 for display.
+    """
+    if not isinstance(breakdown, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    for entry in breakdown:
+        if not isinstance(entry, dict):
+            continue
+        out: dict[str, Any] = {}
+        for key, value in entry.items():
+            if key not in _MCP_BREAKDOWN_KEYS:
+                continue
+            if key == "basis":
+                out[key] = _sanitize_mcp_basis_value(value)
+            elif isinstance(value, str):
+                out[key] = _sanitize_mcp_string(value)
+            elif isinstance(value, bool) or value is None:
+                out[key] = value
+            elif isinstance(value, (int, float)):
+                out[key] = _clamp_mcp_number(value)
+            else:
+                out[key] = _sanitize_mcp_string(str(value))
+        sanitized.append(out)
+    return sanitized
+
+
+def _format_breakdown_line(entry: dict[str, Any]) -> str:
+    """Compact single-line rendering of a sanitized breakdown entry."""
+    name = entry.get("display_name") or entry.get("component") or "component"
+    amount = entry.get("amount_usd")
+    if amount is None:
+        amount = entry.get("rate_usd")
+    source = entry.get("source", "")
+    parts = [f"- {name} ({entry.get('component', '')}): ${amount or '0.000000'}"]
+    if source:
+        parts.append(source)
+    if entry.get("missing_self_report") is True:
+        parts.append("(not reported)")
+    if entry.get("error"):
+        parts.append(f"({entry['error']})")
+    return " ".join(parts)
+
 
 _RETRY_DB = retry(
     stop=stop_after_attempt(3),
@@ -1264,7 +1368,9 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         if run.error_code:
             result["error_code"] = run.error_code
         if detail:
-            token_usage = run.node_token_usage or {}
+            from modulo.api.routes.runs import _clamp_node_token_usage_union
+
+            token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
             outputs_json = run.outputs_json or {}
             node_ids: set[str] = set()
             node_ids.update(token_usage.keys())
@@ -1272,20 +1378,25 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             nodes: list[dict[str, Any]] = []
             for nid in sorted(node_ids):
                 usage = token_usage.get(nid, {})
-                # The enriched union's token fields are the SERVER entries
-                # (input_tokens/output_tokens/total_tokens). The old
-                # tokens_in/tokens_out keys never matched the stored shape.
-                t_in = usage.get("input_tokens", usage.get("tokens_in", 0)) or 0
-                t_out = usage.get("output_tokens", usage.get("tokens_out", 0)) or 0
-                nodes.append(
-                    {
-                        "node_id": nid,
-                        "status": "completed" if nid in outputs_json else "processed",
-                        "tokens": t_in + t_out,
-                        "has_output": nid in outputs_json,
-                    }
-                )
+                if not isinstance(usage, dict):
+                    usage = {}
+                t_in = usage.get("input_tokens") or 0
+                t_out = usage.get("output_tokens") or 0
+                node: dict[str, Any] = {
+                    "node_id": nid,
+                    "status": "completed" if nid in outputs_json else "processed",
+                    "input_tokens": t_in,
+                    "output_tokens": t_out,
+                    "total_tokens": usage.get("total_tokens") or (t_in + t_out),
+                    "cost_usd": usage.get("cost_usd", 0),
+                    "has_output": nid in outputs_json,
+                }
+                if usage.get("model_cost_display_usd") is not None:
+                    node["model_cost_display_usd"] = usage["model_cost_display_usd"]
+                nodes.append(node)
             result["nodes"] = nodes
+            if run.cost_breakdown is not None:
+                result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
         return result
     except ProgrammingError:
         _log.exception("get_run_status failed")
@@ -3176,12 +3287,18 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not result.items:
         return f"Pipeline '{pipeline.name}' has no runs."
 
-    lines = [
-        f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
-        f"created={r.created_at.isoformat()} | "
-        f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
-        for r in result.items
-    ]
+    lines = []
+    for r in result.items:
+        line = (
+            f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
+            f"created={r.created_at.isoformat()} | "
+            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
+        )
+        if r.cost_breakdown is not None:
+            breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
+            if breakdown:
+                line += " | breakdown={" + ", ".join(_format_breakdown_line(e) for e in breakdown) + "}"
+        lines.append(line)
     return f"Runs for pipeline {pipeline.name} ({result.total} total):\n" + "\n".join(lines)
 
 
@@ -3336,6 +3453,13 @@ async def resource_run(run_id: str) -> str:
     ]
     if run.error_code:
         parts.append(f"Error: {run.error_code}")
+    if run.total_cost_usd is not None:
+        parts.append(f"Total cost: ${run.total_cost_usd}")
+    if run.cost_breakdown is not None:
+        breakdown = _sanitize_cost_breakdown(run.cost_breakdown)
+        if breakdown:
+            parts.append("Cost breakdown:")
+            parts.extend(_format_breakdown_line(entry) for entry in breakdown)
     return "\n".join(parts)
 
 

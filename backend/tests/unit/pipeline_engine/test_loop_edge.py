@@ -69,6 +69,28 @@ class TestMakeLoopRouter:
             assert route == "target"
         assert state["_iteration_counts"]["source->target"] == 100
 
+    def test_unseeded_state_is_seeded_by_router(self):
+        """The router must establish the counter when state was never seeded.
+
+        This is the belt-and-suspenders guard for the prod bug where
+        ``_seed_state`` did not seed ``_iteration_counts``: the router must
+        place the dict into the shared state so its in-place mutation persists
+        across steps and ``max_iterations`` can trip.
+        """
+        router = _make_loop_router("source", "target", "exit", 2, None)
+        state: dict[str, Any] = {}
+        assert router(state) == "target"  # 1 (count=1, < 2)
+        assert router(state) == "exit"  # 2 (count=2, >= 2)
+        assert router(state) == "exit"  # 3 (count=3, >= 2)
+        assert state["_iteration_counts"]["source->target"] == 3
+
+    def test_unseeded_state_does_not_overwrite_existing_counts(self):
+        """A pre-seeded counter dict must never be replaced by the guard."""
+        router = _make_loop_router("source", "target", "exit", 1, None)
+        state: dict[str, Any] = {"_iteration_counts": {"source->target": 9}}
+        assert router(state) == "exit"  # count=10, >= 1
+        assert state["_iteration_counts"]["source->target"] == 10
+
 
 # ---------------------------------------------------------------------------
 # build_graph_from_json — integration tests
@@ -197,6 +219,47 @@ class TestBuildGraphWithLoop:
         }
         with pytest.raises(ValueError, match="default_target"):
             build_graph_from_json(graph)
+
+    async def test_loop_terminates_when_state_seeded_via_seed_state(self):
+        """The executor's _seed_state must seed the loop counter so graphs terminate.
+
+        Regression for the prod infinite-loop bug: _seed_state previously
+        returned state WITHOUT ``_iteration_counts``, so the loop router's
+        counter mutation was lost across steps (LangGraph shallow-copies the
+        state dict per superstep) and ``max_iterations`` never tripped — the
+        graph looped until the recursion limit. This exercises the real seeding
+        path ``execute()`` uses and asserts the graph reaches the default target.
+        """
+        from modulo.core.pipeline_engine.executor import _seed_state
+
+        snapshot = MagicMock()
+        snapshot.run_context_defaults = {}
+        snapshot.default_autonomy_level = None
+        initial_state = _seed_state(snapshot, {})
+        assert initial_state["_iteration_counts"] == {}
+
+        graph: dict[str, Any] = {
+            "nodes": [
+                {"id": "entry", "role": None},
+                {"id": "worker", "role": None},
+                {"id": "end", "role": None},
+            ],
+            "edges": [
+                {"source": "entry", "target": "worker", "type": "normal"},
+                {
+                    "source": "worker",
+                    "target": "worker",
+                    "type": "loop",
+                    "max_iterations": 2,
+                    "default_target": "end",
+                },
+            ],
+        }
+        compiled = build_graph_from_json(graph)
+        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+        result = await compiled.ainvoke(initial_state, config)
+        node_ids = [a["node_id"] for a in result["artifacts"]]
+        assert node_ids == ["entry", "worker", "worker", "end"]
 
 
 # ---------------------------------------------------------------------------
