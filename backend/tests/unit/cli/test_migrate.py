@@ -5,16 +5,26 @@ import hashlib
 import json
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from click import ClickException
 from click.testing import CliRunner
 
 from modulo.cli.migrate import (
+    _collect_org_data,
     _compute_export_hash,
     _group_records,
     _hash_record,
+    _import_org_data,
+    _parse_uuid,
     _read_jsonl,
+    _remap_fk_row,
+    _resolve_admin_auth,
     _serialise_row,
+    _verify_admin_access,
     _verify_export,
     _write_jsonl,
     cli,
@@ -64,10 +74,26 @@ class TestComputeExportHash:
         assert len(h) == 64
 
     def test_with_rows(self) -> None:
-        bundle = {"users": [{"id": "u1", "name": "alice"}, {"id": "u2", "name": "bob"}]}
+        # "users" is not an _EXPORT_TABLES entry and would make this vacuous;
+        # use a real table so the rows actually feed the hash.
+        bundle = {"accounts": [{"id": "u1", "name": "alice"}, {"id": "u2", "name": "bob"}]}
         h = _compute_export_hash(bundle)
         assert isinstance(h, str)
         assert len(h) == 64
+
+    def test_rows_affect_hash(self) -> None:
+        assert _compute_export_hash({"accounts": [{"id": "u1"}]}) != _compute_export_hash({"accounts": [{"id": "u2"}]})
+
+    def test_order_independent(self) -> None:
+        # Rows are sorted by id before hashing, so bundle insertion order must
+        # not change the export hash.
+        bundle = {"accounts": [{"id": "u1", "name": "a"}, {"id": "u2", "name": "b"}]}
+        shuffled = {"accounts": [{"id": "u2", "name": "b"}, {"id": "u1", "name": "a"}]}
+        assert _compute_export_hash(bundle) == _compute_export_hash(shuffled)
+
+    def test_only_export_tables_are_hashed(self) -> None:
+        # Unknown keys are ignored by _compute_export_hash.
+        assert _compute_export_hash({"no_such_table": [{"id": "u1"}]}) == _compute_export_hash({})
 
 
 class TestGroupRecords:
@@ -116,6 +142,47 @@ class TestReadJsonl:
         assert meta == {}
         assert records == []
 
+    def test_blank_lines_skipped(self, tmp_path: Path) -> None:
+        path = tmp_path / "blank.jsonl"
+        path.write_text("\n\n" + json.dumps({"__table__": "accounts", "id": "1", "data": {}}) + "\n\n")
+        meta, records = asyncio.run(_read_jsonl(path))
+        assert meta == {}
+        assert len(records) == 1
+
+    def test_record_before_meta(self, tmp_path: Path) -> None:
+        # The first line not being a header must not swallow the record.
+        path = tmp_path / "no_meta.jsonl"
+        path.write_text(json.dumps({"__table__": "accounts", "id": "1", "data": {}}) + "\n")
+        meta, records = asyncio.run(_read_jsonl(path))
+        assert meta == {}
+        assert len(records) == 1
+
+
+class TestReadJsonlErrors:
+    def test_missing_file_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ClickException, match="Input file not found"):
+            asyncio.run(_read_jsonl(tmp_path / "missing.jsonl"))
+
+    def test_invalid_jsonl_line_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.jsonl"
+        path.write_text("{not valid json\n")
+        with pytest.raises(ClickException, match="Invalid JSONL line"):
+            asyncio.run(_read_jsonl(path))
+
+
+class TestParseUuid:
+    def test_valid(self) -> None:
+        uid = uuid.uuid4()
+        assert _parse_uuid(str(uid), "test") == uid
+
+    def test_invalid_raises_click_exception(self) -> None:
+        with pytest.raises(ClickException, match="Invalid organisation ID"):
+            _parse_uuid("not-a-uuid", "organisation ID")
+
+    def test_non_string_raises_click_exception(self) -> None:
+        with pytest.raises(ClickException, match="Invalid"):
+            _parse_uuid(12345, "organisation ID")
+
 
 class TestWriteJsonl:
     def test_writes_header_and_records(self, tmp_path: Path) -> None:
@@ -147,6 +214,67 @@ class TestVerifyExport:
         assert result is False
 
 
+class TestVerifyExportRoundtrip:
+    def test_roundtrip_ok(self, tmp_path: Path) -> None:
+        # Write a bundle, read it back, and confirm verification recomputes the
+        # same export hash from the per-row __hash__ fields.
+        bundle = {
+            "accounts": [
+                {"id": "u1", "name": "alice"},
+                {"id": "u2", "name": "bob"},
+            ],
+            "exported_at": "2024-01-01T00:00:00+00:00",
+        }
+        path = tmp_path / "export.jsonl"
+        _write_jsonl(bundle, path)
+        meta, records = asyncio.run(_read_jsonl(path))
+        assert meta["export_hash"] is not None
+        assert _verify_export(meta, records) is True
+
+    def test_roundtrip_tampered_row_hash_fails(self, tmp_path: Path) -> None:
+        bundle = {
+            "accounts": [{"id": "u1", "name": "alice"}],
+            "exported_at": "2024-01-01T00:00:00+00:00",
+        }
+        path = tmp_path / "export.jsonl"
+        _write_jsonl(bundle, path)
+        meta, records = asyncio.run(_read_jsonl(path))
+        records[0]["__hash__"] = "0" * 64
+        assert _verify_export(meta, records) is False
+
+
+# ── FK row remapping ─────────────────────────────────────────────────────────
+
+
+class TestRemapFkRow:
+    def test_remaps_mapped_values(self) -> None:
+        id_map = {"11111111-1111-1111-1111-111111111111": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+        row = {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "organisation_id": "org-1",
+            "owner_team_id": "11111111-1111-1111-1111-111111111111",
+            "created_at": "2024-01-01",
+            "name": "prod",
+        }
+        _remap_fk_row(row, id_map)
+        # id / organisation_id / created_at are excluded from remapping.
+        assert row["id"] == "11111111-1111-1111-1111-111111111111"
+        assert row["organisation_id"] == "org-1"
+        assert row["created_at"] == "2024-01-01"
+        assert row["owner_team_id"] == uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    def test_unmapped_values_untouched(self) -> None:
+        row = {"owner_team_id": "22222222-2222-2222-2222-222222222222", "name": "prod"}
+        _remap_fk_row(row, {"11111111-1111-1111-1111-111111111111": "x"})
+        assert row["owner_team_id"] == "22222222-2222-2222-2222-222222222222"
+
+    def test_none_values_untouched(self) -> None:
+        row = {"owner_team_id": None, "created_by": None}
+        _remap_fk_row(row, {"None": "x"})
+        assert row["owner_team_id"] is None
+        assert row["created_by"] is None
+
+
 # ── Auth tests ───────────────────────────────────────────────────────────────
 
 
@@ -171,6 +299,70 @@ class TestAuth:
         result = runner.invoke(cli, ["--token", "fake.jwt.token", "export-org", "00000000-0000-0000-0000-000000000001"])
         # Will fail later due to DB, but auth should pass
         assert "Admin authentication required" not in result.output
+
+
+class TestResolveAdminAuth:
+    def test_no_token_no_env_returns_none(self) -> None:
+        with patch.dict("os.environ", {"MODULO_ADMIN_SECRET": ""}):
+            assert _resolve_admin_auth(None) is None
+
+    def test_env_secret_uses_marker(self) -> None:
+        with patch.dict("os.environ", {"MODULO_ADMIN_SECRET": "s3cret"}):
+            assert _resolve_admin_auth(None) == "__admin_secret__"
+
+    def test_non_admin_token_rejected(self) -> None:
+        with (
+            patch("modulo.cli.migrate.decode_principal") as mock_decode,
+            patch("modulo.cli.migrate.get_settings") as mock_settings,
+        ):
+            mock_decode.return_value = SimpleNamespace(org_role="member", user_id="u1")
+            mock_settings.return_value = MagicMock(secret_key="key")
+            with pytest.raises(ClickException, match="not an admin"):
+                _resolve_admin_auth("some.jwt.token")
+
+    def test_invalid_token_wrapped_as_click_exception(self) -> None:
+        with (
+            patch("modulo.cli.migrate.decode_principal", side_effect=RuntimeError("bad token")),
+            patch("modulo.cli.migrate.get_settings") as mock_settings,
+        ):
+            mock_settings.return_value = MagicMock(secret_key="key")
+            with pytest.raises(ClickException, match="Invalid admin JWT"):
+                _resolve_admin_auth("garbage.jwt.token")
+
+
+class TestVerifyAdminAccess:
+    async def test_admin_secret_bypasses_db(self, org_id: uuid.UUID) -> None:
+        session = MagicMock()
+        await _verify_admin_access(session, org_id, "__admin_secret__")
+        session.execute.assert_not_called()
+
+    async def test_account_not_found_raises(self, org_id: uuid.UUID) -> None:
+        with patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account:
+            mock_account.return_value = None
+            with pytest.raises(ClickException, match="Admin account not found"):
+                await _verify_admin_access(MagicMock(), org_id, str(uuid.uuid4()))
+
+    async def test_non_member_raises(self, org_id: uuid.UUID) -> None:
+        account = MagicMock(id=uuid.uuid4())
+        with (
+            patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
+            patch("modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
+        ):
+            mock_account.return_value = account
+            mock_membership.return_value = None
+            with pytest.raises(ClickException, match="does not belong"):
+                await _verify_admin_access(MagicMock(), org_id, str(account.id))
+
+    async def test_non_admin_role_raises(self, org_id: uuid.UUID) -> None:
+        account = MagicMock(id=uuid.uuid4())
+        with (
+            patch("modulo.cli.migrate.get_account_by_id", new_callable=AsyncMock) as mock_account,
+            patch("modulo.cli.migrate.get_membership_by_account_and_org", new_callable=AsyncMock) as mock_membership,
+        ):
+            mock_account.return_value = account
+            mock_membership.return_value = MagicMock(role="runner")
+            with pytest.raises(ClickException, match="admin-level"):
+                await _verify_admin_access(MagicMock(), org_id, str(account.id))
 
 
 # ── Export command tests ─────────────────────────────────────────────────────
@@ -337,6 +529,17 @@ class TestCollectOrgDataPagination:
             assert ids == sorted(ids)
 
 
+class TestCollectOrgDataFlags:
+    async def test_pipelines_only_and_users_only_mutually_exclusive(self, org_id: uuid.UUID) -> None:
+        with patch("modulo.cli.migrate.get_organisation", new_callable=AsyncMock) as mock_get_org:
+            mock_get_org.return_value = MockModel(id=org_id, name="Org")
+            session = MagicMock()
+            with pytest.raises(ClickException, match="mutually exclusive"):
+                await _collect_org_data(session, org_id, pipelines_only=True, users_only=True)
+            # The validation must fire before any table queries are issued.
+            session.execute.assert_not_called()
+
+
 # ── Import command tests ─────────────────────────────────────────────────────
 
 
@@ -453,6 +656,133 @@ class TestImportOrg:
                 ],
             )
             assert result.exit_code == 0, f"Strategy '{strategy}' failed: {result.output}"
+
+
+class _StubMigrateTable:
+    """Minimal __table__ stand-in exposing primary_key.columns.keys()."""
+
+    primary_key = SimpleNamespace(columns=SimpleNamespace(keys=lambda: ["id"]))
+
+
+class _StubMigrateAccount:
+    """Account stand-in that accepts arbitrary attributes like a mapped model."""
+
+    __table__ = _StubMigrateTable()
+    organisation_id = None
+    email = None
+    display_name = None
+
+    def __init__(self, **kwargs: object) -> None:
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class TestImportOrgData:
+    """Unit coverage for the core _import_org_data conflict-resolution logic."""
+
+    _RECORD: ClassVar[dict[str, object]] = {
+        "__table__": "accounts",
+        "id": "u1",
+        "data": {"id": "u1", "email": "new@x.com"},
+    }
+
+    def _session(self) -> AsyncMock:
+        # begin_nested() must return an async context manager (not the coroutine
+        # an AsyncMock attribute would return) for `async with` to work.
+        session = AsyncMock()
+
+        class _Nested:
+            async def __aenter__(self) -> AsyncMock:
+                return session
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+        session.begin_nested = lambda: _Nested()
+        # add() is a synchronous call in the source; an AsyncMock would return an
+        # unawaited coroutine and trip the repo's error::RuntimeWarning filter.
+        session.add = MagicMock()
+        return session
+
+    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    async def test_creates_new_row(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
+        mock_find.return_value = None
+        session = self._session()
+        counts = await _import_org_data(session, org_id, [dict(self._RECORD)], "skip")
+        assert counts == {"created": 1, "skipped": 0, "overwritten": 0, "errors": 0}
+        added = session.add.call_args[0][0]
+        assert added.email == "new@x.com"
+        # The source organisation_id is stripped and replaced by the target org.
+        assert added.organisation_id == org_id
+        session.flush.assert_awaited()
+
+    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    async def test_skip_strategy_leaves_existing(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
+        existing = _StubMigrateAccount(id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com")
+        mock_find.return_value = existing
+        session = self._session()
+        counts = await _import_org_data(session, org_id, [dict(self._RECORD)], "skip")
+        assert counts == {"created": 0, "skipped": 1, "overwritten": 0, "errors": 0}
+        session.add.assert_not_called()
+        assert existing.email == "old@x.com"
+
+    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    async def test_overwrite_strategy_updates_existing(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
+        existing = _StubMigrateAccount(id=uuid.UUID("11111111-1111-1111-1111-111111111111"), email="old@x.com")
+        mock_find.return_value = existing
+        session = self._session()
+        counts = await _import_org_data(session, org_id, [dict(self._RECORD)], "overwrite")
+        assert counts == {"created": 0, "skipped": 0, "overwritten": 1, "errors": 0}
+        assert existing.email == "new@x.com"
+
+    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    async def test_merge_strategy_keeps_non_null_fields(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
+        record = {
+            "__table__": "accounts",
+            "id": "u1",
+            "data": {"id": "u1", "email": "new@x.com", "display_name": "Renamed"},
+        }
+        existing = _StubMigrateAccount(
+            id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+            email="old@x.com",
+            display_name=None,
+        )
+        mock_find.return_value = existing
+        session = self._session()
+        counts = await _import_org_data(session, org_id, [record], "merge")
+        assert counts["overwritten"] == 1
+        # Merge never clobbers a non-null existing value.
+        assert existing.email == "old@x.com"
+        # Null existing fields are backfilled.
+        assert existing.display_name == "Renamed"
+
+    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    async def test_unknown_table_counts_error(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
+        session = self._session()
+        counts = await _import_org_data(
+            session, org_id, [{"__table__": "no_such_table", "id": "1", "data": {}}], "skip"
+        )
+        assert counts["errors"] == 1
+        session.add.assert_not_called()
+
+    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    @patch("modulo.cli.migrate._find_existing_row", new_callable=AsyncMock)
+    async def test_missing_data_key_counts_error(self, mock_find: AsyncMock, org_id: uuid.UUID) -> None:
+        session = self._session()
+        counts = await _import_org_data(session, org_id, [{"__table__": "accounts", "id": "1"}], "skip")
+        assert counts["errors"] == 1
+        session.add.assert_not_called()
+
+    @patch("modulo.cli.migrate._MODEL_MAP", {"accounts": _StubMigrateAccount})
+    async def test_mutually_exclusive_flags_raise(self, org_id: uuid.UUID) -> None:
+        session = self._session()
+        with pytest.raises(ClickException, match="mutually exclusive"):
+            await _import_org_data(session, org_id, [dict(self._RECORD)], "skip", pipelines_only=True, users_only=True)
 
 
 # ── Verify command tests ─────────────────────────────────────────────────────

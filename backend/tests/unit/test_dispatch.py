@@ -8,7 +8,7 @@ Mock/fake based — no Postgres, no Redis. Covers:
   * fail-fast (webhook) enqueue failure -> deferred, no block
   * claim_token distinct from saq_job_id
   * error enum: 'saq' accepted by the validator, unknown rejected
-  * the call sites route through dispatch_run / dispatch_run_sync
+  * the call sites route through dispatch_run (on-loop via BackgroundTasks)
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_job_heartbeat": 300,
         "saq_run_retries": 5,
         "saq_retry_delay": 60,
-        "saq_redis_pool_size": 5,
+        "saq_redis_pool_size": 20,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -303,10 +303,13 @@ class TestEnqueueSaq:
 
 
 class TestCallSiteConversions:
-    def test_webhooks_module_uses_dispatch_run_sync(self) -> None:
+    def test_webhooks_module_uses_dispatch_run(self) -> None:
+        from fastapi import BackgroundTasks
+
         import modulo.api.routes.webhooks as webhooks
 
-        assert webhooks.dispatch_run_sync is dispatch.dispatch_run_sync
+        assert webhooks.dispatch_run is dispatch.dispatch_run
+        assert webhooks.BackgroundTasks is BackgroundTasks
 
     def test_runs_manual_route_uses_dispatch_run(self) -> None:
         import modulo.api.routes.runs as runs

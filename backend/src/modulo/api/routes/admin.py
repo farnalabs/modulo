@@ -148,19 +148,19 @@ async def global_search(
                         )
                     ).scalar() or 0
 
-                    for row in rows:
-                        all_items.append(
-                            (
-                                row.relevance,
-                                SearchResultItem(
-                                    type="pipeline",
-                                    id=str(row.id),
-                                    title=row.name,
-                                    subtitle=row.description,
-                                    url=f"/pipelines/{row.id}",
-                                ),
-                            )
+                    all_items.extend(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="pipeline",
+                                id=str(row.id),
+                                title=row.name,
+                                subtitle=row.description,
+                                url=f"/pipelines/{row.id}",
+                            ),
                         )
+                        for row in rows
+                    )
                     total_by_type["pipeline"] = count
 
                 elif st == "run":
@@ -316,19 +316,19 @@ async def global_search(
                         )
                     ).scalar() or 0
 
-                    for row in rows:
-                        all_items.append(
-                            (
-                                row.relevance,
-                                SearchResultItem(
-                                    type="library",
-                                    id=str(row.id),
-                                    title=row.name,
-                                    subtitle=row.description,
-                                    url="/libraries",
-                                ),
-                            )
+                    all_items.extend(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="library",
+                                id=str(row.id),
+                                title=row.name,
+                                subtitle=row.description,
+                                url="/libraries",
+                            ),
                         )
+                        for row in rows
+                    )
                     total_by_type["library"] = count
 
             all_items.sort(key=lambda x: (-x[0], x[1].title))
@@ -3092,8 +3092,14 @@ async def admin_get_retention(
         ) from None
 
     retention_days = 90
-    if row and isinstance(row, dict):
-        retention_days = row.get("retention_days", 90)
+    if isinstance(row, dict):
+        raw = row.get("retention_days", 90)
+        if isinstance(raw, bool):
+            retention_days = 90
+        elif isinstance(raw, int) and raw > 0:
+            retention_days = raw
+        elif isinstance(raw, str) and raw.isdigit():
+            retention_days = int(raw)
     return RetentionConfigResponse(retention_days=retention_days)
 
 

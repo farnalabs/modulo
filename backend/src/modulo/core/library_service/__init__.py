@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 import logging
-import os
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -869,11 +866,8 @@ def _filter_modulo(
     primitive_types: list[str] | None = None,
     search: str | None = None,
 ) -> list[LibraryPrimitive]:
-    items = _MODULO_PRIMITIVES
-    if os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
-        items = [*items, *_ensure_dogfood_primitives()]
     return _filter_primitives(
-        items,
+        _MODULO_PRIMITIVES,
         primitive_type=primitive_type,
         primitive_types=primitive_types,
         search=search,
@@ -1015,12 +1009,7 @@ async def get_primitive(
         raise
     if item is not None:
         return item
-    result = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
-    if result is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
-        for p in _ensure_dogfood_primitives():
-            if p.id == primitive_id:
-                return p
-    return result
+    return _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
 
 
 async def get_primitive_by_slug(
@@ -1060,12 +1049,7 @@ async def get_primitive_by_slug(
         raise
     if item is not None:
         return item
-    fallback = _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
-    if fallback is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
-        for p in _ensure_dogfood_primitives():
-            if p.primitive_type == primitive_type and p.slug == slug:
-                return p
-    return fallback
+    return _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
 
 
 async def copy_to_adapt(
@@ -1103,11 +1087,6 @@ async def copy_to_adapt(
             refreshed = await get_library_primitive(session, primitive_id)
             if refreshed is None:
                 refreshed = _MODULO_BY_ID.get(primitive_id) or _COMMUNITY_BY_ID.get(primitive_id)
-            if refreshed is None and os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() in ("true", "1"):
-                for p in _ensure_dogfood_primitives():
-                    if p.id == primitive_id:
-                        refreshed = p
-                        break
             if refreshed is None:
                 raise LookupError(f"Primitive {primitive_id} not found for org {org_id} during copy")
             new_version = _bump_version(refreshed.version)
@@ -1542,53 +1521,6 @@ _MODULO_PRIMITIVES.extend(
 # Indexes for O(1) community lookup
 _MODULO_BY_ID: dict[uuid.UUID, LibraryPrimitive] = {p.id: p for p in _MODULO_PRIMITIVES}
 _MODULO_BY_SLUG: dict[tuple[str, str], LibraryPrimitive] = {(p.primitive_type, p.slug): p for p in _MODULO_PRIMITIVES}
-
-# ---------------------------------------------------------------------------
-# Dogfood primitives (loaded from MODULO_DOGFOOD_JSON_B64 env var).
-# Source of truth: Repos/devtools/dogfood/dogfood-primitives.json.
-# Only loaded when MODULO_DOGFOOD_ENABLED is true.
-# ---------------------------------------------------------------------------
-
-_DOGFOOD_PRIMITIVES: list[LibraryPrimitive] | None = None
-
-
-def _ensure_dogfood_primitives() -> list[LibraryPrimitive]:
-    global _DOGFOOD_PRIMITIVES
-    if _DOGFOOD_PRIMITIVES is not None:
-        return _DOGFOOD_PRIMITIVES
-    if os.environ.get("MODULO_DOGFOOD_ENABLED", "").lower() not in ("true", "1"):
-        _DOGFOOD_PRIMITIVES = []
-        return []
-    encoded = os.environ.get("MODULO_DOGFOOD_JSON_B64", "")
-    if not encoded:
-        _DOGFOOD_PRIMITIVES = []
-        return []
-    try:
-        decoded = base64.b64decode(encoded).decode("utf-8")
-        data = json.loads(decoded)
-        result: list[LibraryPrimitive] = []
-        seen: set[uuid.UUID] = set()
-        for entry in data:
-            pid = uuid.UUID(entry["pid"])
-            if pid in seen:
-                continue
-            seen.add(pid)
-            result.append(
-                _make_modulo(
-                    pid=entry["pid"],
-                    primitive_type=entry["primitive_type"],
-                    name=entry["name"],
-                    slug=entry["slug"],
-                    description=entry["description"],
-                    content_json=entry["content_json"],
-                    tags=entry["tags"],
-                )
-            )
-        _DOGFOOD_PRIMITIVES = result
-    except Exception:
-        logger.warning("Failed to load dogfood primitives from MODULO_DOGFOOD_JSON_B64", exc_info=True)
-        _DOGFOOD_PRIMITIVES = []
-    return _DOGFOOD_PRIMITIVES
 
 
 # ---------------------------------------------------------------------------

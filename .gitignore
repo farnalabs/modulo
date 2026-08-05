@@ -33,6 +33,7 @@ dmypy.json
 coverage.xml
 htmlcov/
 test-results/
+.hypothesis/
 
 # ruff
 .ruff_cache/
@@ -77,9 +78,6 @@ stryker.log
 # Agent worktrees (created by improve-codebase / qa-iterate)
 .agents/worktrees/
 
-# Agent skills (installed via junctions, not committed)
-.agents/skills/
-
 # Local — machine-local tooling, scripts, resources.
 local/
 .local/
@@ -96,6 +94,7 @@ qa-findings-lens*.json
 # Local SQLite databases created by the default development and test settings
 **/modulo.db
 **/test.db
+/backend/*.db
 /backend/*.sqlite
 /backend/*.sqlite3
 

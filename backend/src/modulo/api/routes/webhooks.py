@@ -10,13 +10,11 @@ Auth: HMAC-SHA256 via X-Modulo-Webhook-Secret header (configured per trigger).
 All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 """
 
-import asyncio
-import functools
 import logging
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -30,7 +28,7 @@ from modulo.api.dependencies import (
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
-from modulo.core.dispatch import dispatch_run_sync
+from modulo.core.dispatch import dispatch_run
 from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
     DuplicateWebhookError,
@@ -60,6 +58,7 @@ _trigger_engine = TriggerEngine()
 async def receive_webhook(
     trigger_id: uuid.UUID,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -183,13 +182,7 @@ async def receive_webhook(
         ) from None
 
     run_id = run.id
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(
-        None,
-        functools.partial(dispatch_run_sync, queue="runs", fail_fast=True),
-        str(run_id),
-        str(org_id),
-    )
+    background_tasks.add_task(dispatch_run, str(run_id), str(org_id), queue="runs", fail_fast=True)
 
     return {"run_id": str(run_id), "status": "accepted"}
 
@@ -200,6 +193,7 @@ async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -338,13 +332,7 @@ async def replay_webhook(
         ) from None
 
     run_id = run.id
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(
-        None,
-        functools.partial(dispatch_run_sync, queue="runs", fail_fast=True),
-        str(run_id),
-        str(org_id),
-    )
+    background_tasks.add_task(dispatch_run, str(run_id), str(org_id), queue="runs", fail_fast=True)
 
     return {"run_id": str(run_id), "status": "accepted"}
 

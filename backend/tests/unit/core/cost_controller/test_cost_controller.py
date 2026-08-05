@@ -52,6 +52,8 @@ def _make_daily_count_row(**kw: object) -> MagicMock:
     row.run_date = kw.get("run_date", _TODAY)
     row.run_count = kw.get("run_count", 0)
     row.total_spend_usd = kw.get("total_spend_usd", Decimal(0))
+    row.clamped = kw.get("clamped", False)
+    row.refused_spend_usd = kw.get("refused_spend_usd", Decimal(0))
     return row
 
 
@@ -175,149 +177,226 @@ class TestGetOrCreateDailyCount:
 
 
 class TestCheckAndRecordSpend:
-    async def test_approves_spend_without_limit(self, mock_session: AsyncMock) -> None:
+    """The refusal-window contract (spec §4.6).
+
+    The limit check is keyed to the CREATED-AT day (``created_at_day_start``),
+    the current run is EXCLUDED from each SUM (``id != :current_run_id``) and
+    ``cost_usd`` added UNCONDITIONALLY (counted EXACTLY ONCE per predicate).
+    The SUMs SHORT-CIRCUIT when the limit is NULL (a no-limit org runs NO SUM).
+    BOTH limits are checked BEFORE either spend row is written; a refusal
+    writes the refused amount to the day rows' ``refused_spend_usd``.
+    """
+
+    def _mock_execute(self, *results: MagicMock) -> AsyncMock:
+        return AsyncMock(side_effect=list(results))
+
+    def _scalar_none(self) -> MagicMock:
+        return MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+
+    def _scalar_one(self, value: object) -> MagicMock:
+        return MagicMock(scalar_one=MagicMock(return_value=value), scalar_one_or_none=MagicMock(return_value=value))
+
+    async def test_org_no_limit_runs_no_sum(self, mock_session: AsyncMock) -> None:
+        """A no-limit org (the default) runs NO created-at SUM and never refuses."""
         org_count = _make_daily_count_row(run_count=2, total_spend_usd=Decimal(10))
-        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-                org_limit_result,
-            ]
-        )
-
-        approved, reason = await check_and_record_spend(
-            mock_session, org_id=_ORG_ID, cost_usd=Decimal("5.50"), team_id=None
-        )
+        mock_session.execute = self._mock_execute(self._scalar_none())
+        with patch(
+            "modulo.core.cost_controller.get_or_create_daily_count",
+            new=AsyncMock(return_value=org_count),
+        ):
+            approved, reason = await check_and_record_spend(
+                mock_session,
+                org_id=_ORG_ID,
+                cost_usd=Decimal("5.50"),
+                team_id=None,
+                run_id=uuid.uuid4(),
+                run_date=_TODAY,
+            )
 
         assert approved is True
         assert reason is None
         assert org_count.total_spend_usd == Decimal("15.50")
         assert org_count.run_count == 3
-        mock_session.flush.assert_awaited_once()
-        assert mock_session.execute.await_count == 2
+        assert mock_session.execute.await_count == 1  # org-limit fetch ONLY — no SUM
 
-    async def test_rejects_spend_over_org_limit(self, mock_session: AsyncMock) -> None:
-        org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(90))
-        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(100)))
-
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-                org_limit_result,
-            ]
+    async def test_approves_below_limit(self, mock_session: AsyncMock) -> None:
+        """Day one-cost below the limit accepts."""
+        org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(0))
+        mock_session.execute = self._mock_execute(
+            self._scalar_one(Decimal(100)),  # org limit
+            self._scalar_one(Decimal(50)),  # created-at SUM (excludes current)
         )
-
-        approved, reason = await check_and_record_spend(
-            mock_session, org_id=_ORG_ID, cost_usd=Decimal(20), team_id=None
-        )
-
-        assert approved is False
-        assert "organisation" in (reason or "").lower()
-        assert org_count.run_count == 0
-        assert org_count.total_spend_usd == Decimal(90)
-        mock_session.flush.assert_not_awaited()
-        assert mock_session.execute.await_count == 2
-
-    async def test_approves_spend_at_exact_limit(self, mock_session: AsyncMock) -> None:
-        org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(90))
-        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(100)))
-
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-                org_limit_result,
-            ]
-        )
-
-        approved, reason = await check_and_record_spend(
-            mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None
-        )
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+            approved, reason = await check_and_record_spend(
+                mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
+            )
 
         assert approved is True
         assert reason is None
-        assert org_count.total_spend_usd == Decimal(100)
+        assert org_count.total_spend_usd == Decimal(5)
+        assert org_count.run_count == 1
+        mock_session.flush.assert_awaited_once()
+
+    async def test_accepts_at_half_limit(self, mock_session: AsyncMock) -> None:
+        """A terminal at HALF the limit accepts — the current run is counted ONCE."""
+        org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(0))
+        mock_session.execute = self._mock_execute(
+            self._scalar_one(Decimal(100)),
+            self._scalar_one(Decimal(40)),  # other runs at 40; +10 current = 50 (half)
+        )
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+            approved, _ = await check_and_record_spend(
+                mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
+            )
+
+        assert approved is True
+        assert org_count.total_spend_usd == Decimal(10)
+
+    async def test_refuses_exactly_at_limit(self, mock_session: AsyncMock) -> None:
+        """The day's other runs at EXACTLY the limit -> any positive cost refuses
+        AT the configured limit (never at half)."""
+        org_refused = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(0))
+        mock_session.execute = self._mock_execute(
+            self._scalar_one(Decimal(100)),
+            self._scalar_one(Decimal(100)),  # other runs AT the limit
+        )
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
+            approved, reason = await check_and_record_spend(
+                mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
+            )
+
+        assert approved is False
+        assert reason == "daily_limit_exceeded"
+        # No spend row — a refused-only row carrying the refused amount.
+        assert org_refused.run_count == 0
+        assert org_refused.total_spend_usd == Decimal(0)
+        assert org_refused.refused_spend_usd == Decimal(5)
+
+    async def test_refuses_over_limit(self, mock_session: AsyncMock) -> None:
+        org_refused = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(0))
+        mock_session.execute = self._mock_execute(
+            self._scalar_one(Decimal(100)),
+            self._scalar_one(Decimal(95)),
+        )
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_refused)):
+            approved, reason = await check_and_record_spend(
+                mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
+            )
+
+        assert approved is False
+        assert reason == "daily_limit_exceeded"
+        assert org_refused.refused_spend_usd == Decimal(10)
+        assert org_refused.run_count == 0
+        mock_session.flush.assert_awaited_once()
 
     async def test_approves_with_team_under_both_limits(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(30))
-        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(200)))
         team_count = _make_daily_count_row(team_id=_TEAM_ID, run_count=0, total_spend_usd=Decimal(10))
-        team_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(50)))
-
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-                org_limit_result,
-                MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
-                team_limit_result,
-            ]
+        mock_session.execute = self._mock_execute(
+            self._scalar_one(Decimal(200)),  # org limit
+            self._scalar_one(Decimal(100)),  # org SUM
+            self._scalar_one(Decimal(50)),  # team limit
+            self._scalar_one(Decimal(30)),  # team SUM
         )
-
-        approved, reason = await check_and_record_spend(
-            mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=_TEAM_ID
-        )
+        with patch(
+            "modulo.core.cost_controller.get_or_create_daily_count",
+            new=AsyncMock(side_effect=[org_count, team_count]),
+        ):
+            approved, reason = await check_and_record_spend(
+                mock_session,
+                org_id=_ORG_ID,
+                cost_usd=Decimal(5),
+                team_id=_TEAM_ID,
+                run_id=uuid.uuid4(),
+                run_date=_TODAY,
+            )
 
         assert approved is True
         assert reason is None
+        # Org row written first, then the team row (org-then-team mutation order).
         assert org_count.total_spend_usd == Decimal(35)
         assert org_count.run_count == 2
         assert team_count.total_spend_usd == Decimal(15)
         assert team_count.run_count == 1
 
-    async def test_rejects_spend_over_team_limit(self, mock_session: AsyncMock) -> None:
-        org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(5))
-        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(200)))
-        team_count = _make_daily_count_row(team_id=_TEAM_ID, run_count=2, total_spend_usd=Decimal(45))
-        team_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(50)))
-
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-                org_limit_result,
-                MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
-                team_limit_result,
-            ]
+    async def test_org_passes_team_fails_writes_neither_spend_row(self, mock_session: AsyncMock) -> None:
+        """An org-passing / team-failing run refuses and writes NEITHER spend row;
+        the refused amount is written to BOTH rows' refused_spend_usd."""
+        org_refused = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(5))
+        team_refused = _make_daily_count_row(team_id=_TEAM_ID, run_count=2, total_spend_usd=Decimal(45))
+        mock_session.execute = self._mock_execute(
+            self._scalar_one(Decimal(200)),
+            self._scalar_one(Decimal(50)),
+            self._scalar_one(Decimal(50)),
+            self._scalar_one(Decimal(45)),
         )
-
-        approved, reason = await check_and_record_spend(
-            mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=_TEAM_ID
-        )
+        with patch(
+            "modulo.core.cost_controller.get_or_create_daily_count",
+            new=AsyncMock(side_effect=[org_refused, team_refused]),
+        ):
+            approved, reason = await check_and_record_spend(
+                mock_session,
+                org_id=_ORG_ID,
+                cost_usd=Decimal(10),
+                team_id=_TEAM_ID,
+                run_id=uuid.uuid4(),
+                run_date=_TODAY,
+            )
 
         assert approved is False
-        assert "team" in (reason or "").lower()
-        # Neither org nor team counts are modified when team limit is exceeded.
-        assert org_count.run_count == 1
-        assert org_count.total_spend_usd == Decimal(5)
-        assert team_count.run_count == 2
-        assert team_count.total_spend_usd == Decimal(45)
-        mock_session.flush.assert_not_awaited()
+        assert reason == "daily_limit_exceeded"
+        assert org_refused.run_count == 1  # unchanged
+        assert org_refused.total_spend_usd == Decimal(5)  # unchanged
+        assert org_refused.refused_spend_usd == Decimal(10)
+        assert team_refused.run_count == 2  # unchanged
+        assert team_refused.total_spend_usd == Decimal(45)  # unchanged
+        assert team_refused.refused_spend_usd == Decimal(10)
 
     async def test_approves_when_both_limits_none(self, mock_session: AsyncMock) -> None:
+        """No-limit org AND no-limit team accept every terminal run."""
         org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(0))
-        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         team_count = _make_daily_count_row(team_id=_TEAM_ID, run_count=0, total_spend_usd=Decimal(0))
-        team_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-                org_limit_result,
-                MagicMock(scalar_one_or_none=MagicMock(return_value=team_count)),
-                team_limit_result,
-            ]
+        mock_session.execute = self._mock_execute(
+            self._scalar_none(),  # org limit NULL
+            self._scalar_none(),  # team limit NULL
         )
-
-        approved, reason = await check_and_record_spend(
-            mock_session, org_id=_ORG_ID, cost_usd=Decimal(99999), team_id=_TEAM_ID
-        )
+        with patch(
+            "modulo.core.cost_controller.get_or_create_daily_count",
+            new=AsyncMock(side_effect=[org_count, team_count]),
+        ):
+            approved, reason = await check_and_record_spend(
+                mock_session,
+                org_id=_ORG_ID,
+                cost_usd=Decimal(99999),
+                team_id=_TEAM_ID,
+                run_id=uuid.uuid4(),
+                run_date=_TODAY,
+            )
 
         assert approved is True
         assert reason is None
+        assert mock_session.execute.await_count == 2  # limit fetches only — no SUMs
+
+    async def test_null_owner_writes_org_row_only(self, mock_session: AsyncMock) -> None:
+        """A NULL-owner run (team_id None) writes ONLY the org row — no team row."""
+        org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal(0))
+        mock_session.execute = self._mock_execute(
+            self._scalar_none(),
+        )
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+            approved, reason = await check_and_record_spend(
+                mock_session, org_id=_ORG_ID, cost_usd=Decimal(5), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
+            )
+
+        assert approved is True
+        assert reason is None
+        assert org_count.run_count == 1
+        assert org_count.total_spend_usd == Decimal(5)
 
     @pytest.mark.parametrize(
         ("cost_usd", "reason_keyword"),
         [
-            (Decimal(-5), "non-negative"),
+            (Decimal(-5), "non_negative"),
             (None, "none"),
             (Decimal("NaN"), "finite"),
             (Decimal("Infinity"), "finite"),
@@ -326,7 +405,14 @@ class TestCheckAndRecordSpend:
     async def test_rejects_invalid_cost(
         self, mock_session: AsyncMock, cost_usd: Decimal | None, reason_keyword: str
     ) -> None:
-        approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=cost_usd, team_id=None)
+        approved, reason = await check_and_record_spend(
+            mock_session,
+            org_id=_ORG_ID,
+            cost_usd=cost_usd,
+            team_id=None,
+            run_id=uuid.uuid4(),
+            run_date=_TODAY,
+        )
 
         assert approved is False
         assert reason_keyword in (reason or "").lower()
@@ -334,20 +420,29 @@ class TestCheckAndRecordSpend:
 
     async def test_approves_zero_cost(self, mock_session: AsyncMock) -> None:
         org_count = _make_daily_count_row(run_count=1, total_spend_usd=Decimal(10))
-        org_limit_result = MagicMock(scalar_one_or_none=MagicMock(return_value=Decimal(100)))
-
-        mock_session.execute = AsyncMock(
-            side_effect=[
-                MagicMock(scalar_one_or_none=MagicMock(return_value=org_count)),
-                org_limit_result,
-            ]
-        )
-
-        approved, reason = await check_and_record_spend(mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None)
+        mock_session.execute = self._mock_execute(self._scalar_none())
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+            approved, reason = await check_and_record_spend(
+                mock_session, org_id=_ORG_ID, cost_usd=Decimal(0), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
+            )
 
         assert approved is True
         assert reason is None
         assert org_count.run_count == 2
+
+    async def test_daily_ledger_clamp_sets_clamped(self, mock_session: AsyncMock) -> None:
+        """The started-at-day row over the column ceiling is clamped + flagged."""
+        org_count = _make_daily_count_row(run_count=0, total_spend_usd=Decimal("99999999.999998"))
+        mock_session.execute = self._mock_execute(self._scalar_none())
+        with patch("modulo.core.cost_controller.get_or_create_daily_count", new=AsyncMock(return_value=org_count)):
+            approved, reason = await check_and_record_spend(
+                mock_session, org_id=_ORG_ID, cost_usd=Decimal(10), team_id=None, run_id=uuid.uuid4(), run_date=_TODAY
+            )
+
+        assert approved is True
+        assert reason is None
+        assert org_count.total_spend_usd == Decimal("99999999.999999")
+        assert org_count.clamped is True
 
 
 # ---------------------------------------------------------------------------

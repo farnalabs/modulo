@@ -27,7 +27,7 @@
 - v0.8 — Team entity and team-scoped RBAC; pipeline ownership (team vs org visibility); team-scoped HITL gates; team-scoped connector and model backend access; multi-workspace pattern via teams
 - v0.9 — Ownership picker on all resource creation; team deletion policy; privilege cap on team operators; JWT stale membership documented + immediate revocation path; DB-live check for required_team_id HITL; view_as_team server-enforced (IDOR fix); human_only + required_team_id additive; Stage spec team ownership; post-snapshot ownership change rules; team notification endpoints; team audit events; owner_team_id stripped on bundle export; copy-to-adapt ownership picker; library primitive visibility; alpha schema includes team columns; team cost attribution moved to v1
 - v0.10 — Credential-in-state rule; webhook timestamp in HMAC; FilesystemConnector base_path chroot; schema validation ≠ sanitisation documented; eval injection surface documented; §6.18 API rate limiting; Ed25519 key rotation mechanism; checkpoint blob self-hosted gap documented; JWT algorithm pinning + SECRET_KEY entropy; ConnectorInstance visibility vocabulary unified (private/team-shared → org/team); §7.16 Eval System (new); Error UX spec; stage board search/filter; agent picker + schema picker; run inspection UI; bundle import schema conflict resolution; community library trust tiers; plugin installation mechanism clarified; org/team-level admin spend limits
-- v0.20 — §7.19 Break-glass Admin Recovery (new): operator CLI `modulo-break-glass` (activate/deactivate/status/force-last-admin/smoke), dedicated `modulo_breakglass` role + `MODULO_BREAK_GLASS_DATABASE_URL`, operator-secret auth, exit-code table 0-9, startup-validated settings, boot-time watchdog + advisory /healthz exposure
+- v0.20 — §7.19 Break-glass Admin Recovery (consolidated): prevention (org-wide last-admin guard on REST/SCIM mutation surfaces), recovery via operator CLI `modulo-break-glass` (activate/deactivate/status/force-last-admin/smoke) synthesising a single-use TTL-bounded credential consumed by the login-hook compare-and-swap, deny surfaces (API-key mint deny, webhook use-time revalidation, login deny), dedicated `modulo_breakglass` role + `MODULO_BREAK_GLASS_DATABASE_URL`, operator-secret auth, exit-code table 0-9, startup-validated settings, boot-time watchdog + daily `status --all` sweep, trust-anchor residual
 - v0.11 — StateGraph compile caching; WebSocket fan-out broker; LangGraph generic dict state (no dynamic TypedDict); ConnectorHub one-decrypt-per-run; StubModelBackend BaseChatModel interface; Alembic+LangGraph startup order; webhook flood protection Postgres-backed; pipeline edge data model; OTel bridge elevated as blocking dependency; AsyncPostgresSaver mandate; claim_token alpha = opaque token; teams/ tests moved to v1; alpha rating system moved to v1; MODULO_DEMO_MODE; alpha exit criteria; V1 split into V1 Core + V1 Extended; alpha documentation requirements; API key item moved to Infrastructure; eval JSON column in alpha schema; stage board alpha filter-by-status only
 - v0.12 — Organisation entity fields; PlanContext interface fully specified; Run entity fields; Trigger entity fields; PipelineSnapshot fields; YAML bundle edges block; token counting mechanism; cancelled state mechanics; ConnectorType registration (in-memory entry_points); local vs community library data model discriminator; claim_token inconsistency fixed in Glossary and §5.4; WebSocket reconnection + event replay spec; Pinia store hydration path; HITL claim failure UX; Vue Flow canvas serialisation note; MCP server URL via MODULO_PUBLIC_URL; Playwright agent theme test strategy; agent output sensitive data caveat; copy-to-adapt ownership picker cross-reference fixed
 - v0.13 — WebSocket event typed patch payloads (hitl_claimed/hitl_reviewed added; Pinia patch strategy); CSS custom property theme mechanism (semantic tokens only; [data-theme] layers); focus ring CSS custom properties (--focus-ring-width/color; never suppressed; agent theme high-visibility); Playwright data-loading attribute convention; modulo-state script block removed (replaced by GET /api/v1/viewmodel/current); CopyToAdaptWizard component spec (multi-step modal with configurable steps); canvas viewport state preserved per drill-down level via Vue Router state
@@ -801,7 +801,20 @@ Implementation: Redis-backed token bucket via FastAPI middleware. Redis is an op
 
 ### 7.19 Break-glass Admin Recovery
 
-An org can permanently lose access when its only admin cannot authenticate (forgotten password, SCIM deactivation/demotion of the last admin, lost env secrets). Break-glass recovery lets a **Modulo operator** synthesize a time-boxed, single-use admin credential for any org — without weakening the last-admin invariants (prevention stays active; break-glass never bypasses it).
+An org can permanently lose access when its only admin cannot authenticate (forgotten password, SCIM deactivation/demotion of the last admin, role demotion, lost env secrets). Break-glass recovery lets a **Modulo operator** synthesize a time-boxed, single-use admin credential for any org — without weakening the last-admin invariants (prevention stays active; break-glass never bypasses it). The credential works through the normal `POST /api/v1/auth/login` flow (email + password). See the operational runbook (`docs/operations/break-glass-admin-recovery-runbook.md`) for the operator procedure.
+
+#### Prevention: the last-admin guard
+
+The last-admin invariant is enforced org-wide and active-aware on every mutation surface: REST `admin_update_user` (demotion and `is_active=false`), REST `admin_deactivate_user`, and SCIM `replace_user` (PUT), `patch_user` (PATCH, post-state), and `delete_user` (DELETE). A mutation that would leave the org with zero active, non-break-glass admins is rejected (REST 422, SCIM 409), with a clear "provision a replacement admin first" message. SCIM is closed as a lockout vector on all three verbs, not just PUT. Break-glass accounts are excluded from the remaining-admin count and never bypass the guard — the only path that removes the last non-break-glass admin is the operator `force-last-admin` command below.
+
+#### Recovery: operator-synthesised, single-use, TTL-bounded credential
+
+The operator CLI synthesizes a fresh `is_break_glass` admin account, its org membership, a `break_glass_activated` audit row, and a single-use credential in ONE transaction. `break_glass_expires_at` is DB-clock-authoritative and TTL-bounded (default 1440 min, max 4320 min / 72h). The account is `auth_provider=local`, invisible to tenant-facing surfaces, and consumed on first successful login by a login-route hook:
+
+- **Early deny** — a break-glass account that is deactivated, NULL-expiry, expired, or inactive is denied immediately with a byte-identical 401 (`detail: "Incorrect email or password"`, no `WWW-Authenticate`), identical to a wrong-password response on a normal account, and recorded on the auth rate limiter.
+- **Late CAS (family-first, CAS-last)** — for a live credential, the route mints the token family first, then runs the consume compare-and-swap as the FINAL DB statement before token issuance: `UPDATE accounts SET password_hash = <random non-bcrypt> WHERE id = :id AND password_hash = :old AND <live predicate>`, where the live predicate is emitted from the shared break-glass expiry builder and compares against the DB clock. A rowcount of 1 means this login consumed the credential; a rowcount of 0 (already consumed / expired / deactivated) raises 401 and rolls back the phantom family inside the same transaction. A CAS error is fail-closed to 401.
+- **Fail-open for normal accounts** — the hook does zero extra DB queries when the account is not break-glass, and a hook error can never deny a normal login. Fail-closed only for break-glass accounts (a hook/CAS error → 401 + rate-limiter failure).
+- **Refresh denied** — once the credential is no longer live (expired or deactivated), the SQL-predicate deny in role resolution folds every membership to `None`, so the refresh path denies 401 without minting or advancing anything. A consumed-but-unexpired session keeps refreshing until the TTL, bounding the session lifetime.
 
 #### Operator CLI (`modulo-break-glass`)
 The `modulo.cli.break_glass` CLI (registered as `modulo-break-glass`) connects as the dedicated `modulo_breakglass` DB role via `MODULO_BREAK_GLASS_DATABASE_URL` — a dedicated lazy engine, never the app `database_url`. Commands:
@@ -816,15 +829,35 @@ The `modulo.cli.break_glass` CLI (registered as `modulo-break-glass`) connects a
 
 **Operator authentication:** `--secret` or `MODULO_BREAK_GLASS_OPERATOR_SECRET`, checked with `hmac.compare_digest` against the configured primary/standby secrets. The actor written to audit payloads is derived from which secret matched (`operator` / `operator-standby`).
 
-**Credential delivery:** interactive (TTY confirmation) or `--yes` + stdout. Printed ONLY after the activation transaction commits; exit 9 if the print fails after commit. Each credential is single-use (consumed by the login-hook compare-and-swap) and TTL-bounded.
+**Credential delivery:** interactive (TTY confirmation) or `--yes` + stdout. Printed ONLY after the activation transaction commits; exit 9 if the print fails after commit. Each credential is single-use (consumed by the login-hook compare-and-swap) and TTL-bounded. Delivery follows the specified out-of-band operator protocol (see the runbook).
 
 **Exit codes (0-9):** 0 success · 1 unexpected · 2 usage (missing/empty `--reason`, bad `--account-id`) · 3 org-not-found (incl. deactivate M2040 target-does-not-exist) · 4 activation-transaction failure · 5 preconditions (force refusals, TTL out of range, the status-sweep live-row exit, operator-auth failure) · 6 deactivate-refused (live activation without `--force`, M2010/M2020) · 7 smoke failure · 8 deactivate atomicity failure · 9 credential-print failure.
+
+#### Deny surfaces (break-glass accounts)
+
+A break-glass account is denied everywhere a normal long-lived credential is minted or used:
+
+- **API-key mint deny** — break-glass accounts cannot create or modify ANY of the long-lived secret-bearing resources: org API keys, outbound notification webhooks, trigger webhook HMAC secrets, OAuth clients, MCP, connector instances, model backends, pipeline nodes with HTTP/webhook-out endpoints, eval definitions, scheduled triggers. Enforced via a shared mint marker on create/update/delete (uniform 403). The login-route token-family mint is deliberately excluded.
+- **Webhook use-time revalidation** — webhook dispatch revalidates the owning account against the expiry predicate (fail-closed) rather than trusting a cached decision.
+- **Login deny** — the login hook early/late deny (see Recovery above), byte-identical 401.
+- **Role-resolution deny** — the SQL-predicate deny folds break-glass memberships to `None` at every live-role site, so an expired/deactivated/NULL-expiry/inactive break-glass account resolves to `None` and every caller's None-check denies.
 
 #### Config (startup-validated)
 `MODULO_BREAK_GLASS_ENABLED` (independently settable, defaults from primary OR standby secret presence), `MODULO_BREAK_GLASS_SECRET` + `_STANDBY_SECRET` (must differ, minimum length; ENABLED + both empty is a blocking boot finding in fail-mode), `MODULO_BREAK_GLASS_TTL_MINUTES` (default 1440, min 1, `<= MAX_TTL_MINUTES`, also enforced at CLI invocation), `MODULO_BREAK_GLASS_MAX_TTL_MINUTES` (cap 4320), `MODULO_BREAK_GLASS_DATABASE_URL` (blocking when ENABLED, non-blocking warn otherwise), `MODULO_BREAK_GLASS_BOOT_FAILURE_MODE` (`warn`|`fail`).
 
-#### Watchdog
+#### Watchdog, monitoring, and the daily sweep
+
 Boot-time config assertions (allow-list set-equality, `rolsuper=false`, no privileged-role membership — FATAL in both modes) plus URL/secret-presence checks that honour `warn`/`fail`. Exposed on `/healthz` as ADVISORY only (never flips readiness). Deactivation/force/status remain operable while secrets + URL are present even when ENABLED=false.
+
+Runtime detection is a **daily operator sweep**: `modulo-break-glass status --all --json` on a scheduled workflow/harness task (secrets from the vault), non-zero exit when any live row exists (wired to an alert), plus verification of the last 24h of `break_glass_activated` / `last_admin_forcibly_removed` audit rows and a flag on live rows without a matching activation audit (the raw-INSERT forgery detector). Evidence committed to `Repos/admin/reviews/break-glass-daily-sweep/YYYY-MM-DD.md`, 90-day retention.
+
+#### Invisibility and hygiene
+
+Break-glass accounts are excluded from tenant-facing lists, seat counts, and SCIM sync; they are not billable; they cannot mint API keys, webhooks, OAuth clients, or other long-lived secrets; and deactivation re-randomizes the password hash into a tombstone. The credential is single-use, so replay of a captured password is impossible after the first login.
+
+#### Trust-anchor residual
+
+The operator is the deliberate trust anchor: a single compromised operator secret is effectively a full tenant-DB compromise (read-all + forge an admin + pollute-but-not-erase audit), detected by host-log + the daily sweep + the out-of-band protocol. Audit rows are INSERT-only for every role (append-only triggers block erasure), so the host log is the authoritative signal. Compensating controls are rotation and deactivate-all-on-loss. See the break-glass admin recovery plan and ADR-017/018 for the full threat model and operator protocol.
 
 ---
 
@@ -1256,6 +1289,35 @@ cost_estimate_usd = (wall_clock_seconds / 3600 × E2B_SANDBOX_USD_PER_HOUR)
 `E2B_SANDBOX_USD_PER_HOUR` (default `0.13` USD/hr) is operator-configurable and reflects the hourly E2B sandbox rate; the default is based on the opencode template = 2 vCPU / 2 GiB at E2B per-second rates (~$0.1332/hr rounded to 0.13), and 0.5 was a conservative placeholder. E2B bills per-second sandbox uptime, so wall-clock time is a faithful cost basis. The agent's own `cost_estimate_usd` field (written to `/home/user/output.json` by dogfood agents) is merged in when present and numeric. The estimate is attached to both the node's artifact output and the run's `output`, and `Run.total_cost_usd` aggregates token cost + sandbox cost across all completed nodes (`execute` and HITL `resume` paths equally).
 
 **Attributability boundary**: GitHub Actions billing is unavailable on the free tier and is not tracked. Fly costs are infrastructure-level (the platform hosting Modulo itself) and are NOT attributed per-run. Only E2B sandbox usage is per-run attributable; sandbox cost is an estimate, not an invoice.
+
+#### Multi-Component Cost Tracking
+
+A run's cost is a sum of named **cost components**, each with a rate/value, a
+formula, a source (`calculated` vs `self_reported`), and a declared set of run
+parameters it may reference. Components are org-scoped and admin-configurable;
+`Run.total_cost_usd` stays the summed total, and the run detail shows a
+**breakdown** of component snapshots rather than a single number. Breakdown
+values are denormalized onto the run at finalization, so deleting a component
+never affects historical runs.
+
+- **Calculated components** use a safe, fixed-grammar formula (four operators:
+  `+ - * /`, no arbitrary code) over a whitelist of run parameters (token
+  counts, wall-clock hours, rates). Formulas are validated at save time; an
+  invalid formula is rejected with a 422.
+- **Self-reported components** capture the model cost an agent writes to its
+  output (`model_cost_usd`). A self-reported value is validated and clamped at
+  the backend extraction boundary before it can affect the run total, and a
+  node's model cost is never counted twice — a reporting sandbox node's
+  constant-rate estimate is replaced, not added.
+- The daily spend ledger is a **report, not a source of truth**: per-key ledger
+  strictness is deliberately not guaranteed and the ledger may drift for the
+  documented classes (refused, deferred, pre-deploy residue). Enforcement keeps
+  today's behaviour; the report keys by run-start day.
+
+The normative reference for this feature is
+`docs/design/multi-component-cost-tracking.md`; the operator guide is at
+`docs/operations/` (see the config reference for the tunable knobs). This
+section states user-facing behaviour only.
 
 ### 8.11 Notifications
 
@@ -3125,19 +3187,7 @@ V1 SSO (OIDC/SAML) supports group-to-team mapping via claims. On JIT user provis
 
 The My Profile page (`/admin/my-profile`) provides the frontend UI for password change with client-side validation (min length, match confirmation) and error display. Users without a local password (SSO/OIDC/SAML provisioned) cannot use this endpoint.
 
-### 9.5 Break-Glass Admin Recovery (Org Autonomy)
-
-When an organisation's only admin cannot authenticate (forgotten password, mistaken deactivation, SCIM deactivating/demoting the last admin, role demotion, lost secrets), an operator can issue a **break-glass recovery credential** — a synthetic, invisible, single-use, TTL-bounded admin account. The credential works through the normal `POST /api/v1/auth/login` flow (email + password) and is consumed on first successful login.
-
-**One-shot consumption (login hook, compare-and-swap):**
-
-- After `authenticate_db_user` succeeds, the login route runs a break-glass hook:
-  - **Early deny** — a break-glass account that is deactivated, NULL-expiry, expired, or inactive is denied immediately with a byte-identical 401 (`detail: "Incorrect email or password"`, no `WWW-Authenticate`), identical to a wrong-password response on a normal account. The failure is recorded on the auth rate limiter.
-  - **Late CAS (family-first, CAS-last)** — for a live credential, the route mints the token family first and then runs the consume compare-and-swap as the FINAL DB statement before token issuance: `UPDATE accounts SET password_hash = <random non-bcrypt> WHERE id = :id AND password_hash = :old AND <live predicate>`, where the live predicate is emitted from the shared break-glass expiry builder and compares against the DB clock. A rowcount of 1 means this login consumed the credential; a rowcount of 0 (already consumed / expired / deactivated) raises 401 and rolls back the phantom family inside the same transaction. A CAS error is fail-closed to 401.
-- **Fail-open for normal accounts** — the hook does zero extra DB queries when the account is not break-glass, and a hook error can never deny a normal login. Fail-closed only for break-glass accounts (a hook/CAS error → 401 + rate-limiter failure).
-- **Refresh denied** — once the credential is no longer live (expired or deactivated), the SQL-predicate deny in role resolution folds every membership to `None`, so the refresh path denies 401 without minting or advancing anything. A consumed-but-unexpired session keeps refreshing until the TTL, bounding the session lifetime.
-
-**Invisibility and hygiene:** break-glass accounts are excluded from tenant-facing lists, seat counts, and SCIM sync; they are not billable; they cannot mint API keys, webhooks, OAuth clients, or other long-lived secrets; and deactivation re-randomizes the password hash into a tombstone. The credential is single-use, so replay of a captured password is impossible after the first login. See the break-glass admin recovery plan and ADR-017/018 for the full threat model and operator protocol.
+**Break-glass recovery** — an organisation whose only admin cannot authenticate (forgotten password, SCIM deactivation/demotion of the last admin, role demotion, lost secrets) is recovered via an operator-synthesised, single-use credential consumed through this same login flow. See §7.19. Use-time revalidation TRIMs to outbound webhook dispatch: when the notifier dispatches an event, any webhook endpoint owned by a break-glass account (live or denied) is skipped — fail-closed, per-endpoint — so a webhook created before the deny was active, or forged via a raw DB write, never delivers.
 
 ---
 

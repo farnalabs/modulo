@@ -954,6 +954,8 @@ class TestOAuthMiddlewareAccountBinding:
         scopes: list[str],
         live_role: str | None,
         family_valid: bool = True,
+        family_check_error: Exception | None = None,
+        live_role_error: Exception | None = None,
     ) -> tuple[Any, Response]:
         from starlette.responses import JSONResponse
 
@@ -963,16 +965,23 @@ class TestOAuthMiddlewareAccountBinding:
         async def fake_call_next(_req: Request) -> Response:
             return JSONResponse({"ok": True})
 
+        family_check = AsyncMock(return_value=family_valid)
+        if family_check_error is not None:
+            family_check = AsyncMock(side_effect=family_check_error)
+        live_role_check = AsyncMock(return_value=live_role)
+        if live_role_error is not None:
+            live_role_check = AsyncMock(side_effect=live_role_error)
+
         with (
             patch("modulo.api.mcp_server._get_session_factory", return_value=_make_mock_session_factory()),
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
             patch(
                 "modulo.api.mcp_server.resolve_role_from_membership",
-                new=AsyncMock(return_value=live_role),
+                new=live_role_check,
             ),
             patch(
                 "modulo.api.mcp_server.check_oauth_token_family_valid",
-                new=AsyncMock(return_value=family_valid),
+                new=family_check,
             ),
         ):
             middleware = McpAuthMiddleware(app=MagicMock())
@@ -1051,6 +1060,34 @@ class TestOAuthMiddlewareAccountBinding:
             _ctx_auth_type.reset(t_auth)
             _ctx_auth_token.reset(t_tok)
             _ctx_key_id.reset(t_key)
+
+    @pytest.mark.asyncio
+    async def test_middleware_returns_503_on_live_role_db_failure(self) -> None:
+        """A DB outage on the live-role read is a 503, not a 401 bad-key."""
+        from sqlalchemy.exc import OperationalError
+
+        response, _request = await self._dispatch(
+            scopes=["trigger:run"],
+            live_role="admin",
+            live_role_error=OperationalError("SELECT live_role", {}, Exception("db down")),
+        )
+        assert response.status_code == 503
+        body = json_module.loads(response.body)
+        assert body["error"] == "temporarily_unavailable"
+
+    @pytest.mark.asyncio
+    async def test_middleware_returns_503_on_family_check_db_failure(self) -> None:
+        """A DB outage on the token-family check is a 503, not a 401."""
+        from sqlalchemy.exc import SQLAlchemyError
+
+        response, _request = await self._dispatch(
+            scopes=["trigger:run"],
+            live_role="admin",
+            family_check_error=SQLAlchemyError("db down"),
+        )
+        assert response.status_code == 503
+        body = json_module.loads(response.body)
+        assert body["error"] == "temporarily_unavailable"
 
 
 # ---------------------------------------------------------------------------

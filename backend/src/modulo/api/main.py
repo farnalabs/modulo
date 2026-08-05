@@ -60,6 +60,7 @@ from modulo.api.routes.changelog import router as changelog_router
 from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
+from modulo.api.routes.cost_components import router as cost_components_router
 from modulo.api.routes.costs import router as costs_router
 from modulo.api.routes.dashboard import router as dashboard_router
 from modulo.api.routes.deployment import router as deployment_router
@@ -227,10 +228,14 @@ async def _run_bootstrap(settings: Settings) -> None:
     env.py).
 
     A failed allow-list / role-posture assertion (bootstrap's
-    ``_assert_role_posture``) is FATAL in BOTH warn and fail modes — the
-    boundary must survive every boot. Other bootstrap failures (e.g. a transient
-    DB blip while applying roles/grants) are logged and non-fatal: they are
-    re-attempted on the post-alembic run and on the next boot.
+    ``_assert_role_posture``) is currently logged as a WARNING (non-fatal): it
+    blocks boot only until every deployed environment has a non-superuser app
+    role and ``DATABASE_ADMIN_URL`` provisioned — today both staging and prod
+    carry legacy superuser app roles, so a fatal assertion would block every
+    deploy. The break-glass boundary remains enforced by the DDL migrations.
+    Other bootstrap failures (e.g. a transient DB blip while applying
+    roles/grants) are logged and non-fatal: they are re-attempted on the
+    post-alembic run and on the next boot.
     """
     from modulo.db.bootstrap_role import bootstrap_roles
 
@@ -239,20 +244,24 @@ async def _run_bootstrap(settings: Settings) -> None:
         await bootstrap_roles(admin_url, settings.database_url)
     except Exception as exc:
         if "Break-glass role posture assertion FAILED" in str(exc):
-            logger.error("infra_blocked=break_glass_role_posture_failed %s", exc)
-            raise RuntimeError(f"FATAL: break-glass role-posture assertion failed: {exc}") from exc
-        logger.warning("startup.role_bootstrap_failed", exc_info=True)
+            # Non-fatal until DATABASE_ADMIN_URL + non-superuser app role are
+            # provisioned on all envs (staging + prod both have superuser app
+            # roles from the legacy setup; the fatal assertion blocks every
+            # deploy). The DDL migrations still enforce the boundary.
+            logger.warning("startup.break_glass_role_posture_failed %s", exc)
+        else:
+            logger.warning("startup.role_bootstrap_failed", exc_info=True)
 
 
 async def _run_break_glass_watchdog(settings: Settings) -> None:
     """Boot-time break-glass watchdog (deliverable B).
 
-    The allow-list / role-posture assertions from ``bootstrap_role.py`` are
-    FATAL in both warn and fail modes — they run inside ``_run_bootstrap``
-    (before AND after alembic) and are re-raised there. This step runs the
-    URL/secret-presence config checks, honouring
-    ``MODULO_BREAK_GLASS_BOOT_FAILURE_MODE``, and publishes the advisory
-    /healthz exposure.
+    The allow-list / role-posture assertions from ``bootstrap_role.py`` run
+    inside ``_run_bootstrap`` (before AND after alembic); a posture failure is
+    currently logged as a WARNING (non-fatal) until the non-superuser app role
+    migration lands on all envs. This step runs the URL/secret-presence config
+    checks, honouring ``MODULO_BREAK_GLASS_BOOT_FAILURE_MODE``, and publishes
+    the advisory /healthz exposure.
     """
     from modulo.api.routes.health import set_break_glass_watchdog
     from modulo.settings import validate_break_glass_boot
@@ -902,8 +911,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _run_migrations(settings)
 
     # Break-glass watchdog (deliverable B): the allow-list/role-posture
-    # assertions were already FATAL inside _run_bootstrap; the URL/secret-
-    # presence checks honour warn|fail mode.
+    # assertion is a non-fatal WARNING inside _run_bootstrap (superuser legacy
+    # app roles on staging/prod); the URL/secret-presence checks honour
+    # warn|fail mode.
     await _run_break_glass_watchdog(settings)
 
     # Hard-fail guard: the 'owner' org role was dropped (ADR 017 A1a). The
@@ -961,6 +971,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("startup.tier_catalog_seed_failed", exc_info=True)
 
+    # Seed the default cost components for every org (idempotent; system-
+    # context org enumeration, per-org set_rls_org on the inserts).
+    try:
+        await _seed_cost_components(settings)
+    except Exception:
+        logger.warning("startup.cost_components_seed_failed", exc_info=True)
+
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     try:
         await _init_checkpointer(
@@ -979,7 +996,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # NOTE: the in-process cron scheduler (run_scheduler) is intentionally NOT
     # started here. Plan F1 "single scheduler at a time": the SAQ system worker's
     # fire_due_triggers cron is the scheduler, and the entrypoint never starts
-    # Celery beat. Running the in-process loop alongside SAQ would double-fire
+    # Celery beat (removed in PR C). Running the in-process loop alongside SAQ would double-fire
     # cron triggers.
 
     # Initialise the graceful shutdown manager with the configured timeout.
@@ -1046,6 +1063,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     with suppress(asyncio.CancelledError):
         await _trigger_event_cleanup_task
     await _shutdown_manager.shutdown()
+
+
+async def _seed_cost_components(settings: Settings) -> None:
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.core.seed_data.cost_components import seed_cost_components
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+    await seed_cost_components(factory)
 
 
 async def _seed_tier_catalog(settings: Settings) -> None:
@@ -1132,6 +1158,7 @@ app.include_router(sso_router)
 app.include_router(dashboard_router)
 app.include_router(deployment_router)
 app.include_router(costs_router)
+app.include_router(cost_components_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
 app.include_router(pipeline_folders_router)

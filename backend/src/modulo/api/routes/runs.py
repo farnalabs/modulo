@@ -547,7 +547,17 @@ async def cancel_run(
                     detail=f"Run is already in terminal status: {run.status}",
                 )
 
+            # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
+            # finalize (§4.2). A STREAMED running run cancelled cross-process is
+            # routed through finalize_cost, re-reading the STORED cumulative
+            # sets; a NEVER-PAUSED in-flight run has none and forfeits its
+            # accrued cost (cost_components_partial_spend_lost log).
+            was_paused = run.status in ("awaiting_human", "claimed")
             await request_cancellation(session, run_id)
+            if not was_paused:
+                from modulo.core.cost_controller.finalize import finalize_cancelled_run
+
+                await finalize_cancelled_run(session, run_id=run_id, org_id=principal.organisation_id)
     except IntegrityError:
         _log.exception("runs.cancel_run")
         raise HTTPException(
@@ -612,7 +622,7 @@ def _build_fixture_map(
     out = outputs_json or {}
 
     if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
-        for _node_id, node_io in out.items():
+        for node_io in out.values():
             if isinstance(node_io, dict):
                 node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
                 node_output = node_io.get("output", "")

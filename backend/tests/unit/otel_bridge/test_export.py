@@ -126,6 +126,8 @@ def test_shutdown_otel_multi_call_safe() -> None:
     setup_otel(telemetry_enabled=True)
     shutdown_otel()  # First call — flush & shut down
     shutdown_otel()  # Second call — should be a no-op, not raise
+    # The provider must still be a real TracerProvider after shutdown.
+    assert isinstance(trace.get_tracer_provider(), TracerProvider)
 
 
 def test_shutdown_otel_handles_provider_shutdown_failure(caplog) -> None:
@@ -143,6 +145,8 @@ def test_shutdown_otel_with_plain_proxy_provider() -> None:
     """Providers without a shutdown() method are ignored gracefully."""
     trace.set_tracer_provider(MagicMock(spec=[]))
     shutdown_otel()  # should not raise
+    # The caller's provider must be left untouched.
+    assert trace.get_tracer_provider() is not None
 
 
 # ---------------------------------------------------------------------------

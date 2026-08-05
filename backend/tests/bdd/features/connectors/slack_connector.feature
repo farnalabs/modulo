@@ -93,3 +93,115 @@ Feature: Slack Connector
     Given a Slack connector with valid bot token
     When I write resource "thread_reply" with channel "C001" and thread_ts "123456.000001" and text "A reply"
     Then the write succeeds
+
+  Scenario: Get user presence status
+    Given a Slack connector with valid bot token
+    When I query resource "user_presence" with user "U001"
+    Then the result has records
+
+  Scenario: Get user profile
+    Given a Slack connector with valid bot token
+    When I query resource "user_profile" with user "U001"
+    Then the result has records
+
+  Scenario: Lookup user by email
+    Given a Slack connector with valid bot token
+    When I query resource "user_lookup" with email "alice@example.com"
+    Then the result has records
+
+  Scenario: Post an ephemeral message
+    Given a Slack connector with valid bot token
+    When I write resource "ephemeral_message" with channel "C001" and user "U001" and text "Private note"
+    Then the write succeeds
+
+  Scenario: Update a message
+    Given a Slack connector with valid bot token
+    When I write resource "message_update" with channel "C001" and ts "123456.000001" and text "Edited"
+    Then the write succeeds
+
+  Scenario: Delete a message
+    Given a Slack connector with valid bot token
+    When I write resource "message_delete" with channel "C001" and ts "123456.000001"
+    Then the write succeeds
+
+  Scenario: Join a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_join" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Archive a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_archive" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Unarchive a channel
+    Given a Slack connector with valid bot token
+    When I write resource "channel_unarchive" with channel "C002"
+    Then the write succeeds
+
+  Scenario: Ephemeral message without user raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "ephemeral_message" with channel "C001" but no user
+    Then the write is an error
+
+  Scenario: Search messages across channels
+    Given a Slack connector with valid bot token
+    When I query resource "message_search" with query "deploy failed"
+    Then the result has records
+
+  Scenario: Search messages without query raises an error
+    Given a Slack connector with valid bot token
+    When I query resource "message_search" without a query filter
+    Then the result is an error
+
+  Scenario: Schedule a message
+    Given a Slack connector with valid bot token
+    When I write resource "schedule_message" with channel "C001" and post_at "1610118217"
+    Then the write succeeds
+
+  Scenario: Schedule message without post_at raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "schedule_message" with channel "C001" but no post_at
+    Then the write is an error
+
+  Scenario: List scheduled messages
+    Given a Slack connector with valid bot token
+    When I query resource "scheduled_messages" with channel "C001"
+    Then the result has records
+
+  Scenario: List scheduled messages without channel
+    Given a Slack connector with valid bot token
+    When I query resource "scheduled_messages"
+    Then the result has records
+
+  Scenario: Delete a scheduled message
+    Given a Slack connector with valid bot token
+    When I write resource "scheduled_message_delete" with channel "C001" and scheduled_message_id "Q1234"
+    Then the write succeeds
+
+  Scenario: Delete a scheduled message without scheduled_message_id raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "scheduled_message_delete" with channel "C001" but no scheduled_message_id
+    Then the write is an error
+
+  Scenario: Upload a file to a channel
+    Given a Slack connector with valid bot token
+    When I write resource "file_upload" with filename "notes.txt" and content "hello"
+    Then the write succeeds
+
+  Scenario: Upload file without content raises an error
+    Given a Slack connector with valid bot token
+    When I write resource "file_upload" with filename "notes.txt" but no content
+    Then the write is an error
+
+  Scenario: Health check passes when bot is in a channel
+    Given a Slack connector with valid bot token
+    And the Slack connector health check passes
+    When I perform a health check
+    Then the health result is ok
+
+  Scenario: Health check reports when bot is not in any channel
+    Given a Slack connector with valid bot token
+    And the Slack connector health check reports the bot is not in any channel
+    When I perform a health check
+    Then the health result is not ok

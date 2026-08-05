@@ -24,6 +24,15 @@ test.describe('Stages Board', () => {
         }),
       })
     })
+    // The board renders all three fetches together, so the auxiliary
+    // endpoints must be mocked too — otherwise the board waits on staging
+    // and the columns never appear within the assertion timeout.
+    await page.route('**/api/v1/pipelines*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
+    })
+    await page.route('**/api/v1/teams*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], total: 0 }) })
+    })
 
     await page.goto('/stages')
 

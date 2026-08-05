@@ -57,6 +57,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-contribution-update](core/contribution-update.md) => PRD 8.14
 - [feat-core-core](core/core.md) => PRD 8.16, 8.4
 - [feat-core-cost-breakdown](core/cost-breakdown.md) => PRD 8.10
+- [feat-core-cost-components](core/cost-components.md) => PRD 8.10
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD 6.1, 6.2
 - [feat-core-db-abstraction-remaining](core/db-abstraction-remaining.md) => PRD 6.1, 6.2
 - [feat-core-determination](core/determination.md) => PRD 8.16

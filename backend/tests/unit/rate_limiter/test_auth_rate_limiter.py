@@ -10,12 +10,12 @@ Covers:
 
 import asyncio
 import time
-from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.rate_limiter.helpers import make_settings
 
 from modulo.api.middleware.rate_limiter import (
     RATELIMIT_BYPASS_HEADER,
@@ -25,51 +25,6 @@ from modulo.api.middleware.rate_limiter import (
 )
 from modulo.core.rate_limiter import AuthRateLimiter as AuthRateLimiterCls
 from modulo.settings import Settings
-
-
-@pytest.fixture
-def mock_redis():
-    client = MagicMock()
-    client.ttl = AsyncMock(return_value=0)
-    pipe = MagicMock()
-    pipe.zremrangebyscore = MagicMock(return_value=pipe)
-    pipe.zcard = MagicMock(return_value=pipe)
-    pipe.delete = MagicMock(return_value=pipe)
-    pipe.execute = AsyncMock(return_value=(None, 0))
-    client.pipeline = MagicMock(return_value=pipe)
-    client.zadd = AsyncMock()
-    client.expire = AsyncMock()
-    client.delete = AsyncMock()
-    client.setex = AsyncMock()
-    return client
-
-
-@pytest.fixture(autouse=True)
-def _reset_singleton() -> Generator[None, None, None]:
-    """Reset the module-level _auth_rate_limiter before and after each test."""
-    from modulo.api.middleware import rate_limiter as rl_mod
-
-    saved = rl_mod._auth_rate_limiter
-    rl_mod._auth_rate_limiter = None
-    yield
-    rl_mod._auth_rate_limiter = saved
-
-
-def _make_settings(
-    enabled: bool = True,
-    max_attempts: int = 10,
-    window_s: int = 60,
-) -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://localhost/test",
-        secret_key="a" * 32,
-        fernet_key="a" * 32,
-        modulo_admin_password="testpass",
-        modulo_auth_rate_limit_enabled=enabled,
-        modulo_auth_max_attempts=max_attempts,
-        modulo_auth_window_seconds=window_s,
-        redis_url="redis://localhost:6379/0",
-    )
 
 
 def _make_app(
@@ -82,7 +37,7 @@ def _make_app(
     async def login():
         return {"token": "dummy"}
 
-    resolved = settings or _make_settings()
+    resolved = settings or make_settings()
     app.add_middleware(
         AuthRateLimitMiddleware,
         settings=resolved,
@@ -93,13 +48,13 @@ def _make_app(
 
 class TestGetAuthRateLimiter:
     def test_returns_none_when_disabled(self):
-        settings = _make_settings(enabled=False)
+        settings = make_settings(modulo_auth_rate_limit_enabled=False)
         limiter = get_auth_rate_limiter(settings)
         assert limiter is None
 
     def test_returns_limiter_when_enabled(self, monkeypatch):
         monkeypatch.setattr("redis.asyncio.Redis.from_url", lambda url, **kwargs: MagicMock())
-        settings = _make_settings(enabled=True)
+        settings = make_settings(modulo_auth_rate_limit_enabled=True)
         limiter = get_auth_rate_limiter(settings)
         assert limiter is not None
         assert isinstance(limiter, AuthRateLimiterCls)
@@ -119,7 +74,7 @@ class TestGetAuthRateLimiter:
 
     def test_singleton_returns_same_instance(self, monkeypatch):
         monkeypatch.setattr("redis.asyncio.Redis.from_url", lambda url, **kwargs: MagicMock())
-        settings = _make_settings(enabled=True)
+        settings = make_settings(modulo_auth_rate_limit_enabled=True)
         first = get_auth_rate_limiter(settings)
         second = get_auth_rate_limiter(settings)
         assert first is second
@@ -133,7 +88,7 @@ class TestGetAuthRateLimiter:
             "redis.asyncio.Redis.from_url",
             MagicMock(side_effect=ConnectionError("boom")),
         )
-        limiter = get_auth_rate_limiter(_make_settings(enabled=True))
+        limiter = get_auth_rate_limiter(make_settings(modulo_auth_rate_limit_enabled=True))
         assert limiter is None
         assert rl_mod._auth_rate_limiter is None
         assert rl_mod._redis_clients == before_clients
@@ -148,14 +103,14 @@ class TestGetAuthRateLimiter:
             MagicMock(side_effect=asyncio.CancelledError()),
         )
         with pytest.raises(asyncio.CancelledError):
-            get_auth_rate_limiter(_make_settings(enabled=True))
+            get_auth_rate_limiter(make_settings(modulo_auth_rate_limit_enabled=True))
         assert rl_mod._redis_clients == before_clients
 
 
 class TestAuthRateLimitMiddlewareDisabled:
     def test_skips_rate_limiting_when_limiter_is_none(self):
         """When modulo_auth_rate_limit_enabled=False, middleware passes through."""
-        app = _make_app(settings=_make_settings(enabled=False))
+        app = _make_app(settings=make_settings(modulo_auth_rate_limit_enabled=False))
 
         with TestClient(app) as client:
             resp = client.post("/api/v1/auth/login")
@@ -239,7 +194,7 @@ class TestAuthRateLimitMiddlewareEnabled:
 
         app.add_middleware(
             AuthRateLimitMiddleware,
-            settings=_make_settings(enabled=True),
+            settings=make_settings(modulo_auth_rate_limit_enabled=True),
             rate_limiter=limiter,
         )
 
@@ -264,7 +219,7 @@ class TestAuthRateLimitMiddlewareEnabled:
 
         app.add_middleware(
             AuthRateLimitMiddleware,
-            settings=_make_settings(enabled=True),
+            settings=make_settings(modulo_auth_rate_limit_enabled=True),
             rate_limiter=limiter,
         )
 
@@ -281,7 +236,7 @@ class TestAuthRateLimitMiddlewareEnabled:
             max_attempts=0,
             window_s=60,
         )
-        settings = _make_settings(enabled=True)
+        settings = make_settings(modulo_auth_rate_limit_enabled=True)
         settings.modulo_ratelimit_bypass_token = "bypass-secret"
         app = _make_app(settings=settings, rate_limiter=limiter)
 
@@ -302,7 +257,7 @@ class TestAuthRateLimitMiddlewareEnabled:
             max_attempts=0,
             window_s=60,
         )
-        settings = _make_settings(enabled=True)
+        settings = make_settings(modulo_auth_rate_limit_enabled=True)
         settings.modulo_ratelimit_bypass_token = "bypass-secret"
         app = _make_app(settings=settings, rate_limiter=limiter)
 
@@ -368,6 +323,19 @@ class TestClientKeyEdgeCases:
         ip = AuthRateLimitMiddleware._client_ip(mock_request)
         assert ip == "unknown"
 
+    def test_x_forwarded_for_first_hop_is_stripped(self):
+        """The first XFF hop must have surrounding whitespace stripped."""
+        from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
+
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.url.path = "/api/v1/auth/login"
+        mock_request.headers.get = MagicMock(return_value=" 198.51.100.7 , 10.0.0.1")
+        mock_request.client = None
+
+        ip = AuthRateLimitMiddleware._client_ip(mock_request)
+        assert ip == "198.51.100.7"
+
 
 class TestAuthRateLimiterCore:
     """Direct unit tests for AuthRateLimiter (no middleware/HTTP involved)."""
@@ -422,13 +390,26 @@ class TestAuthRateLimiterCore:
         assert retry_after == 0
         mock_redis.setex.assert_not_awaited()
 
-    async def test_lockout_expired_does_not_block(self, mock_redis):
-        mock_redis.ttl = AsyncMock(return_value=0)
+    @pytest.mark.parametrize("ttl_value", [0, -1, -2])
+    async def test_lockout_not_active_does_not_block(self, mock_redis, ttl_value):
+        """ttl of 0 (expired), -1 (no expiry) or -2 (missing key) must not block."""
+        mock_redis.ttl = AsyncMock(return_value=ttl_value)
         mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, 3))
         limiter = AuthRateLimiterCls(redis_client=mock_redis, max_attempts=10, window_s=60)
         allowed, retry_after = await limiter.check_login("203.0.113.5")
         assert allowed is True
         assert retry_after == 0
+
+    async def test_check_login_backoff_scales_with_tier(self, mock_redis):
+        """Past the max_attempts boundary, backoff doubles per tier through check_login."""
+        mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, 20))
+        limiter = AuthRateLimiterCls(redis_client=mock_redis, max_attempts=10, window_s=60)
+        allowed, retry_after = await limiter.check_login("203.0.113.5")
+        assert allowed is False
+        assert retry_after == 120
+        mock_redis.setex.assert_awaited_once()
+        _, backoff, _ = mock_redis.setex.await_args.args
+        assert backoff == 120
 
     async def test_record_failure_then_check_login_blocks_at_max(self, mock_redis):
         mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, 10))

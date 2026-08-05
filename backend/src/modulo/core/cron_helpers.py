@@ -1,6 +1,6 @@
 """SAQ scheduler helpers — per-item fire jobs, fire_due_triggers, dispatcher_reconcile.
 
-Plan F1 / F3c / F3d. This module is the SAQ replacement for the Celery beat fire
+Plan F1 / F3c / F3d. This module is the SAQ fire scheduler (replaced Celery beat)
 tasks (``CronFireTask`` / ``PollingFireTask`` / ``ReportFireTask``, all removed
 in PR C). All fire logic is reimplemented async against the shared DB session
 pattern.
@@ -293,9 +293,8 @@ async def fire_cron_trigger(
     atomic next_fire_at advance already happened in ``fire_due_triggers`` at
     enqueue time; this job sets ``last_fired_at`` only.
 
-    ``advance_next_fire_at=True`` preserves the legacy Celery behaviour used by
-    ``CronFireTask`` (which advances ``next_fire_at`` at fire time); the Celery
-    beat path was removed in PR C.
+    ``advance_next_fire_at=True`` preserves the legacy behaviour (CronFireTask,
+    removed in PR C).
     """
     from sqlalchemy import update
 
@@ -342,9 +341,10 @@ async def fire_cron_trigger(
         if spend_limit is not None:
             from sqlalchemy import func
 
+            from modulo.core.cost_controller import created_at_day_start
             from modulo.db.models.run import Run
 
-            today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = created_at_day_start()
             cost_result = await session.execute(
                 select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
                     Run.trigger_id == trigger_id,
@@ -411,7 +411,7 @@ async def fire_cron_trigger(
 
         # last_fired_at reflects an actual fire (run created). next_fire_at is
         # advanced ONLY at enqueue time (fire_due_triggers) — or here for the
-        # legacy Celery path (advance_next_fire_at=True).
+        # legacy path (pre-PR C).
         values: dict[str, Any] = {"last_fired_at": datetime.now(UTC)}
         if advance_next_fire_at:
             values["next_fire_at"] = compute_next_fire(
@@ -943,8 +943,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                         ),
                         {"pids": [str(p) for p in pids]},
                     )
-                    for pipeline_id, snapshot_id in snap_result:
-                        latest_snapshots[pipeline_id] = snapshot_id
+                    latest_snapshots = {row[0]: row[1] for row in snap_result}
 
                 for row in cron_rows:
                     summary["cron_due"] += 1
@@ -1187,8 +1186,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         run's CREATION path (SAQ mode only), NOT ``dispatcher='saq'``, because
         ``dispatch_run`` returns deferred BEFORE recording dispatched_at/
         dispatcher. NO staleness gate (re-dispatch when capacity frees).
-      * pending + dispatched_at set: ``dispatcher='saq'``, stale by the
+      * pending + dispatched_at set + ``dispatcher='saq'``: stale by the
         re-enqueue window.
+      * pending + dispatched_at set + dispatcher IS NULL: zombie from a
+        fail-fast SAQ enqueue failure — ``dispatch_run`` recorded dispatched_at
+        but the enqueue returned without a job, leaving the run stuck with no
+        dispatcher. NO staleness gate (re-dispatch immediately).
       * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT.
 
     ``awaiting_human``/``claimed`` are NEVER re-dispatched (F6a review): a
@@ -1244,6 +1247,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         )
         re_dispatch_predicate = or_(
             capacity_deferred,
+            # Zombie branch: pending + dispatched_at set + dispatcher NULL — a
+            # fail-fast SAQ enqueue failure wrote dispatched_at but no job was
+            # enqueued. No staleness gate (re-dispatch immediately).
+            and_(
+                Run.status == "pending",
+                Run.dispatched_at.is_not(None),
+                Run.dispatcher.is_(None),
+            ),
             and_(
                 Run.status == "pending",
                 Run.dispatcher == "saq",

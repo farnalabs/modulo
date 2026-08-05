@@ -175,6 +175,10 @@
               {{ runError }}
             </div>
 
+            <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning">
+              {{ emptyRunWarning }}
+            </div>
+
             <div class="flex justify-end gap-2 pt-2">
               <button
                 class="px-4 py-2 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
@@ -924,7 +928,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -1005,6 +1009,16 @@ const showRunDialog = ref(false)
 const runPrompt = ref('')
 const running = ref(false)
 const runError = ref<string | null>(null)
+const confirmEmptyRun = ref(false)
+const emptyRunWarning = ref<string | null>(null)
+
+watch(runPrompt, () => {
+  if (confirmEmptyRun.value) {
+    confirmEmptyRun.value = false
+    emptyRunWarning.value = null
+  }
+})
+
 const maxDurationInput = ref<number | undefined>(undefined)
 
 const folders = ref<any[]>([])
@@ -1642,6 +1656,8 @@ async function updateMaxDuration() {
 function openRunDialog() {
   runPrompt.value = ''
   runError.value = null
+  confirmEmptyRun.value = false
+  emptyRunWarning.value = null
   showRunDialog.value = true
 }
 
@@ -1649,6 +1665,8 @@ function closeRunDialog() {
   showRunDialog.value = false
   runPrompt.value = ''
   runError.value = null
+  confirmEmptyRun.value = false
+  emptyRunWarning.value = null
 }
 
 async function saveGraph() {
@@ -1704,6 +1722,15 @@ async function saveGraph() {
 
 async function triggerRun() {
   if (!pipeline.value) return
+  const trimmedPrompt = runPrompt.value.trim()
+  if (!trimmedPrompt) {
+    if (!confirmEmptyRun.value) {
+      confirmEmptyRun.value = true
+      emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
+      return
+    }
+    emptyRunWarning.value = null
+  }
   running.value = true
   runError.value = null
   try {
@@ -1712,7 +1739,6 @@ async function triggerRun() {
       runError.value = `Failed to save graph: ${saveGraphError.value}`
       return
     }
-    const trimmedPrompt = runPrompt.value.trim()
     const { data } = await withTimeout((signal) => api.POST('/api/v1/runs', {
       body: {
         pipeline_id: pipelineId,

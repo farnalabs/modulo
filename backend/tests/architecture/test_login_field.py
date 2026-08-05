@@ -10,12 +10,28 @@ import re
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent.parent.parent / "tests"
-# Match dict-like patterns containing both 'username' and 'password' (login payload)
+# Match dict-like patterns containing both 'username' and 'password' (login payload).
+# A bounded window (never crossing a `}`) is used so a multi-line payload is
+# caught while two unrelated dicts far apart in the file are not. `re.DOTALL`
+# lets the window span newlines inside a single dict literal.
 LOGIN_PAYLOAD = re.compile(
-    r"""['"]username['"]\s*:.*['"]password['"]""",
+    r"""['"]username['"]\s*:\s*[^}]{0,80}['"]password['"]""",
+    re.DOTALL,
+)
+# Login payloads may order 'password' before 'username'; flag both key orders.
+LOGIN_PAYLOAD_PASSWORD_FIRST = re.compile(
+    r"""['"]password['"]\s*:\s*[^}]{0,80}['"]username['"]""",
+    re.DOTALL,
 )
 # Skip files mocking external APIs (connectors, bitbucket, gitlab, discord, etc.)
 EXCLUDE_PATTERNS = ("connector", "bitbucket", "gitlab", "discord", "scanner", "ci_runner")
+
+
+def _collect_violations(content: str, pattern: re.Pattern, rel: Path, violations: list[str]) -> None:
+    for match in pattern.finditer(content):
+        line_no = content.count("\n", 0, match.start()) + 1
+        line = content.splitlines()[line_no - 1].strip()[:120]
+        violations.append(f"  {rel}:{line_no}  {line}")
 
 
 def test_login_payload_uses_email_not_username():
@@ -28,10 +44,8 @@ def test_login_payload_uses_email_not_username():
             content = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        for i, line in enumerate(content.splitlines(), 1):
-            if not LOGIN_PAYLOAD.search(line):
-                continue
-            violations.append(f"  {rel}:{i}  {line.strip()[:120]}")
+        _collect_violations(content, LOGIN_PAYLOAD, rel, violations)
+        _collect_violations(content, LOGIN_PAYLOAD_PASSWORD_FIRST, rel, violations)
     assert not violations, (
         f"Found {len(violations)} login payloads using 'username' field.\n"
         "FastAPI login endpoint expects 'email' — change to 'email'.\n" + "\n".join(violations)

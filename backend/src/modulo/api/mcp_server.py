@@ -54,6 +54,7 @@ from modulo.auth.oauth import (
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.core.cost_controller.finalize import finalize_cancelled_run
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
@@ -527,6 +528,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     media_type="application/json",
                 )
+            except (SQLAlchemyError, OperationalError, TimeoutError):
+                _log.exception("mcp.auth.db_unavailable")
+                return Response(
+                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
             await _set_authz_enforce(org_id)
             resp3: Response = await call_next(request)
             return resp3
@@ -569,11 +577,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         str(principal.account_id),
                         str(principal.organisation_id),
                     )
-            except SQLAlchemyError:
-                _log.warning("permission.live_role_read_failed", exc_info=True)
+            except (SQLAlchemyError, OperationalError, TimeoutError):
+                _log.exception("mcp.auth.db_unavailable")
                 return Response(
-                    '{"error":"unauthorized","detail":"Role validation failed"}',
-                    status_code=401,
+                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    status_code=503,
                     media_type="application/json",
                 )
             if live_role is None:
@@ -612,6 +620,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         status_code=401,
                         media_type="application/json",
                     )
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception("mcp.auth.db_unavailable")
+            return Response(
+                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                status_code=503,
+                media_type="application/json",
+            )
         except Exception:
             _log.exception("OAuth token family check failed")
             return Response(
@@ -632,11 +647,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     str(claims.account_id),
                     str(claims.organisation_id),
                 )
-        except SQLAlchemyError:
-            _log.warning("permission.live_role_read_failed", exc_info=True)
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception("mcp.auth.db_unavailable")
             return Response(
-                '{"error":"unauthorized","detail":"Role validation failed"}',
-                status_code=401,
+                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                status_code=503,
                 media_type="application/json",
             )
         if live_role is None:
@@ -1257,8 +1272,11 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             nodes: list[dict[str, Any]] = []
             for nid in sorted(node_ids):
                 usage = token_usage.get(nid, {})
-                t_in = usage.get("tokens_in", 0) if usage else 0
-                t_out = usage.get("tokens_out", 0) if usage else 0
+                # The enriched union's token fields are the SERVER entries
+                # (input_tokens/output_tokens/total_tokens). The old
+                # tokens_in/tokens_out keys never matched the stored shape.
+                t_in = usage.get("input_tokens", usage.get("tokens_in", 0)) or 0
+                t_out = usage.get("output_tokens", usage.get("tokens_out", 0)) or 0
                 nodes.append(
                     {
                         "node_id": nid,
@@ -1453,7 +1471,15 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             if run.status in _terminal_statuses:
                 detail = f"Run is already in terminal status: {run.status}"
                 return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
+            # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
+            # finalize (§4.2). A STREAMED running run cancelled cross-process is
+            # routed through finalize_cost, re-reading the STORED cumulative
+            # sets; a NEVER-PAUSED in-flight run has none and forfeits its
+            # accrued cost (cost_components_partial_spend_lost log).
+            was_paused = run.status in ("awaiting_human", "claimed")
             run = await request_cancellation(s, rid)
+            if not was_paused:
+                await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         return {"run_id": run_id, "cancellation_requested": True}
@@ -3418,23 +3444,23 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     fields: list[dict[str, Any]] = []
     if "properties" in defn:
         required_set = set(defn.get("required", []))
-        for name, prop in defn["properties"].items():
-            fields.append(
-                {
-                    "name": name,
-                    "type": prop.get("type", "unknown"),
-                    "required": name in required_set,
-                }
-            )
+        fields = [
+            {
+                "name": name,
+                "type": prop.get("type", "unknown"),
+                "required": name in required_set,
+            }
+            for name, prop in defn["properties"].items()
+        ]
     elif "fields" in defn:
-        for f in defn["fields"]:
-            fields.append(
-                {
-                    "name": f.get("name", "?"),
-                    "type": f.get("type", "unknown"),
-                    "required": f.get("required", False),
-                }
-            )
+        fields = [
+            {
+                "name": f.get("name", "?"),
+                "type": f.get("type", "unknown"),
+                "required": f.get("required", False),
+            }
+            for f in defn["fields"]
+        ]
 
     lines = [
         f"Schema: {schema.name}",
