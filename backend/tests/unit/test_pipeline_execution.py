@@ -685,6 +685,7 @@ _SAQ_SETTINGS_ENV = (
     "SAQ_WORKER_LOST_WINDOW",
     "SAQ_WORKER_DB_POOL_SIZE",
     "SAQ_REDIS_POOL_SIZE",
+    "SAQ_WORKER_CONCURRENCY",
 )
 
 
@@ -716,13 +717,16 @@ class TestSaqSettingsDefaults:
         assert s.saq_worker_lost_window == 600
         assert s.saq_worker_db_pool_size == 10
         assert s.saq_redis_pool_size == 50
+        assert s.saq_worker_concurrency == 5
 
     def test_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RUN_CLAIM_STALE_SECONDS", "500")
         monkeypatch.setenv("SAQ_REDIS_POOL_SIZE", "8")
+        monkeypatch.setenv("SAQ_WORKER_CONCURRENCY", "8")
         s = self._settings(monkeypatch)
         assert s.run_claim_stale_seconds == 500
         assert s.saq_redis_pool_size == 8
+        assert s.saq_worker_concurrency == 8
 
     def test_test_pause_refused_outside_debug(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import ValidationError
