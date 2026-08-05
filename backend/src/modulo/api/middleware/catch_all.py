@@ -91,7 +91,6 @@ async def _ingest_unhandled_error(request: Request) -> None:
 
 def get_unhandled_exception_count() -> int:
     """Expose the counter for observability / monitoring."""
-    global _unhandled_exception_count
     with _unhandled_count_lock:
         return _unhandled_exception_count
 

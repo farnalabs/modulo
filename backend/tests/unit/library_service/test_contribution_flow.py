@@ -421,7 +421,7 @@ class TestPublishContributionErrors:
             patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=None),
             pytest.raises(ContributionNotFoundError, match="not found"),
         ):
-            await publish_contribution(session, uuid.uuid4(), uuid.uuid4(), approved_by=uuid.uuid4())
+            await publish_contribution(session, uuid.uuid4(), uuid.uuid4())
 
     async def test_programming_error_propagates(self) -> None:
         session = _mock_session()
@@ -435,7 +435,7 @@ class TestPublishContributionErrors:
             ),
             pytest.raises(ProgrammingError),
         ):
-            await publish_contribution(session, uuid.uuid4(), uuid.uuid4(), approved_by=uuid.uuid4())
+            await publish_contribution(session, uuid.uuid4(), uuid.uuid4())
 
     async def test_notifies_importers_after_publish(self) -> None:
         session = _mock_session()
@@ -450,7 +450,7 @@ class TestPublishContributionErrors:
             patch("modulo.core.library_service.update_library_primitive", new_callable=AsyncMock, return_value=updated),
             patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock) as notify,
         ):
-            await publish_contribution(session, uuid.uuid4(), prim_id, approved_by=uuid.uuid4())
+            await publish_contribution(session, uuid.uuid4(), prim_id)
 
         notify.assert_awaited_once()
         assert notify.await_args.args == (session, MODULO_ORG_ID, prim_id)
@@ -473,7 +473,7 @@ class TestPublishContributionErrors:
             ),
             patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
         ):
-            await publish_contribution(session, uuid.uuid4(), existing.id, approved_by=uuid.uuid4())
+            await publish_contribution(session, uuid.uuid4(), existing.id)
 
         assert len(_COMMUNITY_PRIMITIVES) == before_count
 

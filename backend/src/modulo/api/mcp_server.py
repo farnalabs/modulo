@@ -291,7 +291,6 @@ def _record_api_key_role_cap(
 
 def get_api_key_role_cap_count() -> int:
     """Return the total number of API-key role-cap clamps recorded."""
-    global _api_key_role_cap_count
     with _api_key_role_cap_lock:
         return _api_key_role_cap_count
 
