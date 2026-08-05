@@ -254,6 +254,7 @@ jobs:
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [deploy-staging]
+    if: inputs.skip_staging_e2e != 'true'
     timeout-minutes: 90
     runs-on: ubicloud-standard-2
     defaults:
@@ -317,7 +318,7 @@ jobs:
   deploy-production:
     name: Deploy to app.modulo.run
     needs: [pre-deploy-tests, staging-e2e]
-    if: always() && (needs.staging-e2e.result == 'success' || inputs.skip_staging_e2e == 'true')
+    if: always() && (needs.staging-e2e.result == 'success' || needs.staging-e2e.result == 'skipped' || inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
