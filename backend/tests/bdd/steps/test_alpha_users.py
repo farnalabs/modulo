@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -274,4 +275,4 @@ def runner_with_team_scope(team: str, request):
 def runner_cannot_trigger_outside_scope(request):
     # Phase 3: team-scope enforcement for run triggering. Deferred per ADR 017 —
     # the scenario carrying this step is @skip tagged and never runs.
-    assert True
+    pytest.skip("team-scope run-trigger enforcement deferred per ADR 017 (Phase 3)")
