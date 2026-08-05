@@ -362,6 +362,7 @@
               <dd>
                 <select
                   v-model="selectedNodeParamSetId"
+                  :aria-label="$t('views.PipelineEditorView.param_set')"
                   class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-sm"
                   @change="onParamSetChange"
                   data-testid="pipeline-node-param-set"
@@ -396,12 +397,14 @@
                   />
                   <input
                     v-else-if="paramDefByKey(pkey)?.type === 'number'"
+                    :id="'pipelineeditorview-override-' + pkey"
                     v-model.number="selectedNodeOverrides[pkey]"
                     type="number"
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                   />
                   <select
                     v-else-if="paramDefByKey(pkey)?.type === 'boolean'"
+                    :id="'pipelineeditorview-override-' + pkey"
                     v-model="selectedNodeOverrides[pkey]"
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                   >
@@ -411,6 +414,7 @@
                   </select>
                   <select
                     v-else-if="paramDefByKey(pkey)?.type === 'select'"
+                    :id="'pipelineeditorview-override-' + pkey"
                     v-model="selectedNodeOverrides[pkey]"
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                   >
@@ -419,6 +423,7 @@
                   </select>
                   <select
                     v-else-if="paramDefByKey(pkey)?.type === 'model_backend_ref'"
+                    :id="'pipelineeditorview-override-' + pkey"
                     v-model="selectedNodeOverrides[pkey]"
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                   >
@@ -427,6 +432,7 @@
                   </select>
                   <select
                     v-else-if="paramDefByKey(pkey)?.type === 'schema_ref'"
+                    :id="'pipelineeditorview-override-' + pkey"
                     v-model="selectedNodeOverrides[pkey]"
                     class="w-full rounded-lg border border-input bg-background px-2 py-1 text-xs"
                   >
@@ -567,6 +573,7 @@
                 v-model.number="edgeForm.max_iterations"
                 type="number"
                 min="0"
+                :aria-label="$t('views.PipelineEditorView.max_iterations')"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 placeholder="0 = unlimited (RunawayGuard applies)"
               />

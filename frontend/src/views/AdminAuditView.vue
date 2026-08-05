@@ -81,6 +81,7 @@
           <input
             v-model="filterActor"
             type="text"
+            :aria-label="$t('views.AdminAuditView.actor_id')"
             :placeholder="$t('views.AdminAuditView.actor_id')"
             class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             data-testid="admin-audit-actor"

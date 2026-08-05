@@ -122,6 +122,7 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 
 ## Known Gaps
 
+- [ ] **Legacy `files.upload` endpoint**: `write("file_upload")` uses the legacy `files.upload` method (deprecated in favor of `files.uploadV2`). Still works and is the simplest implementation for small in-memory uploads; track migration to `files.uploadV2` if Slack retires the legacy endpoint.
 ### Resolved (2026-08-04)
 
 - [x] ~~**No bot-in-channel verification**: health check does not verify bot is in at least one channel~~ — `health_check()` calls `_is_bot_in_channel()` (`conversations.list`, `limit=1`, `types=public_channel,private_channel`); no channels → `HealthResult(ok=False, "Bot is not in any channel")`.

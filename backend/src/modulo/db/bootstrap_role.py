@@ -23,10 +23,12 @@ Deliverable (A) of the break-glass admin recovery plan adds:
     break-glass column UPDATE grants are deliverable (B) and are NOT applied
     here. ``modulo_app`` is NEVER granted membership in either role.
   * Deliverable (B): after the grants are re-applied, the allow-list and role
-    posture are ASSERTED (fatal): no table-level UPDATE grant on accounts for
+    posture are ASSERTED: no table-level UPDATE grant on accounts for
     modulo_app OR PUBLIC, UPDATE-grant set-equality with the allow-list, the
     three break-glass columns not writable by modulo_app, ``rolsuper = false``
-    for the app role, and no membership in the privileged roles.
+    for the app role, and no membership in the privileged roles. The assertion
+    raises ``RuntimeError``; ``_run_bootstrap`` treats it as a non-fatal
+    WARNING (see below).
 """
 
 import asyncio
@@ -225,7 +227,13 @@ async def _find_allow_list_violations(conn: asyncpg.Connection, app_user: str) -
 
 
 async def _assert_role_posture(conn: asyncpg.Connection, app_user: str) -> None:
-    """Fatal when the allow-list / role-posture assertions find a violation."""
+    """Raise when the allow-list / role-posture assertions find a violation.
+
+    Callers decide the severity: ``_run_bootstrap`` treats the
+    ``Break-glass role posture assertion FAILED`` prefix as a non-fatal
+    WARNING (legacy superuser app roles on staging/prod; the boundary is
+    still enforced by the DDL migrations).
+    """
     violations = await _find_allow_list_violations(conn, app_user)
     if violations:
         raise RuntimeError("Break-glass role posture assertion FAILED:\n  " + "\n  ".join(violations))
@@ -285,7 +293,8 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
         await _grant_break_glass(conn, bg_user)
         await _grant_function_execute(conn, app_user, bg_user)
 
-        # Deliverable (B): the allow-list + role-posture assertions (fatal).
+        # Deliverable (B): the allow-list + role-posture assertions (non-fatal
+        # warning at the call site in _run_bootstrap).
         await _assert_role_posture(conn, app_user)
 
         _log.info("Granted DML permissions to: %s", app_user)

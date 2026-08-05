@@ -1,7 +1,8 @@
 # Delivery Tracking
 
-> **The JSON delivery tracker is retired.** `delivery-plan.json` and `task.ps1` were removed from the
-> repositories (preserved in git history). The source of truth for work items is now **Linear**
+> **The JSON delivery tracker is retired.** `delivery-plan.json` was removed from the repositories
+> (preserved in git history); the legacy `task.ps1` script is still tracked at `.agents/tools/task.ps1`
+> but only reads the retired tracker file. The source of truth for work items is now **Linear**
 > (farnalabs-modulo workspace, FAR team); delivery phases are tracked as Linear projects/epics.
 
 ## QA Iterate Loop
