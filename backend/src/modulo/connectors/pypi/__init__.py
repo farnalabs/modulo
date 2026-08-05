@@ -114,24 +114,23 @@ class PyPIConnector(ConnectorBase):
             resp = await c.post("/", content=xml_body, headers={"Content-Type": "text/xml"})
             resp.raise_for_status()
             results: list[dict[str, Any]] = cast("list[dict[str, Any]]", xmlrpc.client.loads(resp.text)[0][0])
-        records = []
-        for r in results:
-            records.append(
-                {
-                    "name": r.get("name", ""),
-                    "version": r.get("version", ""),
-                    "summary": r.get("summary", ""),
-                    "author": r.get("author", ""),
-                    "author_email": r.get("author_email", ""),
-                    "maintainer": r.get("maintainer", ""),
-                    "maintainer_email": r.get("maintainer_email", ""),
-                    "home_page": r.get("home_page", ""),
-                    "license": r.get("license", ""),
-                    "description": r.get("description", ""),
-                    "platform": r.get("platform", ""),
-                    "downloads": r.get("downloads", 0),
-                },
-            )
+        records = [
+            {
+                "name": r.get("name", ""),
+                "version": r.get("version", ""),
+                "summary": r.get("summary", ""),
+                "author": r.get("author", ""),
+                "author_email": r.get("author_email", ""),
+                "maintainer": r.get("maintainer", ""),
+                "maintainer_email": r.get("maintainer_email", ""),
+                "home_page": r.get("home_page", ""),
+                "license": r.get("license", ""),
+                "description": r.get("description", ""),
+                "platform": r.get("platform", ""),
+                "downloads": r.get("downloads", 0),
+            }
+            for r in results
+        ]
         return ConnectorResult(
             records=records,
             total=len(records),

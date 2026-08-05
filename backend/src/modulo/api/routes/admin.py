@@ -148,19 +148,19 @@ async def global_search(
                         )
                     ).scalar() or 0
 
-                    for row in rows:
-                        all_items.append(
-                            (
-                                row.relevance,
-                                SearchResultItem(
-                                    type="pipeline",
-                                    id=str(row.id),
-                                    title=row.name,
-                                    subtitle=row.description,
-                                    url=f"/pipelines/{row.id}",
-                                ),
-                            )
+                    all_items.extend(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="pipeline",
+                                id=str(row.id),
+                                title=row.name,
+                                subtitle=row.description,
+                                url=f"/pipelines/{row.id}",
+                            ),
                         )
+                        for row in rows
+                    )
                     total_by_type["pipeline"] = count
 
                 elif st == "run":
@@ -316,19 +316,19 @@ async def global_search(
                         )
                     ).scalar() or 0
 
-                    for row in rows:
-                        all_items.append(
-                            (
-                                row.relevance,
-                                SearchResultItem(
-                                    type="library",
-                                    id=str(row.id),
-                                    title=row.name,
-                                    subtitle=row.description,
-                                    url="/libraries",
-                                ),
-                            )
+                    all_items.extend(
+                        (
+                            row.relevance,
+                            SearchResultItem(
+                                type="library",
+                                id=str(row.id),
+                                title=row.name,
+                                subtitle=row.description,
+                                url="/libraries",
+                            ),
                         )
+                        for row in rows
+                    )
                     total_by_type["library"] = count
 
             all_items.sort(key=lambda x: (-x[0], x[1].title))
