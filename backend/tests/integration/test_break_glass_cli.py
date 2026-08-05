@@ -136,6 +136,9 @@ async def test_deactivate_refused_then_forced(db_engine: AsyncEngine, bg_session
         rows = await bg.status_rows(bg_session, org_id=org_id, all_rows=True, now=now)
     assert rows[0]["state"] == "deactivated"
 
+    # expire_all() forces a DB refresh -- the SECURITY DEFINER deactivate updated
+    # accounts via raw SQL, and expire_on_commit=False keeps the stale identity map.
+    bg_session.expire_all()
     async with bg_session.begin():
         result = await bg_session.execute(select(Account).where(Account.email == rows[0]["email"]))
     account = result.scalar_one()
