@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
-    saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+    saq_redis_pool_size: int = Field(default=50, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second
     # sandbox uptime). Default reflects the dashboard-confirmed opencode

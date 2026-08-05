@@ -18,7 +18,7 @@ import modulo.core.saq_worker as sw
 def _settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
         "saq_runs_queue": "runs",
-        "saq_redis_pool_size": 20,
+        "saq_redis_pool_size": 50,
         "redis_url": "redis://localhost:6379/0",
         "database_url": "postgresql+asyncpg://localhost/test",
         "modulo_db": "postgres",
