@@ -356,9 +356,10 @@ class PluginRegistry:
                 manifests = list(self._plugins.values())
                 cached_errors = {m.PLUGIN_ID: self._entry_point_errors.get(m.PLUGIN_ID) for m in manifests}
 
-        results: dict[str, PluginHealth] = {}
-        for manifest in manifests:
-            results[manifest.PLUGIN_ID] = self._check_single(manifest, cached_errors.get(manifest.PLUGIN_ID))
+        results = {
+            manifest.PLUGIN_ID: self._check_single(manifest, cached_errors.get(manifest.PLUGIN_ID))
+            for manifest in manifests
+        }
 
         with self._lock:
             self._health.update(results)

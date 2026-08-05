@@ -59,7 +59,6 @@ ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 def _prune_stale_ip_counters() -> None:
     """Remove IP entries with no activity in the last 48 hours."""
-    global _public_daily_event_count
     threshold = (datetime.now(UTC) - timedelta(hours=48)).strftime("%Y-%m-%d")
     stale_ips = []
     for ip, days in _public_daily_event_count.items():
@@ -384,7 +383,6 @@ async def list_error_groups(
             )
 
             sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
-            sample_events: dict[uuid.UUID, ErrorEvent] = {}
             if sample_ids:
                 result = await session.execute(
                     select(ErrorEvent).where(
@@ -392,8 +390,9 @@ async def list_error_groups(
                         ErrorEvent.id.in_(sample_ids),
                     )
                 )
-                for event in result.scalars().all():
-                    sample_events[event.id] = event
+                sample_events = {event.id: event for event in result.scalars().all()}
+            else:
+                sample_events = {}
 
             items = []
             for g in groups:

@@ -511,9 +511,7 @@ async def saml_process_response(
 
     name_id = result["name_id"]
     raw_attrs = result["attributes"]
-    attrs: dict[str, str] = {}
-    for attr_name, values in raw_attrs.items():
-        attrs[attr_name] = ",".join(values)
+    attrs = {attr_name: ",".join(values) for attr_name, values in raw_attrs.items()}
 
     email = attrs.get("email", "") or attrs.get("Email", "") or name_id or ""
     if not email:
