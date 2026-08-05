@@ -9,14 +9,75 @@ set -e
 #   * The system SAQ worker is FAIL-CLOSED: the container refuses to boot if
 #     SAQ_AUTH_PASSWORD / SAQ_AUTH_USERNAME are unset (checked via the SETTINGS
 #     VALUES, not raw env).
-#   * Crash-loop guard: any SAQ worker exiting within PREFLIGHT_WINDOW seconds
-#     is counted; after MAX_RESTARTS the container fails (LB moves traffic).
+#   * Crash-loop guard: sliding window of SLIDING_CRASH_LIMIT crashes within
+#     SLIDING_WINDOW_S seconds fails the container (LB moves traffic).
+#     A clean/healthy exit resets the window.
 
 # python3 / .venv/bin are on PATH via the image ENV.
 export PYTHONPATH="/app/src:${PYTHONPATH:-}"
 
-PREFLIGHT_WINDOW=45
-MAX_RESTARTS=5
+# Sliding window crash guard: track crash timestamps in a temp file so a
+# worker that periodically dies does not cycle forever without triggering the
+# limit. Reset the window on a successful run (clean exit or ran >= 300s).
+SLIDING_WINDOW_S=300
+SLIDING_CRASH_LIMIT=5
+
+_log_crash() {
+    local EXIT_CODE=$1
+    local SIGNAL_NAME=""
+    local CRASH_REASON="unknown"
+    # exit code 128+N means killed by signal N
+    if [ $EXIT_CODE -gt 128 ]; then
+        local SIG=$((EXIT_CODE - 128))
+        case $SIG in
+            9)  SIGNAL_NAME="SIGKILL";   CRASH_REASON="OOM/killed";;
+            15) SIGNAL_NAME="SIGTERM";   CRASH_REASON="shutdown";;
+            2)  SIGNAL_NAME="SIGINT";    CRASH_REASON="interrupt";;
+            6)  SIGNAL_NAME="SIGABRT";   CRASH_REASON="abort";;
+            11) SIGNAL_NAME="SIGSEGV";   CRASH_REASON="segfault";;
+            *)  SIGNAL_NAME="SIG_$SIG";  CRASH_REASON="signal";;
+        esac
+    elif [ $EXIT_CODE -ne 0 ]; then
+        CRASH_REASON="python_exception"
+    fi
+    echo "WORKER_EXIT: code=$EXIT_CODE reason=$CRASH_REASON signal=$SIGNAL_NAME"
+}
+
+_check_sliding_window() {
+    local CRASH_LOG="$1"
+    local NOW
+    NOW=$(date +%s)
+    local RECENT=0
+    local TS
+    if [ -f "$CRASH_LOG" ]; then
+        while IFS= read -r TS; do
+            [ -z "$TS" ] && continue
+            if [ $((NOW - TS)) -le $SLIDING_WINDOW_S ]; then
+                RECENT=$((RECENT + 1))
+            fi
+        done < "$CRASH_LOG"
+    fi
+    echo "$RECENT"
+}
+
+_record_crash() {
+    local CRASH_LOG="$1"
+    date +%s >> "$CRASH_LOG"
+    # Trim entries older than the sliding window
+    local NOW
+    NOW=$(date +%s)
+    local TMP_FILE
+    TMP_FILE="${CRASH_LOG}.tmp"
+    if [ -f "$CRASH_LOG" ]; then
+        while IFS= read -r TS; do
+            [ -z "$TS" ] && continue
+            if [ $((NOW - TS)) -le $SLIDING_WINDOW_S ]; then
+                echo "$TS"
+            fi
+        done < "$CRASH_LOG" > "$TMP_FILE"
+        mv "$TMP_FILE" "$CRASH_LOG"
+    fi
+}
 
 echo "=== Writing frontend runtime configuration ==="
 python3 - <<'PY'
@@ -98,8 +159,8 @@ echo "=== Celery removed (PR C cutover) — SAQ system worker owns the scheduler
 # on the 2026-08-04 staging deploy.)
 # ---------------------------------------------------------------------------
 echo "=== Starting SAQ runs worker (queue: runs) ==="
-RUNS_RESTARTS=0
 SAQ_RUNS_PID=""
+RUNS_CRASH_LOG="/tmp/run-worker-crashes.log"
 start_saq_runs() {
     while true; do
         RUNS_START=$(date +%s)
@@ -109,15 +170,19 @@ start_saq_runs() {
         wait $SAQ_RUNS_PID
         RUNS_END=$(date +%s)
         RUNS_EXIT=$?
-        RUNS_RESTARTS=$(( RUNS_RESTARTS + 1 ))
-        if [ $((RUNS_END - RUNS_START)) -le $PREFLIGHT_WINDOW ] && [ $RUNS_RESTARTS -gt $MAX_RESTARTS ]; then
-            echo "FATAL: SAQ runs worker crashed $RUNS_RESTARTS times within the preflight window — failing container." >&2
-            exit 1
-        fi
-        if [ $((RUNS_END - RUNS_START)) -le $PREFLIGHT_WINDOW ]; then
-            echo "WARNING: SAQ runs worker exited after $((RUNS_END - RUNS_START))s (restart $RUNS_RESTARTS)"
+        _log_crash $RUNS_EXIT
+        RUNS_ELAPSED=$((RUNS_END - RUNS_START))
+        if [ $RUNS_ELAPSED -le $SLIDING_WINDOW_S ] && [ $RUNS_EXIT -ne 0 ]; then
+            _record_crash "$RUNS_CRASH_LOG"
+            RECENT=$(_check_sliding_window "$RUNS_CRASH_LOG")
+            echo "WARNING: SAQ runs worker exited after ${RUNS_ELAPSED}s (exit=$RUNS_EXIT, recent_crashes=$RECENT)"
+            if [ $RECENT -gt $SLIDING_CRASH_LIMIT ]; then
+                echo "FATAL: SAQ runs worker: $RECENT crashes in the last ${SLIDING_WINDOW_S}s — failing container." >&2
+                exit 1
+            fi
         else
-            RUNS_RESTARTS=0
+            # Successful run (ran long enough or clean exit) — reset crash log
+            rm -f "$RUNS_CRASH_LOG"
         fi
         sleep 1
     done
@@ -126,8 +191,8 @@ start_saq_runs &
 SAQ_RUNS_WRAPPER_PID=$!
 
 echo "=== Starting SAQ system worker (queue: system, web UI 8081 on 127.0.0.1, fail-closed auth) ==="
-SYSTEM_RESTARTS=0
 SAQ_SYSTEM_PID=""
+SYSTEM_CRASH_LOG="/tmp/system-worker-crashes.log"
 start_saq_system() {
     while true; do
         SYSTEM_START=$(date +%s)
@@ -143,15 +208,19 @@ start_saq_system() {
         wait $SAQ_SYSTEM_PID
         SYSTEM_END=$(date +%s)
         SYSTEM_EXIT=$?
-        SYSTEM_RESTARTS=$(( SYSTEM_RESTARTS + 1 ))
-        if [ $((SYSTEM_END - SYSTEM_START)) -le $PREFLIGHT_WINDOW ] && [ $SYSTEM_RESTARTS -gt $MAX_RESTARTS ]; then
-            echo "FATAL: SAQ system worker crashed $SYSTEM_RESTARTS times within the preflight window — failing container." >&2
-            exit 1
-        fi
-        if [ $((SYSTEM_END - SYSTEM_START)) -le $PREFLIGHT_WINDOW ]; then
-            echo "WARNING: SAQ system worker exited after $((SYSTEM_END - SYSTEM_START))s (restart $SYSTEM_RESTARTS)"
+        _log_crash $SYSTEM_EXIT
+        SYSTEM_ELAPSED=$((SYSTEM_END - SYSTEM_START))
+        if [ $SYSTEM_ELAPSED -le $SLIDING_WINDOW_S ] && [ $SYSTEM_EXIT -ne 0 ]; then
+            _record_crash "$SYSTEM_CRASH_LOG"
+            RECENT=$(_check_sliding_window "$SYSTEM_CRASH_LOG")
+            echo "WARNING: SAQ system worker exited after ${SYSTEM_ELAPSED}s (exit=$SYSTEM_EXIT, recent_crashes=$RECENT)"
+            if [ $RECENT -gt $SLIDING_CRASH_LIMIT ]; then
+                echo "FATAL: SAQ system worker: $RECENT crashes in the last ${SLIDING_WINDOW_S}s — failing container." >&2
+                exit 1
+            fi
         else
-            SYSTEM_RESTARTS=0
+            # Successful run (ran long enough or clean exit) — reset crash log
+            rm -f "$SYSTEM_CRASH_LOG"
         fi
         sleep 1
     done
