@@ -378,13 +378,11 @@ def build_graph_from_json(
             )
 
     # Build reject-edge lookup for kick-back routing.
-    reject_targets_by_source: dict[str, str] = {}
-    for edge_def in edges:
-        etype = _get_edge_type(edge_def)
-        if etype == "reject":
-            src = _get_edge_val(edge_def, "source", "source_node_id")
-            tgt = _get_edge_val(edge_def, "target", "target_node_id")
-            reject_targets_by_source[src] = tgt
+    reject_targets_by_source = {
+        _get_edge_val(edge_def, "source", "source_node_id"): _get_edge_val(edge_def, "target", "target_node_id")
+        for edge_def in edges
+        if _get_edge_type(edge_def) == "reject"
+    }
 
     # Group forwarding edges by source (skip reject).
     source_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)

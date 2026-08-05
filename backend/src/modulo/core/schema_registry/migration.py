@@ -76,11 +76,9 @@ def create_migration(from_schema: dict[str, Any], to_schema: dict[str, Any]) -> 
     removed = from_names - to_names
     common = from_names & to_names
 
-    for name in added:
-        plan.field_additions[name] = _extract_type(to_props[name])
+    plan.field_additions = {name: _extract_type(to_props[name]) for name in added}
 
-    for name in removed:
-        plan.field_removals.append(name)
+    plan.field_removals.extend(removed)
 
     for name in common:
         old_type = _extract_type(from_props[name])
