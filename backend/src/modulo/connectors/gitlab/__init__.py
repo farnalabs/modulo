@@ -201,7 +201,7 @@ def _safe_json(response: httpx.Response) -> Any:
 
 
 def _safe_json_object(response: httpx.Response) -> dict[str, Any]:
-    return cast(dict[str, Any], _safe_json(response))
+    return cast("dict[str, Any]", _safe_json(response))
 
 
 def _project_path(project_id: str) -> str:
@@ -385,7 +385,7 @@ class GitLabConnector(ConnectorBase):
     async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         try:
-            return cast(dict[str, Any], response.json())
+            return cast("dict[str, Any]", response.json())
         except json.JSONDecodeError as exc:
             raise ValueError(f"GitLab API invalid response: {exc}") from exc
 

@@ -831,7 +831,7 @@ async def diff_prompt_versions(
             return agent.prompt_template
         for entry in history:
             if entry.get("version") == version:
-                tpl = cast(str | None, entry.get("template"))
+                tpl = cast("str | None", entry.get("template"))
                 return tpl or ""
         return None
 

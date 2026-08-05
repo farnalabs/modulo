@@ -31,6 +31,16 @@ _RATE_LIMIT_HEADERS = (
 )
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    """Coerce *value* to int, returning *default* for None or unparseable values."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from API response."""
     value = response.headers.get("Retry-After")
@@ -322,10 +332,12 @@ class JiraConnector(ConnectorBase):
                     params["startAt"] = int(q.cursor)
                 r = await self._call_api("POST", "/search", json=params)
                 body: dict[str, Any] = await self._parse_json(r)
-                issues: list[dict[str, Any]] = body.get("issues", [])
-                total = body.get("total", len(issues))
-                start_at = body.get("startAt", 0)
-                max_results = body.get("maxResults", max_results)
+                issues = body.get("issues", [])
+                if not isinstance(issues, list):
+                    issues = []
+                total = _safe_int(body.get("total"), len(issues))
+                start_at = _safe_int(body.get("startAt"), 0)
+                max_results = _safe_int(body.get("maxResults"), max_results)
                 next_cursor: str | None = None
                 if start_at + max_results < total:
                     next_cursor = str(start_at + max_results)
@@ -345,9 +357,11 @@ class JiraConnector(ConnectorBase):
                 r = await self._call_api("GET", f"/issue/{issue_key}/comment", params=comment_params)
                 body = await self._parse_json(r)
                 comments = body.get("comments", [])
-                total = body.get("total", len(comments))
-                start_at = body.get("startAt", 0)
-                max_results = body.get("maxResults", 50)
+                if not isinstance(comments, list):
+                    comments = []
+                total = _safe_int(body.get("total"), len(comments))
+                start_at = _safe_int(body.get("startAt"), 0)
+                max_results = _safe_int(body.get("maxResults"), 50)
                 comment_next_cursor: str | None = None
                 if start_at + max_results < total:
                     comment_next_cursor = str(start_at + max_results)

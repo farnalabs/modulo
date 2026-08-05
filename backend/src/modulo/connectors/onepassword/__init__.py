@@ -177,7 +177,7 @@ class OnePasswordConnector(ConnectorBase):
         }
         resp = await c.post(f"/v1/vaults/{vault_id}/items", json=body)
         resp.raise_for_status()
-        return cast(dict[str, Any], resp.json())
+        return cast("dict[str, Any]", resp.json())
 
     async def _update_item(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         vault_id = data.get("vault_id", "")
@@ -222,4 +222,4 @@ class OnePasswordConnector(ConnectorBase):
             archive_result = resp.json()
             return {"status": "archived", "vault_id": vault_id, "item_id": item_id, "result": archive_result}
         resp.raise_for_status()
-        return cast(dict[str, Any], resp.json())
+        return cast("dict[str, Any]", resp.json())

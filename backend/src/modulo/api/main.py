@@ -1049,7 +1049,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _mcp_tg = await anyio.create_task_group().__aenter__()
     # FastMCP annotates this private integration slot as None despite assigning a TaskGroup at runtime.
-    session_manager = cast(_TaskGroupSessionManager, mcp.session_manager)
+    session_manager = cast("_TaskGroupSessionManager", mcp.session_manager)
     session_manager._task_group = _mcp_tg
 
     yield

@@ -311,7 +311,7 @@ def build_graph_from_json(
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
-    state_schema = cast(type[Any], Annotated[dict[str, Any], _pipeline_state_reducer])
+    state_schema = cast("type[Any]", Annotated[dict[str, Any], _pipeline_state_reducer])
     graph: StateGraph[Any] = StateGraph(state_schema)
 
     nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
