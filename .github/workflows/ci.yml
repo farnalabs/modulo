@@ -353,6 +353,10 @@ jobs:
             echo "::warning::Modulo Branch Fixer returned HTTP $HTTP_CODE: $(echo $BODY_RESP | jq -r '.detail // "unknown"')"
           fi
 
+      - name: Report Branch Fixer check status
+        if: success()
+        run: echo "Branch Fixer trigger check passed (all required checks green or fixer dispatched)."
+
   notify-pr-review:
     name: Trigger PR Reviewer
     if: github.event_name == 'pull_request' && success()
