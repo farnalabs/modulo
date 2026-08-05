@@ -288,8 +288,7 @@ async def _rename_accounts_objects(conn: asyncpg.Connection) -> None:
         elif contype == "c" and "auth_provider" in definition:
             canonical = "ck_accounts_auth_provider"
         elif contype == "c" and any(
-            token in definition
-            for token in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
+            token in definition for token in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
         ):
             canonical = "ck_accounts_break_glass_expiry"
         else:
