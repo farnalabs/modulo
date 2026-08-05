@@ -8,7 +8,7 @@ Trigger ``config_json`` structure::
     {
         "source_pipeline_id": "<uuid>",   # pipeline to watch
         "source_node_id": "<node_id>",    # node within source pipeline to watch
-        "snapshot_id": "<uuid>",          # snapshot for child run
+        "snapshot_id": "<uuid>",          # (optional) snapshot for child run
     }
 
 If ``snapshot_id`` is omitted, the child run uses the target pipeline's latest
