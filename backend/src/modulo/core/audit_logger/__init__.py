@@ -400,10 +400,16 @@ def _describe_chain_break(
     stored_hash: str | None,
 ) -> str:
     """Build a human-readable tamper-evidence message for a chain break."""
-    expected = expected_hash or "None (this is the first event in the org's chain)"
+    if expected_hash is None:
+        return (
+            f"Audit chain break at event {gap_index} (id {tampered_id}): stored previous_hash "
+            f"({stored_hash}) does not match the recomputed hash of the prior event (None). "
+            "This is the first event in the org's chain, so a prior-event hash is not expected; "
+            "the stored previous_hash indicates tampering."
+        )
     return (
         f"Audit chain break at event {gap_index} (id {tampered_id}): stored previous_hash "
-        f"({stored_hash}) does not match the recomputed hash of the prior event ({expected}). "
+        f"({stored_hash}) does not match the recomputed hash of the prior event ({expected_hash}). "
         "The event or one before it has been tampered with."
     )
 
