@@ -394,4 +394,3 @@ def test_calculated_without_formula_is_eval_error() -> None:
     assert breakdown[0]["error"] == "eval_error"
     assert breakdown[0]["amount_usd"] == "0.000000"
     assert total == Decimal(0)
-

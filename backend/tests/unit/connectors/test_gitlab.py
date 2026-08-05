@@ -867,9 +867,7 @@ async def test_health_check_reports_missing_api_scope(connector):
     """read_api + write_repository without api must fail health (issue/MR writes need api)."""
     respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get(_TOKEN_INFO).mock(
-        return_value=httpx.Response(200, json={"scope": ["read_api", "write_repository"]})
-    )
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api", "write_repository"]}))
     result = await connector.health_check()
     assert result.ok is False
     assert result.detail.startswith("Missing scopes: api")
@@ -941,9 +939,7 @@ async def test_health_check_self_hosted_scope_probe_uses_instance_root(connector
     respx.get("https://gitlab.example.com/api/v4/version").mock(
         return_value=httpx.Response(200, json={"version": "17.5.0"})
     )
-    route = respx.get(_SELF_TOKEN_INFO).mock(
-        return_value=httpx.Response(200, json={"scope": ["read_api"]})
-    )
+    route = respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api"]}))
     result = await custom.health_check()
     assert route.called
     assert result.ok is False
