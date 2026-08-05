@@ -1613,25 +1613,26 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import func, select
 
+        from modulo.db.models.run import Run
+
+        _terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
+            base_where = (
+                HitlClaim.organisation_id == org_id,
+                HitlClaim.decision.is_(None),
+                Run.status.not_in(_terminal_statuses),
+            )
             total_result = await s.execute(
-                select(func.count())
-                .select_from(HitlClaim)
-                .where(
-                    HitlClaim.organisation_id == org_id,
-                    HitlClaim.decision.is_(None),
-                )
+                select(func.count()).select_from(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*base_where)
             )
             total = total_result.scalar_one()
 
             offset = (page - 1) * page_size
             result = await s.execute(
                 select(HitlClaim)
-                .where(
-                    HitlClaim.organisation_id == org_id,
-                    HitlClaim.decision.is_(None),
-                )
+                .join(Run, HitlClaim.run_id == Run.id)
+                .where(*base_where)
                 .offset(offset)
                 .limit(page_size)
             )

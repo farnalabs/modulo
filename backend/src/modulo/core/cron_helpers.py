@@ -64,6 +64,32 @@ _REPORT_FAILURE_COUNTER_TTL = 6 * 3600  # 6h — long enough to count 5 x 5min
 # dispatcher_reconcile (system cron) — every 60s.
 RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
 
+# Exported reconciliation stats for /healthz/ready (PR D — hitl-health-obs).
+_dispatcher_reconcile_stats: dict[str, Any] = {
+    "last_run_at": None,
+    "scanned": 0,
+    "repaired": 0,
+    "skipped": 0,
+    "redis_errors": 0,
+    "deduped": 0,
+}
+
+
+def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
+    """Store the last dispatcher_reconcile outcome for /healthz/ready."""
+    _dispatcher_reconcile_stats["last_run_at"] = datetime.now(UTC).isoformat()
+    _dispatcher_reconcile_stats["scanned"] = stats.get("scanned", 0)
+    _dispatcher_reconcile_stats["repaired"] = stats.get("repaired", 0)
+    _dispatcher_reconcile_stats["skipped"] = stats.get("skipped", 0)
+    _dispatcher_reconcile_stats["redis_errors"] = stats.get("redis_errors", 0)
+    _dispatcher_reconcile_stats["deduped"] = stats.get("deduped", 0)
+
+
+def get_dispatcher_reconcile_stats() -> dict[str, Any]:
+    """Read the last dispatcher_reconcile outcome (thread-safe)."""
+    return dict(_dispatcher_reconcile_stats)
+
+
 _ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
 
 _ENGINE: AsyncEngine | None = None
@@ -1399,6 +1425,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         with _suppress_aclose():
             await redis_client.aclose()
 
+    set_dispatcher_reconcile_stats(summary)
     return summary
 
 

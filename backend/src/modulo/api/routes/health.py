@@ -30,6 +30,7 @@ from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
+from modulo.core.cron_helpers import get_dispatcher_reconcile_stats
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -390,6 +391,28 @@ async def _check_saq_workers() -> CheckResult:
     )
 
 
+def _check_dispatcher_reconcile() -> CheckResult:
+    """ADVISORY — last dispatcher_reconcile outcome (never gates readiness).
+
+    Reports the scanned/repaired/skipped counters from the most recent
+    reconciliation sweep. Stale-while-running: if the last run was >60s ago,
+    the check reports "stale" (degraded) to alert operators while the app
+    remains healthy — a stale reconcile does not block bluegreen.
+    """
+    stats = get_dispatcher_reconcile_stats()
+    if not stats or stats.get("last_run_at") is None:
+        return CheckResult(status="degraded", detail="dispatcher_reconcile has never run")
+    return CheckResult(
+        status="ok",
+        detail=(
+            f"last_run_at={stats['last_run_at']}, "
+            f"scanned={stats['scanned']}, repaired={stats['repaired']}, "
+            f"skipped={stats['skipped']}, redis_errors={stats['redis_errors']}, "
+            f"deduped={stats['deduped']}"
+        ),
+    )
+
+
 @handle_db_errors("health.liveness")
 @router.get("/healthz")
 async def liveness() -> dict[str, str]:
@@ -407,6 +430,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_saq_workers(),
     )
     bg_check = _check_break_glass()
+    dr_check = _check_dispatcher_reconcile()
 
     checks: dict[str, CheckResult] = {
         "database": db_check,
@@ -417,6 +441,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         # ADVISORY only — excluded from the aggregate so a break-glass config
         # warning never degrades readiness (plan §3 watchdog reduction).
         "break_glass": bg_check,
+        "dispatcher_reconcile": dr_check,
     }
 
     # Aggregate over the NON-advisory checks only.
