@@ -22,11 +22,16 @@ vi.mock('../lib/api/client', () => ({
       if (path === '/api/v1/admin/costs') {
         return Promise.resolve({
           data: {
-            org_total_usd: 42.5,
-            teams: [
-              { team_id: 'team-1', team_name: 'Alpha', cost_usd: 25.0, limit_usd: 50.0 },
-              { team_id: 'team-2', team_name: 'Beta', cost_usd: 17.5, limit_usd: null },
+            period: 'month',
+            group_by: 'team',
+            items: [
+              { entity_id: 'team-1', entity_name: 'Alpha', total_spend_usd: 25.0, total_runs: 3, components: [{ name: 'llm_tokens', amount_usd: '25.000000' }], annotations: { refused_total_usd: null, clamped_total_usd: null } },
+              { entity_id: 'team-2', entity_name: 'Beta', total_spend_usd: 17.5, total_runs: 2, components: [], annotations: { refused_total_usd: 1.25, clamped_total_usd: null } },
             ],
+            org_total: '42.500000',
+            legacy_total: '0.000000',
+            org_unassigned_components: '0.000000',
+            has_more: false,
           },
           error: undefined,
         })
