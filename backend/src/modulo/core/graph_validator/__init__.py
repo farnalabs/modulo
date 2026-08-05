@@ -716,11 +716,9 @@ class GraphValidator:
         if isinstance(out_type, list):
             has_null = "null" in out_type
             accepts_null = isinstance(in_type, list) and "null" in in_type
-            for ot in out_type:
-                if ot == "null":
-                    continue
-                if ot != in_type:
-                    errors.append(f"{path}: type mismatch '{ot}' -> '{in_type}'")
+            errors.extend(
+                f"{path}: type mismatch '{ot}' -> '{in_type}'" for ot in out_type if ot != "null" and ot != in_type
+            )
             if has_null and not accepts_null:
                 errors.append(f"{path}: output allows null but input does not")
             return errors

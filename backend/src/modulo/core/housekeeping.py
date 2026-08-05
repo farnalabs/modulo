@@ -425,20 +425,17 @@ async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> 
     for t in duplicate_triggers:
         groups.setdefault((t.pipeline_id, t.trigger_type), []).append(t)
 
-    candidates: list[Candidate] = []
-    for (pid, ttype), triggers in groups.items():
-        # Keep the first one (oldest), suggest removing the rest
-        candidates.extend(
-            Candidate(
-                id=str(t.id),
-                name=f"Trigger {ttype} for pipeline {pid}",
-                detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. "
-                f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
-                created_at=t.created_at.isoformat() if t.created_at else None,
-            )
-            for t in triggers[1:]
+    return [
+        Candidate(
+            id=str(t.id),
+            name=f"Trigger {ttype} for pipeline {pid}",
+            detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. "
+            f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
+            created_at=t.created_at.isoformat() if t.created_at else None,
         )
-    return candidates
+        for (pid, ttype), triggers in groups.items()
+        for t in triggers[1:]
+    ]
 
 
 async def _scan_unused_environment_profiles(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
