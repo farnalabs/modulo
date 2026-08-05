@@ -2,6 +2,14 @@
 
 When a source pipeline's designated node completes execution, fires a child
 pipeline run with the completed node's output as input.
+
+Trigger ``config_json`` structure::
+
+    {
+        "source_pipeline_id": "<uuid>",   # pipeline to watch
+        "source_node_id": "<node_id>",    # node within source pipeline to watch
+        "snapshot_id": "<uuid>",          # snapshot for child run
+    }
 """
 
 import asyncio
