@@ -1,10 +1,11 @@
-"""JiraConnector — async Jira Cloud REST API v3 connector."""
+"""JiraConnector — async Jira Cloud / Data Center REST API connector."""
 
 import asyncio
+import base64
 import json
 import random
 import time
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -104,10 +105,19 @@ def _jitter(delay: float, *, tight: bool = False) -> float:
 
 
 class JiraConnector(ConnectorBase):
-    """Read/write Jira issues via the REST API v3.
+    """Read/write Jira issues via the REST API (Cloud API v3 / Data Center API v2).
+
+    Supports both Jira Cloud and self-hosted Jira Data Center / Server
+    instances. Cloud is the default: ``base_url`` defaults to
+    ``https://{instance}/rest/api/3``. For a self-hosted instance pass the full
+    API base URL (e.g. ``https://jira.example.com/rest/api/2``) via ``base_url``
+    or set ``api_version=2``.
 
     Config (from config_json):
-      "instance" — your-domain.atlassian.net (without https://)
+      "instance"    — your-domain.atlassian.net (without https://)
+      "base_url"    — optional full API base URL for self-hosted instances,
+                      e.g. "https://jira.example.com/rest/api/2"
+      "api_version" — optional REST API version, default 3 (Cloud)
 
     Credentials (from credentials_ciphertext):
       "email"    — Atlassian account email (for Basic auth)
@@ -124,6 +134,8 @@ class JiraConnector(ConnectorBase):
       "field_metadata"   — issue types + create-issue fields for a project; filters: {"project": "PROJ"}
       "fields"           — list all system + custom fields across the instance
       "statuses"         — issue types + their statuses for a project; filters: {"project": "PROJ"}
+      "attachments"      — list attachments on an issue; filters: {"issue_key": "PROJ-123"}
+      "attachment"       — download an attachment's content (base64); filters: {"attachment_id": "10001"}
 
     Supported write resources:
       "issue"           — create an issue; data: {"project": {"key": "PROJ"}, "summary": "...",
@@ -136,16 +148,32 @@ class JiraConnector(ConnectorBase):
                            (all three id lookups accepted; explicit null/unassign flag removes the assignee)
       "issue_label"     — add/remove labels; data: {"issue_key": "PROJ-123", "add": ["bug"], "remove": [...]}
       "issue_delete"    — delete an issue; data: {"issue_key": "PROJ-123"}
+      "attachment"      — upload an attachment; data: {"issue_key": "PROJ-123", "filename": "a.txt",
+                           "content": "..." | "file": <bytes>, "mime_type": optional}
 
     Query results expose ``metadata["rate_limit"]`` mirroring Jira Cloud's
     ``X-RateLimit-Limit`` / ``X-RateLimit-Remaining`` / ``X-RateLimit-Reset``
-    response headers when present (empty dict when absent). On HTTP 429 the
-    connector waits until ``X-RateLimit-Reset`` instead of blind backoff.
+    response headers when present (empty dict when absent; Jira Data Center
+    does not report these headers). On HTTP 429 the connector waits until
+    ``X-RateLimit-Reset`` instead of blind backoff.
     """
 
-    def __init__(self, instance: str, creds: dict[str, str]) -> None:
+    def __init__(
+        self,
+        instance: str = "",
+        creds: dict[str, str] | None = None,
+        *,
+        base_url: str | None = None,
+        api_version: int | str = 3,
+    ) -> None:
+        creds = creds or {}
         self._instance = instance.rstrip("/")
-        self._base_url = f"https://{self._instance}/rest/api/3"
+        if base_url:
+            self._base_url = base_url.rstrip("/")
+        elif self._instance:
+            self._base_url = f"https://{self._instance}/rest/api/{api_version}"
+        else:
+            raise ValueError("JiraConnector requires 'instance' or 'base_url'")
         self._auth: httpx.Auth | None = None
         self._token: str | None = None
 
@@ -238,10 +266,10 @@ class JiraConnector(ConnectorBase):
                 return _jitter(reset_delay, tight=True)
         return _compute_delay(attempt, response)
 
-    async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
+    async def _parse_json(self, response: httpx.Response) -> Any:
         """Safely parse JSON response, wrapping decode errors."""
         try:
-            return cast(dict[str, Any], response.json())
+            return response.json()
         except json.JSONDecodeError as exc:
             raise ValueError(f"Jira API invalid response: {response.text[:200]}") from exc
 
@@ -379,6 +407,37 @@ class JiraConnector(ConnectorBase):
                         "project": project,
                     },
                 )
+            case "attachments":
+                if "issue_key" not in q.filters:
+                    raise ValueError("Jira attachments query requires 'issue_key' filter")
+                issue_key = q.filters["issue_key"]
+                r = await self._call_api("GET", f"/issue/{issue_key}", params={"fields": "attachment"})
+                body = await self._parse_json(r)
+                attachments = body.get("fields", {}).get("attachment", [])
+                return ConnectorResult(
+                    records=attachments,
+                    total=len(attachments),
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
+            case "attachment":
+                if "attachment_id" not in q.filters:
+                    raise ValueError("Jira attachment query requires 'attachment_id' filter")
+                attachment_id = q.filters["attachment_id"]
+                r = await self._call_api("GET", f"/attachment/{attachment_id}/content")
+                content_type = r.headers.get("content-type", "application/octet-stream")
+                encoded = base64.b64encode(r.content).decode("ascii")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "attachment_id": attachment_id,
+                            "content": encoded,
+                            "encoding": "base64",
+                            "content_type": content_type,
+                        }
+                    ],
+                    total=1,
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
             case _:
                 raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
 
@@ -427,7 +486,8 @@ class JiraConnector(ConnectorBase):
                     raise ValueError("Jira issue comment requires 'body' in data")
                 body = payload.data["body"]
                 r = await self._call_api("POST", f"/issue/{issue_key}/comment", json={"body": body})
-                return await self._parse_json(r)
+                comment: dict[str, Any] = await self._parse_json(r)
+                return comment
             case "transition":
                 if "issue_key" not in payload.data:
                     raise ValueError("Jira transition requires 'issue_key' in data")
@@ -441,6 +501,33 @@ class JiraConnector(ConnectorBase):
                     json={"transition": {"id": transition_id}},
                 )
                 return {"issue_key": issue_key, "transitioned": True}
+            case "attachment":
+                if "issue_key" not in payload.data:
+                    raise ValueError("Jira attachment requires 'issue_key' in data")
+                issue_key = payload.data["issue_key"]
+                if "filename" not in payload.data:
+                    raise ValueError("Jira attachment requires 'filename' in data")
+                content = payload.data.get("content")
+                file_content = payload.data.get("file")
+                if content is None and file_content is None:
+                    raise ValueError("Jira attachment requires 'content' or 'file' in data")
+                if content is not None and file_content is not None:
+                    raise ValueError("Jira attachment must provide exactly one of 'content' or 'file'")
+                filename = payload.data["filename"]
+                if content is not None:
+                    raw = content if isinstance(content, bytes) else str(content).encode("utf-8")
+                else:
+                    raw = file_content if isinstance(file_content, bytes) else str(file_content).encode("utf-8")
+                mime_type = payload.data.get("mime_type", "application/octet-stream")
+                r = await self._call_api(
+                    "POST",
+                    f"/issue/{issue_key}/attachments",
+                    files={"file": (filename, raw, mime_type)},
+                    headers={"X-Atlassian-Token": "no-check"},
+                )
+                body = await self._parse_json(r)
+                attachments = body if isinstance(body, list) else [body]
+                return {"issue_key": issue_key, "attachments": attachments}
             case _:
                 raise ValueError(f"Unsupported Jira write resource: {payload.resource!r}")
 
