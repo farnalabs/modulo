@@ -74,10 +74,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Include `sha` for updates (required by GitHub Contents API for existing files)
 - [x] Return created/updated resource dict from API
 - [x] `raise_for_status()` on HTTP errors
+- [x] Recursive file/directory listing via `query("tree")` — resolves `ref` (default `main`) to a commit SHA via `GET /repos/{owner}/{repo}/commits/{ref}`, then lists the tree via `GET /repos/{owner}/{repo}/git/trees/{sha}` (optional `recursive` param, default on); optional `path` filter narrows the returned entries to that directory locally
 - [ ] File content is expected as raw string — no base64 encode/decode in connector; caller must handle encoding
-- [ ] Recursive file listing — not implemented (`/contents` only returns one level)
 - [ ] Batch file operations — not implemented
-- [ ] Path traversal protection — relies on GitHub API server-side; no local validation
+- [x] Path traversal protection — local `_validate_path()` rejects absolute paths and `..` segments on `query("file")`, `query("tree")` (path filter), and `write("file")` before they reach the API
 
 ### Issue Operations — create, read, update, and comment
 
@@ -184,8 +184,8 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
 - [ ] **File content encoding**: caller must base64-encode file content; no encode/decode helper in connector
-- [ ] **Recursive file listing**: `GET /contents` only returns one level; no tree API integration
-- [ ] **Path traversal protection**: relies on GitHub API server-side; no local validation before sending request
+- [x] ~~**Recursive file listing**~~ — **RESOLVED (2026-08-06)**: `query("tree")` lists the full repo tree recursively via the Git Trees API (ref resolved to a commit SHA first), with optional `path`/`recursive` filters
+- [x] ~~**Path traversal protection**~~ — **RESOLVED (2026-08-06)**: local `_validate_path()` blocks absolute paths and `..` segments on `query("file")`, `query("tree")`, and `write("file")` before any request is sent
 - [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
 - [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
 - [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
@@ -193,6 +193,15 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
 
 ## QA History
+
+### 2026-08-06 — improve-architecture: recursive tree listing + path traversal RESOLVED
+
+**RESOLVED 2 known gaps** in the GitHub connector (`connectors/github/__init__.py`):
+
+1. **Recursive file/directory listing** — new `query("tree")` using GitHub's Git Trees API. Resolves `ref` (default `main`) to a commit SHA via `GET /repos/{owner}/{repo}/commits/{ref}` (works for branches, tags, and SHAs; a response without a `sha` raises a descriptive `ValueError`), then fetches `GET /repos/{owner}/{repo}/git/trees/{sha}` with the `recursive` param (default on, `recursive: false` for a top-level listing only). An optional `path` filter narrows the returned entries to that directory (entries carry full repo-relative `path`, so filtering is done locally). Returns the tree entries (`path`/`mode`/`type`/`sha`/`size`/`url`) as records.
+2. **Path traversal protection** — new `_validate_path()` helper (mirrors the GitLab connector) rejects absolute paths and `..` segments with a clear `ValueError` before any request is sent, wired into `query("file")`, `query("tree")` (path filter, validated before the ref-resolution call), and `write("file")`.
+
+**Tests:** 11 unit tests in `test_github.py` (tree recursive param + entries + ref-resolution, non-recursive omits param, custom ref forwarded to the commits call, path filter narrowing, missing-repo error, unresolvable ref error, query-file path traversal + absolute-path blocked, tree path traversal blocked, write-file path traversal + absolute-path blocked) + 3 BDD scenarios in `github_connector.feature` (recursive tree listing with nested entries, path traversal on file query blocked, path traversal on file write blocked) with 3 new step definitions + the mock connector extended to mirror tree/traversal validation. Updated product map (2 behaviours `[ ]`→`[x]` + 1 new, 2 Known Gaps → RESOLVED, QA History). 72/72 `test_github.py` + 139/139 github connector unit tests pass, 19/19 github BDD scenarios pass, ruff clean, mypy strict clean. Status: partial (OAuth flow, fine-grained PAT, rate-limit budget, circuit breaker, batch file ops, file content encoding remain).
 
 ### 2026-08-02 — improve-architecture: 6 known gaps RESOLVED (PR ops, search, assign)
 
