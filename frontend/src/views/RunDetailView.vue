@@ -171,7 +171,10 @@
 
       <!-- Per-Node Execution Trace -->
       <section class="space-y-4 rounded-lg border bg-card p-6">
-        <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
+        <div class="flex items-baseline justify-between gap-4">
+          <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.execution_trace') }}</h2>
+          <p class="text-xs text-muted-foreground">{{ $t('views.RunDetailView.per_node_model_cost_caveat') }}</p>
+        </div>
 
         <div v-if="nodeEntries.length === 0 && run.status !== 'failed'" class="py-4 text-center text-sm text-muted-foreground">
           {{ $t('views.RunDetailView.no_node_data') }}
@@ -188,7 +191,7 @@
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.duration') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.input_tokens') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.output_tokens') }}</th>
-              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.cost') }}</th>
+              <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.model_cost') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.trace_id') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.io') }}</th>
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.logs') }}</th>
@@ -345,6 +348,56 @@
         <p v-if="totalTokens != null" class="mt-1 text-xs text-muted-foreground">
           {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}
         </p>
+
+        <template v-if="breakdownPresent">
+          <p v-if="breakdownTotalClamped" class="mt-4 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning" data-testid="run-detail-cost-clamped">
+            {{ $t('views.RunDetailView.total_clamped_to_column_capacity') }}
+          </p>
+          <div v-if="breakdownEntries.length > 0" class="mt-4 overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="border-b text-xs uppercase text-muted-foreground">
+                  <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.component') }}</th>
+                  <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.amount') }}</th>
+                  <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.source') }}</th>
+                  <th class="pb-2 font-medium">{{ $t('views.RunDetailView.basis') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="entry in breakdownEntries" :key="entry.component" class="border-b last:border-b-0">
+                  <td class="py-2 pr-4 font-medium">
+                    {{ entry.display_name || entry.component }}
+                    <span v-if="entry.missing_self_report" class="ml-1 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
+                    <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
+                  </td>
+                  <td class="py-2 pr-4 tabular-nums">${{ entry.amountUsd }}</td>
+                  <td class="py-2 pr-4">
+                    <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
+                      {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
+                    </span>
+                  </td>
+                  <td class="py-2 text-xs text-muted-foreground">{{ entry.basisLine }}</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr class="border-t font-medium">
+                  <td class="py-2 pr-4">{{ $t('views.RunDetailView.sum_of_components') }}</td>
+                  <td class="py-2 pr-4 tabular-nums">${{ breakdownTotal }}</td>
+                  <td colspan="2" class="py-2 text-xs text-muted-foreground">{{ $t('views.RunDetailView.breakdown_sum_not_total') }}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p class="mt-2 text-xs text-muted-foreground">
+              {{ $t('views.RunDetailView.amounts_below_micro_note') }}
+            </p>
+          </div>
+          <p v-else class="mt-4 text-sm text-muted-foreground" data-testid="run-detail-no-attributable-costs">
+            {{ $t('views.RunDetailView.no_attributable_costs_this_run') }}
+          </p>
+          <p class="mt-2 text-xs text-muted-foreground" data-testid="run-detail-cost-transition-note">
+            {{ $t('views.RunDetailView.cost_accounting_migrated') }}
+          </p>
+        </template>
       </section>
 
       <!-- Prompt Reveal Dialog -->
@@ -409,6 +462,20 @@ interface NodeTokenUsage {
   output_tokens?: number
   total_tokens?: number
   cost_usd?: number
+  model_cost_display_usd?: number
+}
+
+interface CostBreakdownEntry {
+  component?: string
+  display_name?: string
+  source?: string
+  amount_usd?: string | number
+  formula_applied?: string | null
+  rate_usd?: string | number | null
+  basis?: Record<string, unknown>
+  missing_self_report?: boolean
+  error?: string
+  total_clamped?: boolean
 }
 
 interface NodeEntry {
@@ -649,7 +716,57 @@ const formattedCost = computed(() => {
   return Number(c).toFixed(6)
 })
 
-const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled']
+const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed']
+
+const breakdownRaw = computed<CostBreakdownEntry[]>(() => {
+  const raw = run.value?.cost_breakdown
+  return Array.isArray(raw) ? (raw as CostBreakdownEntry[]) : []
+})
+
+const breakdownPresent = computed(() => breakdownRaw.value.length > 0)
+
+const breakdownTotalClamped = computed(() => breakdownRaw.value.some((e) => e.total_clamped === true))
+
+function parseBreakdownAmount(value: string | number | undefined): number {
+  if (value == null || value === '') return 0
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function formatBreakdownAmount(value: string | number | undefined): string {
+  return parseBreakdownAmount(value).toFixed(6)
+}
+
+function breakdownBasisLine(entry: CostBreakdownEntry): string {
+  const basis = entry.basis
+  if (!basis || typeof basis !== 'object') return '—'
+  const parts = Object.entries(basis)
+    .filter(([k]) => k !== 'raw_reported' && k !== 'per_node_raw')
+    .slice(0, 6)
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+  return parts.length > 0 ? parts.join(', ') : '—'
+}
+
+const breakdownEntries = computed(() =>
+  breakdownRaw.value
+    .filter((e) => e.total_clamped !== true)
+    .filter((e) => {
+      const amount = parseBreakdownAmount(e.amount_usd)
+      // Zero-amount rows are omitted — except self-report / eval-error rows
+      // that carry a chip or badge (a dead report_key must stay visible).
+      if (amount !== 0) return true
+      return Boolean(e.error) || e.missing_self_report === true
+    })
+    .map((e) => ({
+      ...e,
+      amountUsd: formatBreakdownAmount(e.amount_usd),
+      basisLine: breakdownBasisLine(e),
+    })),
+)
+
+const breakdownTotal = computed(() =>
+  breakdownEntries.value.reduce((sum, e) => sum + parseBreakdownAmount(e.amount_usd), 0).toFixed(6),
+)
 
 const lastNodeOutput = computed(() => {
   const outputs = runIO.value?.outputs_json as Record<string, { input?: unknown; output?: unknown }> | null | undefined
@@ -844,7 +961,7 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       duration: '—',
       inputTokens: usage?.input_tokens ?? null,
       outputTokens: usage?.output_tokens ?? null,
-      cost: usage?.cost_usd ?? null,
+      cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
       traceId: run.value?.trace_id ?? null,
       io: nodeOutput
         ? {

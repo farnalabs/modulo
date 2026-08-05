@@ -24,9 +24,19 @@ class _FakeCounter:
         self.calls.append({"value": value, "attributes": attributes})
 
 
+class _FakeGauge:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.values: list[float] = []
+
+    def set(self, value: float) -> None:
+        self.values.append(value)
+
+
 class _FakeMeter:
     def __init__(self) -> None:
         self.counters: list[_FakeCounter] = []
+        self.gauges: list[_FakeGauge] = []
 
     def create_counter(self, *, name: str, description: str, unit: str) -> _FakeCounter:
         counter = _FakeCounter(name)
@@ -36,6 +46,14 @@ class _FakeMeter:
     def counter(self, name: str) -> _FakeCounter | None:
         return next((c for c in self.counters if c.name == name), None)
 
+    def create_gauge(self, *, name: str, description: str, unit: str) -> _FakeGauge:
+        gauge = _FakeGauge(name)
+        self.gauges.append(gauge)
+        return gauge
+
+    def gauge(self, name: str) -> _FakeGauge | None:
+        return next((g for g in self.gauges if g.name == name), None)
+
 
 @pytest.fixture()
 def fake_meter() -> _FakeMeter:
@@ -44,7 +62,13 @@ def fake_meter() -> _FakeMeter:
 
 @pytest.fixture(autouse=True)
 def _reset_handles(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("_eval_errors_total", "_clamped_total", "_out_of_band_high_total", "_settings_warning_total"):
+    for name in (
+        "_eval_errors_total",
+        "_clamped_total",
+        "_out_of_band_high_total",
+        "_settings_warning_total",
+        "_probe_last_success_ts",
+    ):
         monkeypatch.setattr(metrics, name, None)
 
 
@@ -72,9 +96,7 @@ def test_get_meter_provider_failure_returns_none(monkeypatch: pytest.MonkeyPatch
 # ---------------------------------------------------------------------------
 
 
-def test_record_eval_error_initialises_and_attributes(
-    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-) -> None:
+def test_record_eval_error_initialises_and_attributes(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
     _stub_meter(monkeypatch, fake_meter)
     metrics.record_eval_error("sandbox_infra")
     counter = fake_meter.counter("modulo_cost_components_eval_errors_total")
@@ -83,9 +105,7 @@ def test_record_eval_error_initialises_and_attributes(
     assert metrics._eval_errors_total is counter
 
 
-def test_record_clamped_initialises_and_attributes(
-    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-) -> None:
+def test_record_clamped_initialises_and_attributes(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
     _stub_meter(monkeypatch, fake_meter)
     metrics.record_clamped("total_flat_clamp")
     counter = fake_meter.counter("modulo_cost_components_clamped_total")
@@ -94,9 +114,7 @@ def test_record_clamped_initialises_and_attributes(
     assert metrics._clamped_total is counter
 
 
-def test_record_out_of_band_initialises_and_attributes(
-    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-) -> None:
+def test_record_out_of_band_initialises_and_attributes(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
     _stub_meter(monkeypatch, fake_meter)
     metrics.record_out_of_band("high")
     counter = fake_meter.counter("modulo_cost_components_out_of_band_high")
@@ -105,9 +123,7 @@ def test_record_out_of_band_initialises_and_attributes(
     assert metrics._out_of_band_high_total is counter
 
 
-def test_record_settings_warning_initialises(
-    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-) -> None:
+def test_record_settings_warning_initialises(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
     _stub_meter(monkeypatch, fake_meter)
     metrics.record_settings_warning()
     metrics.record_settings_warning()
@@ -141,7 +157,7 @@ def test_lazy_init_is_once_only(monkeypatch: pytest.MonkeyPatch, fake_meter: _Fa
         metrics._out_of_band_high_total,
         metrics._settings_warning_total,
     ) == handles
-    assert len(fake_meter.counters) == 4
+    assert len(fake_meter.counters) == 15
 
 
 # ---------------------------------------------------------------------------
@@ -161,12 +177,11 @@ def test_record_functions_noop_without_meter(monkeypatch: pytest.MonkeyPatch) ->
     assert metrics._settings_warning_total is None
 
 
-def test_ensure_early_return_when_handles_initialised(
-    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
-) -> None:
+def test_ensure_early_return_when_handles_initialised(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
     _stub_meter(monkeypatch, fake_meter)
     metrics._ensure()
     metrics._ensure()
     # Only the first call builds handles; the second returns immediately.
-    assert len(fake_meter.counters) == 4
+    assert len(fake_meter.counters) == 15
+    assert len(fake_meter.gauges) == 1
     assert metrics._eval_errors_total is fake_meter.counters[0]
