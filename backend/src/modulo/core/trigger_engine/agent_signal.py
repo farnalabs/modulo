@@ -21,8 +21,11 @@ output it is included as ``node_output``.
 The child run is linked to the source run via ``parent_run_id``. Fires are
 subject to the trigger's ``max_concurrent_runs`` limit; a trigger at the limit
 is skipped and logged as ``concurrency_limit_reached``. Every fire attempt is
-recorded as a ``TriggerEvent`` row (``signal_fired``, ``concurrency_limit_reached``,
-``invalid_snapshot_id``, ``no_snapshot``, ``validation_failed``).
+recorded as a ``TriggerEvent`` row whose ``validation_result`` is one of
+``signal_fired``, ``concurrency_limit_reached``, ``poll_error`` or
+``validation_failed``. A skipped fire is additionally reported in the returned
+dict with ``reason`` one of ``concurrency_limit``, ``invalid_snapshot_id`` or
+``no_snapshot``.
 """
 
 import asyncio
