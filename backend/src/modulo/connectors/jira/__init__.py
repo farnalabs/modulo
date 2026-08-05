@@ -116,11 +116,14 @@ class JiraConnector(ConnectorBase):
       "token"    — OAuth/Personal Access Token
 
     Supported query resources:
-      "issue"           — get a single issue; filters: {"issue_key": "PROJ-123"}
-      "search"          — JQL search; filters: {"jql": "project = PROJ", "max_results": 50}
-      "issue_comments"  — list comments on an issue; filters: {"issue_key": "PROJ-123"}
-      "transitions"     — get available transitions for an issue; filters: {"issue_key": "PROJ-123"}
-      "projects"        — list accessible projects
+      "issue"            — get a single issue; filters: {"issue_key": "PROJ-123"}
+      "search"           — JQL search; filters: {"jql": "project = PROJ", "max_results": 50}
+      "issue_comments"   — list comments on an issue; filters: {"issue_key": "PROJ-123"}
+      "transitions"      — get available transitions for an issue; filters: {"issue_key": "PROJ-123"}
+      "projects"         — list accessible projects
+      "field_metadata"   — issue types + create-issue fields for a project; filters: {"project": "PROJ"}
+      "fields"           — list all system + custom fields across the instance
+      "statuses"         — issue types + their statuses for a project; filters: {"project": "PROJ"}
 
     Supported write resources:
       "issue"           — create an issue; data: {"project": {"key": "PROJ"}, "summary": "...",
@@ -331,6 +334,50 @@ class JiraConnector(ConnectorBase):
                     records=projects,
                     total=len(projects),
                     metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
+            case "field_metadata":
+                if "project" not in q.filters:
+                    raise ValueError("Jira field_metadata query requires 'project' filter")
+                project = q.filters["project"]
+                createmeta_params: dict[str, Any] = {
+                    "projectKeys": project,
+                    "expand": "projects.issuetypes.fields",
+                }
+                r = await self._call_api("GET", "/issue/createmeta", params=createmeta_params)
+                body = await self._parse_json(r)
+                projects_meta = body.get("projects", [])
+                issue_types = projects_meta[0].get("issuetypes", []) if projects_meta else []
+                return ConnectorResult(
+                    records=issue_types,
+                    total=len(issue_types),
+                    metadata={
+                        "rate_limit": _rate_limit_metadata(r),
+                        "project": project,
+                    },
+                )
+            case "fields":
+                r = await self._call_api("GET", "/field")
+                data = await self._parse_json(r)
+                fields: list[Any] = data if isinstance(data, list) else []
+                return ConnectorResult(
+                    records=fields,
+                    total=len(fields),
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
+            case "statuses":
+                if "project" not in q.filters:
+                    raise ValueError("Jira statuses query requires 'project' filter")
+                project = q.filters["project"]
+                r = await self._call_api("GET", f"/project/{project}/statuses")
+                data = await self._parse_json(r)
+                statuses: list[Any] = data if isinstance(data, list) else []
+                return ConnectorResult(
+                    records=statuses,
+                    total=len(statuses),
+                    metadata={
+                        "rate_limit": _rate_limit_metadata(r),
+                        "project": project,
+                    },
                 )
             case _:
                 raise ValueError(f"Unsupported Jira resource: {q.resource!r}")

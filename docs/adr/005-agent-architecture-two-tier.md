@@ -94,7 +94,7 @@ The `modulo-agent-lildax` template is the recommended default for new sandbox_ag
 
 ### Skill-Driven Reviews
 
-The `pr-review` skill at `.agents/skills/pr-review/SKILL.md` is the single source of truth for what a PR review entails. The lildax agent invocation reads this skill and executes it. The Python script implementation is a fallback for environments where lildax is unavailable.
+The `qa-reviewer` skill at `Repos/devtools/agents/.agents/skills/qa-reviewer/SKILL.md` is the single source of truth for what a PR review entails. The lildax agent invocation reads this skill and executes it. The Python script implementation is a fallback for environments where lildax is unavailable.
 
 ### Model Configuration
 

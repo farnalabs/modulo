@@ -36,6 +36,20 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/costs", tags=["admin", "costs"])
 
 
+def _coerce_spend_limit_usd(value: Decimal | None) -> float | None:
+    """Convert a stored spend-limit value to float USD, or None when absent/invalid.
+
+    Returns None for NULL and non-numeric values so an empty/fresh database
+    serialises as ``null`` instead of raising (which would 500 the endpoint).
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class CostReportRow(BaseModel):
     entity_id: str
     entity_name: str
@@ -314,11 +328,11 @@ async def get_cost_controls(
             {
                 "id": str(t.id),
                 "name": t.name,
-                "daily_limit_usd": float(t.daily_spend_limit) if t.daily_spend_limit is not None else None,
+                "daily_limit_usd": _coerce_spend_limit_usd(t.daily_spend_limit),
             }
             for t in teams_result.items
         ],
-        budget=float(org.daily_spend_limit) if org and org.daily_spend_limit is not None else None,
+        budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
     )
 
 
@@ -372,11 +386,11 @@ async def update_cost_controls(
             {
                 "id": str(t.id),
                 "name": t.name,
-                "daily_limit_usd": float(t.daily_spend_limit) if t.daily_spend_limit is not None else None,
+                "daily_limit_usd": _coerce_spend_limit_usd(t.daily_spend_limit),
             }
             for t in teams_result.items
         ],
-        budget=float(org.daily_spend_limit) if org and org.daily_spend_limit is not None else None,
+        budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
     )
 
 

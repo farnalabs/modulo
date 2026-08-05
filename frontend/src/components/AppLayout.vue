@@ -58,6 +58,7 @@
             <input id="applayout-field-2"
               type="checkbox"
               class="sr-only"
+              :aria-label="$t('components.AppLayout.toggle_theme')"
               @change="toggleTheme"
               :checked="isLight"
             />
@@ -101,6 +102,7 @@
         <input id="applayout-field-1"
           type="checkbox"
           class="sr-only"
+          :aria-label="$t('components.AppLayout.toggle_theme')"
           @change="toggleTheme"
           :checked="isLight"
         />

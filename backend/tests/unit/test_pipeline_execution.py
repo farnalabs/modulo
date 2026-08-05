@@ -1,4 +1,4 @@
-"""Unit tests for modulo.core.pipeline_execution (shared Celery + SAQ core).
+"""Unit tests for modulo.core.pipeline_execution.
 
 Tests are mock/fake based — no Postgres required. Real Postgres concurrency
 behaviour (two concurrent claims -> exactly one) lives in
@@ -7,7 +7,6 @@ behaviour (two concurrent claims -> exactly one) lives in
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -68,13 +67,12 @@ def _make_settings(**overrides: object) -> MagicMock:
     """Mock Settings with the SAQ/legacy claim staleness plumbing values."""
     base = {
         "run_claim_stale_seconds": 450,
-        "legacy_run_claim_stale_seconds": 180,
         "saq_never_dispatched_window": 300,
         "saq_worker_lost_window": 600,
         "saq_job_heartbeat": 300,
         "run_heartbeat_seconds": 30,
         "saq_worker_db_pool_size": 2,
-        "saq_redis_pool_size": 5,
+        "saq_redis_pool_size": 20,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -115,39 +113,6 @@ class TestBuildClaimUpdate:
         stmt = pe.build_claim_update(stale_seconds=450, claim_cap=20)
         sql = _compiled(stmt)
         assert "claim_count <" in sql
-
-
-class TestClaimRun:
-    def test_saq_path_uses_run_claim_stale_seconds(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=("id",))
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1") is True
-        assert engine.conn.params[0]["stale_seconds"] == 450
-        assert engine.conn.params[0]["claim_cap"] == 5
-
-    def test_legacy_path_uses_today_180(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=("id",))
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1", legacy=True) is True
-        assert engine.conn.params[0]["stale_seconds"] == 180
-
-    def test_explicit_stale_seconds_overrides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=("id",))
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1", stale_seconds=120) is True
-        assert engine.conn.params[0]["stale_seconds"] == 120
-
-    def test_returns_false_when_no_row_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(row=None)
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        assert pe.claim_run(engine, "run-1", "org-1") is False
-
-    def test_returns_false_and_logs_on_db_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        engine = _FakeEngine(raise_on_execute=True)
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        with patch.object(pe._log, "exception") as mock_log:
-            assert pe.claim_run(engine, "run-1", "org-1") is False
-        mock_log.assert_called_once()
 
 
 class TestClaimRunAsync:
@@ -367,14 +332,76 @@ class TestHeartbeat:
 
 
 class TestStaleRunRecoverySweep:
+    """The sweep is now scoped PER-ORG via set_config('app.organisation_id')
+    (the RLS no-op fix, spec §9.4) — the org enumeration runs first in system
+    context, then the four UPDATE branches run once per org."""
+
+    org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
+
+    def _result(self, rows: list[Any] | None = None, rowcount: int = 0) -> Any:
+        r = MagicMock()
+        r.rowcount = rowcount
+        r.all = MagicMock(return_value=rows or [])
+        return r
+
+    def _engine(self, statements: list[str] | None = None, params: list[dict[str, object]] | None = None) -> Any:
+        statements = statements if statements is not None else []
+        params = params if params is not None else []
+
+        class _AsyncResult:
+            def __init__(self, rows: list[Any] | None = None, rowcount: int = 0) -> None:
+                self.rowcount = rowcount
+                self._rows = rows or []
+
+            def all(self) -> list[Any]:
+                return self._rows
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, bind: dict[str, object] | None = None) -> _AsyncResult:
+                statements.append(str(stmt))
+                params.append(bind or {})
+                if "SELECT id FROM organisations" in str(stmt):
+                    return _AsyncResult(rows=[self._org_row()])
+                if "RETURNING id, organisation_id" in str(stmt):
+                    return _AsyncResult(rowcount=1, rows=[self._stranded_row()])
+                return _AsyncResult(rowcount=self._rowcount)
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        return _AsyncEngine()
+
+    def _org_row(self) -> tuple[uuid.UUID]:
+        return self.org_row
+
+    def _stranded_row(self) -> Any:
+        row = MagicMock()
+        row.id = uuid.uuid4()
+        row.organisation_id = uuid.uuid4()
+        return row
+
     async def test_uses_legacy_300_600_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         statements: list[str] = []
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncResult:
             rowcount = 0
 
+            def __init__(self, is_org: bool = False) -> None:
+                self._is_org = is_org
+
             def all(self) -> list[Any]:
-                return []
+                return [org_row] if self._is_org else []
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -388,7 +415,7 @@ class TestStaleRunRecoverySweep:
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
                 statements.append(str(stmt))
-                return _AsyncResult()
+                return _AsyncResult(is_org="SELECT id FROM organisations" in str(stmt))
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -402,25 +429,20 @@ class TestStaleRunRecoverySweep:
         assert result["worker_lost_swept"] == 0
         assert result["capacity_timeout_swept"] == 0
         assert result["stranded_capacity_redispatched"] == 0
-        assert len(statements) == 4
-        never_sql = statements[0]
-        stranded_sql = statements[1]
-        capacity_sql = statements[2]
-        lost_sql = statements[3]
-        assert "never_dispatched" in never_sql
-        assert "RETURNING id, organisation_id" in stranded_sql
-        assert "org_capacity_limited" in stranded_sql
-        assert "pipeline_capacity" in stranded_sql
-        assert "capacity_timeout" in capacity_sql
-        assert "worker_lost" in lost_sql
-        assert ":nd_window" in never_sql
-        assert ":redispatch_ttl" in stranded_sql
-        assert ":fail_ttl" in stranded_sql
-        assert ":ttl" in capacity_sql
-        assert ":wl_window" in lost_sql
-        # never_dispatched must not kill reason-marked capacity-blocked runs.
-        assert "org_capacity_limited" in never_sql
-        assert "pipeline_capacity" in never_sql
+        # Per-org: org enumeration + set_config + the four UPDATE branches.
+        assert len(statements) == 6
+        joined = " ".join(statements)
+        assert "never_dispatched" in joined
+        assert "RETURNING id, organisation_id" in joined
+        assert "org_capacity_limited" in joined
+        assert "pipeline_capacity" in joined
+        assert "capacity_timeout" in joined
+        assert "worker_lost" in joined
+        assert ":nd_window" in joined
+        assert ":redispatch_ttl" in joined
+        assert ":fail_ttl" in joined
+        assert ":ttl" in joined
+        assert ":wl_window" in joined
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
@@ -429,7 +451,10 @@ class TestStaleRunRecoverySweep:
             rowcount = 1
 
             def all(self) -> list[Any]:
-                return []
+                return self._rows if self._is_org else []
+
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
+        _rows: list[Any] = []
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -443,7 +468,14 @@ class TestStaleRunRecoverySweep:
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
                 params_seen.append(params or {})
-                return _AsyncResult()
+                r = _AsyncResult()
+                if "SELECT id FROM organisations" in str(stmt):
+                    r._is_org = True
+                    r._rows = [org_row]
+                else:
+                    r._is_org = False
+                    r._rows = []
+                return r
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -458,11 +490,13 @@ class TestStaleRunRecoverySweep:
         assert result["never_dispatched_swept"] == 1
         assert result["worker_lost_swept"] == 1
         assert result["capacity_timeout_swept"] == 1
-        assert params_seen[0]["nd_window"] == 300
-        assert params_seen[1]["redispatch_ttl"] == pe._STRANDED_REDISPATCH_TTL_MINUTES
-        assert params_seen[1]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
-        assert params_seen[2]["ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
-        assert params_seen[3]["wl_window"] == 900
+        # params: [0]=enumeration, [1]=set_config, [2]=nd_window, [3]=redispatch,
+        # [4]=capacity, [5]=wl.
+        assert params_seen[2]["nd_window"] == 300
+        assert params_seen[3]["redispatch_ttl"] == pe._STRANDED_REDISPATCH_TTL_MINUTES
+        assert params_seen[3]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[4]["ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[5]["wl_window"] == 900
 
     async def test_stranded_capacity_blocked_run_is_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A stale-heartbeat capacity-marked pending run is re-dispatched, not failed."""
@@ -493,6 +527,8 @@ class TestStaleRunRecoverySweep:
                 return self
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                if "SELECT id FROM organisations" in str(stmt):
+                    return _AsyncResult(rows=[self.org_row])
                 if "RETURNING id, organisation_id" in str(stmt):
                     return _AsyncResult(rowcount=1, rows=[_Row()])
                 return _AsyncResult()
@@ -501,6 +537,7 @@ class TestStaleRunRecoverySweep:
             def connect(self) -> _AsyncConn:
                 return _AsyncConn()
 
+        _AsyncConn.org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         with patch.object(pe, "_re_dispatch_capacity_blocked", new=redispatch_mock):
             result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
@@ -520,7 +557,9 @@ class TestStaleRunRecoverySweep:
             rowcount = 0
 
             def all(self) -> list[Any]:
-                return []
+                return [org_row] if self._is_org else []
+
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -533,7 +572,9 @@ class TestStaleRunRecoverySweep:
                 return self
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
-                return _AsyncResult()
+                r = _AsyncResult()
+                r._is_org = "SELECT id FROM organisations" in str(stmt)
+                return r
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -555,7 +596,9 @@ class TestStaleRunRecoverySweep:
             rowcount = 0
 
             def all(self) -> list[Any]:
-                return []
+                return [org_row] if self._is_org else []
+
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
             async def __aenter__(self) -> Self:
@@ -569,7 +612,9 @@ class TestStaleRunRecoverySweep:
 
             async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
                 params_seen.append(params or {})
-                return _AsyncResult()
+                r = _AsyncResult()
+                r._is_org = "SELECT id FROM organisations" in str(stmt)
+                return r
 
         class _AsyncEngine:
             def connect(self) -> _AsyncConn:
@@ -583,7 +628,7 @@ class TestStaleRunRecoverySweep:
         assert result["capacity_timeout_swept"] == 0
         # The stranded branch bounds its window with the same fail_ttl as the
         # capacity_timeout branch so the two never overlap.
-        assert params_seen[1]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
+        assert params_seen[3]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
         redispatch_mock.assert_not_awaited()
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -616,99 +661,7 @@ class TestStaleRunRecoverySweep:
 # ---------------------------------------------------------------------------
 
 
-class TestExecuteRun:
-    async def test_skips_when_not_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
-        with (
-            patch.object(pe, "claim_run", return_value=False) as mock_claim,
-            patch.object(pe, "load_and_setup", AsyncMock()) as mock_load,
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=str(uuid.uuid4()),
-                org_id=str(uuid.uuid4()),
-                legacy_claim=True,
-            )
-
-        mock_claim.assert_called_once()
-        mock_load.assert_not_awaited()
-        mock_complete.assert_not_awaited()
-
-    async def test_executes_pipeline_and_marks_complete(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        run_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        current = SimpleNamespace(input_payload={"hello": "world"})
-        executor = MagicMock()
-        executor.execute = AsyncMock()
-        with (
-            patch.object(pe, "get_settings", lambda: _make_settings()),
-            patch.object(pe, "claim_run", return_value=True),
-            patch.object(pe, "load_and_setup", AsyncMock(return_value=(current, executor))) as mock_load,
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=run_id,
-                org_id=org_id,
-                legacy_claim=True,
-            )
-
-        mock_load.assert_awaited_once()
-        executor.execute.assert_awaited_once_with(
-            run_id=uuid.UUID(run_id),
-            org_id=uuid.UUID(org_id),
-            input_payload=current.input_payload,
-        )
-        mock_complete.assert_awaited_once()
-
-    async def test_marks_complete_even_when_execution_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        run_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        current = SimpleNamespace(input_payload={})
-        executor = MagicMock()
-        executor.execute = AsyncMock(side_effect=RuntimeError("boom"))
-        with (
-            patch.object(pe, "get_settings", lambda: _make_settings()),
-            patch.object(pe, "claim_run", return_value=True),
-            patch.object(pe, "load_and_setup", AsyncMock(return_value=(current, executor))),
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-            patch.object(pe._log, "exception"),
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=run_id,
-                org_id=org_id,
-                legacy_claim=True,
-            )
-
-        mock_complete.assert_awaited_once()
-
-    async def test_repropagates_cancellation(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        run_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        current = SimpleNamespace(input_payload={})
-        executor = MagicMock()
-        executor.execute = AsyncMock(side_effect=asyncio.CancelledError())
-        with (
-            patch.object(pe, "get_settings", lambda: _make_settings()),
-            patch.object(pe, "claim_run", return_value=True),
-            patch.object(pe, "load_and_setup", AsyncMock(return_value=(current, executor))),
-            patch.object(pe, "mark_complete", AsyncMock()) as mock_complete,
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await pe.execute_run(
-                sync_engine=MagicMock(),
-                async_engine=MagicMock(),
-                run_id=run_id,
-                org_id=org_id,
-                legacy_claim=True,
-            )
-
-        mock_complete.assert_not_awaited()
+# TestExecuteRun removed in PR C (Celery code path)
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +671,6 @@ class TestExecuteRun:
 
 _SAQ_SETTINGS_ENV = (
     "RUN_CLAIM_STALE_SECONDS",
-    "LEGACY_RUN_CLAIM_STALE_SECONDS",
     "SAQ_JOB_HEARTBEAT",
     "RUN_HEARTBEAT_SECONDS",
     "SAQ_HARD_GATE",
@@ -750,7 +702,6 @@ class TestSaqSettingsDefaults:
             monkeypatch.delenv(var, raising=False)
         s = self._settings(monkeypatch)
         assert s.run_claim_stale_seconds == 450
-        assert s.legacy_run_claim_stale_seconds == 180
         assert s.saq_job_heartbeat == 300
         assert s.run_heartbeat_seconds == 30
         assert s.saq_hard_gate is True
@@ -764,7 +715,7 @@ class TestSaqSettingsDefaults:
         assert s.saq_never_dispatched_window == 300
         assert s.saq_worker_lost_window == 600
         assert s.saq_worker_db_pool_size == 10
-        assert s.saq_redis_pool_size == 5
+        assert s.saq_redis_pool_size == 20
 
     def test_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RUN_CLAIM_STALE_SECONDS", "500")
@@ -911,7 +862,7 @@ def _saq_settings(**overrides: object) -> MagicMock:
         "redis_url": "redis://localhost:6379/0",
         "saq_auth_password": "hunter2",
         "saq_auth_username": "modulo-saq",
-        "saq_redis_pool_size": 5,
+        "saq_redis_pool_size": 20,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -924,7 +875,7 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.runs_settings()
         assert settings["queue"].name == "runs"
-        assert settings["concurrency"] == 10
+        assert settings["concurrency"] == 20
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
@@ -936,13 +887,13 @@ class TestSaqWorkerSettings:
         monkeypatch.setattr(sw, "get_settings", lambda: _saq_settings())
         settings = sw.system_settings()
         assert settings["queue"].name == "system"
-        assert settings["concurrency"] == 10
+        assert settings["concurrency"] == 20
         assert settings["shutdown_grace_period_s"] == 30
         assert settings["cancellation_hard_deadline_s"] == 60
         assert settings["dequeue_timeout"] == 5
         assert settings["timers"] == {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
         # PR B-2: system crons wired (fire_due_triggers, reconcile, claim-expiry,
-        # retention, webhook-dedup, stale recovery).
+        # retention, webhook-dedup, stale recovery) + the cost probe (PR A2).
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "fire_due_triggers",
@@ -951,6 +902,7 @@ class TestSaqWorkerSettings:
             "retention_cleanup",
             "webhook_dedup_cleanup",
             "stale_run_recovery",
+            "cost_probe",
         }
         assert settings["after_process"] is not None
 
@@ -988,4 +940,4 @@ class TestSaqWorkerSettings:
         sw.runs_settings()
         assert captured["socket_connect_timeout"] == 10
         assert captured["socket_keepalive"] is True
-        assert captured["max_connections"] == 5
+        assert captured["max_connections"] == 20

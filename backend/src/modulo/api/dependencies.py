@@ -593,7 +593,8 @@ async def get_plan_context(
             return CommunityTier()
 
     try:
-        return await resolve_plan_context(settings, session, org=org)
+        async with session.begin():
+            return await resolve_plan_context(settings, session, org=org)
 
     except (TypeError, AttributeError):
         logger.warning("Session does not support resolve_plan_context — returning CommunityTier")

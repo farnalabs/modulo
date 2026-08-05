@@ -2,10 +2,10 @@
 
 Two worker processes (plan F1/F2):
 
-* ``runs_settings`` — queue ``runs``, concurrency 10, no web UI. Executes
+* ``runs_settings`` — queue ``runs``, concurrency 5 (derived from SAQ_REDIS_POOL_SIZE), no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
-* ``system_settings`` — queue ``system``, concurrency 10, web UI on 8081 bound
+* ``system_settings`` — queue ``system``, concurrency 5 (derived from SAQ_REDIS_POOL_SIZE), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
@@ -59,8 +59,8 @@ _log = logging.getLogger(__name__)
 # SAQ runs asyncio jobs in a single process sharing one engine, so raising
 # concurrency does NOT multiply DB connection pools the way Celery prefork
 # does. Sandbox-agent runs spend most of their time awaiting external E2B
-# sandboxes; 10 concurrent jobs is cheap. Bumped from 2 on 2026-08-01.
-_WORKER_CONCURRENCY = 10
+# sandboxes; concurrency derives from SAQ_REDIS_POOL_SIZE (default 5).
+# Pool and concurrency move together — one knob.
 _SHUTDOWN_GRACE_PERIOD_S = 30
 _CANCELLATION_HARD_DEADLINE_S = 60
 _DEQUEUE_TIMEOUT = 5
@@ -89,15 +89,24 @@ def _get_async_engine() -> AsyncEngine:
 
 
 def _build_queue(queue_name: str) -> RedisQueue:
-    """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2)."""
+    """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2).
+
+    ``max_concurrent_ops`` is set below the pool size so the semaphore never
+    exhausts all available connections — leaving reserve connections for SAQ
+    operations that bypass the semaphore (``schedule``, ``sweep``, ``dequeue``,
+    ``notify``).
+    """
     settings = get_settings()
+    pool_size = settings.saq_redis_pool_size
+    # Leave reserve connections for semaphore-exempt SAQ operations.
+    max_ops = max(pool_size - 5, 5)
     redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
         settings.redis_url,
         socket_connect_timeout=10,
         socket_keepalive=True,
-        max_connections=settings.saq_redis_pool_size,
+        max_connections=pool_size,
     )
-    return RedisQueue(redis_client, name=queue_name)
+    return RedisQueue(redis_client, name=queue_name, max_concurrent_ops=max_ops)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +128,7 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     oid = uuid.UUID(org_id)
     job = ctx.get("job")
 
-    claimed = await claim_run_async(aeng, run_id, org_id, legacy=False)
+    claimed = await claim_run_async(aeng, run_id, org_id)
     if not claimed:
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
@@ -314,6 +323,20 @@ async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
     return await stale_run_recovery_sweep(_get_async_engine())
 
 
+async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
+
+    The verification canary for the ledger/report system: samples the N=50 most
+    recent terminal runs per org, checks ``total == sum``, asserts the org-row
+    WATCH, and evaluates the canonical rollback trigger (the probe rule + the
+    duplicate-terminal flood with its cooldown). The heartbeat gauge turns a
+    silently dead probe into a stale alert.
+    """
+    from modulo.core.cost_controller.probe import run_probe
+
+    return await run_probe(_make_session_factory())
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -347,7 +370,7 @@ def _base_worker_settings(queue_name: str, functions: list[Any]) -> dict[str, An
     return {
         "queue": _build_queue(queue_name),
         "functions": functions,
-        "concurrency": _WORKER_CONCURRENCY,
+        "concurrency": get_settings().saq_redis_pool_size,
         "shutdown_grace_period_s": _SHUTDOWN_GRACE_PERIOD_S,
         "cancellation_hard_deadline_s": _CANCELLATION_HARD_DEADLINE_S,
         "dequeue_timeout": _DEQUEUE_TIMEOUT,
@@ -394,17 +417,19 @@ def _system_functions() -> list[Any]:
         retention_cleanup,
         webhook_dedup_cleanup,
         stale_run_recovery,
+        cost_probe,
     ]
 
 
 def _system_cron_jobs() -> list[CronJob[Any]]:
     """System cron jobs (plan F1) — all knobs explicit."""
     return [
-        # fire_due_triggers: every 30s; the atomic next_fire_at advance makes
-        # multi-machine ticks safe (unique=True only prevents overlap).
+        # fire_due_triggers: every 60s (croniter parses 5-field cron, so the
+        # 30s intent is not achievable — every minute); the atomic next_fire_at
+        # advance makes multi-machine ticks safe (unique=True only prevents overlap).
         CronJob(
             fire_due_triggers,
-            cron="*/30 * * * * *",
+            cron="* * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -414,7 +439,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # dispatcher_reconcile: every 60s (timeout=120 per plan F1).
         CronJob(
             dispatcher_reconcile,
-            cron="0 * * * * *",
+            cron="* * * * *",
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -424,7 +449,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # claim-expiry: every 60s — SAQ cron is the SOLE writer/notifier (F1).
         CronJob(
             claim_expiry,
-            cron="0 * * * * *",
+            cron="* * * * *",
             unique=True,
             timeout=120,
             heartbeat=30,
@@ -434,7 +459,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # retention: hourly (matches the in-process _run_retention_loop cadence).
         CronJob(
             retention_cleanup,
-            cron="0 0 * * * *",
+            cron="0 * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -444,7 +469,7 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # webhook-dedup cleanup: hourly (matches _CLEANUP_INTERVAL_SECONDS).
         CronJob(
             webhook_dedup_cleanup,
-            cron="0 0 * * * *",
+            cron="0 * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
@@ -455,11 +480,23 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # non-SAQ rows in the sweep itself).
         CronJob(
             stale_run_recovery,
-            cron="0 */5 * * * *",
+            cron="*/5 * * * *",
             unique=True,
             timeout=120,
             heartbeat=30,
             retries=2,
+            ttl=300,
+        ),
+        # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
+        # separately by the heartbeat/staleness alert), unique=True so a second
+        # overlapping instance cannot double-advance probe_state (§4.7).
+        CronJob(
+            cost_probe,
+            cron="0 */5 * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=0,
             ttl=300,
         ),
     ]
@@ -519,6 +556,21 @@ def run_system_web() -> None:
 
     worker = Worker(**system_settings())
     loop = asyncio.new_event_loop()
+
+    async def _set_duplicate_terminal_cooldown() -> None:
+        """Set the flood cooldown on worker start so the probe (same process)
+        does not auto-trigger a rollback on PR A's OWN rollout restart burst."""
+        from modulo.core.cost_controller.probe import set_duplicate_terminal_cooldown
+
+        try:
+            await set_duplicate_terminal_cooldown(_make_session_factory())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("saq_worker.cooldown_set_failed")
+
+    _cooldown_task = loop.create_task(_set_duplicate_terminal_cooldown())
+    _cooldown_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     async def _worker_start() -> None:
         try:

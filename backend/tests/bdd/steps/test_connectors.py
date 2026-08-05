@@ -771,6 +771,52 @@ def step_jira_connector(ctx):
                     ],
                     total=2,
                 )
+            case "field_metadata":
+                project = q.filters.get("project", "")
+                if not project:
+                    raise ValueError("Jira field_metadata query requires 'project' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "id": "10001",
+                            "name": "Task",
+                            "subtask": False,
+                            "fields": {
+                                "summary": {"required": True, "name": "Summary", "key": "summary"},
+                                "customfield_10001": {"required": False, "name": "Epic Link", "custom": True},
+                            },
+                        }
+                    ],
+                    total=1,
+                    metadata={"project": project},
+                )
+            case "fields":
+                return ConnectorResult(
+                    records=[
+                        {"id": "summary", "name": "Summary", "custom": False},
+                        {"id": "customfield_10001", "name": "Epic Link", "custom": True},
+                    ],
+                    total=2,
+                )
+            case "statuses":
+                project = q.filters.get("project", "")
+                if not project:
+                    raise ValueError("Jira statuses query requires 'project' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "id": "10001",
+                            "name": "Task",
+                            "subtask": False,
+                            "statuses": [
+                                {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+                                {"id": "3", "name": "Done", "statusCategory": {"key": "done"}},
+                            ],
+                        }
+                    ],
+                    total=1,
+                    metadata={"project": project},
+                )
             case _:
                 raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
 
@@ -889,6 +935,115 @@ def step_jira_query_without_key(resource, ctx):
     except Exception as exc:
         ctx["query_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query field metadata for project "{project}"'))
+def step_jira_query_field_metadata(project, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="field_metadata", filters={"project": project})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query field metadata without a project")
+def step_jira_query_field_metadata_no_project(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="field_metadata", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query all Jira fields")
+def step_jira_query_fields(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="fields")
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query statuses for project "{project}"'))
+def step_jira_query_statuses(project, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="statuses", filters={"project": project})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query statuses without a project")
+def step_jira_query_statuses_no_project(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="statuses", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records list issue types with create fields")
+def step_jira_records_issue_types_with_fields(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected issue type records but got {result.records}"
+    record = result.records[0]
+    assert "name" in record, f"Expected issue type name in {record}"
+    assert "fields" in record, f"Expected create fields in {record}"
+
+
+@then("the records include custom fields")
+def step_jira_records_include_custom_fields(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert any(record.get("custom") for record in result.records), (
+        f"Expected a custom field among records but got {result.records}"
+    )
+
+
+@then("the records list issue type statuses")
+def step_jira_records_issue_type_statuses(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected status records but got {result.records}"
+    record = result.records[0]
+    assert "statuses" in record, f"Expected statuses in {record}"
+    assert record["statuses"], f"Expected non-empty statuses but got {record}"
 
 
 @given("a Jira connector that returns API errors")
@@ -1848,6 +2003,14 @@ def step_slack_connector(ctx):
                     ],
                     next_cursor=None,
                 )
+            case "scheduled_messages":
+                return ConnectorResult(
+                    records=[
+                        {"id": "Q1234", "channel_id": "C001", "post_at": 1610118217, "text": "Morning standup"},
+                        {"id": "Q1235", "channel_id": "C002", "post_at": 1610118300, "text": "Daily report"},
+                    ],
+                    next_cursor=None,
+                )
             case _:
                 raise ValueError(f"Unsupported Slack resource: {q.resource!r}")
 
@@ -1925,6 +2088,14 @@ def step_slack_connector(ctx):
                 if payload.data.get("content") is None and payload.data.get("file") is None:
                     raise ValueError("file_upload payload requires 'content' or 'file'")
                 return {"ok": True, "file": {"id": "F1234", "name": filename, "permalink": "https://.../file"}}
+            case "scheduled_message_delete":
+                channel = payload.data.get("channel")
+                if not channel:
+                    raise ValueError("Missing 'channel' in scheduled_message_delete payload")
+                scheduled_message_id = payload.data.get("scheduled_message_id")
+                if not scheduled_message_id:
+                    raise ValueError("Missing 'scheduled_message_id' in scheduled_message_delete payload")
+                return {"ok": True}
             case _:
                 raise ValueError(f"Unsupported Slack write: {payload.resource!r}")
 
@@ -2166,6 +2337,41 @@ def step_slack_file_upload_no_content(resource, filename, ctx):
         ctx["write_error"] = str(exc)
 
 
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" and scheduled_message_id "{id}"'))
+def step_slack_delete_scheduled_message(resource, channel, id, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource=resource,
+        data={"channel": channel, "scheduled_message_id": id},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with channel "{channel}" but no scheduled_message_id'))
+def step_slack_delete_scheduled_message_no_id(resource, channel, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(resource=resource, data={"channel": channel})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = "unexpected_success"
+        ctx["write_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["write_error"] = str(exc)
+
+
 @when(parsers.parse('I write resource "{resource}" with channel "{channel}" and user "{user}" and text "{text}"'))
 def step_slack_post_ephemeral_message(resource, channel, user, text, ctx):
     from modulo.connectors.base import ConnectorPayload
@@ -2309,8 +2515,8 @@ def step_slack_query_unknown(resource, ctx):
     import asyncio
 
     try:
-        asyncio.run(ctx["connector"].query(q))
-        ctx["query_result"] = "unexpected_success"
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
         ctx["query_error"] = None
     except Exception as exc:
         ctx["query_result"] = None
@@ -2352,6 +2558,26 @@ def step_slack_connector_invalid(ctx):
 
     mock_connector.health_check = mock_health_check
     ctx["connector"] = mock_connector
+
+
+@given("the Slack connector health check passes")
+def step_slack_health_check_passes(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=True, detail="Bot is in at least one channel")
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@given("the Slack connector health check reports the bot is not in any channel")
+def step_slack_health_check_not_in_channel(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Bot is not in any channel")
+
+    ctx["connector"].health_check = mock_health_check
 
 
 @then("the health result indicates failure")

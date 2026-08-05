@@ -12,7 +12,7 @@ code:
   - backend/src/modulo/connectors/base.py
 depends-on:
   - feat-connectors-hub
-status: partial
+status: covered
 ---
 
 # Slack Connector
@@ -80,6 +80,8 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Delete message via `write("message_delete")` — calls `chat.delete` with `channel` and `ts`
 - [x] Upload file to channel via `write("file_upload")` — calls `files.upload` (multipart); `filename` plus exactly one of `content`/`file` required, optional `channels`/`initial_comment`/`thread_ts` passed through. Note: Slack has deprecated `files.upload` in favor of `getUploadURLExternal`/`completeUploadExternal`; legacy endpoint still works and remains the simplest implementation — revisit if Slack retires it.
 - [x] Schedule message via `write("schedule_message")` — calls `chat.scheduleMessage` with `channel` + `post_at` (UNIX timestamp) required
+- [x] List scheduled messages via `query("scheduled_messages")` — calls `chat.scheduledMessages.list`, optional `channel` filter, cursor-based pagination via `response_metadata.next_cursor`
+- [x] Delete scheduled message via `write("scheduled_message_delete")` — calls `chat.deleteScheduledMessage` with `channel` + `scheduled_message_id` required
 
 ### Capability Declaration
 
@@ -96,36 +98,38 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Retry 429 with exponential backoff (max 3) before failing
 - [x] Detect revoked tokens via `auth.test` and return descriptive error
 - [x] Return `HealthResult(ok=False)` for HTTP errors, rate limits, network errors, and API errors
-- [ ] Verify bot is in at least one channel (common misconfiguration)
+- [x] Verify bot is in at least one channel (common misconfiguration) — `conversations.list` (`limit=1`) returns no channels → `HealthResult(ok=False, "Bot is not in any channel")`
 
 ### Error Handling and Resilience
 
 - [x] `_call_api` centralises all HTTP/network error handling with retry/backoff
-- [x] `_parse_json` wraps JSON decode errors as `ValueError`
+- [x] `_parse_json` wraps JSON decode errors as `SlackAPIError`
 - [x] `verify_scopes()` calls `auth.test` to detect revoked/invalid tokens
 - [x] Health check catches all errors and returns `HealthResult(ok=False, detail=...)` — never throws
 - [x] Exponential backoff for 429: `base_delay * 2^attempt` with jitter via `Retry-After` header
-- [x] Consistent error types — all API errors wrapped as `ValueError` with descriptive message
-- [x] `httpx.HTTPStatusError` wrapped as `ValueError("Slack API HTTP {status}: {body}")`
-- [x] `httpx.TimeoutException` wrapped as `ValueError("Slack API timeout")` after 3 retries
-- [x] `httpx.ConnectError` wrapped as `ValueError("Slack API connection error")` after 3 retries
+- [x] Consistent error types — all API/network errors raise `SlackError` subclasses (`SlackAPIError`, `SlackRateLimitError`, `SlackAuthError`, `SlackNetworkError`) that remain `ValueError`-compatible
+- [x] `httpx.HTTPStatusError` mapped via `_error_for_status()` — 429 → `SlackRateLimitError`, 401/403 → `SlackAuthError`, other statuses → `SlackNetworkError` (message `"Slack API HTTP {status}: {body}"`)
+- [x] `httpx.TimeoutException` wrapped as `SlackNetworkError("Slack API timeout")` after 3 retries
+- [x] `httpx.ConnectError` wrapped as `SlackNetworkError("Slack API connection error")` after 3 retries
 - [x] `_compute_retry_delay()` helper extracted — retry delay calculation defined once, not repeated 3 times
 - [x] `_check_slack_ok()` helper extracted — `ok: false` check defined once, not repeated 8 times
-- [x] Health check differentiates network errors from token errors during `verify_scopes` — connection errors, timeouts, and HTTP errors during `auth.test` return "network error" detail instead of misleading "Token is invalid or revoked"
+- [x] Health check differentiates network errors from token errors via exception types — `SlackNetworkError` during `auth.test`/`conversations.list` returns "network error" detail instead of misleading "Token is invalid or revoked"
 - [x] Empty channel list returns empty `ConnectorResult.records` (not an error)
 - [x] Empty message history returns empty `ConnectorResult.records` (not an error)
 - [x] Empty user list returns empty `ConnectorResult.records` (not an error)
 - [x] `api.test` returning `{"ok": false}` with no `error` field handled — returns `"unknown"` detail
-- [ ] Domain-specific exception types (e.g. `SlackRateLimitError`, `SlackAuthError`)
+- [x] Domain-specific exception types — `SlackError`/`SlackAPIError`/`SlackRateLimitError`/`SlackAuthError`/`SlackNetworkError` exported from `modulo.connectors.slack`
 
 ## Known Gaps
 
-- [ ] **No bot-in-channel verification**: health check does not verify bot is in at least one channel
-- [ ] **No domain-specific exception types**: all API and network errors use generic `ValueError` — not domain exceptions like `SlackRateLimitError`, `SlackAuthError`
-- [ ] **No scheduled-message list/delete**: `chat.scheduledMessages.list` / `chat.deleteScheduledMessage` not implemented (schedule-only)
-
 ### Resolved (2026-08-04)
 
+- [x] ~~**No bot-in-channel verification**: health check does not verify bot is in at least one channel~~ — `health_check()` calls `_is_bot_in_channel()` (`conversations.list`, `limit=1`, `types=public_channel,private_channel`); no channels → `HealthResult(ok=False, "Bot is not in any channel")`.
+- [x] ~~**No domain-specific exception types**: all API and network errors use generic `ValueError` — not domain exceptions like `SlackRateLimitError`, `SlackAuthError`~~ — `SlackError`/`SlackAPIError`/`SlackRateLimitError`/`SlackAuthError`/`SlackNetworkError` added (all `ValueError`-compatible) and wired through `_call_api`, `_parse_json`, `_check_slack_ok`, `verify_scopes`, and `health_check`.
+
+### Earlier (2026-08-04)
+
+- [x] ~~**No scheduled-message list/delete**: `chat.scheduledMessages.list` / `chat.deleteScheduledMessage` not implemented (schedule-only)~~ — `query("scheduled_messages")` + `write("scheduled_message_delete")` added.
 - [x] ~~**No file uploads**: cannot upload files or share files in channels (`files.upload`)~~ — `write("file_upload")` added.
 - [x] ~~**No message search**: `search.messages` API not used; agents cannot search across all channels~~ — `query("message_search")` added.
 - [x] ~~**Channel history limited**: only one page of `conversations.history` — full history not accessible via pagination~~ — `query("messages")`/`query("thread_replies")` now forward `q.cursor`.
@@ -136,6 +140,24 @@ Async Slack Web API connector implementing `ConnectorBase`. Provides read/write 
 - [x] ~~**No lookup by email**: `users.lookupByEmail` not implemented~~ — `query("user_lookup")` added.
 
 ## QA History
+### 2026-08-04 — improve-architecture: Slack connector gap programme COMPLETE (bot-in-channel verification + domain exception types)
+
+**RESOLVED the final 2 known gaps** in the Slack connector (`connectors/slack/__init__.py`):
+
+- **Bot-in-channel verification** — `health_check()` now verifies the bot is in at least one channel via a new `_is_bot_in_channel()` helper (`conversations.list`, `limit=1`, `types=public_channel,private_channel`, verified with `_check_slack_ok`). No channels → `HealthResult(ok=False, "Bot is not in any channel")`; network failures during the membership probe → "Channel membership check failed due to network error", API errors → "Channel membership check failed".
+- **Domain-specific exception types** — new `SlackError` (base, `ValueError`-compatible) hierarchy: `SlackAPIError` (business errors `ok:false` + invalid JSON + non-object bodies), `SlackRateLimitError` (429 after retries exhausted), `SlackAuthError` (401/403 + failed `auth.test`), `SlackNetworkError` (timeout / connection / other HTTP status). New `_error_for_status()` helper maps `httpx.HTTPStatusError` → the right type in one place; `health_check` now discriminates on exception types (`except SlackNetworkError`) instead of string-matching messages, and the redundant duplicate retry branch in `_call_api` was removed (the pre-`raise_for_status()` retry check covers all retryable statuses).
+
+**Tests:** 13 new unit tests in `test_slack.py` (health: bot-in-channel ok / bot-not-in-channel / membership network error / membership api error; exceptions: hierarchy subclass matrix, 429→`SlackRateLimitError`, 401→`SlackAuthError`, 403→`SlackAuthError`, 500→`SlackNetworkError`, timeout→`SlackNetworkError`, `ok:false`→`SlackAPIError`, invalid JSON→`SlackAPIError`, `verify_scopes` failure→`SlackAuthError`) + `test_health_check_ok` updated to mock the new `conversations.list` probe. Added 2 BDD scenarios in `slack_connector.feature` (health passes when bot is in a channel, health reports bot-not-in-any-channel) with 2 new step definitions. Updated product map `connectors/slack-connector.md` (3 behaviours `[ ]`→`[x]`, 2 Known Gaps → RESOLVED, BDD count 38→40, status partial→covered, QA History). 145/145 slack unit tests + 40/40 slack BDD scenarios pass (8 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: covered — all documented Slack connector gaps are now RESOLVED.
+
+### 2026-08-04 — improve-architecture: 2 behaviours RESOLVED (scheduled-message list/delete)
+
+**RESOLVED the "No scheduled-message list/delete" known gap** in the Slack connector (`connectors/slack/__init__.py`):
+
+- **Scheduled-message listing** — `query("scheduled_messages")` calls `chat.scheduledMessages.list` with optional `channel` filter and forwards `q.cursor` to the `cursor` param; returns `records` = `scheduled_messages` and `next_cursor` from `response_metadata`.
+- **Scheduled-message deletion** — `write("scheduled_message_delete")` calls `chat.deleteScheduledMessage` with `channel` + `scheduled_message_id` (both required, clear `ValueError` when missing), verified via `_check_slack_ok`.
+
+**Tests:** 10 new unit tests in `test_slack.py` (scheduled_messages happy/channel-filter/cursor-pagination/api-error/http-error, scheduled_message_delete happy/missing-channel/missing-id/api-error/http-error) + 4 new BDD scenarios in `slack_connector.feature` (list scheduled messages, list without channel, delete scheduled message, delete-without-id error) with 2 new step definitions + mock connector extended. **Fixed pre-existing bug** in shared step `step_slack_query_unknown` (`I query resource "{resource}"`) — it discarded the actual query result on success (`query_result = "unexpected_success"`), so non-error scenarios using the bare step could never assert records. Updated product map `connectors/slack-connector.md` (2 behaviours `[ ]`→`[x]`, 1 Known Gap → RESOLVED, BDD count 34→38, QA History). 132/132 slack unit tests + 38/38 slack BDD scenarios pass (18 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (bot-in-channel verification, domain-specific exceptions remain).
+
 ### 2026-08-04 — improve-architecture: 6 behaviours RESOLVED (message search, scheduling, file uploads, history pagination, type filtering)
 
 **RESOLVED 6 behaviours** in the Slack connector (`connectors/slack/__init__.py`):

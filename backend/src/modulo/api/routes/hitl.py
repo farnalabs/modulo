@@ -766,8 +766,7 @@ async def list_org_pending_gates(
                 pipeline_rows = await session.execute(
                     select(Pipeline.id, Pipeline.name).where(Pipeline.id.in_(pipeline_ids))
                 )
-                for pid, pname in pipeline_rows.all():
-                    pipeline_map[pid] = pname
+                pipeline_map = {row[0]: row[1] for row in pipeline_rows.all()}
     except ProgrammingError as exc:
         logger.exception("hitl.list_org_pending_gates")
         raise HTTPException(

@@ -1,4 +1,4 @@
-"""Shared pipeline execution core for SAQ.
+"""Pipeline execution core for SAQ (PR C of the Celery->SAQ migration).
 
 This module is the single home for the claim / execute / heartbeat / complete /
 stale-sweep logic that was historically embedded in
@@ -8,18 +8,16 @@ PR C of the Celery->SAQ migration). The SAQ workers delegate here.
 NOT here: ``dispatch_run``, cron firing, fire/report jobs.
 
 Engine injection: every entry point takes its engine(s) explicitly so the
-legacy sync claim pool + async execution pool helpers stay usable while the SAQ
-path passes its own async engine. No module-level engine globals.
+async execution path passes its own async engine. No module-level engine globals.
 
 Staleness constants (plan F4 / F1 ordering):
 
-    RUN_CLAIM_STALE_SECONDS        = 450  SAQ runs only
-    LEGACY_RUN_CLAIM_STALE_SECONDS = 180  legacy sync claim helpers
-    SAQ_JOB_HEARTBEAT              = 300  SAQ job heartbeat knob
-    RUN_HEARTBEAT_SECONDS          = 30   DB heartbeat cadence
+    RUN_CLAIM_STALE_SECONDS = 450  SAQ runs only
+    SAQ_JOB_HEARTBEAT       = 300  SAQ job heartbeat knob
+    RUN_HEARTBEAT_SECONDS   = 30   DB heartbeat cadence
 
-Both claim staleness values are configurable via settings (see the F4 Settings
-section in :mod:`modulo.settings`). The legacy sweep windows default to
+Staleness values are configurable via settings (see the F4 Settings section in
+:mod:`modulo.settings`). The legacy sweep windows default to
 never_dispatched=300 / worker_lost=600 (today's beat-sweep values, 5 and 10
 minutes) and stay decoupled from ``RUN_CLAIM_STALE_SECONDS``.
 """
@@ -33,17 +31,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Engine, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.crud.run import get_run
 
 _log = logging.getLogger(__name__)
 
-# Claim staleness gates (configurable via settings; module defaults are the
-# documented SAQ / legacy values).
+# Claim staleness gates (configurable via settings).
 RUN_CLAIM_STALE_SECONDS = 450
-LEGACY_RUN_CLAIM_STALE_SECONDS = 180
 
 # DB heartbeat cadence (F4). Must stay well below the 300s SAQ sweep threshold.
 RUN_HEARTBEAT_SECONDS = 30
@@ -93,8 +89,7 @@ class SchedulerDBError(Exception):
     """Raised when a scheduler DB query fails transiently.
 
     Relocated from ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1) so
-    the SAQ scheduler modules never import the Celery task module that PR C
-    deletes.
+    the SAQ scheduler modules never import the deleted Celery task module.
     """
 
     pass
@@ -107,21 +102,16 @@ def _make_sync_url(database_url: str) -> str:
     )
 
 
-def _resolve_claim_stale_seconds(*, legacy: bool, stale_seconds: int | None) -> int:
+def _resolve_claim_stale_seconds(*, stale_seconds: int | None) -> int:
     """Resolve the claim staleness window.
 
-    The SAQ path uses ``RUN_CLAIM_STALE_SECONDS`` (450); the legacy Celery path
-    keeps today's 180s window (``interval '3 minutes'``). Both are configurable
-    via settings.
+    Uses ``RUN_CLAIM_STALE_SECONDS`` (450), configurable via settings.
     An explicit ``stale_seconds`` overrides settings (used by tests and by the
     SAQ reconcile path later).
     """
     if stale_seconds is not None:
         return stale_seconds
-    settings = get_settings()
-    if legacy:
-        return int(settings.legacy_run_claim_stale_seconds)
-    return int(settings.run_claim_stale_seconds)
+    return int(get_settings().run_claim_stale_seconds)
 
 
 def build_claim_update(*, stale_seconds: int, claim_cap: int = _DEFAULT_CLAIM_CAP) -> Any:
@@ -154,47 +144,19 @@ def _claim_params(run_id: str, org_id: str, stale_seconds: int, claim_cap: int) 
     return {"rid": run_id, "oid": org_id, "stale_seconds": stale_seconds, "claim_cap": claim_cap}
 
 
-def claim_run(
-    engine: Engine,
-    run_id: str,
-    org_id: str,
-    stale_seconds: int | None = None,
-    *,
-    legacy: bool = False,
-    claim_cap: int = _DEFAULT_CLAIM_CAP,
-) -> bool:
-    """Claim a pending or stale-running run via an atomic SQL update (sync).
-
-    Returns True if the row was claimed, False if already handled or the claim
-    failed. Used by the Celery prefork path (legacy claim window).
-    """
-    window = _resolve_claim_stale_seconds(legacy=legacy, stale_seconds=stale_seconds)
-    try:
-        with engine.connect() as c, c.begin():
-            result = c.execute(
-                build_claim_update(stale_seconds=window, claim_cap=claim_cap),
-                _claim_params(run_id, org_id, window, claim_cap),
-            )
-            return result.fetchone() is not None
-    except Exception:
-        _log.exception("pipeline_execution.claim_failed run=%s", run_id)
-        return False
-
-
 async def claim_run_async(
     aengine: AsyncEngine,
     run_id: str,
     org_id: str,
     stale_seconds: int | None = None,
     *,
-    legacy: bool = False,
     claim_cap: int = _DEFAULT_CLAIM_CAP,
 ) -> bool:
     """Claim a pending or stale-running run via an atomic SQL update (async).
 
-    Same semantics as :func:`claim_run`; used by the SAQ execute path.
+    Used by the SAQ execute path.
     """
-    window = _resolve_claim_stale_seconds(legacy=legacy, stale_seconds=stale_seconds)
+    window = _resolve_claim_stale_seconds(stale_seconds=stale_seconds)
     try:
         async with aengine.connect() as c, c.begin():
             result = await c.execute(
@@ -304,55 +266,6 @@ async def mark_complete(aeng: AsyncEngine, run_id: str, org_id: str) -> None:
             cur.completed_at = datetime.now(UTC)
 
 
-async def execute_run(
-    *,
-    sync_engine: Engine,
-    async_engine: AsyncEngine,
-    run_id: str,
-    org_id: str,
-    legacy_claim: bool = True,
-) -> None:
-    """Execute a single pipeline run from claim through completion.
-
-    Shared by the Celery task and (from PR B) the SAQ ``execute_run`` job.
-    ``legacy_claim`` selects the legacy 180s claim window (Celery) vs the SAQ
-    450s window. ``_task_instance`` is intentionally absent (plan F4: engine
-    injection, no task coupling).
-    """
-    rid = uuid.UUID(run_id)
-    oid = uuid.UUID(org_id)
-
-    claimed = claim_run(sync_engine, str(rid), str(oid), legacy=legacy_claim)
-    if not claimed:
-        _log.warning("Run %s not claimed — already handled or in wrong state", run_id)
-        return
-
-    cur, executor = await load_and_setup(async_engine, rid, oid)
-    if cur is None:
-        return
-
-    heartbeat_task: asyncio.Task[Any] | None = None
-    try:
-        # execute_run is an async coroutine (always a running loop) — the
-        # create-task-without-guard rule targets sync signal/listener code.
-        heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(async_engine, str(rid), str(oid)),
-            name=f"heartbeat-{run_id}",
-        )
-        await executor.execute(run_id=rid, org_id=oid, input_payload=cur.input_payload or {})
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.exception("Pipeline execution failed for run %s", run_id)
-    finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
-
-    await mark_complete(async_engine, str(rid), str(oid))
-
-
 async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
     """Re-dispatch a stranded capacity-blocked run through ``dispatch_run``.
 
@@ -417,85 +330,98 @@ async def stale_run_recovery_sweep(
     wl_window = worker_lost_window if worker_lost_window is not None else settings.saq_worker_lost_window
     stranded_rows: list[Any] = []
     try:
+        # Collect all org ids FIRST in system context (organisations is the
+        # root table — the app role owns it, owner bypasses RLS). The sweep's
+        # run queries are then scoped PER-ORG via set_config('app.organisation_id')
+        # so they are visible under RLS — the pre-existing sweep never called
+        # set_rls_org, so under RLS it matched ZERO rows and never recovered
+        # anything (Side Effects minor 14, spec §9.4).
         async with async_engine.connect() as conn, conn.begin():
-            never_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
-                    "WHERE status = 'pending' "
-                    "AND created_at < now() - (:nd_window * interval '1 second') "
-                    "AND dispatched_at IS NULL "
-                    "AND cancellation_requested = false "
-                    "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
-                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
-                ),
-                {"nd_window": nd_window},
-            )
-            never_count = never_result.rowcount
+            org_result = await conn.execute(text("SELECT id FROM organisations"))
+            org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
 
-            # Re-dispatch stranded capacity-blocked runs. Runs demoted to
-            # ``pending`` with a capacity marker are normally retried by the
-            # in-process ``PipelineExecutor._retry_pending`` loop, which
-            # refreshes ``heartbeat_at`` per attempt. A stale heartbeat is the
-            # fence that proves that loop is GONE (worker died): only then is
-            # the run re-dispatched so it re-enters claim -> execute ->
-            # _check_capacity. Runs already past the capacity_timeout TTL are
-            # excluded — they fail below, they are not resurrected forever. The
-            # heartbeat stamp both fences against a live loop and backs off the
-            # sweep when the re-dispatch defers (capacity still full) instead of
-            # hot-looping every cron tick.
-            stranded_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET heartbeat_at = now() "
-                    "WHERE status = 'pending' "
-                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
-                    "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
-                    "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
-                    "AND cancellation_requested = false "
-                    "RETURNING id, organisation_id"
-                ),
-                {
-                    "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
-                    "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
-                },
-            )
-            stranded_rows = list(stranded_result.all())
-            stranded_count = len(stranded_rows)
+        if not org_ids:
+            return {
+                "never_dispatched_swept": 0,
+                "worker_lost_swept": 0,
+                "capacity_timeout_swept": 0,
+                "stranded_capacity_redispatched": 0,
+                "redispatch_outcomes": {},
+            }
 
-            # Durable backstop for capacity-blocked runs. The in-process retry
-            # accelerator (PipelineExecutor._retry_pending) handles normal slot
-            # pickup; this branch terminal-fails reason-marked pending runs that
-            # outlived the TTL (e.g. stranded by a worker restart). Anchored on
-            # created_at — the re-dispatch cycle rewrites updated_at/last marker.
-            capacity_timeout_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
-                    "WHERE status = 'pending' "
-                    "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
-                    "AND created_at < now() - (:ttl * interval '1 minute') "
-                    "AND cancellation_requested = false"
-                ),
-                {"ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
-            )
-            capacity_timeout_count = capacity_timeout_result.rowcount
+        never_count = 0
+        lost_count = 0
+        capacity_timeout_count = 0
+        stranded_count = 0
+        for org_id in org_ids:
+            async with async_engine.connect() as conn, conn.begin():
+                await conn.execute(
+                    text("SELECT set_config('app.organisation_id', :val, true)"),
+                    {"val": str(org_id)},
+                )
+                never_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
+                        "WHERE status = 'pending' "
+                        "AND created_at < now() - (:nd_window * interval '1 second') "
+                        "AND dispatched_at IS NULL "
+                        "AND cancellation_requested = false "
+                        "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
+                        "AND (dispatcher IS NULL OR dispatcher != 'saq')"
+                    ),
+                    {"nd_window": nd_window},
+                )
+                never_count += never_result.rowcount or 0
 
-            lost_result = await conn.execute(
-                text(
-                    "UPDATE runs "
-                    "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
-                    "WHERE status = 'running' "
-                    "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
-                    "AND claim_count >= 5 "
-                    "AND (dispatcher IS NULL OR dispatcher != 'saq')"
-                ),
-                {"wl_window": wl_window},
-            )
-            lost_count = lost_result.rowcount
+                stranded_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET heartbeat_at = now() "
+                        "WHERE status = 'pending' "
+                        "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                        "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
+                        "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
+                        "AND cancellation_requested = false "
+                        "RETURNING id, organisation_id"
+                    ),
+                    {
+                        "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
+                        "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
+                    },
+                )
+                org_stranded_rows = list(stranded_result.all())
+                stranded_count += len(org_stranded_rows)
+                stranded_rows.extend(org_stranded_rows)
 
-        # Re-dispatch AFTER the sweep transaction commits so dispatch_run's own
-        # sessions (and the row lock the UPDATE held) never overlap a live
+                capacity_timeout_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
+                        "WHERE status = 'pending' "
+                        "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
+                        "AND created_at < now() - (:ttl * interval '1 minute') "
+                        "AND cancellation_requested = false"
+                    ),
+                    {"ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
+                )
+                capacity_timeout_count += capacity_timeout_result.rowcount or 0
+
+                lost_result = await conn.execute(
+                    text(
+                        "UPDATE runs "
+                        "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
+                        "WHERE status = 'running' "
+                        "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
+                        "AND claim_count >= 5 "
+                        "AND (dispatcher IS NULL OR dispatcher != 'saq')"
+                    ),
+                    {"wl_window": wl_window},
+                )
+                lost_count += lost_result.rowcount or 0
+
+        # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
+        # own sessions (and the row lock the UPDATE held) never overlap a live
         # transaction.
         redispatch_outcomes: dict[str, int] = {}
         for row in stranded_rows:

@@ -45,7 +45,6 @@ primary_region = 'lhr'
   MODULO_DB = "postgres"
   MODULO_PUBLIC_URL = "https://app.modulo.run"
   MODULO_DEMO_MODE = "true"
-  MODULO_DOGFOOD_ENABLED = "true"
   # MODULO_USERS is set with `fly secrets set` and must not be committed.
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
@@ -55,6 +54,6 @@ primary_region = 'lhr'
   CORS_ORIGINS = "https://modulo.run,https://app.modulo.run"
 
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
-  cpus = 1
+  cpus = 2

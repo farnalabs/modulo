@@ -125,7 +125,28 @@ Rate limiting uses a Redis token-bucket algorithm. Falls back to in-memory witho
 | `MODULO_E2B_API_KEY` | For E2B | — | E2B sandbox API key for runtime provider |
 | `MODULO_MAX_LOCAL_CONCURRENCY` | No | `2` | Max concurrent local agents (LocalRuntimeProvider) |
 | `OLLAMA_BASE_URL` | For Ollama | `http://localhost:11434` | Ollama server URL for local model backends |
-| `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate |
+| `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate. **Deprecated** (kept for the legacy fallback path) — the runtime reads `Settings.e2b_sandbox_usd_per_hour` via `get_settings()`; see the multi-component cost-tracking spec. |
+
+---
+
+## Cost Tracking
+
+Anti-abuse knobs for self-reported model cost (see
+`docs/design/multi-component-cost-tracking.md`). A violating value fails at
+Settings load (fail-fast) — a bad env value blocks boot with a recovery message.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_MAX_REPORTABLE_USD_MIN` | No | `0.000001` | The floor: a self-reported `model_cost_usd` below this is NOT a report (closes the spend-evasion hole). `ge=0.000001` — a sub-floor knob is rejected. |
+| `MODULO_MAX_SELF_REPORTED_USD` | No | `10000.0` | The per-node clamp for an absurd single-node report. The write-path effective value is min-capped at `99999999.999999` (the run column cap), so a `1e9` env value cannot silently disable the clamp. `ge=0.000001`. |
+| `MODULO_MAX_REPORTABLE_BAND_USD` | No | `50.0` | The band ceiling — the trust boundary for self-reported model cost at the backend extraction boundary. Any producer is clamped here; a value above the band carries the `model_cost_out_of_band_high` marker. Must be `<= MODULO_MAX_SELF_REPORTED_USD` (else boot-fatal). |
+| `MODULO_MAX_RATE_USD` | No | `100000.0` | Dynamic upper bound for a component's `rate_usd` on writes. The write-path effective value is min-capped at `999999999999.999999` (the rate column cap). Lowering it does NOT affect existing components — the knob moves the write-path boundary only; existing rows are still evaluated at finalization at their stored rate. |
+
+The knobs are Decimal-typed; all comparisons are Decimal (a float/Decimal
+`min()` mismatch is a bug). The ordering invariant
+(`MODULO_MAX_REPORTABLE_USD_MIN < MODULO_MAX_SELF_REPORTED_USD`), the
+floor-vs-band guard, and the knob-below-band guard are enforced at Settings
+LOAD.
 
 ---
 
@@ -208,6 +229,28 @@ blocking readiness indefinitely.
 |----------|----------|---------|-------------|
 | `MODULO_ADMIN_SECRET` | For CLI | — | Shared secret for `modulo-migrate` CLI tool |
 | `MODULO_ADMIN_TOKEN` | For CLI | — | Admin JWT for `modulo-migrate` CLI tool |
+
+---
+
+## Break-glass Admin Recovery
+
+Operator-controlled emergency admin recovery for orgs whose only admin is
+locked out (see `docs/prd.md` §7.19 and
+`docs/operations/break-glass-admin-recovery-runbook.md`). The CLI connects to
+the database as the dedicated `modulo_breakglass` role via
+`MODULO_BREAK_GLASS_DATABASE_URL` — never the application `DATABASE_URL`.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_BREAK_GLASS_ENABLED` | No | from secret presence | Enable CLI `activate` + login-hook consumption. Deactivate/force/status stay operable while secrets + URL are present even when false |
+| `MODULO_BREAK_GLASS_SECRET` | Yes (when ENABLED) | — | Primary operator secret; must differ from `_STANDBY_SECRET`, minimum length |
+| `MODULO_BREAK_GLASS_STANDBY_SECRET` | Yes (when ENABLED) | — | Standby operator secret for rotation |
+| `MODULO_BREAK_GLASS_TTL_MINUTES` | No | `1440` | Default credential TTL in minutes (min 1, ≤ `MODULO_BREAK_GLASS_MAX_TTL_MINUTES`) |
+| `MODULO_BREAK_GLASS_MAX_TTL_MINUTES` | No | `4320` | Hard TTL cap (72h) |
+| `MODULO_BREAK_GLASS_DATABASE_URL` | Yes (when ENABLED) | — | Dedicated `modulo_breakglass` role connection string (BYPASSRLS; never the app `DATABASE_URL`) |
+| `MODULO_BREAK_GLASS_BOOT_FAILURE_MODE` | No | `warn` | `warn` or `fail` for URL/secret-presence checks; the allow-list/role assertions are FATAL in both modes |
+
+Operational procedure: `docs/operations/break-glass-admin-recovery-runbook.md`.
 
 ---
 

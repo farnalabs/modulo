@@ -484,6 +484,42 @@ async def test_lookup_api_key_org_regression(
         assert str(resolved) == str(bg_org)
 
 
+async def test_modulo_migrate_has_schema_usage(db_engine: AsyncEngine) -> None:
+    """The SECURITY DEFINER function owner must resolve schema public objects.
+
+    ``lookup_api_key_org`` is owned by ``modulo_migrate`` (migration 0036) and
+    executes with that role's privileges (SECURITY DEFINER). The function body
+    does ``FROM org_api_keys`` through schema public, so ``modulo_migrate``
+    needs USAGE on schema public. ``bootstrap_role`` grants it; without it,
+    every API-key-authenticated request fails with
+    ``UndefinedTableError: relation "org_api_keys" does not exist`` on DBs that
+    revoke the PUBLIC default schema USAGE (the deployed DB does). This test
+    revokes the PUBLIC default grant to mirror production, so it fails on the
+    regression even where testcontainers otherwise keeps the PUBLIC default.
+    """
+    async with db_engine.begin() as conn:
+        await conn.execute(text("REVOKE USAGE ON SCHEMA public FROM PUBLIC"))
+    try:
+        async with db_engine.connect() as conn:
+            has_usage = (
+                await conn.execute(text("SELECT has_schema_privilege('modulo_migrate', 'public', 'USAGE')"))
+            ).scalar_one()
+            assert has_usage is True
+
+            # Belt-and-braces: the function must actually resolve org_api_keys as
+            # modulo_migrate (no UndefinedTableError). A missing-prefix lookup
+            # returns NULL; a broken schema-USAGE grant raises.
+            resolved = (
+                await conn.execute(text("SELECT public.lookup_api_key_org('no_such_prefix_zz')"))
+            ).scalar_one_or_none()
+            assert resolved is None
+    finally:
+        # Restore the PUBLIC default so the shared session-scoped DB is untouched
+        # for the tests that follow.
+        async with db_engine.begin() as conn:
+            await conn.execute(text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
+
+
 # ── migration downgrade round-trip ───────────────────────────────────
 
 

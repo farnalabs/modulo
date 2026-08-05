@@ -185,6 +185,43 @@ def test_sandbox_timeout_invalid_warns():
     assert "SANDBOX_TIMEOUT_INVALID" in _codes(result)
 
 
+def test_sandbox_no_timeout_is_valid():
+    """A sandbox node without timeout_seconds uses the default (no crash, no warning)."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds=None)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_TIMEOUT_BOUNDS" not in _codes(result)
+    assert "SANDBOX_TIMEOUT_INVALID" not in _codes(result)
+    assert result.is_valid
+
+
+def test_sandbox_string_timeout_in_range_is_valid():
+    """A numeric string timeout within range parses and passes."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds="600")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_TIMEOUT_BOUNDS" not in _codes(result)
+    assert "SANDBOX_TIMEOUT_INVALID" not in _codes(result)
+
+
+def test_sandbox_non_dict_context_files_is_valid():
+    """context_files that is not a dict (e.g. a list) is skipped safely."""
+    graph = {"nodes": [_sandbox_node(context_files=[])], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_CONTEXT_PATH_RELATIVE" not in _codes(result)
+    assert result.is_valid
+
+
+def test_sandbox_non_dict_env_vars_is_valid():
+    """env_vars that is not a dict (e.g. None) is skipped safely."""
+    graph = {"nodes": [_sandbox_node(env_vars=None)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_RESERVED_ENV_VAR" not in _codes(result)
+    assert result.is_valid
+
+
 def test_sandbox_relative_context_file_warns():
     graph = {
         "nodes": [_sandbox_node(context_files={"relative/input.txt": None})],

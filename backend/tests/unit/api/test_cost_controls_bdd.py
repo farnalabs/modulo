@@ -113,145 +113,116 @@ class TestTokenBudgetSteps:
 
 
 class TestCheckAndRecordSpendSteps:
-    """Tests for the step definitions that exercise check_and_record_spend."""
+    """Tests for the step definitions that exercise check_and_record_spend.
+
+    The refusal decision uses the CREATED-AT day SUM (excluding the current
+    run) + the explicit cost add; the ledger row is keyed by the run-start day.
+    """
+
+    def _limit(self, value: object) -> MagicMock:
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = value
+        return r
+
+    def _sum(self, value: object) -> MagicMock:
+        r = MagicMock()
+        r.scalar_one.return_value = value
+        r.scalar_one_or_none.return_value = value
+        return r
+
+    def _run(
+        self, approved: bool, reason: str | None, cost: str, team: bool, sums: list[object]
+    ) -> tuple[bool, str | None]:
+        mock_org_count = MagicMock()
+        mock_org_count.total_spend_usd = Decimal("50.00")
+        mock_org_count.run_count = 5
+        mock_org_count.clamped = False
+        mock_org_count.refused_spend_usd = Decimal(0)
+        mock_team_count = MagicMock()
+        mock_team_count.total_spend_usd = Decimal("20.00")
+        mock_team_count.run_count = 4
+        mock_team_count.clamped = False
+        mock_team_count.refused_spend_usd = Decimal(0)
+        mock_session = _make_mock_session()
+        with (
+            patch(
+                "modulo.core.cost_controller.get_or_create_daily_count",
+                side_effect=[mock_org_count, mock_team_count] if team else [mock_org_count],
+            ),
+            patch.object(mock_session, "execute", side_effect=sums),
+        ):
+            import asyncio
+
+            from modulo.core.cost_controller import check_and_record_spend
+
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(
+                    check_and_record_spend(
+                        mock_session,
+                        org_id=_ORG_ID,
+                        cost_usd=Decimal(cost),
+                        team_id=_TEAM_ID if team else None,
+                    )
+                )
+            finally:
+                loop.close()
 
     def test_spend_under_org_limit_approved(self) -> None:
         """Happy path: spend under org limit is approved."""
-        mock_org_count = MagicMock()
-        mock_org_count.total_spend_usd = Decimal("50.00")
-        mock_org_count.run_count = 5
-
-        mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("100.00")
-
-        with (
-            patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
-                return_value=mock_org_count,
-            ),
-            patch.object(mock_session, "execute", return_value=org_limit_result),
-        ):
-            import asyncio
-
-            from modulo.core.cost_controller import check_and_record_spend
-
-            loop = asyncio.new_event_loop()
-            try:
-                approved, reason = loop.run_until_complete(
-                    check_and_record_spend(
-                        mock_session,
-                        org_id=_ORG_ID,
-                        cost_usd=Decimal("30.00"),
-                        team_id=None,
-                    )
-                )
-                assert approved is True
-                assert reason is None
-            finally:
-                loop.close()
+        # org limit 100, created-at SUM (other runs) 50, +30 = 80 <= 100.
+        approved, reason = self._run(
+            True, None, "30.00", team=False, sums=[self._limit(Decimal("100.00")), self._sum(Decimal("50.00"))]
+        )
+        assert approved is True
+        assert reason is None
 
     def test_spend_over_org_limit_rejected(self) -> None:
-        """Spend exceeding org daily limit is rejected."""
-        mock_org_count = MagicMock()
-        mock_org_count.total_spend_usd = Decimal("95.00")
-        mock_org_count.run_count = 5
-
-        mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("100.00")
-
-        with (
-            patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
-                return_value=mock_org_count,
-            ),
-            patch.object(mock_session, "execute", return_value=org_limit_result),
-        ):
-            import asyncio
-
-            from modulo.core.cost_controller import check_and_record_spend
-
-            loop = asyncio.new_event_loop()
-            try:
-                approved, reason = loop.run_until_complete(
-                    check_and_record_spend(
-                        mock_session,
-                        org_id=_ORG_ID,
-                        cost_usd=Decimal("10.00"),
-                        team_id=None,
-                    )
-                )
-                assert approved is False
-                assert reason == "Daily spend limit exceeded for organisation"
-            finally:
-                loop.close()
+        """Spend exceeding org daily limit is refused."""
+        # org limit 100, created-at SUM 95, +10 = 105 > 100.
+        approved, reason = self._run(
+            False,
+            "daily_limit_exceeded",
+            "10.00",
+            team=False,
+            sums=[self._limit(Decimal("100.00")), self._sum(Decimal("95.00"))],
+        )
+        assert approved is False
+        assert reason == "daily_limit_exceeded"
 
     def test_spend_over_team_limit_rejected(self) -> None:
-        """Spend exceeding team daily limit is rejected."""
-        mock_org_count = MagicMock()
-        mock_org_count.total_spend_usd = Decimal("50.00")
-        mock_org_count.run_count = 5
-
-        mock_team_count = MagicMock()
-        mock_team_count.total_spend_usd = Decimal("45.00")
-        mock_team_count.run_count = 3
-
-        mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("500.00")
-        team_limit_result = MagicMock()
-        team_limit_result.scalar_one_or_none.return_value = Decimal("50.00")
-
-        with (
-            patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
-                side_effect=[mock_org_count, mock_team_count],
-            ),
-            patch.object(
-                mock_session,
-                "execute",
-                side_effect=[org_limit_result, team_limit_result],
-            ),
-        ):
-            import asyncio
-
-            from modulo.core.cost_controller import check_and_record_spend
-
-            loop = asyncio.new_event_loop()
-            try:
-                approved, reason = loop.run_until_complete(
-                    check_and_record_spend(
-                        mock_session,
-                        org_id=_ORG_ID,
-                        cost_usd=Decimal("10.00"),
-                        team_id=_TEAM_ID,
-                    )
-                )
-                assert approved is False
-                assert reason == "Daily spend limit exceeded for team"
-            finally:
-                loop.close()
+        """Spend exceeding team daily limit is refused (org passes, team fails)."""
+        # org limit 500, org SUM 50; team limit 50, team SUM 45, +10 = 55 > 50.
+        approved, reason = self._run(
+            False,
+            "daily_limit_exceeded",
+            "10.00",
+            team=True,
+            sums=[
+                self._limit(Decimal("500.00")),
+                self._sum(Decimal("50.00")),
+                self._limit(Decimal("50.00")),
+                self._sum(Decimal("45.00")),
+            ],
+        )
+        assert approved is False
+        assert reason == "daily_limit_exceeded"
 
     def test_spend_under_both_limits_approved(self) -> None:
         """Spend under both org and team limits is approved with increments."""
         mock_org_count = MagicMock()
         mock_org_count.total_spend_usd = Decimal("100.00")
         mock_org_count.run_count = 10
+        mock_org_count.clamped = False
+        mock_org_count.refused_spend_usd = Decimal(0)
 
         mock_team_count = MagicMock()
         mock_team_count.total_spend_usd = Decimal("20.00")
         mock_team_count.run_count = 4
+        mock_team_count.clamped = False
+        mock_team_count.refused_spend_usd = Decimal(0)
 
         mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("500.00")
-        team_limit_result = MagicMock()
-        team_limit_result.scalar_one_or_none.return_value = Decimal("100.00")
 
         with (
             patch(
@@ -261,7 +232,12 @@ class TestCheckAndRecordSpendSteps:
             patch.object(
                 mock_session,
                 "execute",
-                side_effect=[org_limit_result, team_limit_result],
+                side_effect=[
+                    self._limit(Decimal("500.00")),
+                    self._sum(Decimal("100.00")),
+                    self._limit(Decimal("100.00")),
+                    self._sum(Decimal("20.00")),
+                ],
             ),
         ):
             import asyncio
@@ -452,3 +428,107 @@ class TestAdminGetSpendLimits:
         assert data["org_daily_spend_limit"] == 100.0
         assert len(data["team_limits"]) == 1
         assert data["team_limits"][0]["daily_spend_limit"] == 50.0
+
+
+# ===========================================================================
+# GET /api/v1/admin/costs/controls — fresh/empty DB regression
+# ===========================================================================
+
+
+class TestAdminGetCostControls:
+    """GET /api/v1/admin/costs/controls against a fresh/empty database.
+
+    The endpoint must return 200 with sensible defaults (empty team list, null
+    budget) when the org exists but has no teams and no spend limit set, and
+    must never 500 on NULL/unusable spend-limit values.
+    """
+
+    ENDPOINT = "/api/v1/admin/costs/controls"
+
+    def test_empty_database_returns_defaults(self, client: TestClient) -> None:
+        """Fresh DB: org present, no teams, NULL org spend limit -> 200 + defaults."""
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = None
+
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["teams"] == []
+        assert data["budget"] is None
+
+    def test_missing_org_returns_defaults(self, client: TestClient) -> None:
+        """No organisation row -> 200 with empty teams and null budget."""
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=None),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["teams"] == []
+        assert data["budget"] is None
+
+    def test_populated_database_returns_values(self, client: TestClient) -> None:
+        """Populated DB: org limit + team limits are returned correctly."""
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = Decimal("1000.00")
+
+        team_a = MagicMock()
+        team_a.id = _TEAM_ID
+        team_a.name = "Alpha"
+        team_a.daily_spend_limit = Decimal("250.50")
+
+        team_b = MagicMock()
+        team_b.id = uuid.UUID("20000000-0000-0000-0000-000000000001")
+        team_b.name = "Beta"
+        team_b.daily_spend_limit = None
+
+        page_result = MagicMock(items=[team_a, team_b], total=2, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["budget"] == 1000.0
+        assert len(data["teams"]) == 2
+        assert data["teams"][0] == {"id": str(_TEAM_ID), "name": "Alpha", "daily_limit_usd": 250.5}
+        assert data["teams"][1]["daily_limit_usd"] is None
+
+    def test_unusable_spend_limit_value_does_not_500(self, client: TestClient) -> None:
+        """A NaN/odd stored spend limit must serialize as null, not 500."""
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = Decimal("NaN")
+
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["teams"] == []
+        assert data["budget"] is None

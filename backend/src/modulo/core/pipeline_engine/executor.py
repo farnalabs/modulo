@@ -36,7 +36,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
-from modulo.core.cost_controller import check_and_record_spend
+from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalSuiteBlockedError,
@@ -468,19 +468,35 @@ class PipelineExecutor:
             return True
 
     async def _fail_capacity_timeout(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-        """Terminal-fail a run that stayed capacity-blocked past all retries."""
+        """Terminal-fail a run that stayed capacity-blocked past all retries.
+
+        Routed through ``finalize_cost`` (the capacity-timeout ``"failed"``
+        terminal write, §4.2) — a capacity-timed-out run has NO accumulated
+        sets, so it finalizes via the pre-component-read transition
+        (``total_cost_usd = 0``, ``cost_breakdown = NULL``, no ledger write).
+        """
         try:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 run = await get_run(session, run_id)
                 if run is None or run.status != "pending":
                     return
-                await update_run_status(
+                snap_result = await session.execute(
+                    select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
+                )
+                node_type_map = derive_node_type_map(snap_result.scalar_one_or_none())
+                await finalize_cost(
                     session,
-                    run_id,
-                    "failed",
+                    run_id=run_id,
+                    org_id=org_id,
+                    status="failed",
+                    segment_node_token_usage=None,
+                    segment_completed_node_outputs=None,
+                    node_type_map=node_type_map,
                     error_code=ERROR_CODE_CAPACITY_TIMEOUT,
                     error_detail="Run stayed capacity-blocked beyond the retry window",
+                    is_terminal=True,
+                    session_factory=self._session_factory,
                 )
         except asyncio.CancelledError:
             raise
@@ -751,6 +767,28 @@ class PipelineExecutor:
             return run is not None and run.cancellation_requested
 
     @staticmethod
+    def _log_accumulation_state(
+        run_id: uuid.UUID,
+        segments_completed: int,
+        node_token_usage: dict[str, dict[str, int]] | None,
+    ) -> None:
+        """Distinguish a genuinely-empty accumulator from an upstream wiring
+        regression (§4.2). A ``{}``/``None`` accumulator is legitimate when ZERO
+        segments streamed; an EMPTY dict after ≥1 segment streamed means the
+        on_chain_end / on_chat_model_end handlers stopped populating it.
+        """
+        if segments_completed > 0 and not node_token_usage:
+            _log.warning(
+                "cost_components_accumulation_broken",
+                extra={"run_id": str(run_id), "segments_completed": segments_completed},
+            )
+        elif segments_completed == 0:
+            _log.info(
+                "cost_components_zero_nodes",
+                extra={"run_id": str(run_id)},
+            )
+
+    @staticmethod
     def _compute_token_costs(
         node_token_usage: dict[str, dict[str, int]] | None,
         input_rate: Decimal,
@@ -825,6 +863,12 @@ class PipelineExecutor:
             )
             snapshot = snapshot_result.scalar_one()
             graph_json: dict[str, Any] = snapshot.graph_json
+
+            # FROZEN node-type map — captured ONCE per run at run start from the
+            # snapshot's graph_json (the graph is immutable per snapshot) and
+            # passed into finalize_cost at every pause and resume. A mid-run
+            # graph edit cannot change sandbox_by_map mid-run (§1.6).
+            node_type_map = derive_node_type_map(graph_json)
 
             # Re-validate the snapshot before resuming — the pipeline
             # config may have changed since the original run started.
@@ -954,35 +998,32 @@ class PipelineExecutor:
                 except Exception:
                     _log.exception("audit.eval_blocked_failed", extra={"run_id": str(run_id)})
 
-        total_tokens, total_cost_usd_val, _ = self._compute_token_costs(
-            node_token_usage,
-            self._INPUT_TOKEN_RATE,
-            self._OUTPUT_TOKEN_RATE,
-        )
-
-        # Add sandbox-agent runtime cost from the nodes completed during resume,
-        # mirroring execute() so cost parity holds for resumed HITL runs.
-        _sandbox_cost = self._aggregate_sandbox_cost(completed_node_outputs)
-        if _sandbox_cost > 0:
-            total_cost_usd_val = (total_cost_usd_val or Decimal(0)) + _sandbox_cost
-
+        # Mark terminal/awaiting_human — the SINGLE finalization path (PR A2).
+        # Resume recomputes from LIVE components over the cumulative merged set
+        # (two-state rule, §4.4); finalize_cost reads the stored cumulative set,
+        # merges the resumed segment (segment-wins), and recomputes.
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
-            final_run = await update_run_status(
+            await finalize_cost(
                 session,
-                run_id,
-                final_status,
+                run_id=run_id,
+                org_id=org_id,
+                status=final_status,
+                segment_node_token_usage=node_token_usage,
+                segment_completed_node_outputs=completed_node_outputs,
+                node_type_map=node_type_map,
                 error_code=error_code,
                 error_detail=error_detail,
-                total_tokens=total_tokens,
-                total_cost_usd=total_cost_usd_val,
-                node_token_usage=node_token_usage,
+                is_terminal=final_status in _TERMINAL_STATUSES,
+                session_factory=self._session_factory,
             )
 
-        if total_cost_usd_val is not None:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await check_and_record_spend(session, org_id=org_id, cost_usd=total_cost_usd_val)
+        # Fetch the final run in a fresh session — finalize_cost's ledger block
+        # may have aborted the transaction in the whole-tx-abort reduced-escape
+        # path (the run row was re-terminalized there).
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            final_run = await get_run(session, run_id)
 
         if final_run is None:
             raise RunNotFoundError(run_id)
@@ -1016,6 +1057,10 @@ class PipelineExecutor:
             )
             snapshot = snapshot_result.scalar_one()
             graph_json: dict[str, Any] = snapshot.graph_json
+
+            # FROZEN node-type map — captured ONCE per run at run start (§1.6)
+            # and passed into finalize_cost at every pause and resume.
+            node_type_map = derive_node_type_map(graph_json)
 
             # Pre-run validation — blocks execution on errors.
             validation = await GraphValidator().validate_for_run(snapshot, input_payload, session)
@@ -1262,39 +1307,33 @@ class PipelineExecutor:
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
-        # Compute aggregate token/cost data from per-node usage.
-        total_tokens, total_cost_usd_val, node_token_usage = self._compute_token_costs(
-            node_token_usage,
-            self._INPUT_TOKEN_RATE,
-            self._OUTPUT_TOKEN_RATE,
-        )
-
-        # Add sandbox-agent runtime cost (wall-clock x E2B rate + agent-reported)
-        # from the completed nodes' outputs, so Run.total_cost_usd covers every
-        # cost class attributable to the run.
-        _sandbox_cost = self._aggregate_sandbox_cost(completed_node_outputs)
-        if _sandbox_cost > 0:
-            total_cost_usd_val = (total_cost_usd_val or Decimal(0)) + _sandbox_cost
-
-        # Mark complete/failed/cancelled/awaiting_human.
+        # Mark complete/failed/cancelled/awaiting_human — the SINGLE
+        # finalization path (PR A2). finalize_cost merges the accumulated
+        # segment sets into the stored cumulative sets (segment-wins), builds
+        # the enriched union + breakdown (total == sum), and runs the
+        # terminal-only ledger block.
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
-            final_run = await update_run_status(
+            await finalize_cost(
                 session,
-                run_id,
-                final_status,
+                run_id=run_id,
+                org_id=org_id,
+                status=final_status,
+                segment_node_token_usage=node_token_usage,
+                segment_completed_node_outputs=completed_node_outputs,
+                node_type_map=node_type_map,
                 error_code=error_code,
                 error_detail=error_detail,
-                total_tokens=total_tokens,
-                total_cost_usd=total_cost_usd_val,
-                node_token_usage=node_token_usage,
-                outputs_json=completed_node_outputs,
+                is_terminal=final_status in _TERMINAL_STATUSES,
+                session_factory=self._session_factory,
             )
 
-        if total_cost_usd_val is not None:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await check_and_record_spend(session, org_id=org_id, cost_usd=total_cost_usd_val)
+        # Fetch the final run in a fresh session — finalize_cost's ledger block
+        # may have aborted the transaction in the whole-tx-abort reduced-escape
+        # path (the run row was re-terminalized there).
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            final_run = await get_run(session, run_id)
 
         if final_run is None:
             raise RunNotFoundError(run_id)
@@ -1386,11 +1425,22 @@ class PipelineExecutor:
         interrupts: Any,
         broker: RunEventBroker,
         run_id: uuid.UUID,
+        node_token_usage: dict[str, Any] | None,
+        completed_node_outputs: dict[str, Any],
         *,
         pipeline_id: uuid.UUID | None,
         org_id: uuid.UUID | None,
     ) -> tuple[str, str | None, str | None, dict[str, Any] | None]:
-        """Create the HITL gate and publish the awaiting event for an interrupt."""
+        """Create the HITL gate and publish the awaiting event for an interrupt.
+
+        PR A signature change (§4.2): the handler ACCEPTS the accumulated
+        ``node_token_usage`` / ``completed_node_outputs`` dicts (which live in
+        ``_stream_graph``'s scope) and RETURNS them in the ``awaiting_human``
+        4-tuple, so the pause persists the CURRENT segment's sets MERGED into
+        the stored cumulative set — NOT ``None``, NOT segment-only. The
+        empty-accumulator case (``{}`` → ``None``) normalizes so
+        ``finalize_cost``'s merge leaves the stored set untouched.
+        """
         first_interrupt = interrupts[0] if interrupts else None
         value = getattr(first_interrupt, "value", None)
         gate_payload = value if isinstance(value, dict) else {}
@@ -1417,14 +1467,19 @@ class PipelineExecutor:
                     "team_id": str(required_team_id) if required_team_id else None,
                 },
             )
-            return "awaiting_human", None, None, None
+            return "awaiting_human", None, None, node_token_usage or None
 
         _log.warning(
             "hitl_gate.cannot_create",
             extra={"run_id": str(run_id), "pipeline_id": str(pipeline_id), "org_id": str(org_id)},
         )
         broker.publish("run_failed", {"error": "gate_creation_failed", "detail": "Pipeline or org ID is None"})
-        return "failed", "configuration_error", "Missing pipeline_id or org_id for HITL gate creation", None
+        return (
+            "failed",
+            "configuration_error",
+            "Missing pipeline_id or org_id for HITL gate creation",
+            node_token_usage or None,
+        )
 
     async def _stream_graph(
         self,
@@ -1456,6 +1511,7 @@ class PipelineExecutor:
         Returns (final_status, error_code, error_detail, node_token_usage).
         """
         node_token_usage: dict[str, dict[str, int]] = {}
+        segments_completed = 0
         lg_config = {**config, "callbacks": [self._otel_bridge]}
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
@@ -1468,6 +1524,8 @@ class PipelineExecutor:
                         interrupts,
                         broker,
                         run_id,
+                        node_token_usage,
+                        completed_node_outputs or {},
                         pipeline_id=pipeline_id,
                         org_id=org_id,
                     )
@@ -1482,6 +1540,7 @@ class PipelineExecutor:
                 if event_kind == "on_chain_end":
                     name = lg_event.get("name", "")
                     if name in node_ids:
+                        segments_completed += 1
                         if guard is not None:
                             guard.record_step()
                         if completed_node_outputs is not None:
@@ -1572,18 +1631,21 @@ class PipelineExecutor:
                 interrupts,
                 broker,
                 run_id,
+                node_token_usage,
+                completed_node_outputs or {},
                 pipeline_id=pipeline_id,
                 org_id=org_id,
             )
         except EvalBlockedError as exc:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
-            return "eval_failed", "eval_blocked", str(exc), None
+            return "eval_failed", "eval_blocked", str(exc), node_token_usage or None
         except OutputRejectedError as exc:
             broker.publish("run_failed", {"error": "output_rejected", "detail": str(exc)})
-            return "output_rejected", "output_rejected", str(exc), None
+            return "output_rejected", "output_rejected", str(exc), node_token_usage or None
         except RunCancelledError:
             broker.publish("run_cancelled", {})
-            return "cancelled", None, None, None
+            self._log_accumulation_state(run_id, segments_completed, node_token_usage)
+            return "cancelled", None, None, node_token_usage or None
         except RunawayRunError as exc:
             error_detail = str(exc)
             broker.publish("run_failed", {"error": "runaway", "detail": error_detail})

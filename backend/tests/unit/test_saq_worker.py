@@ -18,7 +18,7 @@ import modulo.core.saq_worker as sw
 def _settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
         "saq_runs_queue": "runs",
-        "saq_redis_pool_size": 5,
+        "saq_redis_pool_size": 20,
         "redis_url": "redis://localhost:6379/0",
         "database_url": "postgresql+asyncpg://localhost/test",
         "modulo_db": "postgres",
@@ -58,10 +58,11 @@ class TestFunctionsWiring:
             "retention_cleanup",
             "webhook_dedup_cleanup",
             "stale_run_recovery",
+            "cost_probe",
         }
-        # fire_due_triggers: every 30s, timeout=300, retries=3 (F1).
+        # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]
-        assert fdt.cron == "*/30 * * * * *"
+        assert fdt.cron == "* * * * *"
         assert fdt.timeout == 300
         assert fdt.retries == 3
         assert fdt.heartbeat == 30
@@ -70,7 +71,7 @@ class TestFunctionsWiring:
         # dispatcher_reconcile: timeout=120 (F1), every 60s.
         dr = jobs["dispatcher_reconcile"]
         assert dr.timeout == 120
-        assert dr.cron == "0 * * * * *"
+        assert dr.cron == "* * * * *"
         assert dr.unique is True
 
     def test_settings_after_process_and_metadata(self) -> None:
