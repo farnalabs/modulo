@@ -170,6 +170,9 @@ def _fold_model_cost(node_dict: dict[str, Any], output_obj: dict[str, Any] | Non
     if "model_cost_usd" in output_obj:
         raw_field = output_obj.get("model_cost_raw_usd")
         fold_input = raw_field if raw_field is not None else output_obj.get("model_cost_usd")
+        if fold_input is None:
+            _pop_model_cost_fields(node_dict)
+            return
         folded = clamp_reported(fold_input)
         if folded is None:
             _pop_model_cost_fields(node_dict)

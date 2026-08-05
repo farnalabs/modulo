@@ -29,6 +29,25 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NOW = datetime.now(UTC)
 
 
+class _FixedClock:
+    """``probe.datetime`` replaced with a FIXED clock in the trigger/flood tests.
+
+    ``_NOW`` is frozen at module import (pytest collects/imports every test
+    module upfront). Without a frozen clock, a full-suite run — which can take
+    >15 minutes between collection and execution — silently breaks the
+    trigger's 10-minute adjacency window (``PROBE_ADJACENCY_GAP_SECONDS``) and
+    the flood's 10-minute window, turning ``test_trigger_two_consecutive_
+    cadences_fires`` into ``assert False is True``. ``fromisoformat`` stays
+    real so blob/event timestamps parse exactly as in production.
+    """
+
+    @staticmethod
+    def now(tz: Any = None) -> datetime:
+        return _NOW if tz is None else _NOW.astimezone(tz)
+
+    fromisoformat = staticmethod(datetime.fromisoformat)
+
+
 def _make_session() -> AsyncMock:
     session = AsyncMock()
     # AsyncMock supports the async context-manager protocol natively — assigning
@@ -159,6 +178,7 @@ def _blob(mismatch_runs: list[str], age_minutes: int) -> dict[str, Any]:
 async def _trigger(mismatches: list[str], sampled: int, blob: Any, gap_minutes: int = 4) -> bool:
     session = _make_session()
     with (
+        patch("modulo.core.cost_controller.probe.datetime", _FixedClock),
         patch("modulo.core.cost_controller.probe.read_system_config", new=AsyncMock(return_value=blob)),
         patch("modulo.core.cost_controller.probe.acquire_kv_lock", new=AsyncMock()),
         patch("modulo.core.cost_controller.probe.write_system_config", new=AsyncMock()),
@@ -199,7 +219,10 @@ async def _flood(events: Any, suppressed_until: Any = None) -> bool:
     session = _make_session()
     side_effect = [suppressed_until] if suppressed_until is not None else [None]
     side_effect.append(events)
-    with patch("modulo.core.cost_controller.probe.read_system_config", new=AsyncMock(side_effect=side_effect)):
+    with (
+        patch("modulo.core.cost_controller.probe.datetime", _FixedClock),
+        patch("modulo.core.cost_controller.probe.read_system_config", new=AsyncMock(side_effect=side_effect)),
+    ):
         return await _duplicate_flood_trigger(session)
 
 
