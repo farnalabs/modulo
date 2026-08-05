@@ -271,6 +271,75 @@ async def test_check_and_record_spend_happy_path(
         assert counts[0].total_spend_usd == Decimal(10)
 
 
+async def _seed_run(
+    engine: AsyncEngine,
+    org_id: uuid.UUID,
+    cost_usd: Decimal,
+    team_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """Insert a minimal account, pipeline, snapshot, and run for the given org."""
+    account_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+            ),
+            {"id": str(account_id), "email": f"seed-run-{account_id.hex[:12]}@test.com", "name": "Seed Run"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_id),
+                "name": "cost-test-pipeline",
+                "uid": str(account_id),
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+        )
+        run_number = int(run_id.int % 10**9) + 1
+        await conn.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
+                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
+                "run_number, status, total_cost_usd, owner_team_id) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, "
+                ":thread, :rn, 'complete', :cost, :tid)",
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "sid": str(snapshot_id),
+                "ih": uuid.uuid4().hex,
+                "thread": f"{org_id}:{run_id}",
+                "rn": run_number,
+                "cost": float(cost_usd),
+                "tid": str(team_id) if team_id is not None else None,
+            },
+        )
+    return run_id
+
+
 async def test_check_and_record_spend_enforces_org_limit(
     db_engine: AsyncEngine,
 ) -> None:
@@ -288,6 +357,9 @@ async def test_check_and_record_spend_enforces_org_limit(
         assert ok1 is True
         await session.commit()
 
+    # Insert a run record so _sum_created_at_day sees the existing spend
+    await _seed_run(db_engine, org, Decimal(60))
+
     async with factory() as session:
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
@@ -295,7 +367,7 @@ async def test_check_and_record_spend_enforces_org_limit(
         )
         ok2, err2 = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(50), team_id=None)
         assert ok2 is False
-        assert "organisation" in (err2 or "").lower()
+        assert "daily_limit_exceeded" in (err2 or "")
         await session.commit()
 
     # Verify only the first spend was recorded
@@ -341,6 +413,8 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         assert ok is True
         await session.commit()
 
+    await _seed_run(db_engine, org, Decimal(80), team_id=team1.id)
+
     # Team 2: under limit
     async with factory() as session:
         await session.execute(
@@ -351,6 +425,8 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         assert ok is True
         await session.commit()
 
+    await _seed_run(db_engine, org, Decimal(30), team_id=team2.id)
+
     # Team 1: exceeds team limit (80 + 30 = 110 > 100)
     async with factory() as session:
         await session.execute(
@@ -359,7 +435,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         ok, err = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(30), team_id=team1.id)
         assert ok is False
-        assert "team" in (err or "").lower()
+        assert "daily_limit_exceeded" in (err or "")
         await session.commit()
 
     # Team 2: at exact limit (30 + 20 = 50)
@@ -371,6 +447,8 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         ok, _ = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(20), team_id=team2.id)
         assert ok is True
         await session.commit()
+
+    await _seed_run(db_engine, org, Decimal(20), team_id=team2.id)
 
     # Verify team counts
     async with factory() as session:
