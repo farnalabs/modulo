@@ -192,6 +192,9 @@ async def list_runs(
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 
+_COST_BREAKDOWN_SENTINEL: Any = object()
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -201,6 +204,7 @@ async def update_run_status(
     error_detail: str | None = None,
     total_tokens: int | None = None,
     total_cost_usd: Decimal | None = None,
+    cost_breakdown: Any = _COST_BREAKDOWN_SENTINEL,
     node_token_usage: dict[str, Any] | None = None,
     outputs_json: dict[str, Any] | None = None,
     claimed_by: str | None = None,
@@ -230,6 +234,13 @@ async def update_run_status(
         run.total_tokens = total_tokens
     if total_cost_usd is not None:
         run.total_cost_usd = total_cost_usd
+    if cost_breakdown is not _COST_BREAKDOWN_SENTINEL:
+        # The eval_failed direct write PRESERVES the terminal field set: it
+        # sets status + completed_at and leaves the cost fields untouched (the
+        # eval pipeline never passes the cost kwargs). Passing the sentinel
+        # (the default) means "leave cost_breakdown alone"; passing None writes
+        # an explicit NULL (the pre-component-read terminal transition).
+        run.cost_breakdown = cost_breakdown
     if node_token_usage is not None:
         run.node_token_usage = node_token_usage
     if outputs_json is not None:
