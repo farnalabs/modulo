@@ -438,6 +438,32 @@ class TestVerifyChain:
         assert data["valid"] is True
         assert data["total_events"] == 5
 
+    def test_verify_surfaces_chain_break_detail(self, client: TestClient) -> None:
+        with (
+            patch(
+                "modulo.api.routes.audit.verify_chain",
+                return_value={
+                    "valid": False,
+                    "total_events": 2,
+                    "checked_events": 1,
+                    "first_gap_index": 1,
+                    "first_tampered_id": "evt-2",
+                    "chain_head_match": None,
+                    "detail": (
+                        "Audit chain break at event 1 (id evt-2): stored previous_hash (bad-hash) "
+                        "does not match the recomputed hash of the prior event (abc123)."
+                    ),
+                },
+            ),
+            patch("modulo.api.routes.audit.set_rls_org"),
+        ):
+            resp = client.get(self.URL)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is False
+        assert "bad-hash" in data["detail"]
+        assert "abc123" in data["detail"]
+
     def test_verify_unauthorized(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)
         assert resp.status_code in (401, 403)
