@@ -432,6 +432,19 @@ def test_seed_state_skips_autonomy_when_snapshot_has_none():
     assert "_pipeline_default_autonomy" not in state["run_context"]
 
 
+def test_seed_state_seeds_iteration_counts():
+    """The loop-edge counter must be seeded so router mutations persist.
+
+    Without ``_iteration_counts`` in the initial LangGraph state the loop
+    router's ``state.get("_iteration_counts", {})`` returns a brand-new dict
+    on every call and the mutation is lost, so ``max_iterations`` never trips
+    and the loop edge runs forever.
+    """
+    snap = _make_snapshot()
+    state = _seed_state(snap, {})
+    assert state["_iteration_counts"] == {}
+
+
 # ---------------------------------------------------------------------------
 # PipelineExecutor.execute — happy path
 # ---------------------------------------------------------------------------

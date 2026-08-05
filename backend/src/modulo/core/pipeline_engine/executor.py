@@ -150,6 +150,11 @@ def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> di
     return {
         "run_context": run_context,
         "artifacts": [],
+        # Seeded so the loop-edge router's in-place counter mutation persists
+        # on the shared state dict across steps. Without it the router's
+        # state.get("_iteration_counts", {}) returns a fresh dict every call
+        # and max_iterations never trips (infinite loop).
+        "_iteration_counts": {},
     }
 
 
