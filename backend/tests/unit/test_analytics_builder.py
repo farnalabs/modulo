@@ -218,3 +218,88 @@ class TestBucketing:
         )
         assert {b["key"] for b in out} == {"cron", "manual"}
         assert sum(b["count"] for b in out) == 2
+
+    def test_folder_dimension_with_uuid_keys_does_not_crash(self) -> None:
+        folder = uuid.UUID("44444444-4444-4444-8444-444444444444")
+        rows = [
+            _row(date(2026, 8, 5), folder_id=folder),
+            _row(date(2026, 8, 6), folder_id=folder),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.FOLDER,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 6),
+        )
+        assert {b["key"] for b in out} == {str(folder)}
+        assert all(b["key"] is None or isinstance(b["key"], str) for b in out), "keys must be str | None, never UUID"
+
+    def test_folder_dimension_null_key_mix_does_not_crash(self) -> None:
+        # Some runs have no folder → keys are {None, <uuid>} for the same day.
+        # This must NOT raise TypeError on sort (None vs UUID incomparable).
+        folder = uuid.UUID("55555555-5555-4555-8555-555555555555")
+        rows = [
+            _row(date(2026, 8, 5), folder_id=folder),
+            _row(date(2026, 8, 5), folder_id=None),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.FOLDER,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {str(folder), None}
+        assert sum(b["count"] for b in out) == 2
+
+    def test_pipeline_dimension_null_snapshot_label_falls_back_to_uuid(self) -> None:
+        # A NULL pipeline_name (backfilled fact for a since-deleted pipeline)
+        # falls back to the pipeline_id UUID. Mixing a named and a NULL-label
+        # pipeline on the same day must not crash bucketing.
+        pipeline_a = uuid.UUID("66666666-6666-4666-8666-666666666666")
+        pipeline_b = uuid.UUID("77777777-7777-4777-8777-777777777777")
+        rows = [
+            _row(date(2026, 8, 5), key_label="Pipeline A", pipeline_id=pipeline_a),
+            _row(date(2026, 8, 5), key_label=None, pipeline_id=pipeline_b),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.PIPELINE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"Pipeline A", str(pipeline_b)}
+        assert sum(b["count"] for b in out) == 2
+
+    def test_team_dimension_null_snapshot_label_falls_back_to_uuid(self) -> None:
+        team_a = uuid.UUID("88888888-8888-4888-8888-888888888888")
+        team_b = uuid.UUID("99999999-9999-4999-8999-999999999999")
+        rows = [
+            _row(date(2026, 8, 5), key_label="Team A", team_id=team_a),
+            _row(date(2026, 8, 5), key_label=None, team_id=team_b),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.TEAM,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert {b["key"] for b in out} == {"Team A", str(team_b)}
+        assert sum(b["count"] for b in out) == 2
+
+    def test_dimensioned_empty_range_zero_fills(self) -> None:
+        # A dimensioned query over an empty range must still return a zero-filled
+        # series (aligned with the non-dimensioned shape), never [].
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.FOLDER,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 3),
+        )
+        assert [b["date"] for b in out] == ["2026-08-01", "2026-08-02", "2026-08-03"]
+        assert all(b["count"] == 0 for b in out)
+        assert all(b["key"] is None for b in out)

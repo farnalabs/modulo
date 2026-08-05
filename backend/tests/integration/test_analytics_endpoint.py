@@ -375,3 +375,30 @@ class TestStatementTimeout:
         )
         assert resp.status_code == 503, f"Expected 503 on statement timeout, got {resp.status_code}: {resp.text}"
         assert "timeout" in resp.json()["detail"].lower()
+
+
+class TestProgrammingError:
+    async def test_missing_table_maps_to_501(
+        self,
+        integration_client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        import modulo.api.routes.analytics as analytics_route
+
+        # A missing table (migrations not applied) raises ProgrammingError. It
+        # must map to 501 "run migrations" — NOT be swallowed by the broader
+        # DBAPIError branch (which would return 503).
+        monkeypatch.setattr(
+            analytics_route,
+            "build_facts_query",
+            lambda _query: (text("SELECT * FROM analytics_no_such_table"), {}),
+        )
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 501, f"Expected 501 on missing table, got {resp.status_code}: {resp.text}"
+        assert "migration" in resp.json()["detail"].lower()

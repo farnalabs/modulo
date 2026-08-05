@@ -192,7 +192,13 @@ def bucket_rows(
         dkey: Any = None
         if dimension is not None:
             label = getattr(row, "key_label", None)
-            dkey = label if label is not None else getattr(row, _DIMENSION_KEY_ATTR[dimension], None)
+            raw = label if label is not None else getattr(row, _DIMENSION_KEY_ATTR[dimension], None)
+            # Normalize to a comparable string: dimension keys may be UUID ids
+            # (folder_id/pipeline_id/team_id fallback when the snapshot label is
+            # NULL) or label strings. Never emit a raw UUID — mixing UUID and
+            # None in the bucket key crashes `sorted` and breaks the
+            # ``str | None`` response model (AnalyticsBucket.key).
+            dkey = str(raw) if raw is not None else None
         bkey: tuple[Any, Any | None] = (tkey, dkey)
         bucket = agg.get(bkey)
         if bucket is None:
@@ -226,7 +232,11 @@ def bucket_rows(
 
     dim_keys: list[Any] = [None]
     if dimension is not None:
-        dim_keys = sorted({bk[1] for bk in agg})
+        # All keys are already normalized to ``str | None``, so the sort is
+        # None-safe. An empty range (no observed dimension keys) falls back to
+        # ``[None]`` so a dimensioned query still zero-fills the requested grid
+        # — same shape as the non-dimensioned case.
+        dim_keys = sorted({bk[1] for bk in agg}, key=lambda k: (k is None, k or "")) or [None]
 
     out: list[dict[str, Any]] = []
     for tkey in grid_times:

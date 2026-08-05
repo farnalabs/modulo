@@ -46,9 +46,14 @@ router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 # ``analytics_query_statement_timeout_ms`` when configured.
 _DEFAULT_STATEMENT_TIMEOUT_MS = 5000
 
-# Per-org app-level limiter (simple in-memory): 60 requests/minute.
+# Per-org app-level limiter (simple in-memory): 60 requests/minute. Best-effort
+# and bounded: idle orgs are pruned and the number of tracked orgs is capped, so
+# the dict cannot grow without limit across many orgs. It remains process-local
+# and is therefore ineffective across multiple worker processes — a shared
+# limiter (e.g. Redis) is the production-grade replacement for this fallback.
 _RATE_LIMIT_WINDOW_SECONDS = 60
 _RATE_LIMIT_MAX_PER_ORG = 60
+_RATE_LIMIT_MAX_ORGS = 1000
 _rate_hits: dict[str, list[float]] = {}
 
 
@@ -72,12 +77,28 @@ class AnalyticsResponse(BaseModel):
 
 def _rate_limited(org_id: str) -> bool:
     now = time.monotonic()
+    _prune_rate_hits(now)
     hits = _rate_hits.setdefault(org_id, [])
     hits[:] = [t for t in hits if now - t < _RATE_LIMIT_WINDOW_SECONDS]
     if len(hits) >= _RATE_LIMIT_MAX_PER_ORG:
         return True
     hits.append(now)
     return False
+
+
+def _prune_rate_hits(now: float) -> None:
+    """Drop idle orgs and cap the number of tracked orgs (best-effort bound).
+
+    An org with no request inside the rate window is forgotten entirely; if that
+    is still not enough, the least-recently-active orgs are evicted until the
+    cap is met.
+    """
+    cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+    for oid in [oid for oid, hits in _rate_hits.items() if not hits or hits[-1] <= cutoff]:
+        del _rate_hits[oid]
+    while len(_rate_hits) > _RATE_LIMIT_MAX_ORGS:
+        oldest = min(_rate_hits, key=lambda oid: _rate_hits[oid][-1] if _rate_hits[oid] else 0.0)
+        del _rate_hits[oldest]
 
 
 def _is_query_canceled(exc: DBAPIError) -> bool:
@@ -178,6 +199,16 @@ async def analytics_query(
                 rows = result.all()
         except asyncio.CancelledError:
             raise
+        except ProgrammingError:
+            # ProgrammingError must be caught BEFORE DBAPIError: it is a
+            # DatabaseError subclass, so the broader branch would swallow it and
+            # return 503. A missing table/column means migrations haven't run —
+            # a 501 is the actionable signal.
+            _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
+            raise HTTPException(
+                status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+                detail="Feature is not available. Run database migrations to enable it.",
+            ) from None
         except DBAPIError as exc:
             if _is_query_canceled(exc):
                 _log.warning(
@@ -192,12 +223,6 @@ async def analytics_query(
             raise HTTPException(
                 status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database temporarily unavailable.",
-            ) from None
-        except ProgrammingError:
-            _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
-            raise HTTPException(
-                status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Feature is not available. Run database migrations to enable it.",
             ) from None
         except SQLAlchemyError:
             _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
