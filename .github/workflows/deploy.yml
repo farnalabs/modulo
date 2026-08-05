@@ -251,6 +251,21 @@ jobs:
           }
           Write-Host "staging.modulo.run SHA match: $deployedSha"
 
+      - name: Ensure worker machine exists (staging)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          WORKER_COUNT=$(fly machine list --app staging-modulo --json 2>/dev/null | python3 -c "import sys,json; machines=json.load(sys.stdin); print(sum(1 for m in machines if m.get('process_group') == 'worker'))")
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            echo "No worker machines found -- creating one"
+            fly machine run . --app staging-modulo --process-group worker --region lhr
+          else
+            echo "Worker machine(s) already exist: $WORKER_COUNT"
+          fi
+
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [deploy-staging]
@@ -381,6 +396,21 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
+
+      - name: Ensure worker machine exists (production)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          WORKER_COUNT=$(fly machine list --app app-modulo --json 2>/dev/null | python3 -c "import sys,json; machines=json.load(sys.stdin); print(sum(1 for m in machines if m.get('process_group') == 'worker'))")
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            echo "No worker machines found -- creating one"
+            fly machine run . --app app-modulo --process-group worker --region lhr
+          else
+            echo "Worker machine(s) already exist: $WORKER_COUNT"
+          fi
   prod-smoke:
     name: Prod smoke tests
     needs: [deploy-production]

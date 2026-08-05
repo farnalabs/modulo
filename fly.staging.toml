@@ -7,9 +7,13 @@ primary_region = 'lhr'
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
-# Restart policy — crash-loop guard + max-restart in the entrypoint is the
-# control (plan F8); no auto-restart here.
+[processes]
+  app = ""
+  worker = ""
+
+# Web process group — nginx + uvicorn, handles HTTP traffic
 [[restart]]
+  processes = ['app']
   policy = "never"
 
 [http_service]
@@ -45,7 +49,19 @@ primary_region = 'lhr'
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
   CORS_ORIGINS = "https://modulo.run,https://staging.modulo.run"
 
+# Worker process group — SAQ workers only, auto-restart on failure
+[[restart]]
+  processes = ['worker']
+  policy = "on-failure"
+
 [[vm]]
+  processes = ['app']
   memory = '2gb'
   cpu_kind = 'shared'
   cpus = 2
+
+[[vm]]
+  processes = ['worker']
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
