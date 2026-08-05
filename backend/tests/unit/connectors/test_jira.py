@@ -301,6 +301,115 @@ async def test_query_projects(connector):
 
 
 @respx.mock
+async def test_query_field_metadata(connector):
+    createmeta = {
+        "expand": "projects",
+        "projects": [
+            {
+                "key": "PROJ",
+                "name": "Project Alpha",
+                "issuetypes": [
+                    {
+                        "id": "10001",
+                        "name": "Task",
+                        "subtask": False,
+                        "fields": {
+                            "summary": {"required": True, "name": "Summary", "key": "summary"},
+                            "customfield_10001": {"required": False, "name": "Epic Link", "custom": True},
+                        },
+                    },
+                    {"id": "10002", "name": "Bug", "subtask": False, "fields": {}},
+                ],
+            }
+        ],
+    }
+    respx.get(f"{_BASE}/issue/createmeta").mock(return_value=httpx.Response(200, json=createmeta))
+    result = await connector.query(ConnectorQuery(resource="field_metadata", filters={"project": "PROJ"}))
+    assert result.total == 2
+    assert result.records[0]["name"] == "Task"
+    assert "customfield_10001" in result.records[0]["fields"]
+    assert result.metadata["project"] == "PROJ"
+    request = respx.calls.last.request
+    assert request.url.params["projectKeys"] == "PROJ"
+    assert request.url.params["expand"] == "projects.issuetypes.fields"
+
+
+@respx.mock
+async def test_query_field_metadata_unknown_project(connector):
+    respx.get(f"{_BASE}/issue/createmeta").mock(
+        return_value=httpx.Response(
+            200,
+            json={"expand": "projects", "projects": []},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="field_metadata", filters={"project": "NOPE"}))
+    assert result.records == []
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_field_metadata_missing_project(connector):
+    with pytest.raises(ValueError, match="requires 'project' filter"):
+        await connector.query(ConnectorQuery(resource="field_metadata", filters={}))
+
+
+@respx.mock
+async def test_query_fields(connector):
+    fields_data = [
+        {"id": "summary", "name": "Summary", "custom": False, "schema": {"type": "string"}},
+        {"id": "customfield_10001", "name": "Epic Link", "custom": True},
+    ]
+    respx.get(f"{_BASE}/field").mock(return_value=httpx.Response(200, json=fields_data))
+    result = await connector.query(ConnectorQuery(resource="fields"))
+    assert result.total == 2
+    assert result.records[0]["id"] == "summary"
+    assert result.records[1]["custom"] is True
+
+
+@respx.mock
+async def test_query_fields_rate_limit_metadata(connector):
+    headers = {"X-RateLimit-Remaining": "7500", "X-RateLimit-Limit": "10000"}
+    respx.get(f"{_BASE}/field").mock(
+        return_value=httpx.Response(200, json=[{"id": "summary", "name": "Summary"}], headers=headers)
+    )
+    result = await connector.query(ConnectorQuery(resource="fields"))
+    assert result.metadata["rate_limit"] == headers
+
+
+@respx.mock
+async def test_query_statuses(connector):
+    statuses_data = [
+        {
+            "id": "10001",
+            "name": "Task",
+            "subtask": False,
+            "statuses": [
+                {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+                {"id": "3", "name": "Done", "statusCategory": {"key": "done"}},
+            ],
+        }
+    ]
+    respx.get(f"{_BASE}/project/PROJ/statuses").mock(return_value=httpx.Response(200, json=statuses_data))
+    result = await connector.query(ConnectorQuery(resource="statuses", filters={"project": "PROJ"}))
+    assert result.total == 1
+    assert [s["name"] for s in result.records[0]["statuses"]] == ["To Do", "Done"]
+    assert result.metadata["project"] == "PROJ"
+
+
+@respx.mock
+async def test_query_statuses_missing_project(connector):
+    with pytest.raises(ValueError, match="requires 'project' filter"):
+        await connector.query(ConnectorQuery(resource="statuses", filters={}))
+
+
+@respx.mock
+async def test_query_statuses_http_error(connector):
+    respx.get(f"{_BASE}/project/NOPE/statuses").mock(return_value=httpx.Response(404))
+    with pytest.raises(ValueError, match="Jira API HTTP 404"):
+        await connector.query(ConnectorQuery(resource="statuses", filters={"project": "NOPE"}))
+
+
+@respx.mock
 async def test_search_pagination_cursor(connector):
     search_body = {
         "issues": [{"id": "1", "key": "PROJ-1", "fields": {"summary": "Task 1"}}],
