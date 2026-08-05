@@ -10,6 +10,9 @@ Trigger ``config_json`` structure::
         "source_node_id": "<node_id>",    # node within source pipeline to watch
         "snapshot_id": "<uuid>",          # snapshot for child run
     }
+
+If ``snapshot_id`` is omitted, the child run uses the target pipeline's latest
+snapshot, matching cron-trigger snapshot resolution.
 """
 
 import asyncio
