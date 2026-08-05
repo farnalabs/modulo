@@ -113,145 +113,116 @@ class TestTokenBudgetSteps:
 
 
 class TestCheckAndRecordSpendSteps:
-    """Tests for the step definitions that exercise check_and_record_spend."""
+    """Tests for the step definitions that exercise check_and_record_spend.
+
+    The refusal decision uses the CREATED-AT day SUM (excluding the current
+    run) + the explicit cost add; the ledger row is keyed by the run-start day.
+    """
+
+    def _limit(self, value: object) -> MagicMock:
+        r = MagicMock()
+        r.scalar_one_or_none.return_value = value
+        return r
+
+    def _sum(self, value: object) -> MagicMock:
+        r = MagicMock()
+        r.scalar_one.return_value = value
+        r.scalar_one_or_none.return_value = value
+        return r
+
+    def _run(
+        self, approved: bool, reason: str | None, cost: str, team: bool, sums: list[object]
+    ) -> tuple[bool, str | None]:
+        mock_org_count = MagicMock()
+        mock_org_count.total_spend_usd = Decimal("50.00")
+        mock_org_count.run_count = 5
+        mock_org_count.clamped = False
+        mock_org_count.refused_spend_usd = Decimal(0)
+        mock_team_count = MagicMock()
+        mock_team_count.total_spend_usd = Decimal("20.00")
+        mock_team_count.run_count = 4
+        mock_team_count.clamped = False
+        mock_team_count.refused_spend_usd = Decimal(0)
+        mock_session = _make_mock_session()
+        with (
+            patch(
+                "modulo.core.cost_controller.get_or_create_daily_count",
+                side_effect=[mock_org_count, mock_team_count] if team else [mock_org_count],
+            ),
+            patch.object(mock_session, "execute", side_effect=sums),
+        ):
+            import asyncio
+
+            from modulo.core.cost_controller import check_and_record_spend
+
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(
+                    check_and_record_spend(
+                        mock_session,
+                        org_id=_ORG_ID,
+                        cost_usd=Decimal(cost),
+                        team_id=_TEAM_ID if team else None,
+                    )
+                )
+            finally:
+                loop.close()
 
     def test_spend_under_org_limit_approved(self) -> None:
         """Happy path: spend under org limit is approved."""
-        mock_org_count = MagicMock()
-        mock_org_count.total_spend_usd = Decimal("50.00")
-        mock_org_count.run_count = 5
-
-        mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("100.00")
-
-        with (
-            patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
-                return_value=mock_org_count,
-            ),
-            patch.object(mock_session, "execute", return_value=org_limit_result),
-        ):
-            import asyncio
-
-            from modulo.core.cost_controller import check_and_record_spend
-
-            loop = asyncio.new_event_loop()
-            try:
-                approved, reason = loop.run_until_complete(
-                    check_and_record_spend(
-                        mock_session,
-                        org_id=_ORG_ID,
-                        cost_usd=Decimal("30.00"),
-                        team_id=None,
-                    )
-                )
-                assert approved is True
-                assert reason is None
-            finally:
-                loop.close()
+        # org limit 100, created-at SUM (other runs) 50, +30 = 80 <= 100.
+        approved, reason = self._run(
+            True, None, "30.00", team=False, sums=[self._limit(Decimal("100.00")), self._sum(Decimal("50.00"))]
+        )
+        assert approved is True
+        assert reason is None
 
     def test_spend_over_org_limit_rejected(self) -> None:
-        """Spend exceeding org daily limit is rejected."""
-        mock_org_count = MagicMock()
-        mock_org_count.total_spend_usd = Decimal("95.00")
-        mock_org_count.run_count = 5
-
-        mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("100.00")
-
-        with (
-            patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
-                return_value=mock_org_count,
-            ),
-            patch.object(mock_session, "execute", return_value=org_limit_result),
-        ):
-            import asyncio
-
-            from modulo.core.cost_controller import check_and_record_spend
-
-            loop = asyncio.new_event_loop()
-            try:
-                approved, reason = loop.run_until_complete(
-                    check_and_record_spend(
-                        mock_session,
-                        org_id=_ORG_ID,
-                        cost_usd=Decimal("10.00"),
-                        team_id=None,
-                    )
-                )
-                assert approved is False
-                assert reason == "Daily spend limit exceeded for organisation"
-            finally:
-                loop.close()
+        """Spend exceeding org daily limit is refused."""
+        # org limit 100, created-at SUM 95, +10 = 105 > 100.
+        approved, reason = self._run(
+            False,
+            "daily_limit_exceeded",
+            "10.00",
+            team=False,
+            sums=[self._limit(Decimal("100.00")), self._sum(Decimal("95.00"))],
+        )
+        assert approved is False
+        assert reason == "daily_limit_exceeded"
 
     def test_spend_over_team_limit_rejected(self) -> None:
-        """Spend exceeding team daily limit is rejected."""
-        mock_org_count = MagicMock()
-        mock_org_count.total_spend_usd = Decimal("50.00")
-        mock_org_count.run_count = 5
-
-        mock_team_count = MagicMock()
-        mock_team_count.total_spend_usd = Decimal("45.00")
-        mock_team_count.run_count = 3
-
-        mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("500.00")
-        team_limit_result = MagicMock()
-        team_limit_result.scalar_one_or_none.return_value = Decimal("50.00")
-
-        with (
-            patch(
-                "modulo.core.cost_controller.get_or_create_daily_count",
-                side_effect=[mock_org_count, mock_team_count],
-            ),
-            patch.object(
-                mock_session,
-                "execute",
-                side_effect=[org_limit_result, team_limit_result],
-            ),
-        ):
-            import asyncio
-
-            from modulo.core.cost_controller import check_and_record_spend
-
-            loop = asyncio.new_event_loop()
-            try:
-                approved, reason = loop.run_until_complete(
-                    check_and_record_spend(
-                        mock_session,
-                        org_id=_ORG_ID,
-                        cost_usd=Decimal("10.00"),
-                        team_id=_TEAM_ID,
-                    )
-                )
-                assert approved is False
-                assert reason == "Daily spend limit exceeded for team"
-            finally:
-                loop.close()
+        """Spend exceeding team daily limit is refused (org passes, team fails)."""
+        # org limit 500, org SUM 50; team limit 50, team SUM 45, +10 = 55 > 50.
+        approved, reason = self._run(
+            False,
+            "daily_limit_exceeded",
+            "10.00",
+            team=True,
+            sums=[
+                self._limit(Decimal("500.00")),
+                self._sum(Decimal("50.00")),
+                self._limit(Decimal("50.00")),
+                self._sum(Decimal("45.00")),
+            ],
+        )
+        assert approved is False
+        assert reason == "daily_limit_exceeded"
 
     def test_spend_under_both_limits_approved(self) -> None:
         """Spend under both org and team limits is approved with increments."""
         mock_org_count = MagicMock()
         mock_org_count.total_spend_usd = Decimal("100.00")
         mock_org_count.run_count = 10
+        mock_org_count.clamped = False
+        mock_org_count.refused_spend_usd = Decimal(0)
 
         mock_team_count = MagicMock()
         mock_team_count.total_spend_usd = Decimal("20.00")
         mock_team_count.run_count = 4
+        mock_team_count.clamped = False
+        mock_team_count.refused_spend_usd = Decimal(0)
 
         mock_session = _make_mock_session()
-
-        org_limit_result = MagicMock()
-        org_limit_result.scalar_one_or_none.return_value = Decimal("500.00")
-        team_limit_result = MagicMock()
-        team_limit_result.scalar_one_or_none.return_value = Decimal("100.00")
 
         with (
             patch(
@@ -261,7 +232,12 @@ class TestCheckAndRecordSpendSteps:
             patch.object(
                 mock_session,
                 "execute",
-                side_effect=[org_limit_result, team_limit_result],
+                side_effect=[
+                    self._limit(Decimal("500.00")),
+                    self._sum(Decimal("100.00")),
+                    self._limit(Decimal("100.00")),
+                    self._sum(Decimal("20.00")),
+                ],
             ),
         ):
             import asyncio

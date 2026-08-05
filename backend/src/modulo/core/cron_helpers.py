@@ -341,9 +341,10 @@ async def fire_cron_trigger(
         if spend_limit is not None:
             from sqlalchemy import func
 
+            from modulo.core.cost_controller import created_at_day_start
             from modulo.db.models.run import Run
 
-            today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = created_at_day_start()
             cost_result = await session.execute(
                 select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
                     Run.trigger_id == trigger_id,

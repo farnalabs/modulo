@@ -316,10 +316,12 @@ class TestCancelRun(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.db.crud.run.get_run")
     @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server.finalize_cancelled_run")
     @patch("modulo.api.mcp_server._session")
     async def test_run_not_found_when_request_cancellation_returns_none(
         self,
         mock_session: AsyncMock,
+        mock_finalize_cancelled: AsyncMock,
         mock_request_cancellation: AsyncMock,
         mock_get_run: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -338,10 +340,12 @@ class TestCancelRun(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.db.crud.run.get_run")
     @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server.finalize_cancelled_run")
     @patch("modulo.api.mcp_server._session")
     async def test_success_requests_cancellation(
         self,
         mock_session: AsyncMock,
+        mock_finalize_cancelled: AsyncMock,
         mock_request_cancellation: AsyncMock,
         mock_get_run: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -356,6 +360,8 @@ class TestCancelRun(_AuthContext):
 
         assert result == {"run_id": str(run.id), "cancellation_requested": True}
         mock_request_cancellation.assert_awaited_once()
+        # A STREAMED (non-paused) run is routed through finalize_cost.
+        mock_finalize_cancelled.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.db.crud.run.get_run")

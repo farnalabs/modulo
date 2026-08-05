@@ -323,6 +323,20 @@ async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
     return await stale_run_recovery_sweep(_get_async_engine())
 
 
+async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — the cost-tracking probe (spec §4.7, every 5 min, retries=0).
+
+    The verification canary for the ledger/report system: samples the N=50 most
+    recent terminal runs per org, checks ``total == sum``, asserts the org-row
+    WATCH, and evaluates the canonical rollback trigger (the probe rule + the
+    duplicate-terminal flood with its cooldown). The heartbeat gauge turns a
+    silently dead probe into a stale alert.
+    """
+    from modulo.core.cost_controller.probe import run_probe
+
+    return await run_probe(_make_session_factory())
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -403,6 +417,7 @@ def _system_functions() -> list[Any]:
         retention_cleanup,
         webhook_dedup_cleanup,
         stale_run_recovery,
+        cost_probe,
     ]
 
 
@@ -472,6 +487,18 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             retries=2,
             ttl=300,
         ),
+        # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
+        # separately by the heartbeat/staleness alert), unique=True so a second
+        # overlapping instance cannot double-advance probe_state (§4.7).
+        CronJob(
+            cost_probe,
+            cron="0 */5 * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=0,
+            ttl=300,
+        ),
     ]
 
 
@@ -529,6 +556,21 @@ def run_system_web() -> None:
 
     worker = Worker(**system_settings())
     loop = asyncio.new_event_loop()
+
+    async def _set_duplicate_terminal_cooldown() -> None:
+        """Set the flood cooldown on worker start so the probe (same process)
+        does not auto-trigger a rollback on PR A's OWN rollout restart burst."""
+        from modulo.core.cost_controller.probe import set_duplicate_terminal_cooldown
+
+        try:
+            await set_duplicate_terminal_cooldown(_make_session_factory())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("saq_worker.cooldown_set_failed")
+
+    _cooldown_task = loop.create_task(_set_duplicate_terminal_cooldown())
+    _cooldown_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     async def _worker_start() -> None:
         try:
