@@ -350,7 +350,7 @@ class _TracedConnector(ConnectorBase):
 
     async def health_check(self) -> HealthResult:
         return cast(
-            HealthResult,
+            "HealthResult",
             await self._run_with_tracing(
                 f"connector.{self._inner.connector_type}.health_check",
                 "health_check",
@@ -362,7 +362,7 @@ class _TracedConnector(ConnectorBase):
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         return cast(
-            ConnectorResult,
+            "ConnectorResult",
             await self._run_with_tracing(
                 f"connector.{self._inner.connector_type}.query",
                 "query",
@@ -382,7 +382,7 @@ class _TracedConnector(ConnectorBase):
 
         filter_payload_for_injection(payload)
         return cast(
-            dict[str, Any],
+            "dict[str, Any]",
             await self._run_with_tracing(
                 f"connector.{self._inner.connector_type}.write",
                 "write",

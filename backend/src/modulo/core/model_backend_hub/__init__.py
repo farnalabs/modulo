@@ -360,7 +360,7 @@ _OPENAI_COMPATIBLE_BACKENDS: dict[str, str | None] = {
 def _backend_class(provider: str, class_name: str) -> Callable[..., ModelBackendBase]:
     """Import a provider adapter only when that provider is configured."""
     module = importlib.import_module(f"modulo.model_backends.{provider}")
-    return cast(Callable[..., ModelBackendBase], getattr(module, class_name))
+    return cast("Callable[..., ModelBackendBase]", getattr(module, class_name))
 
 
 _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(

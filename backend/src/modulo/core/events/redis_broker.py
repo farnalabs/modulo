@@ -59,7 +59,7 @@ class RedisEventBroker:
 
     def _make_client(self) -> aioredis.Redis:
         return cast(
-            aioredis.Redis,
+            "aioredis.Redis",
             aioredis.from_url(  # type: ignore[no-untyped-call]  # redis-py omits this annotation
                 self._redis_url,
                 decode_responses=True,

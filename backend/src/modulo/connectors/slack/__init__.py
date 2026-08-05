@@ -133,7 +133,7 @@ class SlackConnector(ConnectorBase):
         body = await self._parse_json(r)
         if not body.get("ok"):
             raise SlackAuthError(f"Token validation failed: {body.get('error', 'unknown')}")
-        return cast(dict[str, Any], body)
+        return cast("dict[str, Any]", body)
 
     async def _is_bot_in_channel(self) -> bool:
         r = await self._call_api(
