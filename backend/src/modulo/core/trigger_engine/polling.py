@@ -1,8 +1,8 @@
-"""Polling trigger -- connector-driven condition evaluation and run creation.
+"""Polling triggers — periodically polls external sources and fires on schedule.
 
-Fire logic lives in ``fire_polling_trigger()`` -- enqueued as a per-item SAQ
-fire job by ``fire_due_triggers`` (system cron). The legacy beat path (Celery
-removed in PR C) was removed in PR C of the Celery->SAQ migration.
+Each polling trigger queries its configured external source on an interval and
+creates a run when its condition matches. Fire logic lives in
+``fire_polling_trigger()``, enqueued as a per-item SAQ fire job.
 """
 
 import asyncio
