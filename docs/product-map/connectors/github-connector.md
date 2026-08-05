@@ -74,10 +74,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Include `sha` for updates (required by GitHub Contents API for existing files)
 - [x] Return created/updated resource dict from API
 - [x] `raise_for_status()` on HTTP errors
-- [ ] File content is expected as raw string — no base64 encode/decode in connector; caller must handle encoding
-- [ ] Recursive file listing — not implemented (`/contents` only returns one level)
+- [x] **Base64 content helpers** — `write("file")` accepts `content_encoding: "text"` to base64-encode plain text automatically (`_encode_content()`); `query("file")` adds a `decoded_content` field next to the raw base64 `content` for `encoding: "base64"` responses (`_b64decode()`); invalid base64 raises `ValueError`
+- [x] **Recursive tree listing** — `query("tree")` lists repository tree entries via the Git Data API (`GET /repos/{owner}/{repo}/git/trees/{ref}`) with optional `recursive` (default on), `ref` (default `"main"`), and `path` prefix filters; returns `metadata["truncated"]` when the tree exceeds GitHub's limit
 - [ ] Batch file operations — not implemented
-- [ ] Path traversal protection — relies on GitHub API server-side; no local validation
+- [x] **Path traversal protection** — `_validate_path()` rejects absolute paths and `..` segments on `query("file")`, `query("tree")` `path`, and `write("file")` before any request is sent
 
 ### Issue Operations — create, read, update, and comment
 
@@ -176,6 +176,14 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 
 ## Known Gaps
 
+### Resolved (2026-08-05)
+
+- [x] ~~**File content encoding**: caller must base64-encode file content; no encode/decode helper in connector~~ — `write("file")` accepts `content_encoding: "text"` to auto-encode plain text (`_encode_content()`), `query("file")` exposes `decoded_content` (`_b64decode()`), invalid base64 → `ValueError`. Unit tests in `test_github.py` (encode/passthrough/invalid-encoding, decode/skip/non-base64) + 2 BDD scenarios.
+- [x] ~~**Recursive file listing**: `GET /contents` only returns one level; no tree API integration~~ — `query("tree")` uses `GET /repos/{owner}/{repo}/git/trees/{ref}` with optional `recursive`/`ref`/`path` filters and `metadata["truncated"]`. Unit tests in `test_github.py` (entries/recursive-default/disabled/ref/path-filter/truncated/traversal/missing-repo) + 2 BDD scenarios.
+- [x] ~~**Path traversal protection**: relies on GitHub API server-side; no local validation before sending request~~ — `_validate_path()` rejects absolute paths and `..` segments on `query("file")`, `query("tree")`, and `write("file")` before any HTTP request is sent. Unit tests (6 parametrized query rejections + write rejection with zero HTTP calls) + 2 BDD scenarios.
+
+### Remaining Gaps
+
 - [ ] **No OAuth flow**: PAT-only auth; no OAuth 2.0 authorization code flow for user-context operations
 - [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
 - [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
@@ -183,16 +191,23 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
-- [ ] **File content encoding**: caller must base64-encode file content; no encode/decode helper in connector
-- [ ] **Recursive file listing**: `GET /contents` only returns one level; no tree API integration
-- [ ] **Path traversal protection**: relies on GitHub API server-side; no local validation before sending request
 - [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
 - [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
-- [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
+- [ ] **BDD coverage**: 16 scenarios cover basic CRUD + PR ops + error paths + tree/path/encoding; no BDD for retry/backoff, pagination, or configurable base URL
 - [ ] **`test_github_issues.py` (550 lines)** and **`test_github_scopes.py` (89 lines)** now in `unit-tests:` frontmatter — were previously missing
 - [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
+- [ ] **Batch file operations**: no git-trees/blobs batch commit API integration
 
 ## QA History
+
+### 2026-08-05 — improve-architecture: 3 known gaps RESOLVED (path traversal, tree listing, base64 helpers)
+
+**RESOLVED known gaps** "File content encoding", "Recursive file listing", and "Path traversal protection" in `connectors/github/__init__.py`:
+- (1) Path traversal protection — new `_validate_path()` helper rejects absolute paths and `..` segments on `query("file")`, `query("tree")` `path`, and `write("file")` before any HTTP request is sent (mirrors the GitLab connector guard).
+- (2) Recursive file listing — new `query("tree")` (`GET /repos/{owner}/{repo}/git/trees/{ref}`) with optional `recursive` (default on), `ref` (default `"main"`), and `path` prefix filters; returns `metadata["truncated"]` when the tree exceeds GitHub's response limit.
+- (3) File content encoding — new `_b64encode()`/`_b64decode()` helpers + `_encode_content()`; `write("file")` accepts `content_encoding: "text"` to auto-encode plain text (default `"base64"` passthrough stays backward compatible), `query("file")` adds a `decoded_content` field for `encoding: "base64"` responses, invalid base64 → `ValueError`.
+
+Added 25 unit tests (`test_github.py`: path-traversal matrix ×6 + write-rejection-no-request + nested-relative-ok, decoded-content add/skip/invalid-base64, write text-encode/default-passthrough/explicit-base64/invalid-content_encoding, tree entries/recursive-default/recursive-disabled/ref/slash-ref-encoding/path-filter/truncated/traversal ×2/missing-repo). Added 6 BDD scenarios in `github_connector.feature` (recursive tree, tree path filter, path traversal on read, path traversal on write, text-content base64-encoded payload, decoded content on read) with 8 new step definitions in `test_connectors.py` (2 query tree steps, text-content write step, 4 assertion steps, `the result is an error with "{message}"`) and the mock connector extended to exercise the real `_validate_path`/`_b64decode`/`_encode_content` helpers. Updated product map (3 behaviours `[ ]`→`[x]` in File Operations, Known Gaps 16→13, BDD count 16→22, QA History). 86/86 `test_github.py` + 139/139 all-github unit tests + 22/22 github BDD scenarios pass (8 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (OAuth flow, fine-grained PAT, scope verification, rate-limit budget, machine-parseable error codes, circuit breaker, batch file ops remain).
 
 ### 2026-08-02 — improve-architecture: 6 known gaps RESOLVED (PR ops, search, assign)
 

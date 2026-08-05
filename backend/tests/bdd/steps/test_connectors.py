@@ -8,6 +8,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.connectors.base import HealthResult
+from modulo.connectors.github import _b64decode, _encode_content, _validate_path
 
 # ---------------------------------------------------------------------------
 # Connector Health feature (active — 3 scenarios)
@@ -368,15 +369,35 @@ def step_github_connector(ctx):
                     total=2,
                 )
             case "file":
+                _validate_path(q.filters["path"], q.resource)
                 return ConnectorResult(
                     records=[
                         {
                             "name": "README.md",
                             "content": "bXkgcmVhZG1l",
                             "encoding": "base64",
+                            "decoded_content": _b64decode("bXkgcmVhZG1l"),
                         }
                     ]
                 )
+            case "tree":
+                path = q.filters.get("path")
+                if path is not None:
+                    _validate_path(path, q.resource)
+                entries = [
+                    {"path": "src", "mode": "040000", "type": "tree", "sha": "bbb"},
+                    {"path": "src/main.py", "mode": "100644", "type": "blob", "sha": "ccc"},
+                    {"path": "src/util/helper.py", "mode": "100644", "type": "blob", "sha": "ddd"},
+                    {"path": "tests/test_main.py", "mode": "100644", "type": "blob", "sha": "eee"},
+                ]
+                if path:
+                    prefix = path.rstrip("/") + "/"
+                    entries = [
+                        entry
+                        for entry in entries
+                        if entry.get("path") == path or entry.get("path", "").startswith(prefix)
+                    ]
+                return ConnectorResult(records=entries, total=len(entries), metadata={"truncated": False})
             case "pulls":
                 return ConnectorResult(
                     records=[
@@ -399,6 +420,10 @@ def step_github_connector(ctx):
 
     async def mock_write(payload):
         if payload.resource == "file":
+            _validate_path(payload.data["path"], payload.resource)
+            ctx["last_file_payload"] = _encode_content(
+                payload.data["content"], payload.data.get("content_encoding")
+            )
             return {
                 "content": {"name": "new.md"},
                 "commit": {"sha": "abc123"},
@@ -623,6 +648,70 @@ def step_github_query_search(resource, search_query, ctx):
         ctx["query_error"] = str(exc)
 
 
+@when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and branch "{branch}"'))
+def step_github_query_tree_with_branch(resource, repo, branch, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(resource=resource, filters={"repo": repo, "ref": branch})
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(
+    parsers.parse(
+        'I query resource "{resource}" with filters repo "{repo}", branch "{branch}" and path "{path}"'
+    )
+)
+def step_github_query_tree_with_branch_and_path(resource, repo, branch, path, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(resource=resource, filters={"repo": repo, "ref": branch, "path": path})
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write resource "{resource}" with text content "{content}" and path "{path}"'))
+def step_github_write_file_text(resource, content, path, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    connector = ctx["connector"]
+    payload = ConnectorPayload(
+        resource=resource,
+        data={
+            "repo": "owner/repo",
+            "path": path,
+            "content": content,
+            "content_encoding": "text",
+            "message": "Update via Modulo",
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @then("the result has records")
 def step_result_has_records(ctx):
     result = ctx.get("query_result")
@@ -642,6 +731,39 @@ def step_record_contains_file_content(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     assert "content" in result.records[0], f"Record missing content: {result.records[0]}"
+
+
+@then(parsers.parse('the record decoded content is "{text}"'))
+def step_record_decoded_content(ctx, text):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    assert result.records[0].get("decoded_content") == text, f"Record: {result.records[0]}"
+
+
+@then("the records contain tree entries")
+def step_records_contain_tree_entries(ctx):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    for rec in result.records:
+        assert "path" in rec and "type" in rec, f"Record missing tree fields: {rec}"
+
+
+@then(parsers.parse('every tree record path is under "{prefix}"'))
+def step_tree_records_under_prefix(ctx, prefix):
+    result = ctx["query_result"]
+    assert len(result.records) > 0
+    prefix = prefix.rstrip("/") + "/"
+    for rec in result.records:
+        path = rec["path"]
+        assert path == prefix.rstrip("/") or path.startswith(prefix), f"Path {path!r} outside {prefix!r}"
+
+
+@then(parsers.parse('the file write payload is base64 of "{text}"'))
+def step_file_write_payload_is_base64(ctx, text):
+    encoded = ctx.get("last_file_payload")
+    assert encoded is not None, "No file payload recorded"
+    expected = __import__("base64").b64encode(text.encode("utf-8")).decode("ascii")
+    assert encoded == expected, f"Payload {encoded!r} != base64({expected!r})"
 
 
 @then("the record contains issue fields")
@@ -667,6 +789,13 @@ def step_write_fails(ctx):
 @then("the result is an error")
 def step_result_is_error(ctx):
     assert ctx.get("query_error") is not None, "Expected an error but query succeeded"
+
+
+@then(parsers.parse('the result is an error with "{message}"'))
+def step_result_is_error_with(message, ctx):
+    error = ctx.get("query_error")
+    assert error is not None, f"Expected error '{message}' but the call succeeded"
+    assert message in error, f"Expected '{message}' in error but got: {error}"
 
 
 @then("the result reports a next page cursor")

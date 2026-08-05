@@ -1,10 +1,13 @@
 """GitHubConnector — async GitHub API connector."""
 
 import asyncio
+import base64
+import binascii
 import json
 import random
 import re
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -51,6 +54,52 @@ def _parse_link_header(response: httpx.Response) -> dict[str, str]:
     return {rel: url for url, rel in _LINK_HEADER_RE.findall(link_value)}
 
 
+def _validate_path(path: str, resource: str) -> None:
+    """Reject path traversal attempts before they reach the GitHub API.
+
+    GitHub validates repository file paths server-side, but a local check
+    gives a fast, unambiguous error and prevents ``..`` segments (or
+    absolute paths) from ever being interpolated into the Contents/tree
+    endpoint URLs.
+    """
+    if not isinstance(path, str) or not path:
+        raise ValueError(f"GitHub resource {resource!r} requires a non-empty 'path'")
+    if path.startswith(("/", "\\")):
+        raise ValueError(f"GitHub resource {resource!r}: path must be relative: {path!r}")
+    normalized = path.replace("\\", "/")
+    if any(segment == ".." for segment in normalized.split("/")):
+        raise ValueError(f"GitHub resource {resource!r}: path traversal blocked: {path!r}")
+
+
+def _b64encode(content: str) -> str:
+    """Encode plain-text content to the base64 format GitHub's Contents API expects."""
+    return base64.b64encode(content.encode("utf-8")).decode("ascii")
+
+
+def _b64decode(content: str) -> str:
+    """Decode a base64 ``content`` field returned by GitHub's Contents API."""
+    try:
+        return base64.b64decode(content, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
+        raise ValueError(f"GitHub file content is not valid base64: {exc}") from exc
+
+
+def _encode_content(content: str, content_encoding: str | None) -> str:
+    """Encode ``content`` for the Contents API based on the ``content_encoding`` hint.
+
+    ``content_encoding="base64"`` (or omitted) passes the value through as-is —
+    GitHub's API contract. ``content_encoding="text"`` base64-encodes the plain
+    text for the caller. Any other value raises ``ValueError``.
+    """
+    if content_encoding == "text":
+        return _b64encode(content)
+    if content_encoding in (None, "", "base64"):
+        return content
+    raise ValueError(
+        f"GitHub file write 'content_encoding' must be 'text' or 'base64'; got {content_encoding!r}"
+    )
+
+
 class GitHubConnector(ConnectorBase):
     """Read/write GitHub via the REST API.
 
@@ -62,6 +111,10 @@ class GitHubConnector(ConnectorBase):
     Supported query resources:
       "repos"           — list repositories accessible to the token
       "file"            — read a file; filters: {"repo": "owner/repo", "path": "...", "ref": "main"}
+                          (returns a ``decoded_content`` field alongside the base64 ``content``)
+      "tree"            — list repository tree entries via the Git Data API;
+                          filters: {"repo": "owner/repo", "ref": "main"|SHA, "recursive": bool,
+                          "path": "optional/prefix"} (records carry the ``truncated`` flag in metadata)
       "pulls"           — list pull requests; filters: {"repo": ..., "state": "open", "sort": ..., "direction": ...}
       "pr_commits"      — list commits on a PR; filters: {"repo": ..., "pull_number": ...}
       "pr_files"        — list changed files on a PR; filters: {"repo": ..., "pull_number": ...}
@@ -78,8 +131,9 @@ class GitHubConnector(ConnectorBase):
                           (returns total_count and Link-header pagination)
 
     Supported write resources:
-      "file"            — create/update a file; data: {"repo": ..., "path": ..., "content": <base64>,
-                           "message": ..., "sha": <required for update>}
+      "file"            — create/update a file; data: {"repo": ..., "path": ..., "content": ...,
+                           "content_encoding": "base64"|"text" (default "base64"), "message": ...,
+                           "sha": <required for update>}
       "issue"           — create an issue; data: {"repo": ..., "title": ..., "body": ...,
                            "labels": [...], "assignees": [...], "milestone": ...}
       "issue_update"    — update an issue; data: {"repo": ..., "issue_number": ..., ...}
@@ -252,9 +306,44 @@ class GitHubConnector(ConnectorBase):
             case "file":
                 owner_repo = self._require_filter(q.filters, "repo", "file")
                 path = self._require_filter(q.filters, "path", "file")
+                _validate_path(path, q.resource)
                 ref = q.filters.get("ref", "main")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
-                return ConnectorResult(records=[await self._parse_json(r)])
+                record = await self._parse_json(r)
+                if (
+                    isinstance(record, dict)
+                    and record.get("encoding") == "base64"
+                    and isinstance(record.get("content"), str)
+                ):
+                    record["decoded_content"] = _b64decode(record["content"])
+                return ConnectorResult(records=[record])
+            case "tree":
+                owner_repo = self._require_filter(q.filters, "repo", "tree")
+                tree_ref = q.filters.get("ref", "main")
+                path_prefix = q.filters.get("path")
+                if path_prefix is not None:
+                    _validate_path(path_prefix, q.resource)
+                tree_params: dict[str, Any] = {}
+                if q.filters.get("recursive", True):
+                    tree_params["recursive"] = 1
+                r = await self._call_api(
+                    "GET",
+                    f"/repos/{owner_repo}/git/trees/{quote(tree_ref, safe='')}",
+                    params=tree_params,
+                )
+                body = await self._parse_json_object(r)
+                entries = cast(list[dict[str, Any]], body.get("tree", []))
+                if path_prefix:
+                    prefix = path_prefix.rstrip("/") + "/"
+                    entries = [
+                        entry
+                        for entry in entries
+                        if entry.get("path") == path_prefix or entry.get("path", "").startswith(prefix)
+                    ]
+                metadata: dict[str, Any] = {}
+                if "truncated" in body:
+                    metadata["truncated"] = bool(body["truncated"])
+                return ConnectorResult(records=entries, total=len(entries), metadata=metadata)
             case "pulls":
                 owner_repo = self._require_filter(q.filters, "repo", "pulls")
                 state = q.filters.get("state", "open")
@@ -406,9 +495,12 @@ class GitHubConnector(ConnectorBase):
             case "file":
                 owner_repo = self._require_write_filter(payload.data, "repo", "file")
                 path = self._require_write_filter(payload.data, "path", "file")
+                _validate_path(path, payload.resource)
+                content = self._require_write_filter(payload.data, "content", "file")
+                content_encoding = payload.data.get("content_encoding")
                 body: dict[str, Any] = {
                     "message": payload.data.get("message", "Update via Modulo"),
-                    "content": self._require_write_filter(payload.data, "content", "file"),
+                    "content": _encode_content(content, content_encoding),
                 }
                 if "sha" in payload.data:
                     body["sha"] = payload.data["sha"]

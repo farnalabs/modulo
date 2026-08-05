@@ -1,5 +1,6 @@
 """Unit tests for GitHubConnector — HTTP responses are mocked via httpx."""
 
+import base64
 import json
 
 import httpx
@@ -675,3 +676,273 @@ async def test_write_issue_assign(connector):
     assert result["assignees"][0]["login"] == "alice"
     sent = json.loads(route.calls.last.request.content)
     assert sent == {"assignees": ["alice"]}
+
+
+# ---------------------------------------------------------------------------
+# Path traversal protection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path,match_text",
+    [
+        ("../README.md", "path traversal blocked"),
+        ("docs/../../secret.txt", "path traversal blocked"),
+        ("/etc/passwd", "must be relative"),
+        ("..\\windows\\file.txt", "path traversal blocked"),
+        ("\\absolute.txt", "must be relative"),
+        ("", "requires a non-empty 'path'"),
+    ],
+)
+async def test_query_file_rejects_unsafe_paths(connector, path, match_text):
+    with pytest.raises(ValueError, match=match_text):
+        await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": path}))
+
+
+@respx.mock
+async def test_query_file_allows_nested_relative_path(connector):
+    file_data = {"name": "conf.py", "content": base64.b64encode(b"x = 1").decode(), "encoding": "base64"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/src/module/conf.py").mock(
+        return_value=httpx.Response(200, json=file_data)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "src/module/conf.py"})
+    )
+    assert result.records[0]["name"] == "conf.py"
+
+
+@respx.mock
+async def test_write_file_rejects_unsafe_paths(connector):
+    respx.put("https://api.github.com/repos/owner/repo/contents/evil.txt").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "x"}})
+    )
+    with pytest.raises(ValueError, match="path traversal blocked"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file",
+                data={"repo": "owner/repo", "path": "../evil.txt", "content": "SGVsbG8="},
+            )
+        )
+    assert respx.calls.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# File content base64 helpers
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_file_adds_decoded_content(connector):
+    payload = {"name": "hello.txt", "content": base64.b64encode(b"Hello, world!").decode(), "encoding": "base64"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/hello.txt").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "hello.txt"})
+    )
+    assert result.records[0]["decoded_content"] == "Hello, world!"
+    assert result.records[0]["content"] == base64.b64encode(b"Hello, world!").decode()
+
+
+@respx.mock
+async def test_query_file_skips_decoded_content_without_base64_encoding(connector):
+    payload = {"name": "raw.txt", "content": "not-base64", "encoding": "utf-8"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/raw.txt").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "raw.txt"})
+    )
+    assert "decoded_content" not in result.records[0]
+
+
+@respx.mock
+async def test_query_file_invalid_base64_raises(connector):
+    payload = {"name": "bad.txt", "content": "!!not!!base64!!", "encoding": "base64"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/bad.txt").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    with pytest.raises(ValueError, match="not valid base64"):
+        await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "bad.txt"}))
+
+
+@respx.mock
+async def test_write_file_auto_encodes_text_content(connector):
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/docs/hello.txt").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "abc"}})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "repo": "owner/repo",
+                "path": "docs/hello.txt",
+                "content": "Hello, world!",
+                "content_encoding": "text",
+            },
+        )
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["content"] == base64.b64encode(b"Hello, world!").decode()
+
+
+@respx.mock
+async def test_write_file_passthrough_base64_by_default(connector):
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/docs/hello.txt").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "abc"}})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={"repo": "owner/repo", "path": "docs/hello.txt", "content": "SGVsbG8="},
+        )
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["content"] == "SGVsbG8="
+
+
+@respx.mock
+async def test_write_file_explicit_base64_passthrough(connector):
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/docs/hello.txt").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "abc"}})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "repo": "owner/repo",
+                "path": "docs/hello.txt",
+                "content": "SGVsbG8=",
+                "content_encoding": "base64",
+            },
+        )
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["content"] == "SGVsbG8="
+
+
+async def test_write_file_invalid_content_encoding(connector):
+    with pytest.raises(ValueError, match="content_encoding"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file",
+                data={
+                    "repo": "owner/repo",
+                    "path": "docs/hello.txt",
+                    "content": "Hello",
+                    "content_encoding": "binary",
+                },
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Recursive tree listing (Git Data API)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_tree_returns_entries(connector):
+    body = {
+        "sha": "abcd1234",
+        "truncated": False,
+        "tree": [
+            {"path": "README.md", "mode": "100644", "type": "blob", "sha": "aaa", "size": 12},
+            {"path": "src", "mode": "040000", "type": "tree", "sha": "bbb"},
+        ],
+    }
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+    assert result.total == 2
+    assert result.records[0]["path"] == "README.md"
+    assert result.records[1]["type"] == "tree"
+    assert result.metadata["truncated"] is False
+
+
+@respx.mock
+async def test_query_tree_sends_recursive_param_by_default(connector):
+    route = respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json={"tree": []})
+    )
+    await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+    assert route.calls.last.request.url.params["recursive"] == "1"
+
+
+@respx.mock
+async def test_query_tree_omits_recursive_param_when_disabled(connector):
+    route = respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json={"tree": []})
+    )
+    await connector.query(
+        ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "recursive": False})
+    )
+    assert "recursive" not in route.calls.last.request.url.params
+
+
+@respx.mock
+async def test_query_tree_uses_ref_filter(connector):
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/feature-branch").mock(
+        return_value=httpx.Response(200, json={"tree": [{"path": "a.txt", "type": "blob"}]})
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "ref": "feature-branch"})
+    )
+    assert result.total == 1
+
+
+@respx.mock
+async def test_query_tree_encodes_slash_in_ref(connector):
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/feature%2Ffoo").mock(
+        return_value=httpx.Response(200, json={"tree": [{"path": "a.txt", "type": "blob"}]})
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "ref": "feature/foo"})
+    )
+    assert result.total == 1
+
+
+@respx.mock
+async def test_query_tree_path_filter_limits_entries(connector):
+    body = {
+        "tree": [
+            {"path": "src", "type": "tree"},
+            {"path": "src/main.py", "type": "blob"},
+            {"path": "src/util/helper.py", "type": "blob"},
+            {"path": "tests/test_main.py", "type": "blob"},
+        ]
+    }
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "path": "src"})
+    )
+    assert {r["path"] for r in result.records} == {"src", "src/main.py", "src/util/helper.py"}
+
+
+@respx.mock
+async def test_query_tree_truncated_flag(connector):
+    body = {"truncated": True, "tree": [{"path": "big.bin", "type": "blob"}]}
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+    assert result.metadata["truncated"] is True
+
+
+@pytest.mark.parametrize(
+    "path,match_text",
+    [("../..", "path traversal blocked"), ("/etc", "must be relative")],
+)
+async def test_query_tree_path_filter_rejects_unsafe_paths(connector, path, match_text):
+    with pytest.raises(ValueError, match=match_text):
+        await connector.query(
+            ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "path": path})
+        )
+
+
+async def test_query_tree_missing_repo_filter(connector):
+    with pytest.raises(ValueError, match="requires 'repo' filter"):
+        await connector.query(ConnectorQuery(resource="tree", filters={}))

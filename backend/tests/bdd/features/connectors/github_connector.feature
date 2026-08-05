@@ -84,3 +84,36 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When I query resource "search_issues" with search query "repo:owner/repo is:open"
     Then the result has records
+
+  Scenario: Query the repository tree recursively
+    Given a GitHub connector with valid token
+    When I query resource "tree" with filters repo "owner/repo" and branch "main"
+    Then the result has records
+    And the records contain tree entries
+
+  Scenario: Query the repository tree with a path filter
+    Given a GitHub connector with valid token
+    When I query resource "tree" with filters repo "owner/repo", branch "main" and path "src"
+    Then the result has records
+    And every tree record path is under "src"
+
+  Scenario: Path traversal on file read is blocked
+    Given a GitHub connector with valid token
+    When I query resource "file" with filters repo "owner/repo" and path "../README.md"
+    Then the result is an error with "path traversal blocked"
+
+  Scenario: Path traversal on file write is blocked
+    Given a GitHub connector with valid token
+    When I write resource "file" with content "SGVsbG8=" and path "../../etc/passwd"
+    Then the result is an error with "path traversal blocked"
+
+  Scenario: Writing plain-text file content base64-encodes it
+    Given a GitHub connector with valid token
+    When I write resource "file" with text content "Hello, world!" and path "docs/hello.txt"
+    Then the file write payload is base64 of "Hello, world!"
+
+  Scenario: Reading a file exposes decoded content
+    Given a GitHub connector with valid token
+    When I query resource "file" with filters repo "owner/repo" and path "README.md"
+    Then the record contains file content
+    And the record decoded content is "my readme"
