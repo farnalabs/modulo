@@ -368,6 +368,11 @@ def step_github_connector(ctx):
                     total=2,
                 )
             case "file":
+                file_path = q.filters.get("path", "")
+                if file_path.startswith(("/", "\\")) or any(
+                    part == ".." for part in file_path.replace("\\", "/").split("/")
+                ):
+                    raise ValueError(f"GitHub resource 'file': path traversal blocked: {file_path!r}")
                 return ConnectorResult(
                     records=[
                         {
@@ -376,6 +381,20 @@ def step_github_connector(ctx):
                             "encoding": "base64",
                         }
                     ]
+                )
+            case "tree":
+                tree_path = q.filters.get("path", "")
+                if tree_path.startswith(("/", "\\")) or any(
+                    part == ".." for part in tree_path.replace("\\", "/").split("/")
+                ):
+                    raise ValueError(f"GitHub resource 'tree': path traversal blocked: {tree_path!r}")
+                return ConnectorResult(
+                    records=[
+                        {"path": "README.md", "type": "blob", "sha": "aaa"},
+                        {"path": "src", "type": "tree", "sha": "bbb"},
+                        {"path": "src/main.py", "type": "blob", "sha": "ccc"},
+                    ],
+                    total=3,
                 )
             case "pulls":
                 return ConnectorResult(
@@ -399,6 +418,11 @@ def step_github_connector(ctx):
 
     async def mock_write(payload):
         if payload.resource == "file":
+            file_path = payload.data.get("path", "")
+            if file_path.startswith(("/", "\\")) or any(
+                part == ".." for part in file_path.replace("\\", "/").split("/")
+            ):
+                raise ValueError(f"GitHub resource 'file': path traversal blocked: {file_path!r}")
             return {
                 "content": {"name": "new.md"},
                 "commit": {"sha": "abc123"},
@@ -456,6 +480,48 @@ def step_github_query_file_with_filters(resource, repo, path, ctx):
     except Exception as exc:
         ctx["query_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query GitHub tree for repo "{repo}" with path "{path}" and recursive'))
+def step_github_query_tree_recursive(repo, path, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(
+        resource="tree",
+        filters={"repo": repo, "path": path, "recursive": True},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the tree result contains nested entries")
+def step_github_tree_nested(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No tree query result"
+    paths = {r["path"] for r in result.records}
+    assert "src/main.py" in paths, f"Expected nested entry src/main.py in {paths}"
+
+
+@then(parsers.parse('the result is an error containing "{text}"'))
+def step_github_result_error_contains(text, ctx):
+    error = ctx.get("query_error")
+    assert error is not None, "Expected an error but query succeeded"
+    assert text in error, f"Expected error containing {text!r}, got: {error}"
+
+
+@then(parsers.parse('the write is an error containing "{text}"'))
+def step_github_write_error_contains(text, ctx):
+    error = ctx.get("query_error")
+    assert error is not None, "Expected a write error but write succeeded"
+    assert text in error, f"Expected error containing {text!r}, got: {error}"
 
 
 @when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and state "{state}"'))
