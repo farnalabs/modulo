@@ -796,8 +796,8 @@ async def compare_evals(
             if rb
             else None
         )
-        score_a = result_a["score"] if result_a and result_a["score"] is not None else 0.0
-        score_b = result_b["score"] if result_b and result_b["score"] is not None else 0.0
+        score_a = ra.score if ra and ra.score is not None else 0.0
+        score_b = rb.score if rb and rb.score is not None else 0.0
         delta = round(score_a - score_b, 4)
         compared.append(
             {
