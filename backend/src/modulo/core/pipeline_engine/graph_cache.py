@@ -214,7 +214,10 @@ def _make_loop_router(
     compiled_expr = jmespath.compile(condition_expression) if condition_expression else None
 
     def _router(state: dict[str, Any]) -> str:
-        iteration_counts: dict[str, int] = state.get("_iteration_counts", {})
+        iteration_counts = state.get("_iteration_counts")
+        if not isinstance(iteration_counts, dict):
+            iteration_counts = {}
+            state["_iteration_counts"] = iteration_counts
         count: int = iteration_counts.get(loop_key, 0) + 1
         iteration_counts[loop_key] = count
 

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import uuid
 from decimal import Decimal
 
-from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown, clamp_reported
+from modulo.core.cost_controller.breakdown.aggregate import (
+    _basis_within_limit,
+    build_cost_breakdown,
+    clamp_reported,
+    clamp_to_ceiling,
+)
 from modulo.core.cost_controller.breakdown.constants import (
     COST_COLUMN_CAP,
     MAX_REPORTABLE_BAND_USD,
@@ -239,4 +243,154 @@ def test_component_id_in_breakdown_entries() -> None:
     tele = _tel(wall_clock_elapsed_s=Decimal(3600))
     breakdown, _total = build_cost_breakdown(tele, [comp])
     assert breakdown[0]["component"] == "sandbox_infra"
-    assert uuid.uuid4()  # uuid import guard
+    assert breakdown[0]["display_name"] == "Sandbox Infrastructure"
+
+
+# ---------------------------------------------------------------------------
+# clamp_to_ceiling
+# ---------------------------------------------------------------------------
+
+
+def test_clamp_to_ceiling_clamps_above_and_records_metric() -> None:
+    assert clamp_to_ceiling(Decimal("10.0"), Decimal("5.0"), "kind_x") == Decimal("5.0")
+    assert clamp_to_ceiling(Decimal("5.0"), Decimal("5.0"), "kind_x") == Decimal("5.0")
+    assert clamp_to_ceiling(Decimal("4.0"), Decimal("5.0"), "kind_x") == Decimal("4.0")
+
+
+# ---------------------------------------------------------------------------
+# clamp_reported — sub-floor + in-band (above-band already covered above)
+# ---------------------------------------------------------------------------
+
+
+def test_clamp_reported_below_floor_is_absent() -> None:
+    assert clamp_reported(Decimal("0.0000005")) is None
+
+
+def test_clamp_reported_in_band_unchanged() -> None:
+    result = clamp_reported(Decimal("30.0"))
+    assert result is not None
+    clamped, was_clamped, out_of_band = result
+    assert clamped == Decimal("30.0")
+    assert was_clamped is False
+    assert out_of_band is False
+
+
+# ---------------------------------------------------------------------------
+# _basis_within_limit — serialization + deterministic truncation
+# ---------------------------------------------------------------------------
+
+
+def test_basis_normalizes_dict_values_and_clamps_display() -> None:
+    basis = _basis_within_limit({"raw_reported": {"a": "1.5", "b": 1e300, "c": "garbage"}})
+    assert basis["raw_reported"] == {"a": 1.5, "b": 1000000.0}
+    assert "c" not in basis["raw_reported"]
+
+
+def test_basis_non_dict_non_numeric_becomes_zero() -> None:
+    assert _basis_within_limit({"raw_reported": "garbage"}) == {"raw_reported": 0.0}
+
+
+def test_basis_truncates_oversized_per_node_map() -> None:
+    raw = {f"node_{i}": 0.123456 for i in range(120)}
+    basis = _basis_within_limit({"raw_reported": raw, "node_count": 120})
+    assert basis["node_count"] == 8
+    assert len(basis["raw_reported"]) == 8
+
+
+def test_self_reported_oversized_raw_map_truncated_in_breakdown() -> None:
+    raw = {f"node_{i}": 0.123456 for i in range(120)}
+    comp = CostComponentConfig(
+        name="model_tokens",
+        display_name="Model cost (self-reported)",
+        kind="self_reported",
+        report_key="model_cost_usd",
+    )
+    tele = RunCostTelemetry(
+        wall_clock_elapsed_s=Decimal(0),
+        reported={"model_cost_usd": Decimal("0.08")},
+        raw_reported=raw,
+        eligible_sandbox_node_count=120,
+    )
+    breakdown, _total = build_cost_breakdown(tele, [comp])
+    basis = breakdown[0]["basis"]
+    assert basis["node_count"] == 8
+    assert len(basis["raw_reported"]) == 8
+
+
+# ---------------------------------------------------------------------------
+# self_reported basis shape edges
+# ---------------------------------------------------------------------------
+
+
+def test_self_reported_multi_node_raw_is_a_dict() -> None:
+    comp = CostComponentConfig(
+        name="model_tokens",
+        display_name="Model cost (self-reported)",
+        kind="self_reported",
+        report_key="model_cost_usd",
+    )
+    tele = RunCostTelemetry(
+        wall_clock_elapsed_s=Decimal(0),
+        reported={"model_cost_usd": Decimal("0.08")},
+        raw_reported={"n1": 0.03, "n2": 0.05},
+        eligible_sandbox_node_count=2,
+    )
+    breakdown, _total = build_cost_breakdown(tele, [comp])
+    basis = breakdown[0]["basis"]
+    assert basis["raw_reported"] == {"n1": 0.03, "n2": 0.05}
+    assert basis["node_count"] == 2
+
+
+def test_self_reported_clamped_marker_when_node_clamped() -> None:
+    comp = CostComponentConfig(
+        name="model_tokens",
+        display_name="Model cost (self-reported)",
+        kind="self_reported",
+        report_key="model_cost_usd",
+    )
+    tele = RunCostTelemetry(
+        wall_clock_elapsed_s=Decimal(0),
+        reported={"model_cost_usd": Decimal("0.05")},
+        raw_reported={"n1": 0.05},
+        eligible_sandbox_node_count=1,
+        clamped_nodes=["model_tokens"],
+    )
+    breakdown, _total = build_cost_breakdown(tele, [comp])
+    assert breakdown[0]["basis"]["clamped"] is True
+
+
+def test_self_reported_omits_missing_flag_without_eligible_nodes() -> None:
+    comp = CostComponentConfig(
+        name="model_tokens",
+        display_name="Model cost (self-reported)",
+        kind="self_reported",
+        report_key="model_cost_usd",
+    )
+    tele = RunCostTelemetry(
+        wall_clock_elapsed_s=Decimal(0),
+        reported={"model_cost_usd": Decimal("0.05")},
+        raw_reported={"n1": 0.05},
+        eligible_sandbox_node_count=0,
+    )
+    breakdown, _total = build_cost_breakdown(tele, [comp])
+    assert "missing_self_report" not in breakdown[0]
+
+
+# ---------------------------------------------------------------------------
+# _eval_calculated — missing formula
+# ---------------------------------------------------------------------------
+
+
+def test_calculated_without_formula_is_eval_error() -> None:
+    comp = CostComponentConfig(
+        name="calc",
+        display_name="Calc",
+        kind="calculated",
+        rate_usd=Decimal("1.0"),
+        formula=None,
+    )
+    tele = _tel(wall_clock_elapsed_s=Decimal(3600))
+    breakdown, total = build_cost_breakdown(tele, [comp])
+    assert breakdown[0]["error"] == "eval_error"
+    assert breakdown[0]["amount_usd"] == "0.000000"
+    assert total == Decimal(0)

@@ -2,6 +2,7 @@
   <PageTabs :tabs="[
     { label: 'Overview', to: '/admin/costs' },
     { label: 'Spend Limits', to: '/admin/costs/limits' },
+    { label: 'Cost Components', to: '/admin/costs/components' },
     { label: 'Cost Controls', to: '/admin/costs/controls' },
   ]" />
   <div data-theme="agent" class="page-wide">
@@ -57,6 +58,7 @@
                   { key: 'total_spend_usd', label: $t('views.AdminCostBreakdownView.total_spend'), numeric: true },
                   { key: 'total_runs', label: $t('views.AdminCostBreakdownView.runs'), numeric: true },
                   { key: 'avg_per_run', label: $t('views.AdminCostBreakdownView.avg_per_run'), numeric: true },
+                  { key: 'annotations', label: $t('views.AdminCostBreakdownView.annotations') },
                 ]"
                 :rows="tableRows"
               >
@@ -65,6 +67,17 @@
                 </template>
                 <template #cell-avg_per_run="{ row }">
                   ${{ (row as any).total_runs > 0 ? ((row as any).total_spend_usd / (row as any).total_runs).toFixed(2) : '0.00' }}
+                </template>
+                <template #cell-annotations="{ row }">
+                  <div class="text-xs">
+                    <p v-if="(row as any).refused_total_usd != null" class="text-warning" data-testid="cost-annotation-refused">
+                      {{ $t('views.AdminCostBreakdownView.refused_limit_line', { amount: (row as any).refused_total_usd.toFixed(2) }) }}
+                    </p>
+                    <p v-if="(row as any).clamped_total_usd != null" class="text-muted-foreground" data-testid="cost-annotation-clamped">
+                      {{ $t('views.AdminCostBreakdownView.day_ledger_clamped_line') }}
+                    </p>
+                    <span v-if="(row as any).refused_total_usd == null && (row as any).clamped_total_usd == null">—</span>
+                  </div>
                 </template>
               </DataTable>
             </div>
@@ -134,12 +147,18 @@ interface CostReportRow {
   entity_name: string
   total_spend_usd: number
   total_runs: number
+  components?: Array<{ name: string; amount_usd: string }>
+  annotations?: { refused_total_usd?: number | null; clamped_total_usd?: number | null } | null
 }
 
 interface CostReportResponse {
   period: string
   group_by: string
   items: CostReportRow[]
+  org_unassigned_components?: string | null
+  legacy_total?: string | null
+  org_total?: string | null
+  has_more?: boolean
 }
 
 interface AnomalyResponse {
@@ -164,6 +183,8 @@ const items = computed(() => (data.value as CostReportResponse)?.items ?? [])
 const tableRows = computed(() => items.value.map(item => ({
   ...item,
   avg_per_run: item.total_runs > 0 ? item.total_spend_usd / item.total_runs : 0,
+  refused_total_usd: item.annotations?.refused_total_usd ?? null,
+  clamped_total_usd: item.annotations?.clamped_total_usd ?? null,
 })))
 
 const anomaliesLoading = ref(true)
