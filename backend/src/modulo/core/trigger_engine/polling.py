@@ -88,7 +88,7 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
             instance = config.get("instance", "")
             base_url = config.get("base_url")
             if not instance and not base_url:
-                raise ValueError("JiraConnector requires 'instance' in config_json")
+                raise ValueError("JiraConnector requires 'instance' or 'base_url' in config_json")
             return JiraConnector(
                 instance=instance,
                 creds=creds,

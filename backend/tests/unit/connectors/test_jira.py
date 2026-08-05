@@ -862,6 +862,27 @@ async def test_write_attachment_bytes(connector):
 
 
 @respx.mock
+async def test_write_attachment_content_bytes(connector):
+    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(
+        return_value=httpx.Response(201, json=[{"id": "20003", "filename": "c.bin"}])
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="attachment",
+            data={
+                "issue_key": "PROJ-123",
+                "filename": "c.bin",
+                "content": b"\x00\x01\x02",
+                "mime_type": "application/octet-stream",
+            },
+        )
+    )
+    assert result["attachments"][0]["filename"] == "c.bin"
+    request = respx.calls.last.request
+    assert b"\x00\x01\x02" in request.content
+
+
+@respx.mock
 async def test_write_attachment_missing_filename(connector):
     with pytest.raises(ValueError, match="requires 'filename'"):
         await connector.write(

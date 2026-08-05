@@ -5,7 +5,7 @@ import base64
 import json
 import random
 import time
-from typing import Any, cast
+from typing import Any
 
 import httpx
 
@@ -266,10 +266,10 @@ class JiraConnector(ConnectorBase):
                 return _jitter(reset_delay, tight=True)
         return _compute_delay(attempt, response)
 
-    async def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
+    async def _parse_json(self, response: httpx.Response) -> Any:
         """Safely parse JSON response, wrapping decode errors."""
         try:
-            return cast(dict[str, Any], response.json())
+            return response.json()
         except json.JSONDecodeError as exc:
             raise ValueError(f"Jira API invalid response: {response.text[:200]}") from exc
 
@@ -486,7 +486,8 @@ class JiraConnector(ConnectorBase):
                     raise ValueError("Jira issue comment requires 'body' in data")
                 body = payload.data["body"]
                 r = await self._call_api("POST", f"/issue/{issue_key}/comment", json={"body": body})
-                return await self._parse_json(r)
+                comment: dict[str, Any] = await self._parse_json(r)
+                return comment
             case "transition":
                 if "issue_key" not in payload.data:
                     raise ValueError("Jira transition requires 'issue_key' in data")
@@ -514,7 +515,7 @@ class JiraConnector(ConnectorBase):
                     raise ValueError("Jira attachment must provide exactly one of 'content' or 'file'")
                 filename = payload.data["filename"]
                 if content is not None:
-                    raw = str(content).encode("utf-8")
+                    raw = content if isinstance(content, bytes) else str(content).encode("utf-8")
                 else:
                     raw = file_content if isinstance(file_content, bytes) else str(file_content).encode("utf-8")
                 mime_type = payload.data.get("mime_type", "application/octet-stream")

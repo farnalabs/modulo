@@ -81,7 +81,7 @@ class TestBuildPollingConnector:
             ("linear", {}, {"api_key": "lin_xxx"}, "LinearConnector", None),
             ("slack", {}, {"bot_token": "xoxb-xxx"}, "SlackConnector", None),
             ("jira", {"instance": "https://acme.atlassian.net"}, {"token": "x"}, "JiraConnector", None),
-            ("jira", {}, {"token": "x"}, None, "requires 'instance'"),
+            ("jira", {}, {"token": "x"}, None, "requires 'instance' or 'base_url'"),
             (
                 "jira",
                 {"base_url": "https://jira.example.com/rest/api/2", "api_version": 2},
