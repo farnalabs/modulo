@@ -24,9 +24,19 @@ class _FakeCounter:
         self.calls.append({"value": value, "attributes": attributes})
 
 
+class _FakeGauge:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.values: list[float] = []
+
+    def set(self, value: float) -> None:
+        self.values.append(value)
+
+
 class _FakeMeter:
     def __init__(self) -> None:
         self.counters: list[_FakeCounter] = []
+        self.gauges: list[_FakeGauge] = []
 
     def create_counter(self, *, name: str, description: str, unit: str) -> _FakeCounter:
         counter = _FakeCounter(name)
@@ -36,6 +46,14 @@ class _FakeMeter:
     def counter(self, name: str) -> _FakeCounter | None:
         return next((c for c in self.counters if c.name == name), None)
 
+    def create_gauge(self, *, name: str, description: str, unit: str) -> _FakeGauge:
+        gauge = _FakeGauge(name)
+        self.gauges.append(gauge)
+        return gauge
+
+    def gauge(self, name: str) -> _FakeGauge | None:
+        return next((g for g in self.gauges if g.name == name), None)
+
 
 @pytest.fixture()
 def fake_meter() -> _FakeMeter:
@@ -44,7 +62,13 @@ def fake_meter() -> _FakeMeter:
 
 @pytest.fixture(autouse=True)
 def _reset_handles(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("_eval_errors_total", "_clamped_total", "_out_of_band_high_total", "_settings_warning_total"):
+    for name in (
+        "_eval_errors_total",
+        "_clamped_total",
+        "_out_of_band_high_total",
+        "_settings_warning_total",
+        "_probe_last_success_ts",
+    ):
         monkeypatch.setattr(metrics, name, None)
 
 
@@ -133,7 +157,7 @@ def test_lazy_init_is_once_only(monkeypatch: pytest.MonkeyPatch, fake_meter: _Fa
         metrics._out_of_band_high_total,
         metrics._settings_warning_total,
     ) == handles
-    assert len(fake_meter.counters) == 4
+    assert len(fake_meter.counters) == 15
 
 
 # ---------------------------------------------------------------------------
@@ -158,5 +182,6 @@ def test_ensure_early_return_when_handles_initialised(monkeypatch: pytest.Monkey
     metrics._ensure()
     metrics._ensure()
     # Only the first call builds handles; the second returns immediately.
-    assert len(fake_meter.counters) == 4
+    assert len(fake_meter.counters) == 15
+    assert len(fake_meter.gauges) == 1
     assert metrics._eval_errors_total is fake_meter.counters[0]
