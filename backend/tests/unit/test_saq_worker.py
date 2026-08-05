@@ -139,6 +139,36 @@ class TestQueueDerivation:
             assert sw.system_settings()["queue"].name == "system"
 
 
+class TestMaxConcurrentOps:
+    """``max_concurrent_ops`` must always leave reserve connections (FAR-88).
+
+    The old ``max(pool_size - 5, 5)`` clamp gave zero reserve at pool 5
+    (max_ops == pool) and could exceed the pool below 5; the semaphore must
+    always stay strictly below the connection budget.
+    """
+
+    @pytest.mark.parametrize(
+        ("pool_size", "expected"),
+        [
+            (1, 1),
+            (3, 2),
+            (5, 4),
+            (20, 15),
+            (50, 45),
+        ],
+    )
+    def test_reserve_clamp(self, pool_size: int, expected: int) -> None:
+        assert sw._max_concurrent_ops(pool_size) == expected
+
+    def test_never_exhausts_pool(self) -> None:
+        # For every pool in the settings' valid range (ge=1, le=50) the
+        # semaphore must never equal or exceed the connection budget.
+        for pool_size in range(1, 51):
+            assert sw._max_concurrent_ops(pool_size) <= pool_size
+        for pool_size in range(2, 51):
+            assert sw._max_concurrent_ops(pool_size) < pool_size
+
+
 class TestSystemWebRunner:
     """run_system_web must bind 127.0.0.1 AND map auth into AUTH_PASSWORD/AUTH_USER."""
 
