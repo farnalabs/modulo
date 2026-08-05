@@ -600,7 +600,7 @@ async def _ledger_block(
         )
         ok, reason = False, "whole_tx_abort"
 
-    if not ok and reason == "daily_limit_exceeded":
+    if not ok and reason is not None and reason.startswith("daily_limit_exceeded"):
         # LIMIT-REFUSED — expected healthy enforcement, NOT a ledger failure.
         locked.ledger_refused_at = datetime.now(UTC)
         record_limit_refused(str(owner_team_id or "none"))

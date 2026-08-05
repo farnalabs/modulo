@@ -2214,7 +2214,8 @@ export default {
         "session_label": "Session",
         "remy": "Remy",
         "resume": "Resume",
-        "stops_after_each_navigation": "Stops after each navigation"
+        "stops_after_each_navigation": "Stops after each navigation",
+        "move_panel": "Move panel"
       },
       "RemyChat": {
         "ask_remy": "Ask Remy...",

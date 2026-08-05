@@ -38,8 +38,8 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Declare required scopes: `read_api`, `write_repository`, `api` (code constant)
 - [x] Verify `read_api` scope by probing `GET /projects` during health check
 - [x] Distinguish expired token (401) from missing scopes (403) on `/user` and `/projects`
-- [ ] Verify `write_repository` scope during health check — not probed
-- [ ] Verify `api` scope during health check — not probed
+- [x] Verify `write_repository` scope during health check — read the token's declared scopes from the instance `GET /oauth/token/info` endpoint and report it when missing
+- [x] Verify `api` scope during health check — same token-introspection probe; a token declaring `api` is treated as satisfying `read_api`/`write_repository` (GitLab superset scope)
 - [x] Report missing scopes individually in health check detail
 - [ ] Block run start when scopes are insufficient (pre-run health check in ConnectorHub)
 
@@ -138,10 +138,21 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 
 ## Known Gaps
 
-- [ ] **Scope verification incomplete**: health check distinguishes expired-token vs missing-scope and reports denied endpoints, but `write_repository`/`api` scopes are not individually probed and pre-run ConnectorHub blocking is not enforced
+- **Scope verification incomplete** — partially RESOLVED 2026-08-05: `write_repository`/`api` are now individually verified during health check via a best-effort `GET /oauth/token/info` token-introspection probe (reported as `Missing scopes: …`). Pre-run ConnectorHub blocking of insufficient scopes remains unimplemented.
+- [ ] **Pre-run ConnectorHub scope blocking**: a connector instance with insufficient scopes still permits run start — the health check flags it, but the ConnectorHub does not refuse to build/execute the connector.
 - [ ] **Self-hosted discovery**: `base_url` is configurable per connector instance, but there is no instance-discovery/onboarding flow for self-hosted GitLab
 
 ## QA History
+
+### 2026-08-05 — improve-architecture (index 145+)
+
+**RESOLVED the individual-scope-probing gap** (`write_repository`/`api` were declared in `REQUIRED_SCOPES` but never verified; only `read_api` was inferred from `/projects` HTTP status).
+
+- New best-effort `_missing_scopes(client)` reads the token's declared scopes from the instance `GET /oauth/token/info` endpoint (Doorkeeper token introspection, works for PATs on GitLab 11.6+ and self-hosted). The probe reuses the open health-check client and hits the *instance root* (`https://gitlab.com/oauth/token/info`), not the versioned `/api/v4` path — new `_instance_root()` helper strips the `/api/vN` segment and preserves reverse-proxy mount paths.
+- New `_effective_scopes()` treats `api` as a superset scope: a token declaring `api` satisfies `read_api` + `write_repository` (GitLab's full-access scope), so `api`-only tokens keep passing health.
+- `health_check()` now returns `ok=False` with `Missing scopes: <individually listed>` when the token's declared scopes fall short of `REQUIRED_SCOPES` (e.g. `read_api`-only → `api, write_repository` missing; `read_api`+`write_repository` → `api` missing). The probe is strictly non-fatal: a 404 (older self-hosted versions), network error, invalid/non-object body, empty scope list, or the deprecated `scopes` alias all degrade gracefully to the existing `/user`+`/projects` endpoint probes.
+
+**Tests:** 12 new unit tests — `test_gitlab.py` (missing write_repository reported, missing api only, `api` superset passes, token-info 404/network-error/invalid-body/empty-scopes all non-fatal, self-hosted probe hits the instance root) + `test_gitlab_resilience.py` (deprecated `scopes` alias, space-separated string scopes, `_instance_root()` derivation matrix, `_effective_scopes()` matrix). 8 existing health-check tests updated to mock the token-info route. **160/160 gitlab unit tests pass (148 + 12 new), ruff clean, mypy --strict clean.** Status: partial (pre-run ConnectorHub scope blocking + self-hosted discovery remain).
 
 ### 2026-08-04 — improve-architecture: 3 known gaps RESOLVED (recursive tree listing, batch file ops, MR approval request)
 

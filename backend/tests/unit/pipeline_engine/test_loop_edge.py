@@ -9,8 +9,9 @@ import pytest
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.pipeline_engine.graph_cache import (
     _CACHE,
-    _make_loop_router,
+    _make_loop_counter_router,
     build_graph_from_json,
+    make_loop_counter_fn,
 )
 
 pytestmark = pytest.mark.usefixtures("_auto_clear_cache")
@@ -22,74 +23,93 @@ def _auto_clear_cache() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _make_loop_router — pure function tests
+# make_loop_counter_fn / _make_loop_counter_router — pure function tests
 # ---------------------------------------------------------------------------
 
 
-class TestMakeLoopRouter:
-    """Direct unit tests for the loop router function."""
+class TestMakeLoopCounterNode:
+    """Unit tests for the loop counter node function.
 
-    def test_always_loops_no_condition_no_max(self):
-        router = _make_loop_router("source", "target", "exit", 0, None)
-        state: dict[str, Any] = {"_iteration_counts": {}}
-        for _ in range(10):
-            assert router(state) == "target"
-        # Counter increments each call
-        assert state["_iteration_counts"]["source->target"] == 10
+    The counter is a real NODE that returns ``{"_iteration_counts": ...}`` as
+    a state update — LangGraph discards router-side in-place mutations of the
+    state dict across supersteps, so the increment must be a returned update.
+    """
 
-    def test_max_iterations_respected(self):
-        router = _make_loop_router("source", "target", "exit", 3, None)
+    async def test_increments_count_from_empty_state(self):
+        node = make_loop_counter_fn("source->target")
         state: dict[str, Any] = {"_iteration_counts": {}}
-        assert router(state) == "target"  # 1 (count=1, < 3)
-        assert router(state) == "target"  # 2 (count=2, < 3)
-        assert router(state) == "exit"  # 3 (count=3, >= 3)
-        assert router(state) == "exit"  # 4 (count=4, >= 3)
+        result = await node(state)
+        assert result == {"_iteration_counts": {"source->target": 1}}
+        # The node must not mutate the input state in place.
+        assert state["_iteration_counts"] == {}
+
+    async def test_increments_existing_count(self):
+        node = make_loop_counter_fn("source->target")
+        state: dict[str, Any] = {"_iteration_counts": {"source->target": 9}}
+        result = await node(state)
+        assert result == {"_iteration_counts": {"source->target": 10}}
+
+    async def test_unseeded_state_is_seeded(self):
+        """The node must bootstrap the counter when state was never seeded."""
+        node = make_loop_counter_fn("source->target")
+        result = await node({})
+        assert result == {"_iteration_counts": {"source->target": 1}}
+
+    async def test_preserves_counts_for_other_loop_edges(self):
+        """Returning a merged dict keeps unrelated loop counters intact."""
+        node = make_loop_counter_fn("source->target")
+        state: dict[str, Any] = {"_iteration_counts": {"other->edge": 4}}
+        result = await node(state)
+        assert result == {"_iteration_counts": {"source->target": 1, "other->edge": 4}}
+
+
+class TestMakeLoopCounterRouter:
+    """Unit tests for the read-only loop counter router."""
+
+    def test_routes_to_target_below_max(self):
+        router = _make_loop_counter_router("source->target", "target", "exit", 3, None)
+        state: dict[str, Any] = {"_iteration_counts": {"source->target": 2}}
+        assert router(state) == "target"
+
+    def test_routes_to_default_target_at_max(self):
+        router = _make_loop_counter_router("source->target", "target", "exit", 3, None)
+        state: dict[str, Any] = {"_iteration_counts": {"source->target": 3}}
+        assert router(state) == "exit"
+        state["_iteration_counts"]["source->target"] = 4
+        assert router(state) == "exit"
 
     def test_condition_truthy_loops(self):
-        router = _make_loop_router("source", "target", "exit", 0, "iterations < `3`")
+        router = _make_loop_counter_router("source->target", "target", "exit", 0, "iterations < `3`")
         state: dict[str, Any] = {"_iteration_counts": {"source->target": 0}, "iterations": 2}
         assert router(state) == "target"
 
     def test_condition_falsy_exits(self):
-        router = _make_loop_router("source", "target", "exit", 0, "iterations >= `10`")
+        router = _make_loop_counter_router("source->target", "target", "exit", 0, "iterations >= `10`")
         state: dict[str, Any] = {"_iteration_counts": {"source->target": 0}, "iterations": 5}
         assert router(state) == "exit"
 
     def test_max_iterations_takes_precedence_over_condition(self):
-        router = _make_loop_router("source", "target", "exit", 2, "whatever == `true`")
-        state: dict[str, Any] = {"_iteration_counts": {}, "whatever": True}
-        assert router(state) == "target"  # 1
-        assert router(state) == "exit"  # 2 (count >= max_iterations)
+        router = _make_loop_counter_router("source->target", "target", "exit", 2, "whatever == `true`")
+        state: dict[str, Any] = {"_iteration_counts": {"source->target": 1}, "whatever": True}
+        assert router(state) == "target"
+        state["_iteration_counts"]["source->target"] = 2
+        assert router(state) == "exit"
 
-    def test_unlimited_no_condition(self):
-        router = _make_loop_router("source", "target", "exit", 0, None)
-        state: dict[str, Any] = {"_iteration_counts": {}}
-        for _ in range(100):
-            route = router(state)
-            assert route == "target"
-        assert state["_iteration_counts"]["source->target"] == 100
+    def test_unlimited_no_condition_always_loops(self):
+        router = _make_loop_counter_router("source->target", "target", "exit", 0, None)
+        state: dict[str, Any] = {"_iteration_counts": {"source->target": 100}}
+        assert router(state) == "target"
 
-    def test_unseeded_state_is_seeded_by_router(self):
-        """The router must establish the counter when state was never seeded.
+    def test_read_only_never_mutates_state(self):
+        """The router only reads the counter — mutation is the node's job."""
+        router = _make_loop_counter_router("source->target", "target", "exit", 3, None)
+        state: dict[str, Any] = {"_iteration_counts": {"source->target": 1}}
+        router(state)
+        assert state["_iteration_counts"] == {"source->target": 1}
 
-        This is the belt-and-suspenders guard for the prod bug where
-        ``_seed_state`` did not seed ``_iteration_counts``: the router must
-        place the dict into the shared state so its in-place mutation persists
-        across steps and ``max_iterations`` can trip.
-        """
-        router = _make_loop_router("source", "target", "exit", 2, None)
-        state: dict[str, Any] = {}
-        assert router(state) == "target"  # 1 (count=1, < 2)
-        assert router(state) == "exit"  # 2 (count=2, >= 2)
-        assert router(state) == "exit"  # 3 (count=3, >= 2)
-        assert state["_iteration_counts"]["source->target"] == 3
-
-    def test_unseeded_state_does_not_overwrite_existing_counts(self):
-        """A pre-seeded counter dict must never be replaced by the guard."""
-        router = _make_loop_router("source", "target", "exit", 1, None)
-        state: dict[str, Any] = {"_iteration_counts": {"source->target": 9}}
-        assert router(state) == "exit"  # count=10, >= 1
-        assert state["_iteration_counts"]["source->target"] == 10
+    def test_missing_counts_default_to_zero(self):
+        router = _make_loop_counter_router("source->target", "target", "exit", 1, None)
+        assert router({}) == "target"  # count defaults to 0 (< 1)
 
 
 # ---------------------------------------------------------------------------
@@ -223,12 +243,13 @@ class TestBuildGraphWithLoop:
     async def test_loop_terminates_when_state_seeded_via_seed_state(self):
         """The executor's _seed_state must seed the loop counter so graphs terminate.
 
-        Regression for the prod infinite-loop bug: _seed_state previously
-        returned state WITHOUT ``_iteration_counts``, so the loop router's
-        counter mutation was lost across steps (LangGraph shallow-copies the
-        state dict per superstep) and ``max_iterations`` never tripped — the
-        graph looped until the recursion limit. This exercises the real seeding
-        path ``execute()`` uses and asserts the graph reaches the default target.
+        Regression for the prod infinite-loop bug: the loop counter previously
+        lived on a router that MUTATED the state dict in place, and LangGraph
+        discarded that mutation across supersteps, so ``max_iterations`` never
+        tripped — the graph looped until the recursion limit. The counter now
+        lives on a synthetic node that returns the increment as a real state
+        update. This exercises the real seeding path ``execute()`` uses and
+        asserts the graph reaches the default target.
         """
         from modulo.core.pipeline_engine.executor import _seed_state
 

@@ -84,7 +84,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection: Connection, alt_engine: sa.engine.Engine | None = None) -> None:
+def do_run_migrations(connection: Connection) -> None:
     backend = _detect_backend(str(connection.engine.url))
     _log.info("Running migrations for %s backend", backend)
 
@@ -102,7 +102,7 @@ def do_run_migrations(connection: Connection, alt_engine: sa.engine.Engine | Non
             # Use a separate connection so a failure here (e.g. non-owner role)
             # does not abort the outer migration transaction.
             try:
-                with alt_engine.begin() as alt_conn:
+                with connection.engine.begin() as alt_conn:
                     alt_conn.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
                     _log.info("Widened alembic_version.version_num to VARCHAR(255)")
             except Exception:
@@ -135,7 +135,7 @@ def run_migrations_online() -> None:
     engine = create_engine(sync_url, poolclass=NullPool)
     try:
         with engine.begin() as connection:
-            do_run_migrations(connection, alt_engine=engine)
+            do_run_migrations(connection)
     finally:
         engine.dispose()
 

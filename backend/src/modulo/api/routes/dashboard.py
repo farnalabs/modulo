@@ -192,18 +192,14 @@ async def dashboard_summary(
                 tid = str(tr_row.owner_team_id)
                 team_run_data.setdefault(tid, {})[tr_row.status] = _safe_int(tr_row.cnt)
 
-            team_pipeline_data: dict[str, int] = {}
-            for tp_row in team_pipeline_rows:
-                team_pipeline_data[str(tp_row.owner_team_id)] = int(tp_row.pipeline_cnt)
+            team_pipeline_data = {str(tp_row.owner_team_id): int(tp_row.pipeline_cnt) for tp_row in team_pipeline_rows}
 
             team_metrics: list[dict[str, Any]] = []
             for team in teams:
                 tid = str(team.id)
                 run_data = team_run_data.get(tid, {})
                 team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
-                team_statuses: dict[str, int] = {}
-                for tracked_status in _TRACKED_STATUSES:
-                    team_statuses[tracked_status] = run_data.get(tracked_status, 0)
+                team_statuses = {s: run_data.get(s, 0) for s in _TRACKED_STATUSES}
                 team_idle_from_db = sum(run_data.get(s, 0) for s in ("pending", "claimed", "waiting_for_lock"))
                 team_statuses["idle"] = team_idle_from_db
 
