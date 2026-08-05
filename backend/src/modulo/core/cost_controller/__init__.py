@@ -7,7 +7,10 @@ The daily ledger (``org_daily_run_counts``) is a REPORT, not a source of truth
 path: it checks BOTH the org and team daily limits against the CREATED-AT day
 (the same window the enforcement readers use) BEFORE writing either ledger row
 (which is keyed by the RUN-START day), and persists the refused amount to the
-day rows' ``refused_spend_usd`` on a refusal (§4.6).
+day rows' ``refused_spend_usd`` on a refusal (§4.6). The limit-check SUM reads
+the daily ledger itself (``org_daily_run_counts.total_spend_usd`` keyed by
+``run_date``), so already-recorded spend is enforced even when no ``runs``
+rows survive.
 """
 
 import asyncio
@@ -142,15 +145,20 @@ async def check_and_record_spend(
 
     Returns ``(approved: bool, reason: str | None)``. ``ok=false`` = a daily
     limit would be exceeded and NO spend row was written; ``reason`` is a
-    stable machine code (``"daily_limit_exceeded"``). Consumers log on false
-    (``cost_ledger.limit_reached``) but do NOT fail the run.
+    stable machine code (``"daily_limit_exceeded"``) qualified by the refused
+    scope (``"daily_limit_exceeded: organisation"`` / ``"daily_limit_exceeded:
+    team"``). Consumers log on false (``cost_ledger.limit_reached``) but do
+    NOT fail the run.
 
     Refusal-window semantics (normative in spec §4.6):
 
     - The limit check is keyed to the CREATED-AT day (the same window the
       enforcement readers use) via ``created_at_day_start``.
-    - The current run's total is EXCLUDED from each SUM (``id != run_id``)
-      because ``update_run_status`` already wrote it in the same transaction;
+    - Each SUM reads the daily ledger (``org_daily_run_counts``) — the org SUM
+      over the org-level row (``team_id IS NULL``), the team SUM over the
+      team-scoped row — filtered to the created-at day (``run_date ==
+      day_start.date()``). The check runs BEFORE the current run is written to
+      the ledger, so the SUM is naturally current-run-exclusive;
       ``cost_usd`` is then added UNCONDITIONALLY — the run counts EXACTLY
       ONCE per predicate.
     - The SUMs SHORT-CIRCUIT when the limit is NULL (a no-limit org runs NO
@@ -205,7 +213,12 @@ async def check_and_record_spend(
             team_refused = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=team_id)
             _accumulate_refused(team_refused, cost_usd)
         await session.flush()
-        return False, "daily_limit_exceeded"
+        scopes: list[str] = []
+        if refuse_org:
+            scopes.append("organisation")
+        if refuse_team:
+            scopes.append("team")
+        return False, f"daily_limit_exceeded: {', '.join(scopes)}"
 
     # --- both limits pass — write the org row then the team row ---
     org_count = await get_or_create_daily_count(session, org_id=org_id, run_date=run_date, team_id=None)
@@ -226,20 +239,25 @@ async def _sum_created_at_day(
     run_id: uuid.UUID | None,
     team_id: uuid.UUID | None = None,
 ) -> Decimal:
-    """SUM the created-at day's run totals, EXCLUDING the current run (§4.6).
+    """SUM the day's ledger spend (``org_daily_run_counts.total_spend_usd``).
 
-    Served by ``ix_runs_refusal (organisation_id, created_at)`` — the org SUM
-    as a true range; the team SUM as the same range with a residual
-    ``owner_team_id`` filter.
+    The ledger is keyed by ``(organisation_id, team_id, run_date)`` via
+    ``get_or_create_daily_count``, so the created-at-day window filters
+    ``run_date == day_start.date()``. The org SUM reads the org-level row
+    (``team_id IS NULL``); the team SUM reads the team-scoped row
+    (``team_id == :team_id``). The limit check runs BEFORE the current run is
+    written to the ledger, so the SUM is naturally current-run-exclusive — the
+    run counts EXACTLY ONCE per predicate. ``run_id`` is accepted for signature
+    compatibility but is NOT applied (the ledger is keyed per day, not per run).
     """
-    stmt = select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
-        Run.organisation_id == org_id,
-        Run.created_at >= day_start,
+    stmt = select(func.coalesce(func.sum(OrgDailyRunCount.total_spend_usd), 0)).where(
+        OrgDailyRunCount.organisation_id == org_id,
+        OrgDailyRunCount.run_date == day_start.date(),
     )
     if team_id is not None:
-        stmt = stmt.where(Run.owner_team_id == team_id)
-    if run_id is not None:
-        stmt = stmt.where(Run.id != run_id)
+        stmt = stmt.where(OrgDailyRunCount.team_id == team_id)
+    else:
+        stmt = stmt.where(OrgDailyRunCount.team_id.is_(None))
     result = await session.execute(stmt)
     value = result.scalar_one()
     return Decimal(value or 0)
