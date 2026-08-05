@@ -771,6 +771,52 @@ def step_jira_connector(ctx):
                     ],
                     total=2,
                 )
+            case "field_metadata":
+                project = q.filters.get("project", "")
+                if not project:
+                    raise ValueError("Jira field_metadata query requires 'project' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "id": "10001",
+                            "name": "Task",
+                            "subtask": False,
+                            "fields": {
+                                "summary": {"required": True, "name": "Summary", "key": "summary"},
+                                "customfield_10001": {"required": False, "name": "Epic Link", "custom": True},
+                            },
+                        }
+                    ],
+                    total=1,
+                    metadata={"project": project},
+                )
+            case "fields":
+                return ConnectorResult(
+                    records=[
+                        {"id": "summary", "name": "Summary", "custom": False},
+                        {"id": "customfield_10001", "name": "Epic Link", "custom": True},
+                    ],
+                    total=2,
+                )
+            case "statuses":
+                project = q.filters.get("project", "")
+                if not project:
+                    raise ValueError("Jira statuses query requires 'project' filter")
+                return ConnectorResult(
+                    records=[
+                        {
+                            "id": "10001",
+                            "name": "Task",
+                            "subtask": False,
+                            "statuses": [
+                                {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+                                {"id": "3", "name": "Done", "statusCategory": {"key": "done"}},
+                            ],
+                        }
+                    ],
+                    total=1,
+                    metadata={"project": project},
+                )
             case _:
                 raise ValueError(f"Unsupported Jira resource: {q.resource!r}")
 
@@ -889,6 +935,115 @@ def step_jira_query_without_key(resource, ctx):
     except Exception as exc:
         ctx["query_result"] = None
         ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query field metadata for project "{project}"'))
+def step_jira_query_field_metadata(project, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="field_metadata", filters={"project": project})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query field metadata without a project")
+def step_jira_query_field_metadata_no_project(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="field_metadata", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query all Jira fields")
+def step_jira_query_fields(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="fields")
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I query statuses for project "{project}"'))
+def step_jira_query_statuses(project, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="statuses", filters={"project": project})
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when("I query statuses without a project")
+def step_jira_query_statuses_no_project(ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    q = ConnectorQuery(resource="statuses", filters={})
+    import asyncio
+
+    try:
+        asyncio.run(ctx["connector"].query(q))
+        ctx["query_result"] = "unexpected_success"
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the records list issue types with create fields")
+def step_jira_records_issue_types_with_fields(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected issue type records but got {result.records}"
+    record = result.records[0]
+    assert "name" in record, f"Expected issue type name in {record}"
+    assert "fields" in record, f"Expected create fields in {record}"
+
+
+@then("the records include custom fields")
+def step_jira_records_include_custom_fields(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert any(record.get("custom") for record in result.records), (
+        f"Expected a custom field among records but got {result.records}"
+    )
+
+
+@then("the records list issue type statuses")
+def step_jira_records_issue_type_statuses(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert result.records, f"Expected status records but got {result.records}"
+    record = result.records[0]
+    assert "statuses" in record, f"Expected statuses in {record}"
+    assert record["statuses"], f"Expected non-empty statuses but got {record}"
 
 
 @given("a Jira connector that returns API errors")

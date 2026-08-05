@@ -74,3 +74,31 @@ Feature: Jira Connector
     When I delete issue "PROJ-123"
     Then the write succeeds
     And the write returns deletion confirmation for "PROJ-123"
+
+  Scenario: Discover field metadata for a project
+    Given a Jira connector with valid credentials
+    When I query field metadata for project "PROJ"
+    Then the result has records
+    And the records list issue types with create fields
+
+  Scenario: Missing project filter for field metadata raises an error
+    Given a Jira connector with valid credentials
+    When I query field metadata without a project
+    Then the result is an error
+
+  Scenario: Query all available fields
+    Given a Jira connector with valid credentials
+    When I query all Jira fields
+    Then the result has records
+    And the records include custom fields
+
+  Scenario: Query project statuses
+    Given a Jira connector with valid credentials
+    When I query statuses for project "PROJ"
+    Then the result has records
+    And the records list issue type statuses
+
+  Scenario: Missing project filter for statuses raises an error
+    Given a Jira connector with valid credentials
+    When I query statuses without a project
+    Then the result is an error
