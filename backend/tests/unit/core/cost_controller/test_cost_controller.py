@@ -266,7 +266,7 @@ class TestCheckAndRecordSpend:
             )
 
         assert approved is False
-        assert reason == "daily_limit_exceeded"
+        assert reason == "daily_limit_exceeded: organisation"
         # No spend row — a refused-only row carrying the refused amount.
         assert org_refused.run_count == 0
         assert org_refused.total_spend_usd == Decimal(0)
@@ -284,7 +284,7 @@ class TestCheckAndRecordSpend:
             )
 
         assert approved is False
-        assert reason == "daily_limit_exceeded"
+        assert reason == "daily_limit_exceeded: organisation"
         assert org_refused.refused_spend_usd == Decimal(10)
         assert org_refused.run_count == 0
         mock_session.flush.assert_awaited_once()
@@ -344,7 +344,7 @@ class TestCheckAndRecordSpend:
             )
 
         assert approved is False
-        assert reason == "daily_limit_exceeded"
+        assert reason == "daily_limit_exceeded: team"
         assert org_refused.run_count == 1  # unchanged
         assert org_refused.total_spend_usd == Decimal(5)  # unchanged
         assert org_refused.refused_spend_usd == Decimal(10)

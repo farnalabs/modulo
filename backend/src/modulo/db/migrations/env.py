@@ -99,18 +99,16 @@ def do_run_migrations(connection: Connection) -> None:
         from sqlalchemy import inspect as sa_inspect
 
         if sa_inspect(connection).has_table("alembic_version"):
-            # Use a savepoint so a failure here (e.g. non-owner role) does not
-            # abort the outer migration transaction.
-            with connection.begin_nested():
-                try:
-                    connection.execute(
-                        sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
-                    )
+            # Use a separate connection so a failure here (e.g. non-owner role)
+            # does not abort the outer migration transaction.
+            try:
+                with connection.engine.begin() as alt_conn:
+                    alt_conn.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
                     _log.info("Widened alembic_version.version_num to VARCHAR(255)")
-                except Exception:
-                    _log.warning(
-                        "Could not widen alembic_version (non-owner); bootstrap_db.py already created it with VARCHAR(255)"
-                    )
+            except Exception:
+                _log.warning(
+                    "Could not widen alembic_version (non-owner); bootstrap_db.py already created it with VARCHAR(255)"
+                )
         else:
             connection.execute(sa.text("CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
             _log.info("Pre-created alembic_version.version_num as VARCHAR(255)")
