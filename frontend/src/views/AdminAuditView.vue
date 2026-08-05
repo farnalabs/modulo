@@ -533,7 +533,7 @@ async function verifyChain() {
       chainResult.value = {
         valid: data.valid !== false,
         event_count: data.event_count,
-        error: data.error,
+        error: data.detail || data.error,
       }
     }
   } catch (e: unknown) {

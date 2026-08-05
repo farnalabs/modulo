@@ -43,7 +43,7 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - [x] Each event's stored previous_hash must match the recomputed hash of the prior event
 - [x] Returns valid: True when all links intact
 - [x] Returns valid: False + first_tampered_id + first_gap_index when a mismatch is found
-- [ ] Detail message includes expected vs actual previous_hash — `_recompute_chain` returns only `(gap_index, tampered_id)`, `_make_verify_result` never receives `detail`
+- [x] Detail message includes expected vs actual previous_hash — `_recompute_chain` returns `(gap_index, tampered_id, expected_hash, stored_hash)` and `_describe_chain_break` builds the human-readable tamper evidence surfaced via `_make_verify_result(detail=...)`
 - [x] Empty chain returns valid: True, total_events=0, checked_events=0
 - [x] Validates last recomputed hash against AuditChainHead.last_event_hash
 - [x] chain_head_match is None when no chain head exists
@@ -59,6 +59,7 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 
 - [x] Given 3 audit events exist: When I verify the audit chain, then each event has a previous_hash linking to the prior event and the chain is valid
 - [x] Given a sequence of 100 audit events: When I verify the hash chain, then each event's hash is derived from the previous event's hash and tampering with any event breaks the chain for all subsequent events
+- [x] Given 3 audit events exist: When I GET /api/v1/admin/audit/verify with a broken chain, then the response detail mentions the tampered event id and the expected hash
 
 ### Edge Cases
 
@@ -84,7 +85,7 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - [x] append_audit_event IntegrityError retry exhaustion — re-raises after 3 attempts with exponential backoff
 - [x] append_audit_event with `payload_json=None` — resolved to `{}` via `resolved_payload = payload_json or {}`
 - [x] append_audit_event with `actor_user_id=None` / `resource_type=None` / `resource_id=None` — all optional, stored as None in DB
-- [x] Chain break verification lacks detail message — `_recompute_chain` does not compute expected vs actual hash strings
+- [x] Chain break verification reports tamper evidence — `_recompute_chain` computes expected vs actual previous_hash and the verify result includes a `detail` message describing the break
 
 ### Resilience
 
@@ -101,6 +102,7 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - [x] Verification is read-only — no mutation performed during integrity check
 
 ## QA History
+- **2026-08-06 (improve-architecture)**: Resolved the "chain break verification lacks detail message" gap — `_recompute_chain` now returns `(gap_index, tampered_id, expected_hash, stored_hash)` and `verify_chain` surfaces a human-readable `detail` via the new `_describe_chain_break` helper (expected vs actual previous_hash at the first gap; first-event breaks clearly flagged). The `detail` field flows through the `/api/v1/admin/audit/verify` response and is now shown in the admin audit UI (`AdminAuditView` surfaces `data.detail`). Added 3 core unit tests (mid-chain break detail, first-event break detail, valid-chain has no detail), 1 route test (detail passthrough), 1 frontend vitest (detail rendered), and 1 BDD scenario in `event_recording.feature` with 2 new step definitions. Marked both detail-message checkboxes `[ ]→[x]`. 73/73 `test_audit_logger.py` tests + ruff + mypy clean.
 - **2026-07-02**: Cross-cutting QA (index 49). Fixed BDD scenario path (scenarios() was resolving to nonexistent bdd/features/audit/, now uses ../../features/ corrected path) for test_alpha_audit.py, test_audit.py, and test_personas.py step files. Fixed check_previous_hash step to handle both _appended_events and verify API response (was passing vacuously for "Audit events have cryptographic chaining" scenario). Added 4 missing step definitions for `@goal-marcus-crypto-chain` scenario (sequence of 100 events, chain verification, tampering detection). Updated unit-tests frontmatter from empty [] to 3 actual test file references. Marked both BDD scenario behaviours [ ]→[x].
 - **2026-07-05**: Cross-cutting QA (feat-core-audit-crypto-chain). Verified all 40 behaviours against code. Found 1 inaccurate claim: "Detail message includes expected vs actual previous_hash" — code does not pass `detail` to `_make_verify_result`. Added detailed Error Handling (9 items), Resilience (5 items), and Edge Cases (6 new items) sections. Created website docs stub at `Website/modulo-website/src/docs/audit/audit-crypto-chain.md`.
 
