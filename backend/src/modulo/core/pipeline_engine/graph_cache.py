@@ -195,7 +195,7 @@ def _make_loop_counter_id(source: str, target: str) -> str:
     return f"__loop_counter_{source}_{target}"
 
 
-def make_loop_counter_fn(loop_key: str) -> Callable[[dict[str, Any]], Any]:
+def make_loop_counter_fn(loop_key: str) -> Any:
     """Return an async node function that increments a loop edge's counter.
 
     LangGraph discards in-place mutations of the state dict performed by
