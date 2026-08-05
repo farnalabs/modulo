@@ -115,6 +115,8 @@ def test_aggregate_sandbox_cost_ignores_non_dict():
         # Non-finite floats must not corrupt the run total.
         "node-h": {"output": {"cost_estimate_usd": float("inf")}},
         "node-i": {"output": {"cost_estimate_usd": float("nan")}},
+        # bool is an int subclass; `cost_estimate_usd: true` must not count as $1.
+        "node-j": {"output": {"cost_estimate_usd": True}},
     }
 
     assert PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs) == Decimal(0)
@@ -425,6 +427,19 @@ def test_seed_state_skips_autonomy_when_snapshot_has_none():
     snap.default_autonomy_level = None
     state = _seed_state(snap, {})
     assert "_pipeline_default_autonomy" not in state["run_context"]
+
+
+def test_seed_state_seeds_iteration_counts():
+    """The loop-edge counter must be seeded so router mutations persist.
+
+    Without ``_iteration_counts`` in the initial LangGraph state the loop
+    router's ``state.get("_iteration_counts", {})`` returns a brand-new dict
+    on every call and the mutation is lost, so ``max_iterations`` never trips
+    and the loop edge runs forever.
+    """
+    snap = _make_snapshot()
+    state = _seed_state(snap, {})
+    assert state["_iteration_counts"] == {}
 
 
 # ---------------------------------------------------------------------------

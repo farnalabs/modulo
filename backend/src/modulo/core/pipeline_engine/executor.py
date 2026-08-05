@@ -150,6 +150,11 @@ def _seed_state(snapshot: PipelineSnapshot, input_payload: dict[str, Any]) -> di
     return {
         "run_context": run_context,
         "artifacts": [],
+        # Seeded so the loop-edge router's in-place counter mutation persists
+        # on the shared state dict across steps. Without it the router's
+        # state.get("_iteration_counts", {}) returns a fresh dict every call
+        # and max_iterations never trips (infinite loop).
+        "_iteration_counts": {},
     }
 
 
@@ -834,7 +839,9 @@ class PipelineExecutor:
             if not isinstance(out, dict):
                 continue
             est = out.get("cost_estimate_usd")
-            if isinstance(est, (int, float)) and est > 0 and math.isfinite(est):
+            # bool is an int subclass; exclude it so `cost_estimate_usd: true`
+            # doesn't aggregate as $1.
+            if isinstance(est, (int, float)) and not isinstance(est, bool) and est > 0 and math.isfinite(est):
                 sandbox_cost += Decimal(str(est))
         return sandbox_cost
 

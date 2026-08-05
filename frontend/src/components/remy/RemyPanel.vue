@@ -12,10 +12,7 @@
       tabindex="0"
       :aria-label="$t('components.remy.RemyPanel.move_panel')"
       @mousedown="startDrag"
-      @keydown.up="onTitlebarKeydown($event, 0, -1)"
-      @keydown.down="onTitlebarKeydown($event, 0, 1)"
-      @keydown.left="onTitlebarKeydown($event, -1, 0)"
-      @keydown.right="onTitlebarKeydown($event, 1, 0)"
+      @keydown="handleTitlebarKeydown"
     >
       <div class="flex items-center gap-2 flex-1 min-w-0">
         <template v-if="editingName && store.activeSession">
@@ -437,15 +434,23 @@ function stopDrag() {
   document.removeEventListener("mouseup", stopDrag);
 }
 
-function onTitlebarKeydown(e: KeyboardEvent, dx: number, dy: number) {
-  const target = e.target as HTMLElement;
-  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+function nudgePanel(dx: number, dy: number) {
   if (store.panelState !== "floating") return;
-  e.preventDefault();
   store.updatePosition({
     x: store.panelPosition.x + dx,
     y: store.panelPosition.y + dy,
   });
+}
+
+function handleTitlebarKeydown(e: KeyboardEvent) {
+  if (e.target instanceof HTMLElement && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+  if (store.panelState !== "floating") return;
+  switch (e.key) {
+    case "ArrowUp": e.preventDefault(); nudgePanel(0, -1); break;
+    case "ArrowDown": e.preventDefault(); nudgePanel(0, 1); break;
+    case "ArrowLeft": e.preventDefault(); nudgePanel(-1, 0); break;
+    case "ArrowRight": e.preventDefault(); nudgePanel(1, 0); break;
+  }
 }
 
 function startResize(e: MouseEvent) {
