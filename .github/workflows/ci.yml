@@ -194,6 +194,62 @@ jobs:
           fi
           echo "Migration heads OK ($HEAD_COUNT head)"
 
+      # Numeric-prefix collision check vs base. `alembic heads` above catches TWO
+      # head migrations, but NOT a numeric-prefix collision: two migrations that
+      # both use prefix 0065_ (e.g. the PR's 0065_cost_components + main's
+      # 0065_reconcile_staging_schema) that are manually chained (one's
+      # down_revision is the other) produce a single head, so the multi-head check
+      # can't see the collision. We hit exactly this on PR #671 (A1); it was caught
+      # only because the two files were separate heads. Fail early here instead.
+      - name: Check numeric migration-prefix collisions vs base
+        if: github.event_name == 'pull_request'
+        working-directory: backend
+        shell: bash
+        run: |
+          MIG_DIR="src/modulo/db/migrations/versions"
+          BASE="origin/${{ github.base_ref }}"
+
+          # Migration files changed by this PR vs its merge-base.
+          CHANGED=$(git diff --name-only "${BASE}...HEAD" -- "${MIG_DIR}/" || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No migration files changed by this PR -- skipping migration-prefix collision check"
+            exit 0
+          fi
+
+          # All migration filenames on the base (main) side.
+          BASE_FILES=$(git ls-tree --name-only "${BASE}" "${MIG_DIR}/" | sed 's|.*/||' || true)
+
+          echo "Migration files changed by this PR:"
+          printf '%s\n' "$CHANGED" | sed 's/^/  /'
+          echo ""
+
+          COLLISION=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # Skip deletions/renamed-away files: only files still present in the
+            # PR tree can collide after merge.
+            if ! git cat-file -e "HEAD:${f}" 2>/dev/null; then
+              echo "  (skip) not present in PR tree: ${f}"
+              continue
+            fi
+            base_f=$(basename "$f")
+            prefix=$(printf '%s' "$base_f" | cut -d_ -f1)
+            while IFS= read -r bf; do
+              [ -z "$bf" ] && continue
+              bprefix=$(printf '%s' "$bf" | cut -d_ -f1)
+              if [ "$bprefix" = "$prefix" ] && [ "$bf" != "$base_f" ]; then
+                echo "::error::Numeric migration-prefix collision: ${base_f} collides with ${bf}. Renumber to the next free prefix (e.g. 0066, 0067...) and set down_revision to the actual current head."
+                COLLISION=1
+              fi
+            done <<< "$BASE_FILES"
+          done <<< "$CHANGED"
+
+          if [ "$COLLISION" -eq 1 ]; then
+            exit 1
+          fi
+          echo "No migration-prefix collision"
+          exit 0
+
   # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery
   # plan §3: automated staging verification = the boot-time allow-list assertion
   # + the connectivity smoke that FAILS boot when ENABLED AND
