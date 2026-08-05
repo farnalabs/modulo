@@ -3432,23 +3432,23 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     fields: list[dict[str, Any]] = []
     if "properties" in defn:
         required_set = set(defn.get("required", []))
-        for name, prop in defn["properties"].items():
-            fields.append(
-                {
-                    "name": name,
-                    "type": prop.get("type", "unknown"),
-                    "required": name in required_set,
-                }
-            )
+        fields = [
+            {
+                "name": name,
+                "type": prop.get("type", "unknown"),
+                "required": name in required_set,
+            }
+            for name, prop in defn["properties"].items()
+        ]
     elif "fields" in defn:
-        for f in defn["fields"]:
-            fields.append(
-                {
-                    "name": f.get("name", "?"),
-                    "type": f.get("type", "unknown"),
-                    "required": f.get("required", False),
-                }
-            )
+        fields = [
+            {
+                "name": f.get("name", "?"),
+                "type": f.get("type", "unknown"),
+                "required": f.get("required", False),
+            }
+            for f in defn["fields"]
+        ]
 
     lines = [
         f"Schema: {schema.name}",
