@@ -769,9 +769,9 @@ async def compare_evals(
                 detail="An unexpected error occurred while comparing eval results.",
             ) from None
 
-    results_by_eval_a = {r.eval_id: r for r in results_a}
+    results_by_eval_a: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_a}
 
-    results_by_eval_b = {r.eval_id: r for r in results_b}
+    results_by_eval_b: dict[uuid.UUID, Any] = {r.eval_id: r for r in results_b}
 
     compared: list[dict[str, Any]] = []
     all_eval_ids = sorted(eval_ids)
