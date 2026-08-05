@@ -55,11 +55,14 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] Delete issue via dedicated `write("issue_delete")` operation — `DELETE /issue/{issue_key}` with success confirmation
 - [x] JQL search supports pagination cursor via `startAt` parsing
 - [x] JQL search returns total count
+- [x] Discover create-issue field metadata via `query("field_metadata")` with required `project` filter — `GET /issue/createmeta?projectKeys={project}&expand=projects.issuetypes.fields`, returns the project's issue types with their create-issue field definitions (system + custom fields); `metadata["project"]` echoes the requested key
+- [x] List all instance fields via `query("fields")` — `GET /field`, returns system + custom fields (`custom: true` flags custom fields)
 
 ### Project Operations — discovery and metadata
 
 - [x] List accessible projects via `query("projects")` — returns key, name, lead, avatarUrls
-- [ ] Get project metadata (issue types, statuses, fields) — not implemented
+- [x] Get project metadata (issue types, statuses, fields) — via `query("field_metadata")`, `query("fields")`, and `query("statuses")`
+- [x] List issue-type statuses for a project via `query("statuses")` with required `project` filter — `GET /project/{project}/statuses`, returns each issue type with its statuses (incl. status category); `metadata["project"]` echoes the requested key
 - [ ] Get project components and versions — not implemented
 
 ### Capability Declaration
@@ -124,11 +127,23 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 
 - [ ] **Jira Data Center not supported**: URL format is `https://{instance}/rest/api/3` — Jira Server/Data Center uses a different path structure
 - [ ] **No attachment support**: cannot upload or download issue attachments
-- [ ] **No field metadata**: agents cannot discover custom fields, available issue types, or statuses for a given project
+- [x] ~~**No field metadata**~~ — **RESOLVED (2026-08-05)**: agents can now discover create-issue fields + custom fields (`query("field_metadata")`), all instance fields (`query("fields")`), and per-project issue-type statuses (`query("statuses")`)
 
 ---
 
 ## QA History
+
+### 2026-08-05 — improve-architecture: field metadata RESOLVED
+
+**RESOLVED known gap** "No field metadata". Agents can now discover custom fields, available issue types, and statuses for a given project via three new `query()` resources in `connectors/jira/__init__.py`:
+
+- **`query("field_metadata")`** — requires a `project` filter; calls `GET /issue/createmeta?projectKeys={project}&expand=projects.issuetypes.fields` and returns the project's issue types with their create-issue field definitions (system fields such as `summary` plus custom fields such as `customfield_*`). `ValueError` when the `project` filter is missing; empty `projects` list (unknown project) yields empty records. `metadata["project"]` echoes the requested key.
+- **`query("fields")`** — calls `GET /field` and lists every field across the instance (system + custom, `custom: true` flags custom fields). No filter required.
+- **`query("statuses")`** — requires a `project` filter; calls `GET /project/{project}/statuses` and returns each issue type for the project with its available statuses (incl. status category). `ValueError` when the `project` filter is missing; `metadata["project"]` echoes the requested key.
+
+All three return `ConnectorResult` with `metadata["rate_limit"]` (empty dict when headers absent).
+
+**Tests:** 8 unit tests in `test_jira.py` (field_metadata records + createmeta params + project echo + unknown-project empty + missing-project error, fields records + custom flag + rate-limit metadata, statuses records + status categories + project echo + missing-project error + 404 api error) + 5 BDD scenarios in `jira_connector.feature` (discover field metadata, missing-project filter error, query all fields incl. custom, query project statuses, missing-project statuses error) with 6 new step definitions and the mock connector extended. Updated product map (3 behaviours `[ ]`→`[x]`, 1 Known Gap → RESOLVED, BDD count 13→18, QA History). 57/57 `test_jira.py` + 27/27 `test_jira_resilience.py` unit tests pass, 18/18 jira BDD scenarios pass (19 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (Jira Data Center, attachments remain).
 
 ### 2026-08-03 — improve-architecture: assign / labels / delete RESOLVED
 - **RESOLVED 3 known gaps** in the Jira connector. (1) Dedicated assignment — `write("issue_assign")` accepts `{"issue_key", "account_id"}` (direct `accountId`), `{"issue_key", "email"}` or `{"issue_key", "display_name"}` (resolved via `GET /user/search?query=...&maxResults=1`, `ValueError` when no user / no `accountId` returned), or explicit `{"account_id": null}` / `{"unassign": true}` to clear the assignee (PUT `{"fields": {"assignee": null}}`). (2) Label management — `write("issue_label")` accepts `{"issue_key", "add": [...], "remove": [...]}`; because Jira's `labels` field is a set (PUT replaces the whole list), new `_compute_target_labels()` fetches the issue's current labels and computes the add/remove target atomically in one PUT. (3) Issue delete — `write("issue_delete")` (`DELETE /issue/{issue_key}`, success confirmation). Added 14 unit tests (`test_jira.py`: assign by account_id / by email / by display_name / unassign via null / unassign via flag / missing key / no-identifier error / user-not-found, labels add+remove / add-dedupe / missing add/remove / missing key, delete + missing key) + 4 BDD scenarios in `jira_connector.feature` (assign, unassign, add/remove labels, delete) with 8 new step definitions in `test_connectors.py` and the mock connector extended. Updated product map (4 behaviours `[ ]`→`[x]`, Known Gaps 6→3, QA History). 49/49 `test_jira.py` + 27/27 `test_jira_resilience.py` unit tests pass, 13/13 jira BDD scenarios pass, ruff clean. Status: partial (Jira Data Center, attachments, field metadata remain).

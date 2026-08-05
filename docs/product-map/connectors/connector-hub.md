@@ -96,7 +96,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 #### Issue Tracking & Project Management
 
 - [x] `type_id = "linear"` → `LinearConnector(api_key=creds.api_key)`; BDD exists (linear_connector.feature — placeholder); ConnectorType.LINEAR; enum entry exists
-- [x] `type_id = "jira"` → `JiraConnector(instance=config.instance, creds=creds)` — `instance` or `base_url` is required; `ValueError` if missing; supports token or email+api_token auth; BDD exists (jira_connector.feature: 5 real scenarios); ConnectorType.JIRA; enum entry exists
+- [x] `type_id = "jira"` → `JiraConnector(instance=config.instance, creds=creds)` — `instance` or `base_url` is required; `ValueError` if missing; supports token or email+api_token auth; BDD exists (jira_connector.feature: 18 real scenarios); ConnectorType.JIRA; enum entry exists
 - [x] `type_id = "shortcut"` → `ShortcutConnector(token=creds.token)`; no BDD; ConnectorType.SHORTCUT; enum entry exists; unit tests exist (test_shortcut_connector.py)
 - [x] `type_id = "trello"` → `TrelloConnector(api_key=creds.api_key, token=creds.token)` — two required credentials; no BDD; ConnectorType.TRELLO; enum entry exists; unit tests exist (test_trello_connector.py)
 - [x] `type_id = "asana"` → `AsanaConnector(personal_access_token=creds.personal_access_token)`; no BDD; ConnectorType.ASANA; enum entry exists; unit tests exist (test_asana_connector.py)
