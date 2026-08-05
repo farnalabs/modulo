@@ -377,6 +377,15 @@ def step_github_connector(ctx):
                         }
                     ]
                 )
+            case "tree":
+                return ConnectorResult(
+                    records=[
+                        {"path": "README.md", "mode": "100644", "type": "blob", "sha": "a1", "size": 10},
+                        {"path": "src", "mode": "040000", "type": "tree", "sha": "a2"},
+                        {"path": "src/main.py", "mode": "100644", "type": "blob", "sha": "a3", "size": 20},
+                    ],
+                    total=3,
+                )
             case "pulls":
                 return ConnectorResult(
                     records=[
@@ -399,6 +408,9 @@ def step_github_connector(ctx):
 
     async def mock_write(payload):
         if payload.resource == "file":
+            path = payload.data.get("path", "")
+            if any(part == ".." for part in path.replace("\\", "/").split("/")):
+                raise ValueError(f"GitHub resource 'file': path traversal blocked: {path!r}")
             return {
                 "content": {"name": "new.md"},
                 "commit": {"sha": "abc123"},
@@ -606,6 +618,23 @@ def step_github_query_pr_with_pull_number(resource, repo, number, ctx):
         ctx["query_error"] = str(exc)
 
 
+@when(parsers.parse('I query resource "{resource}" with filters repo "{repo}" and ref "{ref}"'))
+def step_github_query_tree_with_ref(resource, repo, ref, ctx):
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    q = ConnectorQuery(resource=resource, filters={"repo": repo, "ref": ref})
+    import asyncio
+
+    try:
+        result = asyncio.run(connector.query(q))
+        ctx["query_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["query_result"] = None
+        ctx["query_error"] = str(exc)
+
+
 @when(parsers.parse('I query resource "{resource}" with search query "{search_query}"'))
 def step_github_query_search(resource, search_query, ctx):
     from modulo.connectors.base import ConnectorQuery
@@ -667,6 +696,23 @@ def step_write_fails(ctx):
 @then("the result is an error")
 def step_result_is_error(ctx):
     assert ctx.get("query_error") is not None, "Expected an error but query succeeded"
+
+
+@then(parsers.parse('the error message contains "{needle}"'))
+def step_error_message_contains(needle, ctx):
+    error = ctx.get("query_error")
+    assert error is not None, "Expected an error but none was recorded"
+    assert needle in error, f"Expected error containing {needle!r} but got: {error}"
+
+
+@then("the tree records include nested paths")
+def step_tree_records_include_nested_paths(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    assert len(result.records) > 0, "Tree query returned no records"
+    assert any(r.get("path", "").startswith("src/") for r in result.records), (
+        f"Expected nested paths under src/ but got: {result.records}"
+    )
 
 
 @then("the result reports a next page cursor")

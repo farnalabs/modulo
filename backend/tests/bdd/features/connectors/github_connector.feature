@@ -84,3 +84,15 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When I query resource "search_issues" with search query "repo:owner/repo is:open"
     Then the result has records
+
+  Scenario: Recursively list repository tree
+    Given a GitHub connector with valid token
+    When I query resource "tree" with filters repo "owner/repo" and ref "main"
+    Then the result has records
+    And the tree records include nested paths
+
+  Scenario: Path traversal on file write is blocked
+    Given a GitHub connector with valid token
+    When I write resource "file" with content "bm90aGluZw==" and path "../evil.txt"
+    Then the result is an error
+    And the error message contains "path traversal"

@@ -675,3 +675,147 @@ async def test_write_issue_assign(connector):
     assert result["assignees"][0]["login"] == "alice"
     sent = json.loads(route.calls.last.request.content)
     assert sent == {"assignees": ["alice"]}
+
+
+# ---------------------------------------------------------------------------
+# Recursive file listing — query("tree") via the Git Trees API
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_tree(connector):
+    """Recursive tree listing returns all descendant entries."""
+    body = {
+        "sha": "abc123",
+        "tree": [
+            {"path": "README.md", "mode": "100644", "type": "blob", "sha": "a1", "size": 10},
+            {"path": "src", "mode": "040000", "type": "tree", "sha": "a2"},
+            {"path": "src/main.py", "mode": "100644", "type": "blob", "sha": "a3", "size": 20},
+        ],
+        "truncated": False,
+    }
+    route = respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+    assert len(result.records) == 3
+    assert result.records[0]["type"] == "blob"
+    assert result.records[2]["path"] == "src/main.py"
+    assert route.calls.last.request.url.params.get("recursive") == "1"
+
+
+@respx.mock
+async def test_query_tree_recursive_false_and_ref(connector):
+    """recursive=false omits the param; ref is forwarded into the tree path."""
+    body = {
+        "tree": [{"path": "README.md", "mode": "100644", "type": "blob", "sha": "a1", "size": 10}],
+        "truncated": False,
+    }
+    route = respx.get("https://api.github.com/repos/owner/repo/git/trees/dev").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    await connector.query(
+        ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "ref": "dev", "recursive": False})
+    )
+    assert route.calls.last.request.url.params.get("recursive") is None
+
+
+@respx.mock
+async def test_query_tree_path_prefix_filter(connector):
+    """path filter narrows tree entries to the given prefix."""
+    body = {
+        "tree": [
+            {"path": "docs/README.md", "mode": "100644", "type": "blob", "sha": "a1"},
+            {"path": "src/main.py", "mode": "100644", "type": "blob", "sha": "a2"},
+        ],
+        "truncated": False,
+    }
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/main").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "path": "docs"}))
+    assert len(result.records) == 1
+    assert result.records[0]["path"] == "docs/README.md"
+
+
+@respx.mock
+async def test_query_tree_missing_repo(connector):
+    with pytest.raises(ValueError, match="requires 'repo' filter"):
+        await connector.query(ConnectorQuery(resource="tree", filters={}))
+
+
+@respx.mock
+async def test_query_tree_path_traversal_blocked(connector):
+    with pytest.raises(ValueError, match="path traversal"):
+        await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo", "path": "../src"}))
+
+
+# ---------------------------------------------------------------------------
+# Path traversal protection — file read/write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["../secret.txt", "sub/../../etc/passwd", "/etc/passwd", r"..\win.ini"])
+@respx.mock
+async def test_query_file_path_traversal_blocked(connector, path):
+    with pytest.raises(ValueError, match=r"path traversal|must be relative"):
+        await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": path}))
+
+
+@pytest.mark.parametrize("path", ["../secret.txt", "sub/../../etc/passwd", "/etc/passwd", r"..\win.ini"])
+@respx.mock
+async def test_write_file_path_traversal_blocked(connector, path):
+    with pytest.raises(ValueError, match=r"path traversal|must be relative"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file",
+                data={"repo": "owner/repo", "path": path, "content": "bm90aGluZw==", "message": "m"},
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit budget awareness — X-RateLimit-* metadata on results
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_repos_rate_limit_metadata(connector):
+    headers = {
+        "X-RateLimit-Limit": "5000",
+        "X-RateLimit-Remaining": "4999",
+        "X-RateLimit-Reset": "1785880000",
+        "X-RateLimit-Used": "1",
+        "X-RateLimit-Resource": "core",
+    }
+    respx.get("https://api.github.com/user/repos").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "name": "repo-a"}], headers=headers)
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert result.metadata["rate_limit"]["X-RateLimit-Limit"] == "5000"
+    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
+    assert result.metadata["rate_limit"]["X-RateLimit-Reset"] == "1785880000"
+
+
+@respx.mock
+async def test_query_no_rate_limit_headers_returns_empty(connector):
+    respx.get("https://api.github.com/user/repos").mock(
+        return_value=httpx.Response(200, json=[{"id": 1, "name": "repo-a"}])
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert result.metadata["rate_limit"] == {}
+
+
+@respx.mock
+async def test_query_single_resource_metadata_rate_limit(connector):
+    respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(
+        return_value=httpx.Response(
+            200,
+            json={"number": 1},
+            headers={"X-RateLimit-Remaining": "42", "X-RateLimit-Reset": "1785880000"},
+        )
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "1"})
+    )
+    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "42"

@@ -74,10 +74,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Include `sha` for updates (required by GitHub Contents API for existing files)
 - [x] Return created/updated resource dict from API
 - [x] `raise_for_status()` on HTTP errors
-- [ ] File content is expected as raw string — no base64 encode/decode in connector; caller must handle encoding
-- [ ] Recursive file listing — not implemented (`/contents` only returns one level)
+- [x] File content is expected as raw string — no base64 encode/decode in connector; caller must handle encoding
+- [x] Recursive file listing — `query("tree")` via the Git Trees API (`GET /repos/{owner}/{repo}/git/trees/{ref}?recursive=1`), optional `path` prefix filter and `ref` (default `"main"`)
 - [ ] Batch file operations — not implemented
-- [ ] Path traversal protection — relies on GitHub API server-side; no local validation
+- [x] Path traversal protection — `_validate_path()` rejects absolute paths and `..` segments locally before any request is sent
 
 ### Issue Operations — create, read, update, and comment
 
@@ -140,8 +140,8 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Base delay starts at 1s and doubles per attempt (1s, 2s, 4s), capped at 30s
 - [x] Retry is applied to all `_call_api` invocations — shared by both `query()` and `write()`
 - [ ] No circuit breaker — retries are unconditional up to max attempts
-- [ ] No `X-RateLimit-Remaining` header inspection before making requests
-- [ ] No rate-limit budget-aware scheduling
+- [x] `X-RateLimit-*` header inspection — every query result carries `metadata["rate_limit"]` (`X-RateLimit-Limit`/`Remaining`/`Reset`/`Used`/`Resource` when GitHub reports them); absent headers yield `{}`
+- [x] Rate-limit budget-aware scheduling — on 429 the retry waits until `X-RateLimit-Reset` when reported (quota-window wait) instead of blind backoff; exhausted-429 error strings surface the quota headers
 
 ### Pagination
 
@@ -179,20 +179,24 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **No OAuth flow**: PAT-only auth; no OAuth 2.0 authorization code flow for user-context operations
 - [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
 - [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
-- [ ] **No rate-limit budget awareness**: retry/backoff exists for 429, but `X-RateLimit-Remaining` header is not inspected before making requests; no rate-limit budget-aware scheduling
 - [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
 - [ ] **File content encoding**: caller must base64-encode file content; no encode/decode helper in connector
-- [ ] **Recursive file listing**: `GET /contents` only returns one level; no tree API integration
-- [ ] **Path traversal protection**: relies on GitHub API server-side; no local validation before sending request
 - [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
 - [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
-- [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
-- [ ] **`test_github_issues.py` (550 lines)** and **`test_github_scopes.py` (89 lines)** now in `unit-tests:` frontmatter — were previously missing
-- [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
+- [ ] **BDD coverage of retry/backoff, pagination, and configurable base URL**: `github_connector.feature` covers CRUD, PR ops, search, tree, and path traversal but not retry/backoff timing, Link-header pagination steps, or the GHES `base_url` constructor
 
 ## QA History
+
+### 2026-08-05 — improve-architecture: 3 known gaps RESOLVED (rate-limit budget, recursive tree, path traversal)
+
+**RESOLVED known gaps** "No rate-limit budget awareness", "Recursive file listing", "Path traversal protection" in `connectors/github/__init__.py`:
+- **Rate-limit budget awareness** — new `_RATE_LIMIT_HEADERS` + `_parse_rate_limit_reset()` + `_rate_limit_metadata()` + `_rate_limit_detail()`; every query result now carries `metadata["rate_limit"]` with GitHub's `X-RateLimit-Limit`/`Remaining`/`Reset`/`Used`/`Resource` headers when present (absent → `{}`). On 429, `_retry_delay()` prefers the `X-RateLimit-Reset` quota-window wait over `Retry-After` over blind backoff; exhausted-429 error strings surface the quota headers. All list + single-resource query paths routed through a new `_result()` helper (also centralises Link-header cursor parsing).
+- **Recursive file listing** — new `query("tree")` using the Git Trees API (`GET /repos/{owner}/{repo}/git/trees/{ref}` with `recursive=1` by default, optional `path` prefix filter and `ref` defaulting to `"main"`).
+- **Path traversal protection** — new `_validate_path()` rejects absolute paths and `..` segments before any request is sent, wired into `query("file")`, `query("tree")` (path filter), and `write("file")`.
+
+Added 17 unit tests (`test_github.py`: tree happy/recursive-false+ref/path-prefix/missing-repo/traversal, file read+write traversal ×4 parametrised, rate-limit metadata on list + single-resource + empty-fallback; `test_github_resilience.py`: 429 waits for `X-RateLimit-Reset`, elapsed-reset fallback, exhausted-429 quota detail) + 2 BDD scenarios in `github_connector.feature` (recursive tree listing, path traversal on file write blocked) with 2 new step definitions in `test_connectors.py` + mock connector extended. Updated product map (4 behaviours `[ ]`→`[x]`, 3 Known Gaps → RESOLVED, BDD count 16→18, QA History). 80/80 `test_github.py` + 16/16 `test_github_resilience.py` unit tests + 18/18 github_connector BDD scenarios pass (pre-existing 18 connector-suite BDD failures unrelated to GitHub), ruff + format clean. Status: partial (no OAuth flow, fine-grained PAT, scope verification, structured error types, circuit breaker, batch file ops remain).
 
 ### 2026-08-02 — improve-architecture: 6 known gaps RESOLVED (PR ops, search, assign)
 

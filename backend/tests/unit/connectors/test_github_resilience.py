@@ -180,3 +180,54 @@ async def test_retry_respects_retry_after_header(connector):
     result = await connector.query(ConnectorQuery(resource="repos"))
     assert len(result.records) == 1
     assert route.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit budget awareness — X-RateLimit-Reset window wait on 429
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_retry_waits_for_rate_limit_reset_window(connector):
+    """429 with X-RateLimit-Reset waits until the window opens instead of blind backoff."""
+    reset_epoch = str(int(__import__("time").time()) + 60)
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(429, text="Rate limit", headers={"X-RateLimit-Reset": reset_epoch}),
+            httpx.Response(200, json=[{"id": 1}]),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_retry_rate_limit_reset_elapsed_falls_back(connector):
+    """An already-elapsed X-RateLimit-Reset falls back to backoff (no crash)."""
+    reset_epoch = str(int(__import__("time").time()) - 5)
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(429, text="Rate limit", headers={"X-RateLimit-Reset": reset_epoch}),
+            httpx.Response(200, json=[{"id": 1}]),
+        ]
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_exhausted_429_surfaces_quota_headers(connector):
+    """Exhausted 429 error detail carries the X-RateLimit-* quota headers."""
+    respx.get("https://api.github.com/user/repos").mock(
+        return_value=httpx.Response(
+            429,
+            text="Rate limit exceeded",
+            headers={"X-RateLimit-Limit": "60", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1785880000"},
+        )
+    )
+    with pytest.raises(ValueError, match=r"X-RateLimit-Limit=60.*X-RateLimit-Remaining=0"):
+        await connector.query(ConnectorQuery(resource="repos"))
