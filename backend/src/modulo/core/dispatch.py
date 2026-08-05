@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
@@ -25,8 +24,12 @@ _log = logging.getLogger(__name__)
 SAQ_EXECUTE_RUN_FUNCTION = "modulo.core.saq_worker.execute_run"
 SAQ_RESUME_RUN_FUNCTION = "modulo.core.saq_worker.resume_run"
 
-# Per-job knobs (plan F5): ttl=300 is finish-origin (SPIKE-verified), so a
-# 300s ttl after completion is safe; timeout=7200 covers long agent runs.
+# Per-job knobs (plan F5): ttl=300 is FINISH-origin — verified against the
+# pinned saq==0.26.4 source: saq/queue/redis.py:436-441 (_finish applies
+# ``setex(job_id, job.ttl, ...)`` ONLY when the job completes) and
+# saq/queue/redis.py:447-471 (_enqueue stores the job hash with a plain SET and
+# no TTL). A 300s ttl therefore never expires a mid-run job hash (timeout=7200
+# covers long agent runs); it only bounds how long a COMPLETED job is retained.
 SAQ_RUN_TIMEOUT = 7200
 SAQ_RUN_TTL = 300
 
@@ -133,6 +136,7 @@ async def _enqueue_saq(
         settings.redis_url,
         socket_keepalive=True,
         socket_connect_timeout=10,
+        max_connections=settings.saq_redis_pool_size,
     )
     try:
         q = RedisQueue(redis_client, name=queue_name)
@@ -172,10 +176,12 @@ async def dispatch_run(
 
     Returns ``(outcome, job_id)``:
 
-      * ``('enqueued', job_id)``  — job is on the SAQ queue.
-      * ``('deduped', job_id)``   — a SAQ job with the same key already exists.
-      * ``('deferred', None)``    — capacity-blocked (no enqueue, no dispatched_at)
-        or enqueue failed.
+      * ``('enqueued', job_id)``     — job is on the SAQ queue.
+      * ``('deduped', job_id)``      — a SAQ job with the same key already exists.
+      * ``('deferred', None)``       — capacity-blocked (no enqueue, no dispatched_at).
+      * ``('enqueue_failed', None)`` — fail-fast enqueue failure (webhook path);
+        the caller records an ``error_event`` (source='saq',
+        function='webhook_dispatch'). Only produced when ``fail_fast=True``.
     """
     settings = get_settings()
     rid = uuid.UUID(str(run_id))
@@ -215,7 +221,7 @@ async def dispatch_run(
     except Exception as exc:
         if fail_fast:
             _log.exception("dispatch_run: SAQ enqueue failed for run %s (fail-fast)", rid)
-            return ("deferred", None)
+            return ("enqueue_failed", None)
         _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", rid, exc)
         for attempt in (1, 2, 3):
             await asyncio.sleep(attempt)
@@ -254,26 +260,3 @@ async def dispatch_run(
     finally:
         await session.close()
     return ("deduped" if deduped else "enqueued", job_id)
-
-
-def dispatch_run_sync(run_id: str, org_id: str, **kwargs: Any) -> tuple[str, str | None]:
-    """Sync facade for sync call sites (webhook handlers)."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(dispatch_run(run_id, org_id, **kwargs))
-    # A loop is already running in this thread — run in a separate thread.
-    result: dict[str, Any] = {}
-
-    def _runner() -> None:
-        try:
-            result["value"] = asyncio.run(dispatch_run(run_id, org_id, **kwargs))
-        except BaseException as exc:
-            result["error"] = exc
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-    if "error" in result:
-        raise result["error"]
-    return cast("tuple[str, str | None]", result["value"])

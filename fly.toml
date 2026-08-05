@@ -15,6 +15,14 @@ primary_region = 'lhr'
   worker = ""
 
 # Web process group — nginx + uvicorn, handles HTTP traffic
+# Restart policy — crash-loop guard + max-restart in the entrypoint is the
+# control (plan F8): no auto-restart here; a crash-looping SAQ worker fails the
+# container and the LB moves traffic decisively.
+# Machine-level recovery for a machine whose worker/scheduler is SILENTLY dead
+# (not crash-looping) is the /healthz/ready watchdog: it 503s when THIS machine's
+# SAQ workers are stale on any queue OR the fire_due_triggers system cron has not
+# fired within 2x its cadence (health.py _check_saq_workers / _check_system_crons),
+# so Fly removes/replaces the machine without relying on a restart policy.
 [[restart]]
   processes = ['app']
   policy = "never"
