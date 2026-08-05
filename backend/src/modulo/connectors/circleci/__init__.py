@@ -150,8 +150,7 @@ class CircleCIConnector(CIRunnerBase):
                             all_lines.append(f"  Job: {job_name} (#{job_number})")
                             for out in outputs:
                                 msg = out.get("message", "") or ""
-                                for line in msg.splitlines():
-                                    all_lines.append(f"    {line}")
+                                all_lines.extend(f"    {line}" for line in msg.splitlines())
 
             return CIRunLog(
                 run_id=run_id,

@@ -174,8 +174,7 @@ async def _export_entity(
         batch = (await session.execute(stmt)).scalars().all()
         if not batch:
             break
-        for row in batch:
-            rows.append(_serialise_row(row))
+        rows.extend(_serialise_row(row) for row in batch)
         offset += PAGE_SIZE
 
     return rows

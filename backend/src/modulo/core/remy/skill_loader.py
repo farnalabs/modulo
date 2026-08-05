@@ -99,8 +99,7 @@ class SkillLoader:
         if not skills:
             return
         parts.append(heading)
-        for skill in skills:
-            parts.append(f"### {skill.name}\n\n{skill.body}")
+        parts.extend(f"### {skill.name}\n\n{skill.body}" for skill in skills)
 
     async def _build_user_profile(self, org_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
         try:

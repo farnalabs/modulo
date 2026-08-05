@@ -91,19 +91,22 @@ def _get_async_engine() -> AsyncEngine:
 def _build_queue(queue_name: str) -> RedisQueue:
     """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2).
 
-    ``max_concurrent_ops`` is pinned to the connection pool size so the
-    semaphore never allows more Redis operations than connections available,
-    preventing ``ConnectionError("Too many connections")`` pool exhaustion.
+    ``max_concurrent_ops`` is set below the pool size so the semaphore never
+    exhausts all available connections — leaving reserve connections for SAQ
+    operations that bypass the semaphore (``schedule``, ``sweep``, ``dequeue``,
+    ``notify``).
     """
     settings = get_settings()
     pool_size = settings.saq_redis_pool_size
+    # Leave reserve connections for semaphore-exempt SAQ operations.
+    max_ops = max(pool_size - 5, 5)
     redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
         settings.redis_url,
         socket_connect_timeout=10,
         socket_keepalive=True,
         max_connections=pool_size,
     )
-    return RedisQueue(redis_client, name=queue_name, max_concurrent_ops=pool_size)
+    return RedisQueue(redis_client, name=queue_name, max_concurrent_ops=max_ops)
 
 
 # ---------------------------------------------------------------------------
