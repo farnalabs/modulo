@@ -261,6 +261,119 @@ jobs:
             -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
             -d "$BODY"
           echo "Fixer notified of conflicts in PRs: $CONFLICTS"
+      - name: Detect migration-number collisions in merged PRs
+        if: steps.merge.outputs.merged_count != '0'
+        env:
+          WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
+        shell: bash
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then echo "No webhook URL configured -- skipping notification"; exit 0; fi
+
+          MIG_DIR="backend/src/modulo/db/migrations/versions"
+          declare -A prefix_holder
+          collision_prs=""
+
+          # Seed the accumulated prefix set from main's current migration tree. Each
+          # migration file holds its numeric prefix (NNNN_name.py), so a PR that
+          # introduces a prefix already held by a DIFFERENT filename is a collision.
+          while IFS= read -r fname; do
+            [ -z "$fname" ] && continue
+            base=$(basename "$fname")
+            prefix="${base%%_*}"
+            [ -n "$prefix" ] && prefix_holder["$prefix"]="$base"
+          done < <(git ls-tree --name-only main -- "$MIG_DIR/" 2>/dev/null | grep '\.py$' || true)
+
+          # Process merged PRs oldest-first (same order as the squash-merge), so the
+          # accumulated set mirrors the migration tree immediately before each PR merged.
+          for NUM in $(cat /tmp/merged_prs.txt 2>/dev/null || echo ""); do
+            [ -z "$NUM" ] && continue
+            git fetch origin "+refs/pull/$NUM/head:refs/heads/pr-$NUM" >/dev/null 2>&1 || true
+            if ! git rev-parse --verify -q "pr-$NUM" >/dev/null 2>&1; then
+              echo "  PR #$NUM branch unavailable -- skipping collision check"
+              continue
+            fi
+
+            echo "  PR #$NUM: checking migration-number collisions..."
+            while IFS=$'\t' read -r status path extra; do
+              [ -z "$path" ] && continue
+              case "$status" in
+                R*)
+                  # Rename: the old path releases its prefix, the new path claims its own.
+                  old_base=$(basename "$path")
+                  old_prefix="${old_base%%_*}"
+                  new_base=$(basename "$extra")
+                  new_prefix="${new_base%%_*}"
+                  [ -n "$old_prefix" ] && [ -n "${prefix_holder[$old_prefix]+x}" ] && [ "${prefix_holder[$old_prefix]}" = "$old_base" ] && unset 'prefix_holder[$old_prefix]'
+                  if [ -n "$new_prefix" ]; then
+                    if [ -n "${prefix_holder[$new_prefix]+x}" ]; then
+                      if [ "${prefix_holder[$new_prefix]}" != "$new_base" ]; then
+                        echo "    COLLISION: PR #$NUM adds $new_base, prefix $new_prefix already held by ${prefix_holder[$new_prefix]}"
+                        collision_prs="$collision_prs $NUM"
+                      fi
+                    else
+                      prefix_holder["$new_prefix"]="$new_base"
+                    fi
+                  fi
+                  ;;
+                D)
+                  # Deletion: release the prefix if this PR removed the file holding it.
+                  base=$(basename "$path")
+                  prefix="${base%%_*}"
+                  [ -n "$prefix" ] && [ -n "${prefix_holder[$prefix]+x}" ] && [ "${prefix_holder[$prefix]}" = "$base" ] && unset 'prefix_holder[$prefix]'
+                  ;;
+                *)
+                  # Addition or modification of a migration file. Only genuinely
+                  # NEW prefixes are added to the accumulated set — the existing
+                  # holder (main or an earlier-merged PR) stays authoritative so
+                  # a colliding PR does not steal the prefix and trigger false
+                  # positives on subsequent PRs that touch the original file.
+                  base=$(basename "$path")
+                  prefix="${base%%_*}"
+                  [ -z "$prefix" ] && continue
+                  if [ -n "${prefix_holder[$prefix]+x}" ]; then
+                    if [ "${prefix_holder[$prefix]}" != "$base" ]; then
+                      echo "    COLLISION: PR #$NUM adds $base, prefix $prefix already held by ${prefix_holder[$prefix]}"
+                      collision_prs="$collision_prs $NUM"
+                    fi
+                  else
+                    prefix_holder["$prefix"]="$base"
+                  fi
+                  ;;
+              esac
+            done < <(git diff --name-status main...pr-$NUM -- "$MIG_DIR" 2>/dev/null || true)
+          done
+
+          collision_prs=$(echo "$collision_prs" | xargs)
+          collision_count=0
+          if [ -n "$collision_prs" ]; then
+            collision_count=$(echo "$collision_prs" | wc -w)
+          fi
+
+          echo "$collision_prs" > /tmp/migration_collision_prs.txt
+          echo "migration_collision_count=$collision_count" >> "$GITHUB_OUTPUT"
+
+          if [ "$collision_count" -eq 0 ]; then
+            echo "No migration-number collisions detected."
+            exit 0
+          fi
+
+          echo "Migration-number collisions detected in PRs: $collision_prs"
+          TIMESTAMP=$(date +%s)
+          BODY=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg phase "migration-collision" \
+            --arg collisionPrs "$collision_prs" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{repository: $repo, phase: $phase, collisionPrs: $collisionPrs, runUrl: $run_url}')
+          PAYLOAD="${TIMESTAMP}.${BODY}"
+          HMAC=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | sed 's/^.* //')
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Modulo-Timestamp: ${TIMESTAMP}" \
+            -H "X-Modulo-Webhook-Secret: sha256=${HMAC}" \
+            -d "$BODY"
+          echo "Fixer notified of migration collisions in PRs: $collision_prs"
       - name: Exit if nothing to merge
         if: steps.merge.outputs.merged_count == '0'
         run: |
