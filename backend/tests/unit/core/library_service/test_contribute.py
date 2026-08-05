@@ -400,8 +400,7 @@ class TestPublish:
                 new_callable=AsyncMock,
             ),
         ):
-            approved_by = uuid.uuid4()
-            result = await publish_contribution(session, org_id, prim_id, approved_by=approved_by)
+            result = await publish_contribution(session, org_id, prim_id)
 
         assert result.contribution_status == CONTRIBUTION_PUBLISHED
         assert result.visibility == "community"
@@ -429,7 +428,7 @@ class TestPublish:
             ),
             pytest.raises(ContributionNotFoundError, match=str(prim_id)),
         ):
-            await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            await publish_contribution(session, org_id, prim_id)
 
     async def test_publish_from_draft_succeeds(self):
         session = _mock_session()
@@ -452,7 +451,7 @@ class TestPublish:
             ),
             patch("modulo.core.library_service.notify_importers_of_update", new_callable=AsyncMock),
         ):
-            result = await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            result = await publish_contribution(session, org_id, prim_id)
             assert result.contribution_status == CONTRIBUTION_PUBLISHED
             assert result.visibility == "community"
 
@@ -471,7 +470,7 @@ class TestPublish:
             ),
             pytest.raises(ContributionInvalidTransitionError),
         ):
-            await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            await publish_contribution(session, org_id, prim_id)
 
     async def test_publish_update_returns_none_raises_not_found(self):
         session = _mock_session()
@@ -493,7 +492,7 @@ class TestPublish:
             ),
             pytest.raises(ContributionNotFoundError),
         ):
-            await publish_contribution(session, org_id, prim_id, approved_by=uuid.uuid4())
+            await publish_contribution(session, org_id, prim_id)
 
 
 class TestListContributions:

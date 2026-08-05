@@ -967,7 +967,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Seed the tier catalog and feature flag definitions (idempotent).
     try:
-        await _seed_tier_catalog(settings)
+        await _seed_tier_catalog()
     except Exception:
         logger.warning("startup.tier_catalog_seed_failed", exc_info=True)
 
@@ -1074,7 +1074,7 @@ async def _seed_cost_components(settings: Settings) -> None:
     await seed_cost_components(factory)
 
 
-async def _seed_tier_catalog(settings: Settings) -> None:
+async def _seed_tier_catalog() -> None:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from modulo.db.session import engine as db_engine
