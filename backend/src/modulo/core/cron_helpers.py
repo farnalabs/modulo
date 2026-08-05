@@ -1252,6 +1252,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         org_ids: list[uuid.UUID] = list(result.scalars())
 
     if not org_ids:
+        # Still record the run so /healthz/ready sees a fresh last_run_at even
+        # in an empty-org environment (the cron keeps ticking every 60s).
+        set_dispatcher_reconcile_stats(summary)
         return summary
 
     redis_client = AsyncRedis.from_url(

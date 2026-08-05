@@ -47,6 +47,10 @@ _START_TIME: datetime = datetime.now(UTC)
 _STALE_PROBE_LIMIT = 4
 _consecutive_stale_probes: int = 0
 
+# dispatcher_reconcile runs on a 60s system-cron tick; a last_run_at older
+# than 60s means at least one tick was missed -> report "stale" (advisory).
+_RECONCILE_STALE_SECONDS = 60
+
 # Break-glass watchdog state, published at boot by the lifespan and exposed on
 # /healthz as ADVISORY only — it never flips readiness.
 _break_glass_watchdog: dict[str, str] = {"status": "ok", "detail": "break-glass watchdog not run at boot"}
@@ -402,6 +406,22 @@ def _check_dispatcher_reconcile() -> CheckResult:
     stats = get_dispatcher_reconcile_stats()
     if not stats or stats.get("last_run_at") is None:
         return CheckResult(status="degraded", detail="dispatcher_reconcile has never run")
+    try:
+        last_run = datetime.fromisoformat(stats["last_run_at"])
+    except (ValueError, TypeError):
+        return CheckResult(status="degraded", detail="dispatcher_reconcile last_run_at unparsable")
+    stale_seconds = (datetime.now(UTC) - last_run).total_seconds()
+    if stale_seconds > _RECONCILE_STALE_SECONDS:
+        return CheckResult(
+            status="degraded",
+            detail=(
+                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run); "
+                f"last_run_at={stats['last_run_at']}, "
+                f"scanned={stats['scanned']}, repaired={stats['repaired']}, "
+                f"skipped={stats['skipped']}, redis_errors={stats['redis_errors']}, "
+                f"deduped={stats['deduped']}"
+            ),
+        )
     return CheckResult(
         status="ok",
         detail=(
