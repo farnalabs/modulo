@@ -176,7 +176,6 @@ async def publish_contribution_endpoint(
             session,
             principal.organisation_id,
             primitive_id,
-            approved_by=principal.account_id,
         )
     except ProgrammingError:
         _log.exception("contributions.publish_contribution_endpoint")

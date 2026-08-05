@@ -1476,7 +1476,6 @@ async def admin_publish_contribution_endpoint(
             session,
             principal.organisation_id,
             primitive_id,
-            approved_by=principal.account_id,
         )
     except ContributionNotFoundError:
         raise HTTPException(
