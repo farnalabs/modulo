@@ -2,10 +2,10 @@
 
 The counters are lazy-initialised against the OTel meter provider and must be
 no-ops when the provider is missing or unavailable — the cost path must never
-break because telemetry wiring is absent. ``_ensure`` initialises ALL four
-handles in one call, so each record function is exercised both with a live
-fake meter (asserting the matching handle + attributes) and with a None meter
-(asserting the silent no-op guard).
+break because telemetry wiring is absent. ``_ensure`` initialises ALL handles in
+one call (15 counters + 1 gauge), so each record function is exercised both
+with a live fake meter (asserting the matching handle + attributes) and with a
+None meter (asserting the silent no-op guard).
 """
 
 from __future__ import annotations
@@ -13,6 +13,28 @@ from __future__ import annotations
 import pytest
 
 import modulo.core.cost_controller.breakdown.metrics as metrics
+
+_ALL_HANDLES = (
+    "_eval_errors_total",
+    "_clamped_total",
+    "_out_of_band_high_total",
+    "_settings_warning_total",
+    "_fallback_legacy_total",
+    "_ledger_clamped_total",
+    "_ledger_refused_clamped_total",
+    "_finalize_deferred_total",
+    "_limit_refused_total",
+    "_duplicate_terminal_total",
+    "_probe_mismatch_runs_total",
+    "_probe_total_eq_mismatch_total",
+    "_probe_clamped_skip_total",
+    "_probe_missing_ledger_row_total",
+    "_probe_last_success_ts",
+    "_schema_drift_total",
+)
+
+_N_COUNTERS = 15
+_N_GAUGES = 1
 
 
 class _FakeCounter:
@@ -24,17 +46,35 @@ class _FakeCounter:
         self.calls.append({"value": value, "attributes": attributes})
 
 
+class _FakeGauge:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls: list[dict] = []
+
+    def set(self, value: float) -> None:
+        self.calls.append({"value": value})
+
+
 class _FakeMeter:
     def __init__(self) -> None:
         self.counters: list[_FakeCounter] = []
+        self.gauges: list[_FakeGauge] = []
 
     def create_counter(self, *, name: str, description: str, unit: str) -> _FakeCounter:
         counter = _FakeCounter(name)
         self.counters.append(counter)
         return counter
 
+    def create_gauge(self, *, name: str, description: str, unit: str) -> _FakeGauge:
+        gauge = _FakeGauge(name)
+        self.gauges.append(gauge)
+        return gauge
+
     def counter(self, name: str) -> _FakeCounter | None:
         return next((c for c in self.counters if c.name == name), None)
+
+    def gauge(self, name: str) -> _FakeGauge | None:
+        return next((g for g in self.gauges if g.name == name), None)
 
 
 @pytest.fixture()
@@ -44,12 +84,16 @@ def fake_meter() -> _FakeMeter:
 
 @pytest.fixture(autouse=True)
 def _reset_handles(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("_eval_errors_total", "_clamped_total", "_out_of_band_high_total", "_settings_warning_total"):
+    for name in _ALL_HANDLES:
         monkeypatch.setattr(metrics, name, None)
 
 
 def _stub_meter(monkeypatch: pytest.MonkeyPatch, meter: _FakeMeter | None) -> None:
     monkeypatch.setattr(metrics, "_get_meter", lambda: meter)
+
+
+def _record_calls(counter: _FakeCounter | None) -> list[dict]:
+    return counter.calls if counter is not None else []
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +161,138 @@ def test_record_settings_warning_initialises(
     assert metrics._settings_warning_total is counter
 
 
+def test_record_fallback_legacy_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_fallback_legacy()
+    counter = fake_meter.counter("modulo_cost_components_fallback_legacy_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._fallback_legacy_total is counter
+
+
+def test_record_ledger_clamped_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_ledger_clamped()
+    counter = fake_meter.counter("modulo_cost_ledger_clamped_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._ledger_clamped_total is counter
+
+
+def test_record_ledger_refused_clamped_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_ledger_refused_clamped()
+    counter = fake_meter.counter("modulo_cost_ledger_refused_clamped_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._ledger_refused_clamped_total is counter
+
+
+def test_record_finalize_deferred_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_finalize_deferred("write_failure", "core")
+    counter = fake_meter.counter("modulo_cost_ledger_finalize_deferred_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": {"reason": "write_failure", "team": "core"}}]
+    assert metrics._finalize_deferred_total is counter
+
+
+def test_record_limit_refused_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_limit_refused("core")
+    counter = fake_meter.counter("modulo_cost_ledger_limit_refused_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": {"team": "core"}}]
+    assert metrics._limit_refused_total is counter
+
+
+def test_record_duplicate_terminal_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_duplicate_terminal()
+    counter = fake_meter.counter("modulo_cost_ledger_duplicate_terminal_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._duplicate_terminal_total is counter
+
+
+def test_record_probe_mismatch_runs_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_mismatch_runs(3)
+    counter = fake_meter.counter("modulo_cost_probe_mismatch_runs_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 3, "attributes": None}]
+    assert metrics._probe_mismatch_runs_total is counter
+
+
+def test_record_probe_total_eq_mismatch_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_total_eq_mismatch()
+    counter = fake_meter.counter("modulo_cost_probe_total_eq_mismatch_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._probe_total_eq_mismatch_total is counter
+
+
+def test_record_probe_clamped_skip_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_clamped_skip(2)
+    counter = fake_meter.counter("modulo_cost_probe_clamped_skip_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 2, "attributes": None}]
+    assert metrics._probe_clamped_skip_total is counter
+
+
+def test_record_probe_missing_ledger_row_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_missing_ledger_row(2)
+    counter = fake_meter.counter("modulo_cost_probe_missing_ledger_row_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 2, "attributes": None}]
+    assert metrics._probe_missing_ledger_row_total is counter
+
+
+def test_set_probe_last_success_ts_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.set_probe_last_success_ts(1712345678.5)
+    gauge = fake_meter.gauge("modulo_cost_probe_last_success_ts")
+    assert gauge is not None
+    assert gauge.calls == [{"value": 1712345678.5}]
+    assert metrics._probe_last_success_ts is gauge
+
+
+def test_record_schema_drift_initialises(
+    monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_schema_drift()
+    counter = fake_meter.counter("modulo_cost_opencode_schema_drift_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._schema_drift_total is counter
+
+
 def test_lazy_init_is_once_only(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
     _stub_meter(monkeypatch, fake_meter)
     metrics.record_eval_error("a")
@@ -127,21 +303,12 @@ def test_lazy_init_is_once_only(monkeypatch: pytest.MonkeyPatch, fake_meter: _Fa
         {"value": 1, "attributes": {"component": "a"}},
         {"value": 1, "attributes": {"component": "b"}},
     ]
-    # No re-initialisation: the four handles stay the same objects.
-    handles = (
-        metrics._eval_errors_total,
-        metrics._clamped_total,
-        metrics._out_of_band_high_total,
-        metrics._settings_warning_total,
-    )
+    # No re-initialisation: all handles stay the same objects.
+    handles = tuple(getattr(metrics, name) for name in _ALL_HANDLES)
     metrics.record_eval_error("c")
-    assert (
-        metrics._eval_errors_total,
-        metrics._clamped_total,
-        metrics._out_of_band_high_total,
-        metrics._settings_warning_total,
-    ) == handles
-    assert len(fake_meter.counters) == 4
+    assert tuple(getattr(metrics, name) for name in _ALL_HANDLES) == handles
+    assert len(fake_meter.counters) == _N_COUNTERS
+    assert len(fake_meter.gauges) == _N_GAUGES
 
 
 # ---------------------------------------------------------------------------
@@ -155,10 +322,20 @@ def test_record_functions_noop_without_meter(monkeypatch: pytest.MonkeyPatch) ->
     metrics.record_clamped("kind")
     metrics.record_out_of_band("high")
     metrics.record_settings_warning()
-    assert metrics._eval_errors_total is None
-    assert metrics._clamped_total is None
-    assert metrics._out_of_band_high_total is None
-    assert metrics._settings_warning_total is None
+    metrics.record_fallback_legacy()
+    metrics.record_ledger_clamped()
+    metrics.record_ledger_refused_clamped()
+    metrics.record_finalize_deferred("reason", "team")
+    metrics.record_limit_refused("team")
+    metrics.record_duplicate_terminal()
+    metrics.record_probe_mismatch_runs()
+    metrics.record_probe_total_eq_mismatch()
+    metrics.record_probe_clamped_skip()
+    metrics.record_probe_missing_ledger_row()
+    metrics.set_probe_last_success_ts(123.0)
+    metrics.record_schema_drift()
+    for name in _ALL_HANDLES:
+        assert getattr(metrics, name) is None
 
 
 def test_ensure_early_return_when_handles_initialised(
@@ -168,5 +345,7 @@ def test_ensure_early_return_when_handles_initialised(
     metrics._ensure()
     metrics._ensure()
     # Only the first call builds handles; the second returns immediately.
-    assert len(fake_meter.counters) == 4
+    assert len(fake_meter.counters) == _N_COUNTERS
+    assert len(fake_meter.gauges) == _N_GAUGES
     assert metrics._eval_errors_total is fake_meter.counters[0]
+    assert metrics._probe_last_success_ts is fake_meter.gauges[0]
