@@ -3,6 +3,14 @@
 When a source pipeline's designated node completes execution, a child pipeline
 run is fired with the completed node's output as input. Fire logic lives in
 ``fire_agent_signal()``.
+
+Trigger config_json structure::
+
+    {
+        "source_pipeline_id": "<uuid>",   # pipeline to watch
+        "source_node_id": "<node_id>",    # node within source pipeline to watch
+        "snapshot_id": "<uuid>",          # snapshot for child run (optional)
+    }
 """
 
 import asyncio
