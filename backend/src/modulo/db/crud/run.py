@@ -3,6 +3,7 @@
 All functions require RLS org context to be set by the caller.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -12,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import Date, case, cast, delete, func, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -390,14 +391,55 @@ def _percentile(sorted_data: list[float], p: float) -> float:
     return sorted_data[f] + (k - f) * (sorted_data[c] - sorted_data[f])
 
 
+def _empty_run_stats() -> dict[str, Any]:
+    """Zero-shaped stats response for an empty window (same shape as a full one)."""
+    return {
+        "total_runs": 0,
+        "success_rate": 0.0,
+        "avg_duration_ms": 0,
+        "p50_duration_ms": 0,
+        "p95_duration_ms": 0,
+        "p99_duration_ms": 0,
+        "runs_by_day": [],
+        "failure_by_reason": [],
+        "avg_duration_by_day": [],
+    }
+
+
+async def _get_dialect_name(session: AsyncSession) -> str:
+    """Return the active SQLAlchemy dialect name (e.g. 'postgresql')."""
+    bind = session.get_bind()
+    if asyncio.iscoroutine(bind):
+        bind = await bind
+    return bind.dialect.name
+
+
 async def get_run_stats(
     session: AsyncSession,
     period: str = "30d",
 ) -> dict[str, Any]:
-    """Aggregated run stats for the given period (7d|30d|90d)."""
+    """Aggregated run stats for the given period (7d|30d|90d).
+
+    Postgres computes the p50/p95/p99 duration percentiles in SQL via
+    ``percentile_cont`` so the endpoint does not load every run in the window
+    into Python. Generic backends (SQLite, MariaDB) fall back to loading runs
+    and computing percentiles in Python because ``percentile_cont`` is
+    Postgres-only. The response shape is identical on both paths.
+    """
     days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
     cutoff = datetime.now(UTC) - timedelta(days=days)
 
+    dialect = await _get_dialect_name(session)
+    if dialect == "postgresql":
+        return await _get_run_stats_postgres(session, cutoff)
+    return await _get_run_stats_python(session, cutoff)
+
+
+async def _get_run_stats_python(
+    session: AsyncSession,
+    cutoff: datetime,
+) -> dict[str, Any]:
+    """Generic-backend fallback: load runs into Python, compute percentiles locally."""
     result = await session.execute(
         select(Run)
         .join(Pipeline, Run.pipeline_id == Pipeline.id)
@@ -411,17 +453,7 @@ async def get_run_stats(
 
     total = len(runs)
     if total == 0:
-        return {
-            "total_runs": 0,
-            "success_rate": 0.0,
-            "avg_duration_ms": 0,
-            "p50_duration_ms": 0,
-            "p95_duration_ms": 0,
-            "p99_duration_ms": 0,
-            "runs_by_day": [],
-            "failure_by_reason": [],
-            "avg_duration_by_day": [],
-        }
+        return _empty_run_stats()
 
     completed_runs = [r for r in runs if r.completed_at and r.started_at]
     durations_ms = sorted(
@@ -469,6 +501,121 @@ async def get_run_stats(
             {"reason": r, "count": c} for r, c in sorted(failure_reasons.items(), key=lambda x: -x[1])
         ],
         "avg_duration_by_day": [{"date": d, "avg_ms": int(sum(v) / len(v))} for d, v in sorted(dur_by_day.items())],
+    }
+
+
+async def _get_run_stats_postgres(
+    session: AsyncSession,
+    cutoff: datetime,
+) -> dict[str, Any]:
+    """Postgres fast path: duration percentiles computed in SQL via ``percentile_cont``.
+
+    RLS scoping still applies — the queries are ORM selects against ``Run`` and
+    ``Pipeline`` and the route sets the org context with ``set_rls_org`` before
+    calling this function. NULL durations are excluded from the percentile
+    aggregates (a run without both ``started_at`` and ``completed_at`` has no
+    duration); an empty percentile group yields ``None`` in the response.
+    """
+    duration_ms = func.extract("epoch", Run.completed_at - Run.started_at) * 1000
+    base_where = (
+        Run.created_at >= cutoff,
+        Pipeline.deleted_at.is_(None),
+    )
+    day = cast(Run.created_at, Date).label("day")
+
+    # Per-day count/success/failed buckets plus per-day average duration. A day
+    # with runs but no completed durations has a NULL avg and is omitted, which
+    # matches the generic path (days only appear once they have a duration).
+    day_rows = list(
+        (
+            await session.execute(
+                select(
+                    day,
+                    func.count().label("count"),
+                    func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
+                    func.sum(
+                        case((Run.status.in_(("failed", "cancelled", "eval_failed", "expired")), 1), else_=0)
+                    ).label("failed"),
+                    func.avg(duration_ms).label("avg_duration"),
+                )
+                .select_from(Run)
+                .join(Pipeline, Run.pipeline_id == Pipeline.id)
+                .where(*base_where)
+                .group_by(day)
+            )
+        ).all()
+    )
+
+    total = sum(int(row.count) for row in day_rows)
+    if total == 0:
+        return _empty_run_stats()
+
+    # Whole-window duration percentiles + mean over completed runs (both
+    # started_at and completed_at present). percentile_cont ignores NULLs and
+    # returns NULL for an empty group, so the response null-guards below.
+    overall = (
+        await session.execute(
+            select(
+                func.percentile_cont(0.5).within_group(duration_ms).label("p50"),
+                func.percentile_cont(0.95).within_group(duration_ms).label("p95"),
+                func.percentile_cont(0.99).within_group(duration_ms).label("p99"),
+                func.avg(duration_ms).label("avg_duration"),
+            )
+            .select_from(Run)
+            .join(Pipeline, Run.pipeline_id == Pipeline.id)
+            .where(
+                *base_where,
+                Run.completed_at.is_not(None),
+                Run.started_at.is_not(None),
+            )
+        )
+    ).one()
+    p50 = overall.p50
+    p95 = overall.p95
+    p99 = overall.p99
+    avg_duration = overall.avg_duration
+
+    # Failure reason breakdown for failed / eval_failed runs carrying an error code.
+    failure_rows = list(
+        (
+            await session.execute(
+                select(Run.error_code, func.count())
+                .select_from(Run)
+                .join(Pipeline, Run.pipeline_id == Pipeline.id)
+                .where(
+                    *base_where,
+                    Run.status.in_(("failed", "eval_failed")),
+                    Run.error_code.is_not(None),
+                    Run.error_code != "",
+                )
+                .group_by(Run.error_code)
+            )
+        ).all()
+    )
+
+    success_count = sum(int(row.success) for row in day_rows)
+    success_rate = round(success_count / total, 4)
+
+    return {
+        "total_runs": total,
+        "success_rate": success_rate,
+        "avg_duration_ms": int(avg_duration) if avg_duration is not None else 0,
+        "p50_duration_ms": int(p50) if p50 is not None else None,
+        "p95_duration_ms": int(p95) if p95 is not None else None,
+        "p99_duration_ms": int(p99) if p99 is not None else None,
+        "runs_by_day": [
+            {"date": str(row.day), "count": int(row.count), "success": int(row.success), "failed": int(row.failed)}
+            for row in sorted(day_rows, key=lambda r: r.day)
+        ],
+        "failure_by_reason": [
+            {"reason": reason, "count": int(count)}
+            for reason, count in sorted(failure_rows, key=lambda item: -int(item[1]))
+        ],
+        "avg_duration_by_day": [
+            {"date": str(row.day), "avg_ms": int(row.avg_duration)}
+            for row in sorted(day_rows, key=lambda r: r.day)
+            if row.avg_duration is not None
+        ],
     }
 
 
