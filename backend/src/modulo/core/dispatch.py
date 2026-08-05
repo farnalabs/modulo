@@ -1,21 +1,7 @@
-"""dispatch_run — the single gating point for run dispatch.
+"""Dispatch pipeline runs to SAQ — the only dispatch path post-cutover.
 
-Every run dispatch flows through :func:`dispatch_run` (plan F3e). It enqueues
-``execute_run`` / ``resume_run`` jobs to the SAQ runs queue with per-job knobs
-from Settings and records the ``dispatcher`` column — unconditionally ``'saq'``
-(PR C cutover: Celery removed, the dispatcher column reflects where the job
-actually went, and that is always SAQ).
-
-Capacity gating (plan F3b/F3e) applies to all dispatches — both new
-``execute_run`` dispatches and ``resume_run`` — a run at the pipeline's
-``max_concurrent_runs`` is returned ``'deferred'`` with NO enqueue and NO
-``dispatched_at`` (dispatcher_reconcile re-dispatches when capacity frees). The
-run's own slot is excluded from the count so a resume never blocks itself.
-
-On enqueue failure: webhook handlers pass ``fail_fast=True`` (respond 202,
-leave recovery to ``dispatcher_reconcile`` — never block the request on
-backoff); elsewhere ``fail_fast=False`` retries with backoff and on final
-failure marks the run ``dispatch_failed`` and expires the webhook dedup hash.
+Covers enqueue and SAQ job dedup for the ``execute_run``/``resume_run`` job
+functions via :func:`dispatch_run` (with capacity gating).
 """
 
 from __future__ import annotations
