@@ -182,20 +182,20 @@ class TestCheckAndRecordSpendSteps:
         # org limit 100, created-at SUM 95, +10 = 105 > 100.
         approved, reason = self._run(
             False,
-            "daily_limit_exceeded",
+            "daily_limit_exceeded: organisation",
             "10.00",
             team=False,
             sums=[self._limit(Decimal("100.00")), self._sum(Decimal("95.00"))],
         )
         assert approved is False
-        assert reason == "daily_limit_exceeded"
+        assert reason == "daily_limit_exceeded: organisation"
 
     def test_spend_over_team_limit_rejected(self) -> None:
         """Spend exceeding team daily limit is refused (org passes, team fails)."""
         # org limit 500, org SUM 50; team limit 50, team SUM 45, +10 = 55 > 50.
         approved, reason = self._run(
             False,
-            "daily_limit_exceeded",
+            "daily_limit_exceeded: team",
             "10.00",
             team=True,
             sums=[
@@ -206,7 +206,7 @@ class TestCheckAndRecordSpendSteps:
             ],
         )
         assert approved is False
-        assert reason == "daily_limit_exceeded"
+        assert reason == "daily_limit_exceeded: team"
 
     def test_spend_under_both_limits_approved(self) -> None:
         """Spend under both org and team limits is approved with increments."""
