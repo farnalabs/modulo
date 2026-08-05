@@ -514,7 +514,7 @@ class JiraConnector(ConnectorBase):
                     raise ValueError("Jira attachment must provide exactly one of 'content' or 'file'")
                 filename = payload.data["filename"]
                 if content is not None:
-                    raw = str(content).encode("utf-8")
+                    raw = content if isinstance(content, bytes) else str(content).encode("utf-8")
                 else:
                     raw = file_content if isinstance(file_content, bytes) else str(file_content).encode("utf-8")
                 mime_type = payload.data.get("mime_type", "application/octet-stream")
