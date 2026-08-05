@@ -13,6 +13,10 @@ Trigger ``config_json`` structure::
 
 If ``snapshot_id`` is omitted, the child run uses the target pipeline's latest
 snapshot, matching cron-trigger snapshot resolution.
+
+The child run's input payload always carries ``source_run_id``,
+``source_pipeline_id`` and ``source_node_id``; when the completed node emits
+output it is included as ``node_output``.
 """
 
 import asyncio
