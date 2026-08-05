@@ -8,6 +8,12 @@ a live worker for THIS hostname exists on EACH configured queue independently
 for 4 consecutive probes => 503. Post-cutover (PR C) the gate is ALWAYS active
 — there is no Celery path to fall back on — but can be relaxed to degraded
 (alert-only) via ``SAQ_HARD_GATE=false`` after the hold (plan F7).
+
+Plan F8 (restart-policy watchdog): ``/healthz/ready`` ALSO 503s when THIS
+machine's ``fire_due_triggers`` system cron has not fired within 2x its 60s
+cadence (machine-scoped Redis heartbeat), so Fly's health check removes a
+machine whose system-worker cron scheduler is silently dead — the recovery the
+``policy = "never"`` restart policy relies on (see fly.toml).
 """
 
 import asyncio
@@ -50,6 +56,13 @@ _consecutive_stale_probes: int = 0
 # dispatcher_reconcile runs on a 60s system-cron tick; a last_run_at older
 # than 60s means at least one tick was missed -> report "stale" (advisory).
 _RECONCILE_STALE_SECONDS = 60
+
+# System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
+# (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
+# 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
+# removes the machine.
+_FIRE_DUE_CRON_CADENCE_SECONDS = 60
+_CRON_STALE_SECONDS = 2 * _FIRE_DUE_CRON_CADENCE_SECONDS
 
 # Break-glass watchdog state, published at boot by the lifespan and exposed on
 # /healthz as ADVISORY only — it never flips readiness.
@@ -431,6 +444,68 @@ def _check_dispatcher_reconcile() -> CheckResult:
     )
 
 
+async def _check_system_crons() -> CheckResult:
+    """Machine-scoped system-cron liveness (plan F8 cron watchdog).
+
+    The SAQ system worker runs ``fire_due_triggers`` every 60s and writes a
+    per-machine Redis heartbeat (``saq:cron:heartbeat:fire_due_triggers:{host}``).
+    If THIS machine's heartbeat is stale by more than 2x the cadence (or was
+    never written once the process has been up that long), the machine's cron
+    scheduler is silently dead — a worker loop can stay alive while its cron
+    scheduler is stuck — so return ``unavailable`` (503) to let Fly's health
+    check remove the machine. Fail-open on Redis read errors (never 503 a
+    healthy machine on a transient read). ``SAQ_HARD_GATE=false`` relaxes to
+    alert-only, matching the SAQ worker gate.
+    """
+    settings = get_settings()
+    this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
+    r: aioredis.Redis | None = None
+    try:
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+        last = await r.get(f"saq:cron:heartbeat:fire_due_triggers:{this_host}")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("health._check_system_crons redis read failed: %s", exc)
+        return CheckResult(status="ok", detail="system-cron liveness check unavailable (redis read failed)")
+    finally:
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+
+    uptime_seconds = (datetime.now(UTC) - _START_TIME).total_seconds()
+    if last is None:
+        if uptime_seconds < _CRON_STALE_SECONDS:
+            return CheckResult(status="ok", detail="no system-cron heartbeat yet (boot grace)")
+        if settings.saq_hard_gate:
+            return CheckResult(
+                status="unavailable",
+                detail=f"system-cron scheduler never fired on this machine ({this_host})",
+            )
+        _log.warning("health.system_cron_never_fired_relaxed hostname=%s", this_host)
+        return CheckResult(status="ok", detail="system-cron never fired (SAQ_HARD_GATE=false, alert-only)")
+
+    try:
+        last_ts = float(last)
+    except (TypeError, ValueError):
+        return CheckResult(status="degraded", detail="system-cron heartbeat key unparseable")
+
+    age = time.time() - last_ts
+    if age <= _CRON_STALE_SECONDS:
+        return CheckResult(status="ok", detail=f"system-cron heartbeat fresh ({age:.0f}s ago)")
+
+    if settings.saq_hard_gate:
+        return CheckResult(
+            status="unavailable",
+            detail=(
+                f"this machine's fire_due_triggers cron heartbeat stale "
+                f"({age:.0f}s > {_CRON_STALE_SECONDS}s; hostname={this_host})"
+            ),
+        )
+    _log.warning("health.system_cron_stale_relaxed age=%.0fs hostname=%s", age, this_host)
+    return CheckResult(status="ok", detail="system-cron heartbeat stale (SAQ_HARD_GATE=false, alert-only)")
+
+
 @handle_db_errors("health.liveness")
 @router.get("/healthz")
 async def liveness() -> dict[str, str]:
@@ -440,12 +515,13 @@ async def liveness() -> dict[str, str]:
 @handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
 async def readiness(response: Response) -> ReadinessResponse:
-    db_check, redis_check, cp_check, mig_check, saq_check = await asyncio.gather(
+    db_check, redis_check, cp_check, mig_check, saq_check, cron_check = await asyncio.gather(
         _check_database(),
         _check_redis(),
         _check_checkpointer(),
         _check_migrations(),
         _check_saq_workers(),
+        _check_system_crons(),
     )
     bg_check = _check_break_glass()
     dr_check = _check_dispatcher_reconcile()
@@ -456,6 +532,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         "checkpointer": cp_check,
         "migrations": mig_check,
         "saq_workers": saq_check,
+        "system_crons": cron_check,
         # ADVISORY only — excluded from the aggregate so a break-glass config
         # warning never degrades readiness (plan §3 watchdog reduction).
         "break_glass": bg_check,
@@ -469,6 +546,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         cp_check.status,
         mig_check.status,
         saq_check.status,
+        cron_check.status,
     ]
     if "unavailable" in statuses:
         overall: Literal["ok", "degraded", "unavailable"] = "unavailable"
