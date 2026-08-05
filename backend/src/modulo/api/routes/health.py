@@ -342,9 +342,7 @@ async def _check_saq_workers() -> CheckResult:
     this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
     try:
         queues = await _configured_queues()
-        live_by_queue: dict[str, set[str]] = {}
-        for qname in queues:
-            live_by_queue[qname] = await _live_worker_hostnames(qname)
+        live_by_queue: dict[str, set[str]] = {qname: await _live_worker_hostnames(qname) for qname in queues}
     except asyncio.CancelledError:
         raise
     except Exception as exc:
