@@ -102,3 +102,36 @@ Feature: Jira Connector
     Given a Jira connector with valid credentials
     When I query statuses without a project
     Then the result is an error
+
+  Scenario: Upload an attachment to an issue
+    Given a Jira connector with valid credentials
+    When I upload attachment "report.pdf" with content "PDF data" to issue "PROJ-123"
+    Then the write succeeds
+    And the write returns the uploaded attachment
+
+  Scenario: Uploading an attachment without content raises an error
+    Given a Jira connector with valid credentials
+    When I upload attachment "report.pdf" with no content to issue "PROJ-123"
+    Then the result is an error
+
+  Scenario: List attachments for an issue
+    Given a Jira connector with valid credentials
+    When I query attachments for issue "PROJ-123"
+    Then the result has records
+    And the records include attachment files
+
+  Scenario: Listing attachments without an issue key raises an error
+    Given a Jira connector with valid credentials
+    When I query attachments without an issue key
+    Then the result is an error
+
+  Scenario: Download an attachment by id
+    Given a Jira connector with valid credentials
+    When I query attachment "20001"
+    Then the result has records
+    And the attachment content is returned
+
+  Scenario: Downloading an attachment without an id raises an error
+    Given a Jira connector with valid credentials
+    When I query attachment content without an id
+    Then the result is an error

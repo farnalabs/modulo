@@ -61,8 +61,23 @@ def test_build_jira_connector_with_instance():
 
 
 def test_build_jira_connector_with_base_url():
-    connector = _build_connector("jira", {"base_url": "https://jira.example.com"}, {"token": "jira_token"})
+    connector = _build_connector(
+        "jira",
+        {"base_url": "https://jira.example.com/rest/api/2"},
+        {"token": "jira_token"},
+    )
     assert connector.connector_type == ConnectorType.JIRA
+    assert connector._base_url == "https://jira.example.com/rest/api/2"
+
+
+def test_build_jira_connector_with_api_version():
+    connector = _build_connector(
+        "jira",
+        {"instance": "jira.example.com", "api_version": 2},
+        {"token": "jira_token"},
+    )
+    assert connector.connector_type == ConnectorType.JIRA
+    assert connector._base_url == "https://jira.example.com/rest/api/2"
 
 
 def test_build_jira_connector_missing_instance_raises():
