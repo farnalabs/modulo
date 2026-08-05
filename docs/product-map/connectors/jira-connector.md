@@ -8,6 +8,7 @@ bdd:
 unit-tests:
   - backend/tests/unit/connectors/test_jira.py
   - backend/tests/unit/connectors/test_jira_resilience.py
+  - backend/tests/unit/connector_hub/test_build_connector.py
 code:
   - backend/src/modulo/connectors/jira/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -29,11 +30,12 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] Support Basic Auth via `email` + `api_token` parameters
 - [x] Set appropriate `Authorization` header based on auth method
 - [x] Use `httpx.AsyncClient` with base URL `https://{instance}/rest/api/3`
+- [x] Accept configurable `base_url` for self-hosted Jira Server/Data Center — full API base URL (e.g. `https://jira.example.com/rest/api/2`), trailing slash normalised; defaults to `https://{instance}/rest/api/3` (Jira Cloud)
 - [x] `health_check()` calls `GET /myself` to validate credentials
 - [x] Return authenticated user displayName on success
 - [x] Return `HealthResult(ok=False)` with HTTP status on non-200
 - [x] Return `HealthResult(ok=False)` with detail containing status code — Jira Cloud 401 vs 403 distinction is visible in the detail string
-- [ ] Jira Data Center (self-hosted) API support — URL format differs
+- [x] Jira Data Center (self-hosted) API support — `base_url` constructor arg + `config_json["base_url"]` wiring through `connector_hub._build_connector` and `polling._build_polling_connector`
 
 ### Issue Operations — CRUD via Jira REST API
 
@@ -49,8 +51,11 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] Add issue comment via `write("issue_comment")` with `body`
 - [x] List issue comments via `query("issue_comments")` with pagination
 - [x] Assign/reassign issue via dedicated `write("issue_assign")` operation — accepts `account_id` (direct), `email` or `display_name` (resolved via `GET /user/search`), or explicit `null`/`unassign` to clear the assignee
-- [ ] Add issue attachment — not implemented
-- [ ] List issue remote links — not implemented
+- [x] Add issue attachment via dedicated `write("issue_attachment")` operation — multipart `POST /issue/{issue_key}/attachments` with `X-Atlassian-Token: no-check`; accepts `filename` + exactly one of `content` (str) / `file` (bytes)
+- [x] List issue attachments via `query("issue_attachments")` with `issue_key` filter — returned from the issue's `fields.attachment`
+- [x] List issue remote links via `query("issue_remote_links")` with `issue_key` filter — `GET /issue/{issue_key}/remotelink`, returns `{id, object: {url, title}}` entries
+- [x] Add issue remote link via dedicated `write("issue_remote_link")` operation — `POST /issue/{issue_key}/remotelink` with `url` (required) + optional `title`
+- [x] Delete issue remote link via dedicated `write("remote_link_delete")` operation — `DELETE /issue/{issue_key}/remotelink/{link_id}` with `issue_key` + `link_id` required
 - [x] Set issue labels via dedicated `write("issue_label")` operation — `add`/`remove` label names resolved against the issue's current `labels` set before PUT (true add/remove, not a blind replace)
 - [x] Delete issue via dedicated `write("issue_delete")` operation — `DELETE /issue/{issue_key}` with success confirmation
 - [x] JQL search supports pagination cursor via `startAt` parsing
@@ -63,7 +68,8 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 - [x] List accessible projects via `query("projects")` — returns key, name, lead, avatarUrls
 - [x] Get project metadata (issue types, statuses, fields) — via `query("field_metadata")`, `query("fields")`, and `query("statuses")`
 - [x] List issue-type statuses for a project via `query("statuses")` with required `project` filter — `GET /project/{project}/statuses`, returns each issue type with its statuses (incl. status category); `metadata["project"]` echoes the requested key
-- [ ] Get project components and versions — not implemented
+- [x] Get project components via `query("project_components")` with required `project` filter — `GET /project/{project}/components`, returns each component; `metadata["project"]` echoes the requested key
+- [x] Get project versions/releases via `query("project_versions")` with required `project` filter — `GET /project/{project}/versions`, returns each version (incl. released flag); `metadata["project"]` echoes the requested key
 
 ### Capability Declaration
 
@@ -125,13 +131,24 @@ Async Jira Cloud REST API v3 connector implementing `ConnectorBase`. Provides re
 
 ## Known Gaps
 
-- [ ] **Jira Data Center not supported**: URL format is `https://{instance}/rest/api/3` — Jira Server/Data Center uses a different path structure
-- [ ] **No attachment support**: cannot upload or download issue attachments
-- [x] ~~**No field metadata**~~ — **RESOLVED (2026-08-05)**: agents can now discover create-issue fields + custom fields (`query("field_metadata")`), all instance fields (`query("fields")`), and per-project issue-type statuses (`query("statuses")`)
+- [x] ~~**Jira Data Center not supported**~~ — **RESOLVED (2026-08-06)**: self-hosted Jira Server/Data Center instances are supported via a new `base_url` constructor arg (full API base URL, e.g. `https://jira.example.com/rest/api/2`; default remains Jira Cloud `https://{instance}/rest/api/3`), wired through `connector_hub._build_connector` + `polling._build_polling_connector` via `config_json["base_url"]`
+- [x] ~~**No attachment support**~~ — **RESOLVED (2026-08-06)**: agents can now upload (`write("issue_attachment")`, multipart with `X-Atlassian-Token: no-check`) and list (`query("issue_attachments")`) issue attachments
+- [x] ~~**No remote links / components / versions**~~ — **RESOLVED (2026-08-06)**: added `query("issue_remote_links")` + `write("issue_remote_link")` + `write("remote_link_delete")`, and `query("project_components")` + `query("project_versions")`
 
 ---
 
 ## QA History
+
+### 2026-08-06 — improve-architecture: Jira Data Center + attachments + remote links + components/versions RESOLVED
+
+**RESOLVED the final feature-gap programme** for the Jira connector (`connectors/jira/__init__.py`):
+
+1. **Self-hosted Jira Server/Data Center support** — new `base_url` constructor arg (trailing slash normalised; a bare host such as `https://jira.example.com` has `/rest/api/3` appended automatically). When omitted, `https://{instance}/rest/api/3` (Jira Cloud) is used as before; when a full API path is provided (e.g. `https://jira.example.com/rest/api/2`) it is used verbatim. Wired through `connector_hub._build_connector` + `polling._build_polling_connector` via `config_json["base_url"]` (mirrors the GitLab/GitHub `base_url` pattern). The pre-existing hub fallback `instance = config.get("instance") or config.get("base_url")` was broken for full URLs (produced `https://https://...`); now `instance` and `base_url` are passed separately.
+2. **Attachments** — `query("issue_attachments")` (`GET /issue/{issue_key}` → `fields.attachment`, required `issue_key` filter) and `write("issue_attachment")` (multipart `POST /issue/{issue_key}/attachments` with `X-Atlassian-Token: no-check`; `issue_key` + `filename` + exactly one of `content`/`file` required, extra keys pass through as form fields — mirrors the Slack `file_upload` contract).
+3. **Remote links** — `query("issue_remote_links")` (`GET /issue/{issue_key}/remotelink`, required `issue_key`), `write("issue_remote_link")` (`POST .../remotelink` with required `url` + optional `title`), `write("remote_link_delete")` (`DELETE .../remotelink/{link_id}`, `issue_key` + `link_id` required).
+4. **Project metadata** — `query("project_components")` (`GET /project/{project}/components`) and `query("project_versions")` (`GET /project/{project}/versions`), both with required `project` filter and `metadata["project"]` echo.
+
+**Tests:** 36 new unit tests (32 in `test_jira.py`: base_url default/custom/trailing-slash/bare-host-append, self-hosted health-check + query, issue_attachments records/empty/missing-key, issue_attachment upload content/bytes/missing-filename/missing-content/both/missing-key/http-error, issue_remote_links records/empty/missing-key, issue_remote_link happy/url-only/missing-url/missing-key, remote_link_delete happy/missing-link_id/missing-key, project_components records/missing-project/404, project_versions records/missing-project/404; 4 in `test_build_connector.py`: instance cloud API path, bare base_url append, full base_url verbatim, missing config) + 10 BDD scenarios in `jira_connector.feature` (list attachments, upload attachment, upload-without-content error, list remote links, add remote link, delete remote link, query components, components missing-project error, query versions, versions missing-project error) with 16 new step definitions and the mock connector extended. Updated product map (7 behaviours `[ ]`→`[x]` + 1 new, 3 Known Gaps → RESOLVED, BDD count 18→28, QA History). 116/116 `test_jira.py` + `test_jira_resilience.py` unit tests pass, 28/28 jira BDD scenarios pass (19 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (only cross-cutting gaps remain — expired-token vs invalid-URL distinction, per-operation permission checks, prompt-portability documentation).
 
 ### 2026-08-05 — improve-architecture: field metadata RESOLVED
 

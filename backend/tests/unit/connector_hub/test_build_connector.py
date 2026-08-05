@@ -65,6 +65,25 @@ def test_build_jira_connector_with_base_url():
     assert connector.connector_type == ConnectorType.JIRA
 
 
+def test_build_jira_connector_instance_uses_cloud_api_path():
+    connector = _build_connector("jira", {"instance": "acme.atlassian.net"}, {"token": "jira_token"})
+    assert connector._base_url == "https://acme.atlassian.net/rest/api/3"
+
+
+def test_build_jira_connector_bare_base_url_appends_api_path():
+    connector = _build_connector("jira", {"base_url": "https://jira.example.com"}, {"token": "jira_token"})
+    assert connector._base_url == "https://jira.example.com/rest/api/3"
+
+
+def test_build_jira_connector_full_base_url_kept_verbatim():
+    connector = _build_connector(
+        "jira",
+        {"base_url": "https://jira.example.com/rest/api/2"},
+        {"token": "jira_token"},
+    )
+    assert connector._base_url == "https://jira.example.com/rest/api/2"
+
+
 def test_build_jira_connector_missing_instance_raises():
     with pytest.raises(ValueError, match="instance"):
         _build_connector("jira", {}, {"token": "jira_token"})

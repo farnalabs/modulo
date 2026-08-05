@@ -85,10 +85,11 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
         case "linear":
             return LinearConnector(api_key=creds["api_key"])
         case "jira":
-            instance = config.get("instance", config.get("base_url", ""))
-            if not instance:
+            instance = config.get("instance")
+            base_url = config.get("base_url")
+            if not instance and not base_url:
                 raise ValueError("JiraConnector requires 'instance' in config_json")
-            return JiraConnector(instance=instance, creds=creds)
+            return JiraConnector(instance=instance or "", creds=creds, base_url=base_url)
         case "slack":
             return SlackConnector(bot_token=creds["bot_token"])
         case _:
