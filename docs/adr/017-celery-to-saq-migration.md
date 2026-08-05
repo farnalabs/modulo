@@ -37,6 +37,31 @@ Replace Celery with **SAQ 0.26.4** as the task queue substrate, pinned in `pypro
 - `runs_manual` + `runs_automated` collapse into **ONE `runs` queue**. Celery consumes both today via `task_queues`, but the entire worker process is deleted, so the collapse loses nothing.
 - Global run concurrency: 2/machine × 2–5 machines = 4–10 concurrent runs.
 
+### Concurrency model (2026-08-05 revision)
+
+Worker concurrency was coupled to the Redis pool size during the cutover
+firefight, then decoupled. Current (post-fix) model:
+
+- **`SAQ_WORKER_CONCURRENCY`** (default `5`) is the only worker-concurrency
+  knob, decoupled from the Redis pool size. This is a NEW knob: during the
+  cutover, the #663 coupling bug meant raising `SAQ_REDIS_POOL_SIZE` 5 → 20 →
+  50 silently raised worker concurrency 5 → 20 → 50, multiplying in-flight jobs
+  (and therefore DB/Redis load) with every pool resize. Decoupling makes the
+  two budgets independent and independently tunable.
+- **`SAQ_REDIS_POOL_SIZE`** (default `50`) and **`SAQ_WORKER_DB_POOL_SIZE`**
+  (default `10`) are firefight residues: both were raised during the cutover to
+  relieve "Too many connections" pressure and were never re-derived from the
+  actual connection budgets. They remain pending a connection-budget
+  verification against the deployed Postgres `max_connections` and the Upstash
+  `maxclients` (tracked under FAR-88 / the tier ticket). Accepted design
+  target: concurrency 5 per worker x up to 5 machines = up to 25 concurrent
+  runs.
+- **`max_concurrent_ops` reserve clamp** (SAQ RedisQueue semaphore): must stay
+  strictly below the pool size so the semaphore can never exhaust every
+  connection. Reserve formula: pool ≤ 1 → `pool`; pool 2–5 → `pool − 1`; pool
+  > 5 → `pool − 5`. Implemented as `_max_concurrent_ops()` in
+  `backend/src/modulo/core/saq_worker.py` and covered by unit tests.
+
 ### Database as system of record
 
 - The DB remains the system of record for run state. Three columns are added: `dispatcher`, `saq_job_id`, `claim_token`. `re_enqueue_count` is cut (re-enqueue detection moved to log-line ingestion).

@@ -2,14 +2,19 @@
 
 Two worker processes (plan F1/F2):
 
-* ``runs_settings`` — queue ``runs``, concurrency 5 (derived from SAQ_WORKER_CONCURRENCY), no web UI. Executes
+* ``runs_settings`` — queue ``runs``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
+  decoupled from Redis pool size), no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
-* ``system_settings`` — queue ``system``, concurrency 5 (derived from SAQ_WORKER_CONCURRENCY), web UI on 8081 bound
+* ``system_settings`` — queue ``system``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
+  decoupled from Redis pool size), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
   webhook-dedup cleanup, stale_run_recovery.
+
+Accepted design target: concurrency 5 per worker x up to 5 machines = up to 25
+concurrent runs (recorded in ADR 017).
 
 Staging uses the SAME workers on dedicated queue names so a staging worker can
 never dequeue production system jobs: ``staging_runs_settings`` (queue
@@ -89,6 +94,28 @@ def _get_async_engine() -> AsyncEngine:
     return _ASYNC_ENGINE
 
 
+def _max_concurrent_ops(pool_size: int) -> int:
+    """Clamp SAQ's ``max_concurrent_ops`` strictly below the Redis pool size.
+
+    The semaphore must never exhaust all available connections — leaving
+    reserve connections for SAQ operations that bypass the semaphore
+    (``schedule``, ``sweep``, ``dequeue``, ``notify``). The old
+    ``max(pool_size - 5, 5)`` clamp was broken: at pool_size 5 it allowed
+    ``max_ops == pool_size`` (zero reserve) and for pool_size < 5 it allowed
+    ``max_ops > pool_size`` — the exact 'Too many connections' exhaustion it
+    claims to prevent.
+
+    The correct clamp always leaves at least one reserve connection: small
+    pools (2-5) reserve 1, larger pools keep the historical 5-connection
+    margin. A pool of 1 gets the whole single connection.
+    """
+    if pool_size <= 1:
+        return pool_size
+    if pool_size <= 5:
+        return pool_size - 1
+    return pool_size - 5
+
+
 def _build_queue(queue_name: str) -> RedisQueue:
     """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2).
 
@@ -99,8 +126,7 @@ def _build_queue(queue_name: str) -> RedisQueue:
     """
     settings = get_settings()
     pool_size = settings.saq_redis_pool_size
-    # Leave reserve connections for semaphore-exempt SAQ operations.
-    max_ops = max(pool_size - 5, 5)
+    max_ops = _max_concurrent_ops(pool_size)
     redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
         settings.redis_url,
         socket_connect_timeout=10,
