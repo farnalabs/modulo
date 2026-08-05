@@ -11,6 +11,9 @@ from modulo.connectors.gitlab import GitLabConnector
 
 TOKEN = "glpat_test_token"
 _API = "https://gitlab.com/api/v4"
+_TOKEN_INFO = "https://gitlab.com/oauth/token/info"
+_SELF_TOKEN_INFO = "https://gitlab.example.com/oauth/token/info"
+_FULL_SCOPES = {"scope": ["read_api", "write_repository", "api"]}
 
 
 @pytest.fixture()
@@ -22,6 +25,7 @@ def connector():
 async def test_health_check_ok(connector):
     respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "myuser"
@@ -312,6 +316,7 @@ async def test_self_hosted_base_url():
     respx.get("https://gitlab.example.com/api/v4/version").mock(
         return_value=httpx.Response(200, json={"version": "17.5.0", "revision": "abc123"})
     )
+    respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
     assert result.detail == "selfhosted (GitLab 17.5.0)"
@@ -328,6 +333,7 @@ async def test_self_hosted_base_url_trailing_slash():
     respx.get("https://gitlab.example.com/api/v4/version").mock(
         return_value=httpx.Response(200, json={"version": "17.5.0", "revision": "abc123"})
     )
+    respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
 
@@ -346,6 +352,7 @@ async def test_default_base_url_unchanged(connector):
     """Default connector still targets the hosted GitLab endpoint."""
     respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await connector.health_check()
     assert result.ok is True
 
@@ -840,3 +847,104 @@ async def test_write_mr_approval_request_requires_users(connector):
 async def test_write_mr_approval_request_missing_project(connector):
     with pytest.raises(ValueError, match="Missing required filter"):
         await connector.write(ConnectorPayload(resource="mr_approval_request", data={"iid": "7", "user_ids": [1]}))
+
+
+@respx.mock
+async def test_health_check_reports_missing_write_repository_scope(connector):
+    """A token without write_repository/api scopes must fail health with the scopes listed."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api"]}))
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "write_repository" in result.detail
+    assert "api" in result.detail
+    assert "Missing scopes" in result.detail
+
+
+@respx.mock
+async def test_health_check_reports_missing_api_scope(connector):
+    """read_api + write_repository without api must fail health (issue/MR writes need api)."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(
+        return_value=httpx.Response(200, json={"scope": ["read_api", "write_repository"]})
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert result.detail.startswith("Missing scopes: api")
+    assert "write_repository" not in result.detail.split("Required:")[0]
+
+
+@respx.mock
+async def test_health_check_api_scope_satisfies_all_required(connector):
+    """Declaring api alone satisfies read_api + write_repository (superset)."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+@respx.mock
+async def test_health_check_token_info_unavailable_non_fatal(connector):
+    """A 404 from /oauth/token/info (old self-hosted) must not fail health."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(404, text="Not Found"))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+@respx.mock
+async def test_health_check_token_info_network_error_non_fatal(connector):
+    """A network error on /oauth/token/info must not fail health (best-effort probe)."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(side_effect=httpx.ConnectError("Connection refused"))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+@respx.mock
+async def test_health_check_token_info_invalid_body_non_fatal(connector):
+    """A non-object/invalid JSON body from /oauth/token/info must not fail health."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, text="not json"))
+    result = await connector.health_check()
+    assert result.ok is True
+    assert result.detail == "myuser"
+
+
+@respx.mock
+async def test_health_check_token_info_empty_scopes_non_fatal(connector):
+    """An empty scope list from /oauth/token/info is treated as unknown, not failing."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": []}))
+    result = await connector.health_check()
+    assert result.ok is True
+
+
+@respx.mock
+async def test_health_check_self_hosted_scope_probe_uses_instance_root(connector):
+    """Self-hosted scope probe must hit the instance root, outside /api/v4."""
+    custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
+    respx.get("https://gitlab.example.com/api/v4/user").mock(
+        return_value=httpx.Response(200, json={"username": "selfhosted"})
+    )
+    respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    respx.get("https://gitlab.example.com/api/v4/version").mock(
+        return_value=httpx.Response(200, json={"version": "17.5.0"})
+    )
+    route = respx.get(_SELF_TOKEN_INFO).mock(
+        return_value=httpx.Response(200, json={"scope": ["read_api"]})
+    )
+    result = await custom.health_check()
+    assert route.called
+    assert result.ok is False
+    assert "write_repository" in result.detail
