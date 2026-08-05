@@ -241,6 +241,12 @@ async def _sum_created_at_day(
 ) -> Decimal:
     """SUM the day's ledger spend (``org_daily_run_counts.total_spend_usd``).
 
+    NOTE: the refusal SUM reads the ``org_daily_run_counts`` LEDGER (keyed by
+    ``run_date``), NOT ``runs`` — so it does NOT use ``ix_runs_refusal``
+    (organisation_id, created_at). That index is KEPT for the per-trigger
+    daily-spend-limit enforcement readers (``cron_helpers`` / ``polling``) and
+    the billing overview, which still query ``Run.created_at``.
+
     The ledger is keyed by ``(organisation_id, team_id, run_date)`` via
     ``get_or_create_daily_count``, so the created-at-day window filters
     ``run_date == day_start.date()``. The org SUM reads the org-level row

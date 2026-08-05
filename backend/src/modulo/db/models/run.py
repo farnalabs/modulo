@@ -42,7 +42,9 @@ class Run(OrgScoped):
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
         # Probe sample query (organisation_id, started_at) — migration 0066.
         Index("ix_runs_probe", "organisation_id", "started_at"),
-        # Refusal-window SUM predicates (organisation_id, created_at) — migration 0066.
+        # Per-trigger daily-spend-limit enforcement readers (cron_helpers /
+        # polling) + billing overview — org_id + created_at. Migration 0066.
+        # The cost-controller refusal SUM reads the ledger, NOT runs (0066).
         Index("ix_runs_refusal", "organisation_id", "created_at"),
     )
 
