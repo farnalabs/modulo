@@ -108,7 +108,28 @@ echo "=== Bootstrapping modulo_app role ==="
 python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 echo "=== Running DB migrations ==="
-alembic upgrade heads && echo "  Migrations complete" || echo "  WARNING: migrations failed (will retry in lifespan)"
+# Serialised across machines/processes by the advisory lock in env.py (shared
+# with the app lifespan runner). Retry on failure: both process groups fire this
+# on a fresh deploy, and a transient lock/connection error should not abort the
+# boot. The worker group has no app lifespan to retry migrations later, so it
+# FAILS CLOSED here rather than start SAQ workers against a half-migrated schema.
+MIGRATIONS_OK=0
+for attempt in $(seq 1 10); do
+    if alembic upgrade heads; then
+        echo "  Migrations complete (attempt $attempt)"
+        MIGRATIONS_OK=1
+        break
+    fi
+    echo "  WARNING: migrations failed (attempt $attempt/10) -- retrying in 5s"
+    sleep 5
+done
+if [ "$MIGRATIONS_OK" -ne 1 ]; then
+    if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
+        echo "FATAL: DB migrations failed after 10 attempts -- not starting SAQ workers." >&2
+        exit 1
+    fi
+    echo "  WARNING: migrations failed (will retry in lifespan)"
+fi
 
 # ============================================================================
 # Process group dispatch
@@ -153,9 +174,14 @@ if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
             ( python3 -m saq modulo.core.saq_worker.runs_settings ) &
             SAQ_RUNS_PID=$!
             echo $SAQ_RUNS_PID > /tmp/run-worker.pid
-            wait $SAQ_RUNS_PID
+            # `wait || EXIT=$?` both survives `set -e` (a nonzero wait would
+            # otherwise abort this wrapper on the FIRST crash, bypassing the
+            # sliding-window tolerance) AND captures the worker's real exit code
+            # — plain `wait` then `RUNS_END=$(date +%s)` would leave `$?` as
+            # date's status (always 0).
+            RUNS_EXIT=0
+            wait $SAQ_RUNS_PID || RUNS_EXIT=$?
             RUNS_END=$(date +%s)
-            RUNS_EXIT=$?
             _log_crash $RUNS_EXIT
             RUNS_ELAPSED=$((RUNS_END - RUNS_START))
             if [ $RUNS_ELAPSED -le $SLIDING_WINDOW_S ] && [ $RUNS_EXIT -ne 0 ]; then
@@ -192,9 +218,14 @@ if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
             ( python3 -m modulo.core.saq_worker ) &
             SAQ_SYSTEM_PID=$!
             echo $SAQ_SYSTEM_PID > /tmp/system-worker.pid
-            wait $SAQ_SYSTEM_PID
+            # `wait || EXIT=$?` both survives `set -e` (a nonzero wait would
+            # otherwise abort this wrapper on the FIRST crash, bypassing the
+            # sliding-window tolerance) AND captures the worker's real exit code
+            # — plain `wait` then `SYSTEM_END=$(date +%s)` would leave `$?` as
+            # date's status (always 0).
+            SYSTEM_EXIT=0
+            wait $SAQ_SYSTEM_PID || SYSTEM_EXIT=$?
             SYSTEM_END=$(date +%s)
-            SYSTEM_EXIT=$?
             _log_crash $SYSTEM_EXIT
             SYSTEM_ELAPSED=$((SYSTEM_END - SYSTEM_START))
             if [ $SYSTEM_ELAPSED -le $SLIDING_WINDOW_S ] && [ $SYSTEM_EXIT -ne 0 ]; then
