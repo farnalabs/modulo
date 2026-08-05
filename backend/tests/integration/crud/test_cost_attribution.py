@@ -288,6 +288,30 @@ async def test_check_and_record_spend_enforces_org_limit(
         assert ok1 is True
         await session.commit()
 
+    # Insert a Run record so _sum_created_at_day finds non-zero spend
+    async with factory() as session:
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        await session.execute(text("SET session_replication_role = replica"))
+        await session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, 'manual', :thread, 1, :hash, :cost)"  # noqa: E501
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org),
+                "pid": str(uuid.uuid4()),
+                "sid": str(uuid.uuid4()),
+                "thread": str(uuid.uuid4()),
+                "hash": "0" * 64,
+                "cost": Decimal(60),
+            },
+        )
+        await session.execute(text("SET session_replication_role = DEFAULT"))
+        await session.commit()
+
     async with factory() as session:
         await session.execute(
             text("SELECT set_config('app.organisation_id', :oid, true)"),
@@ -295,7 +319,7 @@ async def test_check_and_record_spend_enforces_org_limit(
         )
         ok2, err2 = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(50), team_id=None)
         assert ok2 is False
-        assert "organisation" in (err2 or "").lower()
+        assert err2 == "daily_limit_exceeded"
         await session.commit()
 
     # Verify only the first spend was recorded
@@ -341,6 +365,31 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         assert ok is True
         await session.commit()
 
+    # Insert a Run record for Team 1's spend so _sum_created_at_day finds non-zero team spend
+    async with factory() as session:
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        await session.execute(text("SET session_replication_role = replica"))
+        await session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :thread, 1, :hash, :cost)"  # noqa: E501
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org),
+                "pid": str(uuid.uuid4()),
+                "sid": str(uuid.uuid4()),
+                "tid": str(team1.id),
+                "thread": str(uuid.uuid4()),
+                "hash": "0" * 64,
+                "cost": Decimal(80),
+            },
+        )
+        await session.execute(text("SET session_replication_role = DEFAULT"))
+        await session.commit()
+
     # Team 2: under limit
     async with factory() as session:
         await session.execute(
@@ -351,6 +400,31 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         assert ok is True
         await session.commit()
 
+    # Insert a Run record for Team 2's spend
+    async with factory() as session:
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        await session.execute(text("SET session_replication_role = replica"))
+        await session.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :thread, 2, :hash, :cost)"  # noqa: E501
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "oid": str(org),
+                "pid": str(uuid.uuid4()),
+                "sid": str(uuid.uuid4()),
+                "tid": str(team2.id),
+                "thread": str(uuid.uuid4()),
+                "hash": "0" * 64,
+                "cost": Decimal(30),
+            },
+        )
+        await session.execute(text("SET session_replication_role = DEFAULT"))
+        await session.commit()
+
     # Team 1: exceeds team limit (80 + 30 = 110 > 100)
     async with factory() as session:
         await session.execute(
@@ -359,7 +433,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         ok, err = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(30), team_id=team1.id)
         assert ok is False
-        assert "team" in (err or "").lower()
+        assert err == "daily_limit_exceeded"
         await session.commit()
 
     # Team 2: at exact limit (30 + 20 = 50)
