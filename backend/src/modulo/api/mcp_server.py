@@ -55,6 +55,7 @@ from modulo.auth.oauth import (
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
 from modulo.core.cost_controller.breakdown.constants import RAW_REPORTED_DISPLAY_CLAMP
+from modulo.core.cost_controller.finalize import finalize_cancelled_run
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
@@ -1581,7 +1582,15 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             if run.status in _terminal_statuses:
                 detail = f"Run is already in terminal status: {run.status}"
                 return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
+            # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
+            # finalize (§4.2). A STREAMED running run cancelled cross-process is
+            # routed through finalize_cost, re-reading the STORED cumulative
+            # sets; a NEVER-PAUSED in-flight run has none and forfeits its
+            # accrued cost (cost_components_partial_spend_lost log).
+            was_paused = run.status in ("awaiting_human", "claimed")
             run = await request_cancellation(s, rid)
+            if not was_paused:
+                await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         return {"run_id": run_id, "cancellation_requested": True}
@@ -3559,23 +3568,23 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     fields: list[dict[str, Any]] = []
     if "properties" in defn:
         required_set = set(defn.get("required", []))
-        for name, prop in defn["properties"].items():
-            fields.append(
-                {
-                    "name": name,
-                    "type": prop.get("type", "unknown"),
-                    "required": name in required_set,
-                }
-            )
+        fields = [
+            {
+                "name": name,
+                "type": prop.get("type", "unknown"),
+                "required": name in required_set,
+            }
+            for name, prop in defn["properties"].items()
+        ]
     elif "fields" in defn:
-        for f in defn["fields"]:
-            fields.append(
-                {
-                    "name": f.get("name", "?"),
-                    "type": f.get("type", "unknown"),
-                    "required": f.get("required", False),
-                }
-            )
+        fields = [
+            {
+                "name": f.get("name", "?"),
+                "type": f.get("type", "unknown"),
+                "required": f.get("required", False),
+            }
+            for f in defn["fields"]
+        ]
 
     lines = [
         f"Schema: {schema.name}",
