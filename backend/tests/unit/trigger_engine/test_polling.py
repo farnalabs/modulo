@@ -82,6 +82,13 @@ class TestBuildPollingConnector:
             ("slack", {}, {"bot_token": "xoxb-xxx"}, "SlackConnector", None),
             ("jira", {"instance": "https://acme.atlassian.net"}, {"token": "x"}, "JiraConnector", None),
             ("jira", {}, {"token": "x"}, None, "requires 'instance'"),
+            (
+                "jira",
+                {"base_url": "https://jira.example.com/rest/api/2", "api_version": 2},
+                {"token": "x"},
+                "JiraConnector",
+                None,
+            ),
             ("filesystem", {}, {}, None, "requires 'base_path'"),
             ("unknown", {}, {}, None, "Unsupported connector type"),
         ],
