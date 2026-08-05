@@ -60,6 +60,7 @@ from modulo.api.routes.changelog import router as changelog_router
 from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
+from modulo.api.routes.cost_components import router as cost_components_router
 from modulo.api.routes.costs import router as costs_router
 from modulo.api.routes.dashboard import router as dashboard_router
 from modulo.api.routes.deployment import router as deployment_router
@@ -970,6 +971,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("startup.tier_catalog_seed_failed", exc_info=True)
 
+    # Seed the default cost components for every org (idempotent; system-
+    # context org enumeration, per-org set_rls_org on the inserts).
+    try:
+        await _seed_cost_components(settings)
+    except Exception:
+        logger.warning("startup.cost_components_seed_failed", exc_info=True)
+
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     try:
         await _init_checkpointer(
@@ -1057,6 +1065,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _shutdown_manager.shutdown()
 
 
+async def _seed_cost_components(settings: Settings) -> None:
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.core.seed_data.cost_components import seed_cost_components
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+    await seed_cost_components(factory)
+
+
 async def _seed_tier_catalog(settings: Settings) -> None:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1141,6 +1158,7 @@ app.include_router(sso_router)
 app.include_router(dashboard_router)
 app.include_router(deployment_router)
 app.include_router(costs_router)
+app.include_router(cost_components_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
 app.include_router(pipeline_folders_router)

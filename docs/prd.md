@@ -1290,6 +1290,35 @@ cost_estimate_usd = (wall_clock_seconds / 3600 × E2B_SANDBOX_USD_PER_HOUR)
 
 **Attributability boundary**: GitHub Actions billing is unavailable on the free tier and is not tracked. Fly costs are infrastructure-level (the platform hosting Modulo itself) and are NOT attributed per-run. Only E2B sandbox usage is per-run attributable; sandbox cost is an estimate, not an invoice.
 
+#### Multi-Component Cost Tracking
+
+A run's cost is a sum of named **cost components**, each with a rate/value, a
+formula, a source (`calculated` vs `self_reported`), and a declared set of run
+parameters it may reference. Components are org-scoped and admin-configurable;
+`Run.total_cost_usd` stays the summed total, and the run detail shows a
+**breakdown** of component snapshots rather than a single number. Breakdown
+values are denormalized onto the run at finalization, so deleting a component
+never affects historical runs.
+
+- **Calculated components** use a safe, fixed-grammar formula (four operators:
+  `+ - * /`, no arbitrary code) over a whitelist of run parameters (token
+  counts, wall-clock hours, rates). Formulas are validated at save time; an
+  invalid formula is rejected with a 422.
+- **Self-reported components** capture the model cost an agent writes to its
+  output (`model_cost_usd`). A self-reported value is validated and clamped at
+  the backend extraction boundary before it can affect the run total, and a
+  node's model cost is never counted twice — a reporting sandbox node's
+  constant-rate estimate is replaced, not added.
+- The daily spend ledger is a **report, not a source of truth**: per-key ledger
+  strictness is deliberately not guaranteed and the ledger may drift for the
+  documented classes (refused, deferred, pre-deploy residue). Enforcement keeps
+  today's behaviour; the report keys by run-start day.
+
+The normative reference for this feature is
+`docs/design/multi-component-cost-tracking.md`; the operator guide is at
+`docs/operations/` (see the config reference for the tunable knobs). This
+section states user-facing behaviour only.
+
 ### 8.11 Notifications
 
 Outbound webhook on: `hitl_awaiting`, `run_failed`, `budget_exceeded`, `circuit_breaker_tripped`, `claim_expired`, `hitl_overdue`.
