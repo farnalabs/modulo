@@ -249,10 +249,12 @@ class TestExecuteResumeWrappers:
         ctx: dict = {"job": MagicMock()}
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=True) as claim,
+            patch(
+                "modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-claim"
+            ) as claim,
             patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
             patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
-            patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock),
+            patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock) as heartbeat,
         ):
             run = MagicMock()
             run.input_payload = {"a": 1}
@@ -267,12 +269,15 @@ class TestExecuteResumeWrappers:
         claim.assert_awaited_once()
         executor.execute.assert_awaited_once()
         complete.assert_awaited_once()
+        assert complete.await_args.kwargs["claim_token"] == "tok-claim"
+        heartbeat.assert_called_once()
+        assert heartbeat.call_args.kwargs["claim_token"] == "tok-claim"
 
     @pytest.mark.asyncio
     async def test_execute_run_not_claimed_returns_early(self) -> None:
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
-            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=False),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=None),
             patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
         ):
             result = await sw.execute_run(
