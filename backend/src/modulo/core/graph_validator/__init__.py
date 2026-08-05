@@ -867,9 +867,7 @@ class GraphValidator:
 
         required = schema_definition.get("required", [])
 
-        errors.extend(
-            f"Missing required field '{field_name}'" for field_name in required if field_name not in payload
-        )
+        errors.extend(f"Missing required field '{field_name}'" for field_name in required if field_name not in payload)
 
         for field_name, field_def in properties.items():
             if not isinstance(field_def, dict):
