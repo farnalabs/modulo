@@ -17,6 +17,12 @@ snapshot, matching cron-trigger snapshot resolution.
 The child run's input payload always carries ``source_run_id``,
 ``source_pipeline_id`` and ``source_node_id``; when the completed node emits
 output it is included as ``node_output``.
+
+The child run is linked to the source run via ``parent_run_id``. Fires are
+subject to the trigger's ``max_concurrent_runs`` limit; a trigger at the limit
+is skipped and logged as ``concurrency_limit_reached``. Every fire attempt is
+recorded as a ``TriggerEvent`` row (``signal_fired``, ``concurrency_limit_reached``,
+``invalid_snapshot_id``, ``no_snapshot``, ``validation_failed``).
 """
 
 import asyncio
