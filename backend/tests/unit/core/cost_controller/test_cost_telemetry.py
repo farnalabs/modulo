@@ -239,8 +239,10 @@ def test_explicit_is_sandbox_for_wallclock_flag_does_not_gate_accumulation() -> 
     assert tele.wall_clock_elapsed_s == Decimal(3)
 
 
-def test_missing_report_keys_only_when_eligible_nodes_exist() -> None:
-    """An enabled report_key with zero eligible node outputs is surfaced."""
+def test_missing_report_keys_surfaced_without_eligible_nodes() -> None:
+    """A consuming report_key absent from reported outputs is surfaced even with
+    zero eligible sandbox nodes; the eligible-node gate is applied at breakdown
+    render (see test_self_reported_omits_missing_flag_without_eligible_nodes)."""
     entries = {"n1": {"input_tokens": 3}}
     tele, _per_node_cost = build_telemetry(entries, [_comp(report_key="model_cost_usd")])
     assert tele.missing_report_keys == {"model_cost_usd"}

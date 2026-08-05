@@ -58,7 +58,6 @@ def _stub_meter(monkeypatch: pytest.MonkeyPatch, meter: _FakeMeter | None) -> No
 
 
 def test_get_meter_missing_provider_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(metrics, "_get_meter", metrics._get_meter)
     monkeypatch.setattr("opentelemetry.metrics.get_meter_provider", lambda: None)
     assert metrics._get_meter() is None
 
