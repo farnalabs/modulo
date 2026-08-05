@@ -1303,13 +1303,12 @@ def _reconcile_job_type(status: str) -> str:
 def _saq_run_claim_cap() -> int:
     """SAQ run claim cap for the claim-cap terminalizer (plan F8).
 
-    Reads the single source of truth in ``pipeline_execution.py``
-    (``SAQ_RUN_CLAIM_CAP``) — never redefines it. The single-constant
-    alignment of execute/resume claim caps is owned by Tier 2 (pipeline_execution).
+    Reads the settings field ``SAQ_RUN_CLAIM_CAP`` (default 20) — the single
+    source of truth shared with ``pipeline_execution.SAQ_RUN_CLAIM_CAP`` so
+    cron_helpers never imports pipeline_execution (import-linter: api must not
+    reach langgraph transitively through pipeline_execution -> executor).
     """
-    from modulo.core.pipeline_execution import SAQ_RUN_CLAIM_CAP
-
-    return int(SAQ_RUN_CLAIM_CAP)
+    return int(get_settings().saq_run_claim_cap)
 
 
 async def dispatcher_reconcile() -> dict[str, Any]:

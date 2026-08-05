@@ -12,13 +12,14 @@ All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
@@ -31,6 +32,7 @@ from modulo.api.dependencies import (
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.core.dispatch import dispatch_run
+from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.trigger_engine import (
     ConcurrentRunLimitError,
     DuplicateWebhookError,
@@ -47,6 +49,8 @@ from modulo.core.trigger_engine import (
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.webhook import WebhookPayload
 from modulo.db.rls import set_rls_org
+from modulo.settings import get_settings
+from modulo.version import get_version
 
 _log = logging.getLogger(__name__)
 
@@ -61,15 +65,6 @@ async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) 
     Best-effort and never raises — error ingestion must not break the request
     or the background dispatch task. Runs in its own session/transaction.
     """
-    import os
-
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-
-    from modulo.core.error_tracking import ErrorIngestionService
-    from modulo.db.rls import set_rls_org
-    from modulo.settings import get_settings
-    from modulo.version import get_version
-
     try:
         oid = uuid.UUID(str(org_id))
         factory = async_sessionmaker(
