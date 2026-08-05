@@ -356,7 +356,8 @@ async def build_cost_report_buckets(
             if not isinstance(name, str) or not name:
                 continue
             try:
-                amount = Decimal(str(entry.get("amount_usd", "0")))
+                raw_amount = entry.get("amount_usd")
+                amount = Decimal(str(raw_amount)) if raw_amount is not None else Decimal(0)
             except (TypeError, ValueError, ArithmeticError):
                 continue
             bucket[name] = bucket.get(name, Decimal(0)) + amount
