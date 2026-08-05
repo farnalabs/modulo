@@ -740,8 +740,7 @@ async def compare_evals(
                     .scalars()
                     .all()
                 )
-                for d in defs_rows:
-                    eval_defs[d.id] = d
+                eval_defs = {d.id: d for d in defs_rows}
         except HTTPException:
             raise
         except IntegrityError:
@@ -770,13 +769,9 @@ async def compare_evals(
                 detail="An unexpected error occurred while comparing eval results.",
             ) from None
 
-    results_by_eval_a: dict[uuid.UUID, Any] = {}
-    for r in results_a:
-        results_by_eval_a[r.eval_id] = r
+    results_by_eval_a = {r.eval_id: r for r in results_a}
 
-    results_by_eval_b: dict[uuid.UUID, Any] = {}
-    for r in results_b:
-        results_by_eval_b[r.eval_id] = r
+    results_by_eval_b = {r.eval_id: r for r in results_b}
 
     compared: list[dict[str, Any]] = []
     all_eval_ids = sorted(eval_ids)

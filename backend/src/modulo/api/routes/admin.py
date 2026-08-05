@@ -1367,9 +1367,7 @@ async def admin_list_teams(
                         .group_by(TeamMembership.team_id)
                     )
                 ).all()
-                for row in count_rows:
-                    if row.team_id is not None:
-                        member_counts[row.team_id] = row.cnt
+                member_counts.update({row.team_id: row.cnt for row in count_rows if row.team_id is not None})
     except IntegrityError:
         logger.exception("admin_list_teams IntegrityError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
@@ -3356,9 +3354,7 @@ async def admin_get_storage(
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
 
-    breakdown: dict[str, int] = {}
-    for row in status_rows:
-        breakdown[row.status] = row.cnt
+    breakdown: dict[str, int] = {row.status: row.cnt for row in status_rows}
 
     terminal_states = ("complete", "failed", "eval_failed", "cancelled")
     terminal_count = sum(breakdown.get(s, 0) for s in terminal_states)

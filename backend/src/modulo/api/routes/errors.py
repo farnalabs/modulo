@@ -392,8 +392,7 @@ async def list_error_groups(
                         ErrorEvent.id.in_(sample_ids),
                     )
                 )
-                for event in result.scalars().all():
-                    sample_events[event.id] = event
+                sample_events.update({event.id: event for event in result.scalars().all()})
 
             items = []
             for g in groups:
