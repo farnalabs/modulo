@@ -160,10 +160,7 @@ def test_per_module_level_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_configure_logging_runs_without_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that configure_logging() does not raise."""
     monkeypatch.setenv("MODULO_LOG_LEVEL", "INFO")
-    try:
-        configure_logging()
-    except Exception:
-        pytest.fail("configure_logging() raised unexpectedly")
+    configure_logging()
 
 
 def test_known_sensitive_keys_redacted_in_extra() -> None:

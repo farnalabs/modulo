@@ -184,8 +184,10 @@ class TestValidateBreakGlassBoot:
         validate_break_glass_boot(settings)
         assert not caplog.records
 
-    def test_disabled_unconfigured_is_warn_not_fail(self) -> None:
+    def test_disabled_unconfigured_is_warn_not_fail(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings(modulo_break_glass_boot_failure_mode="fail")
         # Fully unconfigured (disabled) never fails boot even in fail mode — the
         # URL/secret-presence findings are non-blocking warns when disabled.
         validate_break_glass_boot(settings)
+        # Non-blocking findings still surface as warnings, not a silent pass.
+        assert any("break_glass.boot_config" in rec.message for rec in caplog.records)
