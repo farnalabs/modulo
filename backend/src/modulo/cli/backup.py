@@ -195,8 +195,7 @@ def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM checkpoints ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id")
-        for row in cur:
-            rows.append(_serialise_export_row(row))
+        rows.extend(_serialise_export_row(row) for row in cur)
     return rows
 
 
@@ -209,8 +208,7 @@ def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
             "SELECT * FROM checkpoint_writes "
             "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx"
         )
-        for row in cur:
-            rows.append(_serialise_export_row(row))
+        rows.extend(_serialise_export_row(row) for row in cur)
     return rows
 
 
