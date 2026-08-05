@@ -1344,6 +1344,8 @@ export default {
       "failed_to_start_pipeline": "Failed to start pipeline",
       "guided_setup_wizard_mdash_connect_tools_infer_schemas_browse": "Guided setup wizard &mdash; connect tools, infer schemas, browse the library, and wire your first pipeline",
       "pipeline_started_successfully": "Pipeline started successfully.",
+      "confirm_empty_run_warning": "No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?",
+      "cancel": "Cancel",
       "infer_a_schema_from_your_connected_data_source": "Infer a schema from your connected data source",
       "select_a_connector_instance_github_jira_filesystem": "Select a connector instance (GitHub, Jira, filesystem)",
       "connect_tools": "Connect Tools",
@@ -2214,7 +2216,8 @@ export default {
         "session_label": "Session",
         "remy": "Remy",
         "resume": "Resume",
-        "stops_after_each_navigation": "Stops after each navigation"
+        "stops_after_each_navigation": "Stops after each navigation",
+        "move_panel": "Move panel"
       },
       "RemyChat": {
         "ask_remy": "Ask Remy...",

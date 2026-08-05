@@ -219,29 +219,22 @@ def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
 # cannot be imported; keep it in sync with settings.py's
 # `e2b_sandbox_usd_per_hour` default.
 _E2B_SANDBOX_USD_PER_HOUR = 0.13
-try:
-    from modulo.settings import get_settings
-
-    _E2B_SANDBOX_USD_PER_HOUR = float(get_settings().e2b_sandbox_usd_per_hour)
-except Exception:
-    _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
 
 
-def _e2b_rate_runtime() -> float:
-    """The E2B hourly rate read at RUNTIME via ``get_settings()`` (§3.3).
+def _e2b_sandbox_usd_per_hour() -> float:
+    """Return the configured E2B hourly sandbox rate (USD).
 
-    Routing the rate through ``get_settings()`` at RUNTIME (instead of the
-    import-time read) is a REAL code change: an env override of
-    ``E2B_SANDBOX_USD_PER_HOUR`` must move the boundary everywhere — including
-    this legacy fallback path — without a process restart. Falls back to the
-    module default when Settings is unavailable (never raises).
+    Looked up per call (not at import time) so operator changes to
+    ``E2B_SANDBOX_USD_PER_HOUR`` take effect without a process reload;
+    ``get_settings`` is lru-cached and env-based, so this stays cheap.
+    Falls back to the module default when settings cannot be loaded.
     """
     try:
         from modulo.settings import get_settings
 
         return float(get_settings().e2b_sandbox_usd_per_hour)
     except Exception:
-        _log.debug("sandbox_cost.e2b_rate_runtime_lookup_failed; using default", exc_info=True)
+        _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
         return _E2B_SANDBOX_USD_PER_HOUR
 
 
@@ -254,12 +247,15 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     by the agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
     discarded. Returns a plain JSON-serialisable float.
     """
-    rate = _e2b_rate_runtime()
-    sandbox_cost = round((elapsed_seconds / 3600.0) * rate, 6)
+    sandbox_cost = round((elapsed_seconds / 3600.0) * _e2b_sandbox_usd_per_hour(), 6)
     agent_reported_cost = 0.0
     if isinstance(output_json, dict):
+        # bool is an int subclass; `cost_estimate_usd: true` must not count as $1.
+        _est = output_json.get("cost_estimate_usd")
+        if isinstance(_est, bool):
+            _est = 0.0
         try:
-            agent_reported_cost = float(output_json.get("cost_estimate_usd") or 0)
+            agent_reported_cost = float(_est or 0)
         except (TypeError, ValueError):
             agent_reported_cost = 0.0
         if not math.isfinite(agent_reported_cost):
