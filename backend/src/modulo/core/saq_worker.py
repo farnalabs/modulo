@@ -42,7 +42,8 @@ import asyncio
 import contextlib
 import logging
 import os
-import signal
+import sys
+import time
 import uuid
 from typing import Any
 
@@ -106,7 +107,64 @@ def _build_queue(queue_name: str) -> RedisQueue:
         socket_keepalive=True,
         max_connections=pool_size,
     )
+    _check_redis_connection(redis_client)
     return RedisQueue(redis_client, name=queue_name, max_concurrent_ops=max_ops)
+
+
+def _check_redis_connection(redis_client: aioredis.Redis, max_retries: int = 3) -> None:
+    """Validate Redis connectivity on worker startup with exponential backoff.
+
+    Synchronous — called from the settings factory before the event loop is
+    available. Uses the sync Redis ping under the hood (``aioredis`` wraps
+    ``redis-py``'s sync client). Logs a warning and retries up to
+    ``max_retries`` times with exponential backoff instead of immediately
+    crashing.
+    """
+    import redis as sync_redis
+
+    last_exc: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            redis_client.ping()
+            _log.info("Redis connection validated (attempt %d/%d)", attempt, max_retries)
+            return
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, OSError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = 2**attempt
+                _log.warning(
+                    "Redis ping failed (attempt %d/%d): %s — retrying in %ds",
+                    attempt,
+                    max_retries,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+    _log.error(
+        "Redis unreachable after %d attempts: %s — worker proceeding anyway",
+        max_retries,
+        last_exc,
+    )
+
+
+def _probe_database() -> None:
+    """Run a lightweight DB probe (``SELECT 1``) on worker startup.
+
+    Uses a synchronous SQLAlchemy connection with a short timeout. Non-fatal —
+    the DB may recover before the first real job arrives. Logs a warning on
+    failure.
+    """
+    from sqlalchemy import create_engine, text
+
+    settings = get_settings()
+    sync_url = str(settings.database_url).replace("+asyncpg", "+psycopg2").replace("+aiomysql", "+pymysql")
+    try:
+        engine = create_engine(sync_url, connect_args={"connect_timeout": 5}, pool_pre_ping=True)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        _log.info("Database connection probe passed")
+    except Exception as exc:
+        _log.warning("Database probe failed (non-fatal): %s — DB may recover before first job", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +612,8 @@ def run_system_web() -> None:
     os.environ["AUTH_PASSWORD"] = settings.saq_auth_password or ""
     os.environ["AUTH_USER"] = settings.saq_auth_username or "admin"
 
+    _probe_database()
+
     worker = Worker(**system_settings())
     loop = asyncio.new_event_loop()
 
@@ -576,6 +636,11 @@ def run_system_web() -> None:
         try:
             await worker.queue.connect()
             await worker.start()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("SAQ system worker failed to start — exiting gracefully")
+            sys.exit(1)
         finally:
             await worker.queue.disconnect()
 
@@ -586,7 +651,7 @@ def run_system_web() -> None:
     app = create_app([queue])
     app.on_shutdown.append(_shutdown)
 
-    loop.create_task(_worker_start()).add_done_callback(lambda _: signal.raise_signal(signal.SIGTERM))
+    loop.create_task(_worker_start()).add_done_callback(lambda fut: None if fut.cancelled() else fut.exception())
     web.run_app(app, host=_SYSTEM_WEB_HOST, port=_SYSTEM_WEB_PORT, loop=loop)
 
 
