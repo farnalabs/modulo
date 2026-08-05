@@ -1,6 +1,5 @@
 """TeamCity CI/CD connector — triggers and observes builds via the TeamCity REST API."""
 
-import logging
 from typing import Any
 
 import httpx
@@ -16,8 +15,6 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-
-_logger = logging.getLogger(__name__)
 
 
 def _parse_teamcity_status(state: str, status: str | None = None) -> CIRunStatus:
