@@ -6,7 +6,7 @@ import logging
 import uuid
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
@@ -687,7 +687,7 @@ async def list_schema_fields_endpoint(
 
 class SchemaSampleQuery(BaseModel):
     resource: str = Field(min_length=1)
-    filters: ClassVar[dict[str, Any]] = {}
+    filters: dict[str, Any] = Field(default_factory=dict)
     limit: int = Field(default=10, ge=1, le=100)
 
 
@@ -909,7 +909,7 @@ async def infer_schema_endpoint(
 
 class SchemaGenerateRequest(BaseModel):
     description: str = Field(min_length=1)
-    examples: ClassVar[list[dict[str, Any]]] = []
+    examples: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SchemaGenerateResponse(BaseModel):

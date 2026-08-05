@@ -365,7 +365,6 @@ def test_replace_pipeline_graph_rejects_duplicate_paths(client: TestClient) -> N
     assert resp.status_code == 422
 
 
-@pytest.mark.xfail(reason="pre-existing rot — 422 validation mismatch needs investigation")
 def test_replace_pipeline_graph_accepts_manual_node_contract(client: TestClient) -> None:
     node_id = uuid.uuid4()
     output_schema_id = uuid.uuid4()
