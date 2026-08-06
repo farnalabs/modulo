@@ -190,27 +190,29 @@ async def _process_org(
             _log.warning("no cost components for org %s — run after the seed fix deploys", org_id)
             return
 
-        offset = 0
+        # Keyset cursor on id — NOT offset pagination. The candidate filter
+        # shrinks as rows are updated (they drop out of the WHERE once they
+        # carry a cost write), so an offset-based window skips the rows shifted
+        # into the tail on every batch. A keyset cursor advances past the
+        # last-seen id regardless of how the filter set changes (live updates,
+        # dry-run no-ops, skipped or errored rows), so every candidate is
+        # visited exactly once and the loop converges. id is used (not a
+        # (created_at, id) tuple) because on SQLite CURRENT_TIMESTAMP stores
+        # whole-second values while SQLAlchemy binds datetimes with microsecond
+        # precision, so ``created_at > cursor`` can never match rows in the
+        # cursor's own second and would silently skip them.
+        cursor_id: uuid.UUID | None = None
         while True:
             if limit is not None and summary.candidates >= limit:
                 break
             batch_size = _BATCH_SIZE if limit is None else min(_BATCH_SIZE, limit - summary.candidates)
-            rows = list(
-                (
-                    await session.execute(
-                        select(Run)
-                        .where(_candidate_filter(org_id))
-                        .order_by(Run.created_at)
-                        .offset(offset)
-                        .limit(batch_size)
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            stmt = select(Run).where(_candidate_filter(org_id)).order_by(Run.id).limit(batch_size)
+            if cursor_id is not None:
+                stmt = stmt.where(Run.id > cursor_id)
+            rows = list((await session.execute(stmt)).scalars().all())
             if not rows:
                 break
-            offset += len(rows)
+            cursor_id = rows[-1].id
             for run in rows:
                 if limit is not None and summary.candidates >= limit:
                     break

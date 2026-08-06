@@ -110,6 +110,38 @@ async def _load_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) 
         return await session.get(Run, run_id)
 
 
+async def _add_many_runs(
+    maker: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    *,
+    count: int,
+    prefix: str,
+    run_number_start: int = 1,
+) -> None:
+    """Seed ``count`` candidate runs in a single transaction (fast path for
+    pagination tests that need more runs than one batch window).
+    """
+    async with maker() as session, session.begin():
+        for i in range(count):
+            session.add(
+                Run(
+                    id=uuid.uuid4(),
+                    organisation_id=org_id,
+                    pipeline_id=_PIPELINE,
+                    snapshot_id=_SNAPSHOT,
+                    trigger_type="manual",
+                    run_number=run_number_start + i,
+                    account_id=_ACCOUNT,
+                    input_hash=f"hash-{prefix}-{i}-{uuid.uuid4()}",
+                    langgraph_thread_id=f"thread-{prefix}-{uuid.uuid4()}",
+                    status="complete",
+                    node_token_usage=_enriched_usage(),
+                    cost_breakdown=None,
+                    total_cost_usd=None,
+                )
+            )
+
+
 class TestBackfillRunCosts:
     async def test_recomputes_breakdown_and_total(self, maker: async_sessionmaker[AsyncSession]) -> None:
         await _seed_components(maker, _ORG_A)
@@ -182,3 +214,41 @@ class TestBackfillRunCosts:
         assert result.candidates == 1
         assert result.updated == 1
         assert result.skipped == 0
+
+    async def test_many_runs_pass_backfills_all_candidates(self, maker: async_sessionmaker[AsyncSession]) -> None:
+        await _seed_components(maker, _ORG_A)
+        await _add_many_runs(maker, _ORG_A, count=1200, prefix="bulk")
+
+        result = await backfill_run_costs(maker, org_id=_ORG_A)
+
+        assert result.candidates == 1200
+        assert result.updated == 1200
+        assert result.skipped == 0
+        assert result.errors == 0
+
+    async def test_dry_run_across_batches_visits_every_candidate(self, maker: async_sessionmaker[AsyncSession]) -> None:
+        await _seed_components(maker, _ORG_A)
+        await _add_many_runs(maker, _ORG_A, count=1200, prefix="dry")
+
+        result = await backfill_run_costs(maker, org_id=_ORG_A, dry_run=True)
+
+        assert result.candidates == 1200
+        assert result.updated == 1200
+        assert result.errors == 0
+
+    async def test_pass_with_skipped_rows_terminates(self, maker: async_sessionmaker[AsyncSession]) -> None:
+        await _seed_components(maker, _ORG_A)
+        await _add_run(
+            maker,
+            _ORG_A,
+            breakdown=[{"component": "sandbox_infra", "amount_usd": "0.00"}],
+            total_cost_usd=Decimal(0),
+        )
+        await _add_many_runs(maker, _ORG_A, count=600, prefix="skip", run_number_start=2)
+
+        result = await backfill_run_costs(maker, org_id=_ORG_A)
+
+        assert result.candidates == 600
+        assert result.updated == 600
+        assert result.skipped == 1
+        assert result.errors == 0
