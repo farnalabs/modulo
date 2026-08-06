@@ -377,8 +377,8 @@ async def update_model_backend_endpoint(
 ) -> ModelBackendResponse:
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
     if "api_key" in updates and updates["api_key"] is not None:
-        _ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
-        updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
+        ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
+        updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
     elif "api_key" in updates:
         updates.pop("api_key")
     try:
