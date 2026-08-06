@@ -67,7 +67,7 @@ Redis is hard-required at startup (`REDIS_URL`).
 - [x] `/healthz/ready` machine-scoped SAQ worker gate — 503 after 4 consecutive stale probes (SAQ_HARD_GATE, default true)
 - [x] Entrypoint runs only the 2 SAQ workers (Celery removed), fail-closed auth, crash-loop guard
 - [x] fly.toml health check path `/healthz/ready`, interval <30s, kill_timeout >= 120s, restart policy
-- [x] deploy.yml `hold-check` job gates deploys while `SAQ_HOLD` is set
+- [x] Deploy hold gate (deploy.yml `hold-check` / `SAQ_HOLD`) **retired 2026-08-05 (PR #752)** — cutover complete; deploys are now gated only by the deploy throttle (`DEPLOY_INTERVAL_HOURS`) + the app-side `SAQ_HARD_GATE` readiness gate (a separate mechanism that stays)
 
 ### Local dev
 
@@ -85,4 +85,4 @@ Redis is hard-required at startup (`REDIS_URL`).
 
 - 2026-07-01 (improve-architecture index 38): Guarded imports + `[redis]` extras era (Celery optional).
 - 2026-07-06 (cross-cutting QA): Verified guarded-import behaviours.
-- 2026-08-02 (PR C cutover): Celery fully removed. SAQ is the only dispatch path; `SAQ_ENABLED` deleted; dispatch_run flattened to unconditional 'saq'; `MODULO_CELERY_DB_POOL_*` settings removed; entrypoint runs only SAQ workers; deploy hold-check added; local-dev worker services shipped.
+- 2026-08-02 (PR C cutover): Celery fully removed. SAQ is the only dispatch path; `SAQ_ENABLED` deleted; dispatch_run flattened to unconditional 'saq'; `MODULO_CELERY_DB_POOL_*` settings removed; entrypoint runs only SAQ workers; deploy hold-check (`SAQ_HOLD`) added; local-dev worker services shipped. (The `SAQ_HOLD` hold gate was later retired 2026-08-05 in PR #752.)
