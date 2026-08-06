@@ -165,14 +165,10 @@ def test_visibility_and_trigger_outcome_constraints_are_complete() -> None:
     trigger_checks = " ".join(
         str(constraint.sqltext) for constraint in tables["trigger_events"].constraints if hasattr(constraint, "sqltext")
     )
-    for outcome in (
-        "passed",
-        "hmac_failed",
-        "schema_validation_failed",
-        "deduplicated",
-        "concurrency_limit_reached",
-        "timestamp_expired",
-        "validation_failed",
-        "rate_limited",
-    ):
+    # The ORM CheckConstraint is generated from the full 19-value vocabulary —
+    # every value must appear and the generated SQL must match exactly.
+    from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
+
+    assert f"validation_result IN {tuple(VALIDATION_RESULT_VALUES)}" in trigger_checks
+    for outcome in VALIDATION_RESULT_VALUES:
         assert outcome in trigger_checks
