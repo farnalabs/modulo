@@ -367,8 +367,8 @@ class TestDashboardSummaryPeriod:
                 assert set(metric.keys()) == {"current", "previous", "delta_pct"}
         assert metrics["success_rate"]["current"] == 80.0
 
-    def test_days_1_30_90_accepted(self, period_client: Callable[..., TestClient]) -> None:
-        for days in ("1", "30", "90"):
+    def test_days_1_3_30_90_accepted(self, period_client: Callable[..., TestClient]) -> None:
+        for days in ("1", "3", "30", "90"):
             # Fresh client per request: the mock session's current/previous
             # window counters are consumed once per request.
             response = period_client().get(f"/api/v1/dashboard/summary?days={days}")
@@ -376,7 +376,7 @@ class TestDashboardSummaryPeriod:
             assert response.json()["period"]["days"] == int(days)
 
     def test_days_2_rejected(self, client: TestClient) -> None:
-        # 2 is within [1, 90] but not one of {1, 7, 30, 90} → 422.
+        # 2 is within [1, 90] but not one of {1, 3, 7, 30, 90} → 422.
         response = client.get("/api/v1/dashboard/summary?days=2")
         assert response.status_code == 422
 
