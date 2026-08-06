@@ -10,6 +10,11 @@ primary_region = 'lhr'
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
+[processes]
+  app = ""
+  worker = ""
+
+# Web process group — nginx + uvicorn, handles HTTP traffic
 # Restart policy — crash-loop guard + max-restart in the entrypoint is the
 # control (plan F8): no auto-restart here; a crash-looping SAQ worker fails the
 # container and the LB moves traffic decisively.
@@ -19,6 +24,7 @@ primary_region = 'lhr'
 # fired within 2x its cadence (health.py _check_saq_workers / _check_system_crons),
 # so Fly removes/replaces the machine without relying on a restart policy.
 [[restart]]
+  processes = ['app']
   policy = "never"
 
 [http_service]
@@ -46,6 +52,11 @@ primary_region = 'lhr'
     path = "/healthz/ready"
     protocol = "http"
 
+# Worker process group — SAQ workers only, auto-restart on failure
+[[restart]]
+  processes = ['worker']
+  policy = "on-failure"
+
 [env]
   MODULO_DB = "postgres"
   MODULO_PUBLIC_URL = "https://app.modulo.run"
@@ -59,6 +70,13 @@ primary_region = 'lhr'
   CORS_ORIGINS = "https://modulo.run,https://app.modulo.run"
 
 [[vm]]
+  processes = ['app']
   memory = '2gb'
   cpu_kind = 'shared'
   cpus = 2
+
+[[vm]]
+  processes = ['worker']
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
