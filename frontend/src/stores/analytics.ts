@@ -11,7 +11,7 @@ export type AnalyticsMeasure =
   | "tokens"
   | "duration"
   | "success_rate";
-export type AnalyticsTimespan = "24h" | "7d" | "30d" | "90d";
+export type AnalyticsTimespan = "24h" | "3d" | "7d" | "30d" | "90d";
 export type AnalyticsGroupBy = "day" | "week";
 export type AnalyticsDimension =
   | "trigger_type"
@@ -97,12 +97,18 @@ export const RUN_STATUSES = [
   "eval_failed",
 ] as const;
 
-export const TIMESPANS: { value: AnalyticsTimespan; days: number }[] = [
+export const TIMESPANS: AnalyticsTimespanOption[] = [
   { value: "24h", days: 1 },
+  { value: "3d", days: 3 },
   { value: "7d", days: 7 },
   { value: "30d", days: 30 },
   { value: "90d", days: 90 },
 ];
+
+export interface AnalyticsTimespanOption {
+  value: AnalyticsTimespan;
+  days: number;
+}
 
 export const MEASURES: { value: AnalyticsMeasure; labelKey: string }[] = [
   { value: "count", labelKey: "views.AnalyticsView.measure_count" },
@@ -143,12 +149,19 @@ function shiftUtcDays(date: Date, days: number): Date {
   return new Date(date.getTime() - days * DAY_MS); // nosemgrep: new-date-without-guard
 }
 
-/** Rolling timespan → typed query params (UTC). Filters included only when set. */
+/**
+ * Rolling timespan → typed query params (UTC). Filters included only when set.
+ * All timespans are day-granular windows that send ISO day strings and respect
+ * the user's day/week granularity control — the backend only supports
+ * `AnalyticsGroupBy` of day/week with date-typed `date_from`/`date_to`.
+ */
 export function serializeFilters(
   filters: AnalyticsFilters,
   now: Date = new Date(),
 ): AnalyticsQueryParams {
-  const timespan = TIMESPANS.find((t) => t.value === filters.timespan) ?? TIMESPANS[1];
+  const timespan =
+    TIMESPANS.find((t) => t.value === filters.timespan) ??
+    TIMESPANS.find((t) => t.value === DEFAULT_FILTERS.timespan)!;
   const dateTo = parseISO(isoDay(now));
   const dateFrom = shiftUtcDays(dateTo, timespan.days);
   const params: AnalyticsQueryParams = {
