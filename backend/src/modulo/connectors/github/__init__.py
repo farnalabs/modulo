@@ -329,9 +329,38 @@ class GitHubConnector(ConnectorBase):
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
 
     @staticmethod
-    def _jitter(delay: float) -> float:
-        """Add random jitter: [0, delay) to avoid thundering herd."""
+    def _jitter(delay: float, *, tight: bool = False) -> float:
+        """Add jitter to a retry delay.
+
+        Full jitter (``[0, delay)``) is used for exponential backoff to avoid
+        the thundering herd. Server-derived waits (quota reset / Retry-After)
+        use tight jitter around the requested value so the window is honoured
+        instead of being collapsed to near-immediate retries.
+        """
+        if tight:
+            return random.uniform(delay * 0.9, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
         return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+
+    @staticmethod
+    def _has_server_delay(response: httpx.Response) -> bool:
+        """Whether the response carries an explicit server-provided retry delay.
+
+        ``Retry-After`` is honoured on any retryable status. GitHub reports the
+        ``X-RateLimit-Reset`` header on *every* response while rate limiting is
+        active, so it only counts as a server delay on HTTP 429 (the quota
+        window); on other retryable statuses it would otherwise switch the
+        backoff to tight jitter and undermine thundering-herd protection.
+        """
+        if _parse_retry_after(response) is not None:
+            return True
+        return response.status_code == 429 and _parse_rate_limit_reset(response) is not None
+
+    def _sleep_delay(self, response: httpx.Response, attempt: int) -> float:
+        """Compute the sleep before a retry, honouring server-provided wait times."""
+        delay = self._retry_delay(response, attempt)
+        if self._has_server_delay(response):
+            return self._jitter(delay, tight=True)
+        return self._jitter(delay)
 
     @staticmethod
     def _retry_delay(response: httpx.Response, attempt: int) -> float:
@@ -370,14 +399,14 @@ class GitHubConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("GitHub API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        await asyncio.sleep(self._jitter(self._retry_delay(r, attempt)))
+                        await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    await asyncio.sleep(self._jitter(self._retry_delay(exc.response, attempt)))
+                    await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
                 detail = f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
                 if exc.response.status_code == 429:

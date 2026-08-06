@@ -285,3 +285,78 @@ def test_parse_rate_limit_reset_missing_or_invalid():
     future = httpx.Response(200, headers={"X-RateLimit-Reset": str(time.time() + 10)})
     delay = _parse_rate_limit_reset(future)
     assert delay is not None and 0 < delay <= 10.0
+
+
+@respx.mock
+async def test_query_429_reset_uses_tight_jitter_not_full(connector, monkeypatch):
+    """A 429 with X-RateLimit-Reset must sleep near the full quota window.
+
+    Full jitter (``[0, delay)``) on a server-derived wait would collapse the
+    sleep to a near-immediate retry inside the still-active quota window.
+    Tight jitter keeps the wait close to the reset so the window is honoured.
+    """
+    fake_now = 1_000_000.0
+    monkeypatch.setattr("modulo.connectors.github.time.time", lambda: fake_now)
+    reset_epoch = fake_now + 10.0
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("modulo.connectors.github.random.uniform", lambda lo, hi: lo)
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(429, headers={"X-RateLimit-Reset": str(reset_epoch)}, text="Rate limit exceeded"),
+            httpx.Response(200, json=[{"id": 1}]),
+        ],
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+    assert sleeps and sleeps[0] >= 9.0
+
+
+@respx.mock
+async def test_query_429_retry_after_uses_tight_jitter_not_full(connector, monkeypatch):
+    """A 429 with Retry-After must also sleep near the server-provided wait."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("modulo.connectors.github.random.uniform", lambda lo, hi: lo)
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "10"}, text="Rate limit exceeded"),
+            httpx.Response(200, json=[{"id": 1}]),
+        ],
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert sleeps and sleeps[0] >= 9.0
+
+
+@respx.mock
+async def test_query_503_backoff_still_uses_full_jitter(connector, monkeypatch):
+    """Backoff (no server-derived wait) must keep full jitter, not tight."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("modulo.connectors.github.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("modulo.connectors.github.random.uniform", lambda lo, hi: lo)
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(503, text="Unavailable"),
+            httpx.Response(200, json=[{"id": 1}]),
+        ],
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert sleeps and sleeps[0] < 1.0
