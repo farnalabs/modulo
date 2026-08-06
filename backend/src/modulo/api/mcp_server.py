@@ -1438,9 +1438,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         # Detect masked fields by scanning for the bullet mask character.
         masked_fields: list[str] = []
         if isinstance(masked, dict):
-            for k, v in masked.items():
-                if isinstance(v, str) and "\u2022" in v:
-                    masked_fields.append(k)
+            masked_fields = [k for k, v in masked.items() if isinstance(v, str) and "\u2022" in v]
 
         return {
             "node_id": node_id,
@@ -2907,13 +2905,12 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         elif section in {"plan", "rate_limits"}:
             key_prefixes = ["feature_flags", "default_plan", "rate_limits"]
 
-        filtered = []
-        for cfg in configs:
-            if key_prefixes is not None and not any(cfg.key.startswith(p) for p in key_prefixes):
-                continue
-            if _is_sensitive_key(cfg.key):
-                continue
-            filtered.append(cfg)
+        filtered = [
+            cfg
+            for cfg in configs
+            if (key_prefixes is None or any(cfg.key.startswith(p) for p in key_prefixes))
+            and not _is_sensitive_key(cfg.key)
+        ]
 
         if not filtered:
             section_label = section or "org"
@@ -3488,7 +3485,9 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         gate = result.scalar_one_or_none()
         required_team_name = None
         if gate is not None and gate.required_team_id is not None:
-            team_result = await s.execute(select(Team).where(Team.id == gate.required_team_id))
+            team_result = await s.execute(
+                select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None))
+            )
             team = team_result.scalar_one_or_none()
             required_team_name = team.name if team else None
     if gate is None:

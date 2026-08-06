@@ -277,6 +277,12 @@ class PipelineExecutor:
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._checkpointer_conn_string = checkpointer_conn_string
         self._otel_bridge = LangGraphOtelBridge()
+        # Zombie-run protection hook (2026-08-05): wired by
+        # ``pipeline_execution.run_executor_with_watchdog`` to an asyncio.Event.
+        # Called when the FIRST node dispatches so the execute_run watchdog can
+        # distinguish "hung in pre-node setup" (no progress) from a legitimate
+        # long-running node (progress already signalled → watchdog stands down).
+        self.on_first_progress: Callable[[], None] | None = None
 
     # Token pricing constants
     _INPUT_TOKEN_RATE = Decimal("0.00001")
@@ -1363,6 +1369,7 @@ class PipelineExecutor:
         node_token_usage: dict[str, dict[str, int]] = {}
         segments_completed = 0
         lg_config = {**config, "callbacks": [self._otel_bridge]}
+        _first_node_signalled = False
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 if guard is not None:
@@ -1383,6 +1390,13 @@ class PipelineExecutor:
                 mapped = _map_lg_event(lg_event, node_ids)
                 if mapped is not None:
                     event_type, payload = mapped
+                    # Zombie-run protection: the first real node dispatch is the
+                    # signal that pre-node setup finished — stands down the
+                    # execute_run watchdog (pipeline_execution.zombie_watchdog).
+                    if not _first_node_signalled:
+                        _first_node_signalled = True
+                        if self.on_first_progress is not None:
+                            self.on_first_progress()
                     broker.publish(event_type, payload)
 
                 event_kind = lg_event.get("event", "")

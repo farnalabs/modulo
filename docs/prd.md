@@ -3100,7 +3100,7 @@ A user may belong to multiple teams with different roles in each.
 **Team membership management**: `admin` can manage any team. A team `operator` can add or remove members from their own team only, and can only grant roles up to their own team role (a team `operator` cannot grant another member `operator` if the granting user is only a `runner`). This prevents privilege escalation within team scope. V1: team membership requires email-based invitation acceptance before access is granted.
 
 #### Team Deletion Policy
-Team deletion is blocked (`team_has_resources` error) if any resource has `owner_team_id` pointing to the team being deleted. Admin must first reassign or delete all team-owned resources. Reassignment can be done in bulk ("Reassign all to org-wide") before confirming deletion. Team deletion with no owned resources succeeds immediately. `team_deleted` is written to AuditEvent.
+Team deletion is blocked (`team_has_resources` error) if any resource has `owner_team_id` pointing to the team being deleted. Admin must first reassign or delete all team-owned resources. Reassignment can be done in bulk ("Reassign all to org-wide") before confirming deletion. Team deletion with no owned resources succeeds immediately and is a soft delete (`deleted_at` set; the row is retained for history/analytics). A soft-deleted team is hidden from all lists and lookups, and its name can be reused (name uniqueness applies only to non-deleted teams). `team_deleted` is written to AuditEvent.
 
 #### Effective Access Model
 
@@ -4154,6 +4154,16 @@ Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omit
 | Component | Tier |
 |---|---|
 | Analytics page + endpoint | Team (`analytics_page` feature flag, default off until the frontend ships) |
+
+#### 8.32.7 Analytics Page UI (frontend)
+
+The `/analytics` page (sidebar group Core, `analytics.query` permission, community tier) is a **structured filter form → typed query params** surface. There is **no query language in this delivery** (see 8.32.2) — the filter form is the surface; syntax/expression mode stays deferred until a pre-rolled dependency slots in.
+
+- **Filter bar**: rolling timespan toggle (Last 24h / 7d / 30d / 90d), granularity (day / ISO week), optional dimension (trigger_type / status / pipeline / folder / team), and combinable filters (trigger_type, status, pipeline_id, folder_id). A measure picker selects the rendered metric (run count / cost / tokens / avg duration / success rate). The backend returns all metrics per bucket, so the measure is a client-side rendering concern — it is never a query param.
+- **Visualisation**: ECharts (via `vue-echarts`, lazy-loaded). Line chart for undimensioned trends by date; bar chart for dimensioned queries (x = dimension key, fallback date). `buildChartOption` is a pure series → ECharts option mapping — the client never buckets. Pre-coverage buckets render as gaps (`null`), never zero-filled as "zero activity".
+- **Trend table**: rows are buckets; columns are date/key + measure value + a period arrow (▲/▼/→) against the previous equal-length window. The previous window is fetched as a second query and compared by key (dimensioned) or by offset (undimensioned). `prev=0` and both-zero show no arrow.
+- **Empty state**: "No analytics data yet — data since \<date\>" where \<date\> is the earliest bucket with data (launch-forward coverage, 8.32.3).
+- **Flag-off state**: the sidebar link is hidden when the feature flag is off (manifest `required_permissions`); if the page is reached anyway and the API returns 402, an "Analytics is not enabled for your workspace" card is shown — never a spinner.
 
 ---
 

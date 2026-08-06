@@ -407,11 +407,8 @@ def build_graph_from_json(
         normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
 
         if loop_edges:
-            normal_targets: list[str] = []
-            for edge_def in normal:
-                tgt = _get_edge_val(edge_def, "target", "target_node_id")
-                normal_targets.append(tgt)
-                target_ids.add(tgt)
+            normal_targets = [_get_edge_val(edge_def, "target", "target_node_id") for edge_def in normal]
+            target_ids.update(normal_targets)
 
             for loop_edge in loop_edges:
                 target = _get_edge_val(loop_edge, "target", "target_node_id")

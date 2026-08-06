@@ -70,7 +70,7 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SAQ_RUNS_QUEUE` | No | `runs` | Runs-queue name (`staging-runs` on staging for isolation) |
-| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when THIS machine's SAQ workers are stale. Set `false` after the cutover hold to relax to degraded (alerting continues) |
+| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when THIS machine's SAQ workers are stale. Set `false` to relax to degraded (alerting continues). The cutover deploy-hold was retired 2026-08-05 — this readiness gate is the only gate left |
 | `SAQ_AUTH_PASSWORD` | Yes (system worker) | — | Fail-closed web UI auth password; refuse to boot without it |
 | `SAQ_AUTH_USERNAME` | Yes (system worker) | — | Fail-closed web UI auth user; maps to the `AUTH_USER` env SAQ's web reads |
 | `SAQ_RUN_RETRIES` | No | `5` | SAQ retries per run job — `N` is N total attempts (N-1 retries) |
@@ -80,8 +80,8 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
 | `SAQ_NEVER_DISPATCHED_WINDOW` | No | `300` | Legacy never-dispatched sweep window (non-SAQ rows only) |
 | `SAQ_WORKER_LOST_WINDOW` | No | `600` | Legacy worker-lost sweep window (non-SAQ rows only) |
-| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker) |
-| `SAQ_REDIS_POOL_SIZE` | No | `50` | SAQ Redis client pool size (Upstash connection budget) |
+| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker). Firefight residue — pending budget verification (`SHOW max_connections` on the deployed Postgres) before lowering. |
+| `SAQ_REDIS_POOL_SIZE` | No | `50` | SAQ Redis client pool size (Upstash connection budget). Firefight residue — pending budget verification (`CLIENT LIST` / `maxclients` on Upstash) before lowering. |
 | `SAQ_WORKER_CONCURRENCY` | No | `5` | SAQ worker job concurrency, decoupled from Redis pool size |
 | `RUN_CLAIM_STALE_SECONDS` | No | `450` | Staleness gate for re-claiming a SAQ run whose heartbeat is stale |
 | `LEGACY_RUN_CLAIM_STALE_SECONDS` | No | `180` | Legacy claim window for the shared sync claim helpers |
@@ -89,8 +89,9 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
-only dispatch path, so the readiness gate is always active and the hold gate is
-controlled by `SAQ_HARD_GATE` alone.
+only dispatch path, so the readiness gate is always active. The deploy-time
+`SAQ_HOLD` gate (deploy.yml `hold-check` job) was retired 2026-08-05 — no
+deploy hold remains; `SAQ_HARD_GATE` is the only gate.
 
 ---
 

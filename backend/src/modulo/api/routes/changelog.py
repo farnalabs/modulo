@@ -1,5 +1,7 @@
 """API changelog endpoint — lists version history for the Modulo API."""
 
+from operator import attrgetter
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
@@ -69,14 +71,14 @@ _SEED_ENTRIES: list[ChangelogEntry] = [
 @handle_db_errors("changelog.list_changelog")
 async def list_changelog() -> list[ChangelogEntry]:
     """Return all changelog entries sorted by date descending."""
-    return sorted(_SEED_ENTRIES, key=lambda e: e.date, reverse=True)
+    return sorted(_SEED_ENTRIES, key=attrgetter("date"), reverse=True)
 
 
 @router.get("/latest", response_model=ChangelogEntry)
 @handle_db_errors("changelog.latest_changelog")
 async def latest_changelog() -> ChangelogEntry:
     """Return the most recent changelog entry."""
-    entries = sorted(_SEED_ENTRIES, key=lambda e: e.date, reverse=True)
+    entries = sorted(_SEED_ENTRIES, key=attrgetter("date"), reverse=True)
     if not entries:
         raise HTTPException(status_code=404, detail="No changelog entries")
     return entries[0]

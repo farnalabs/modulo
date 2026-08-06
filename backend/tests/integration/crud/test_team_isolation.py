@@ -284,6 +284,68 @@ async def test_crud_team_round_trip(db_engine: AsyncEngine) -> None:
         assert gone is None
 
 
+async def test_soft_deleted_team_hidden_but_row_persists(db_engine: AsyncEngine) -> None:
+    """A soft-deleted team disappears from lists/lookups but the row persists with deleted_at set."""
+    org = await _create_org(db_engine, f"softdel-{uuid.uuid4().hex[:8]}")
+    user = await _create_user(db_engine, org, "softdel@test.com")
+
+    from modulo.db.crud.team import create_team, delete_team, get_team, get_team_by_name, list_teams
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        created = await create_team(session, org_id=org, name="Soft Delete Team", account_id=user)
+
+        deleted = await delete_team(session, created.id)
+        assert deleted is True
+
+        assert await get_team(session, created.id) is None
+        assert await get_team_by_name(session, org, "Soft Delete Team") is None
+        listed = await list_teams(session, org, page=1, page_size=50)
+        assert not any(t.id == created.id for t in listed.items)
+
+    # The row still exists in the DB with deleted_at set (raw query with org context).
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+        row = (
+            await conn.execute(
+                text("SELECT deleted_at FROM teams WHERE id = :tid"),
+                {"tid": str(created.id)},
+            )
+        ).scalar_one_or_none()
+    assert row is not None
+
+
+async def test_team_name_reusable_after_soft_delete(db_engine: AsyncEngine) -> None:
+    """A soft-deleted team's name can be reused (partial unique index on non-deleted rows)."""
+    org = await _create_org(db_engine, f"reuse-{uuid.uuid4().hex[:8]}")
+    user = await _create_user(db_engine, org, "reuse@test.com")
+
+    from modulo.db.crud.team import create_team, delete_team
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        team = await create_team(session, org_id=org, name="Reusable Name", account_id=user)
+        assert await delete_team(session, team.id) is True
+
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        new_team = await create_team(session, org_id=org, name="Reusable Name", account_id=user)
+        assert new_team.name == "Reusable Name"
+
+
 async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
     """Full CRUD round-trip for team membership."""
     org = await _create_org(db_engine, f"mem-crud-{uuid.uuid4().hex[:8]}")
