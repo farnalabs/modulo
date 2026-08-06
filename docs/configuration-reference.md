@@ -80,9 +80,9 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
 | `SAQ_NEVER_DISPATCHED_WINDOW` | No | `300` | Legacy never-dispatched sweep window (non-SAQ rows only) |
 | `SAQ_WORKER_LOST_WINDOW` | No | `600` | Legacy worker-lost sweep window (non-SAQ rows only) |
-| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker). Firefight residue — pending budget verification (`SHOW max_connections` on the deployed Postgres) before lowering. |
-| `SAQ_REDIS_POOL_SIZE` | No | `50` | SAQ Redis client pool size (Upstash connection budget). Firefight residue — pending budget verification (`CLIENT LIST` / `maxclients` on Upstash) before lowering. |
-| `SAQ_WORKER_CONCURRENCY` | No | `5` | SAQ worker job concurrency, decoupled from Redis pool size |
+| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker). Verified 2026-08-06: deployed Postgres `max_connections=300` with ~40 in use at sample time — 10 x 2 workers x up to 5 machines = 100 + web pools + checkpointer fits with headroom. |
+| `SAQ_REDIS_POOL_SIZE` | No | `20` | SAQ Redis client pool size (Upstash connection budget). Verified 2026-08-06: prod pins this to `5` as a secret with ~15 actual connected clients at sample time, so the old firefight default of 50 was over-provisioned (500 potential conns across 5 machines). 20 caps at 200 potential conns; operators on a small Redis tier may lower to 5, matching prod. |
+| `SAQ_WORKER_CONCURRENCY` | No | `5` | SAQ worker job concurrency, decoupled from Redis pool size. Design target 5/worker x up to 5 machines = up to 25 concurrent runs — verified-safe against the prod Postgres 300-connection cap. |
 | `RUN_CLAIM_STALE_SECONDS` | No | `450` | Staleness gate for re-claiming a SAQ run whose heartbeat is stale |
 | `LEGACY_RUN_CLAIM_STALE_SECONDS` | No | `180` | Legacy claim window for the shared sync claim helpers |
 | `RUN_HEARTBEAT_SECONDS` | No | `30` | DB heartbeat cadence (keep below the 300s SAQ sweep threshold) |
