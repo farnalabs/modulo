@@ -216,9 +216,7 @@
                     :title="$t('common.edit')"
                     @click="startEdit(ev)"
                   >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
+                    <Pencil class="h-4 w-4" />
                   </button>
                   <button
                     v-if="deletingEvalId !== ev.id"
@@ -228,9 +226,7 @@
                     :title="$t('common.delete')"
                     @click="confirmDelete(ev.id)"
                   >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
+                    <Trash2 class="h-4 w-4" />
                   </button>
                   <div v-else class="flex items-center gap-1">
                     <button
@@ -239,7 +235,7 @@
                       class="rounded bg-destructive px-2 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
                       @click="deleteEval(ev.id)"
                     >
-                      {{ deleting ? '...' : $t('common.confirm') }}
+                      {{ deleting ? $t('common.deleting') : $t('common.confirm') }}
                     </button>
                     <button
                       data-testid="eval-editor-cancel-delete"
@@ -275,6 +271,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import PageTabs from "../components/PageTabs.vue"
+import { Pencil, Trash2 } from '@lucide/vue'
 import { api } from '../lib/api/client'
 
 const { t } = useI18n()
