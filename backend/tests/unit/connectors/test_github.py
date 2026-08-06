@@ -868,6 +868,342 @@ async def test_query_tree_unresolvable_ref(connector):
 
 
 # ---------------------------------------------------------------------------
+# Batch file operations — write("commit") via the Git Database API
+# ---------------------------------------------------------------------------
+
+
+def _mock_commit_flow(repo="owner/repo", base_sha="base123", blob_shas=("blob1", "blob2")):
+    """Register the commits/blobs/trees/commits/refs endpoints for a batch commit."""
+    respx.get(f"https://api.github.com/repos/{repo}/commits/main").mock(
+        return_value=httpx.Response(200, json={"sha": base_sha})
+    )
+    blob_route = respx.post(f"https://api.github.com/repos/{repo}/git/blobs")
+    blob_route.mock(
+        side_effect=[
+            httpx.Response(201, json={"sha": sha}) for sha in blob_shas
+        ]
+    )
+    tree_route = respx.post(f"https://api.github.com/repos/{repo}/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "tree123"})
+    )
+    commit_route = respx.post(f"https://api.github.com/repos/{repo}/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "commit123"})
+    )
+    ref_route = respx.patch(f"https://api.github.com/repos/{repo}/git/refs/refs/heads/main").mock(
+        return_value=httpx.Response(200, json={"ref": "refs/heads/main", "object": {"sha": "commit123"}})
+    )
+    return blob_route, tree_route, commit_route, ref_route
+
+
+@respx.mock
+async def test_write_commit_create_multiple_files(connector):
+    """A batch create commit flows blobs -> tree -> commit -> ref update."""
+    _, tree_route, commit_route, ref_route = _mock_commit_flow()
+    result = await connector.write(
+        ConnectorPayload(
+            resource="commit",
+            data={
+                "repo": "owner/repo",
+                "message": "Add two files",
+                "actions": [
+                    {"action": "create", "path": "a.txt", "content": "hello"},
+                    {"action": "create", "path": "b.txt", "content": "world"},
+                ],
+            },
+        )
+    )
+    assert result["ref"] == "refs/heads/main"
+    assert result["object"]["sha"] == "commit123"
+
+    tree_sent = json.loads(tree_route.calls.last.request.content)
+    assert tree_sent["base_tree"] == "base123"
+    assert tree_sent["tree"] == [
+        {"path": "a.txt", "mode": "100644", "type": "blob", "sha": "blob1"},
+        {"path": "b.txt", "mode": "100644", "type": "blob", "sha": "blob2"},
+    ]
+
+    commit_sent = json.loads(commit_route.calls.last.request.content)
+    assert commit_sent["message"] == "Add two files"
+    assert commit_sent["tree"] == "tree123"
+    assert commit_sent["parents"] == ["base123"]
+
+    ref_sent = json.loads(ref_route.calls.last.request.content)
+    assert ref_sent == {"sha": "commit123", "force": False}
+
+
+@respx.mock
+async def test_write_commit_update(connector):
+    """The update action creates a blob and adds a tree entry, like create."""
+    _, tree_route, _, _ = _mock_commit_flow()
+    await connector.write(
+        ConnectorPayload(
+            resource="commit",
+            data={
+                "repo": "owner/repo",
+                "actions": [{"action": "update", "path": "a.txt", "content": "changed"}],
+            },
+        )
+    )
+    tree_sent = json.loads(tree_route.calls.last.request.content)
+    assert tree_sent["tree"] == [{"path": "a.txt", "mode": "100644", "type": "blob", "sha": "blob1"}]
+
+
+@respx.mock
+async def test_write_commit_delete(connector):
+    """A delete action adds a tree entry with a null SHA (no blob created)."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
+        return_value=httpx.Response(200, json={"sha": "base123"})
+    )
+    tree_route = respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "tree123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "commit123"})
+    )
+    respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/main").mock(
+        return_value=httpx.Response(200, json={"ref": "refs/heads/main"})
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="commit",
+            data={"repo": "owner/repo", "actions": [{"action": "delete", "path": "old.txt"}]},
+        )
+    )
+    assert result["ref"] == "refs/heads/main"
+    tree_sent = json.loads(tree_route.calls.last.request.content)
+    assert tree_sent["tree"] == [{"path": "old.txt", "mode": "100644", "type": "blob", "sha": None}]
+
+
+@respx.mock
+async def test_write_commit_move_reads_old_content(connector):
+    """A move deletes the old path and blobs the old file's content at the new path."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
+        return_value=httpx.Response(200, json={"sha": "base123"})
+    )
+    old_content = base64.b64encode(b"moved content").decode()
+    respx.get("https://api.github.com/repos/owner/repo/contents/old.txt?ref=main").mock(
+        return_value=httpx.Response(200, json={"content": old_content, "encoding": "base64"})
+    )
+    blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
+        return_value=httpx.Response(201, json={"sha": "blob1"})
+    )
+    tree_route = respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "tree123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "commit123"})
+    )
+    respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/main").mock(
+        return_value=httpx.Response(200, json={"ref": "refs/heads/main"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="commit",
+            data={
+                "repo": "owner/repo",
+                "actions": [{"action": "move", "path": "new.txt", "previous_path": "old.txt"}],
+            },
+        )
+    )
+    blob_sent = json.loads(blob_route.calls.last.request.content)
+    assert blob_sent["content"] == "moved content"
+    tree_sent = json.loads(tree_route.calls.last.request.content)
+    assert tree_sent["tree"] == [
+        {"path": "old.txt", "mode": "100644", "type": "blob", "sha": None},
+        {"path": "new.txt", "mode": "100644", "type": "blob", "sha": "blob1"},
+    ]
+
+
+@respx.mock
+async def test_write_commit_custom_ref_and_message(connector):
+    """A custom ref is resolved and the ref update targets refs/heads/<ref>."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(
+        return_value=httpx.Response(200, json={"sha": "dev123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
+        return_value=httpx.Response(201, json={"sha": "blob1"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "tree123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "commit123"})
+    )
+    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/develop").mock(
+        return_value=httpx.Response(200, json={"ref": "refs/heads/develop"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="commit",
+            data={
+                "repo": "owner/repo",
+                "ref": "develop",
+                "message": "Custom message",
+                "actions": [{"action": "create", "path": "a.txt", "content": "x"}],
+            },
+        )
+    )
+    assert "commits/develop" in respx.calls[0].request.url.path
+    assert ref_route.calls.last.request.url.path.endswith("/refs/heads/develop")
+
+
+@respx.mock
+async def test_write_commit_full_git_ref_passthrough(connector):
+    """An already-qualified refs/... ref is passed through unchanged."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/refs/heads/feature").mock(
+        return_value=httpx.Response(200, json={"sha": "feat123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
+        return_value=httpx.Response(201, json={"sha": "blob1"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "tree123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "commit123"})
+    )
+    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/feature").mock(
+        return_value=httpx.Response(200, json={"ref": "refs/heads/feature"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="commit",
+            data={
+                "repo": "owner/repo",
+                "ref": "refs/heads/feature",
+                "actions": [{"action": "create", "path": "a.txt", "content": "x"}],
+            },
+        )
+    )
+    assert ref_route.calls.last.request.url.path.endswith("/refs/heads/feature")
+
+
+@respx.mock
+async def test_write_files_alias(connector):
+    """write("files") behaves identically to write("commit")."""
+    _, tree_route, _, _ = _mock_commit_flow()
+    result = await connector.write(
+        ConnectorPayload(
+            resource="files",
+            data={"repo": "owner/repo", "actions": [{"action": "create", "path": "a.txt", "content": "hi"}]},
+        )
+    )
+    assert result["object"]["sha"] == "commit123"
+    assert json.loads(tree_route.calls.last.request.content)["tree"][0]["path"] == "a.txt"
+
+
+async def test_write_commit_missing_repo(connector):
+    with pytest.raises(ValueError, match="requires 'repo' in data"):
+        await connector.write(ConnectorPayload(resource="commit", data={}))
+
+
+async def test_write_commit_missing_actions(connector):
+    with pytest.raises(ValueError, match="non-empty 'actions' list"):
+        await connector.write(ConnectorPayload(resource="commit", data={"repo": "owner/repo"}))
+
+
+async def test_write_commit_empty_actions(connector):
+    with pytest.raises(ValueError, match="non-empty 'actions' list"):
+        await connector.write(ConnectorPayload(resource="commit", data={"repo": "owner/repo", "actions": []}))
+
+
+async def test_write_commit_invalid_action(connector):
+    with pytest.raises(ValueError, match="must be one of"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={"repo": "owner/repo", "actions": [{"action": "chmod", "path": "a.txt"}]},
+            )
+        )
+
+
+async def test_write_commit_missing_path(connector):
+    with pytest.raises(ValueError, match="requires 'path'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={"repo": "owner/repo", "actions": [{"action": "create", "content": "x"}]},
+            )
+        )
+
+
+async def test_write_commit_path_traversal_blocked(connector):
+    with pytest.raises(ValueError, match="path traversal"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={"repo": "owner/repo", "actions": [{"action": "create", "path": "../evil.txt", "content": "x"}]},
+            )
+        )
+
+
+async def test_write_commit_move_missing_previous_path(connector):
+    with pytest.raises(ValueError, match="requires 'previous_path'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={"repo": "owner/repo", "actions": [{"action": "move", "path": "new.txt"}]},
+            )
+        )
+
+
+async def test_write_commit_move_previous_path_traversal_blocked(connector):
+    with pytest.raises(ValueError, match="path traversal"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={
+                    "repo": "owner/repo",
+                    "actions": [{"action": "move", "path": "new.txt", "previous_path": "../old.txt"}],
+                },
+            )
+        )
+
+
+async def test_write_commit_create_missing_content(connector):
+    with pytest.raises(ValueError, match="requires string 'content'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={"repo": "owner/repo", "actions": [{"action": "create", "path": "a.txt"}]},
+            )
+        )
+
+
+@respx.mock
+async def test_write_commit_unresolvable_ref(connector):
+    """A ref that cannot be resolved to a commit SHA raises a descriptive error."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
+        return_value=httpx.Response(200, json={"message": "not found"})
+    )
+    with pytest.raises(ValueError, match="could not resolve ref"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={"repo": "owner/repo", "actions": [{"action": "create", "path": "a.txt", "content": "x"}]},
+            )
+        )
+
+
+@respx.mock
+async def test_write_commit_http_error_propagates(connector):
+    """An API error on blob creation surfaces as a ValueError with the status."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
+        return_value=httpx.Response(200, json={"sha": "base123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
+        return_value=httpx.Response(422, text="Unprocessable")
+    )
+    with pytest.raises(ValueError, match="422"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={"repo": "owner/repo", "actions": [{"action": "create", "path": "a.txt", "content": "x"}]},
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
 # Path traversal protection
 # ---------------------------------------------------------------------------
 
