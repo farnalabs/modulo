@@ -1,4 +1,6 @@
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import pytest
 from fastapi import FastAPI, Request
@@ -13,7 +15,7 @@ def app() -> FastAPI:
     app = FastAPI()
 
     @app.get("/test")
-    async def test_endpoint(request: Request) -> JSONResponse:
+    async def correlation_endpoint(request: Request) -> JSONResponse:
         cid = request.state.correlation_id
         assert cid is not None
         parsed = uuid.UUID(cid)
@@ -30,10 +32,16 @@ def app() -> FastAPI:
     return app
 
 
-@pytest.mark.anyio
-async def test_correlation_id_set_on_request_state(app: FastAPI) -> None:
+@asynccontextmanager
+async def _client(app: FastAPI) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest.mark.anyio
+async def test_correlation_id_set_on_request_state(app: FastAPI) -> None:
+    async with _client(app) as client:
         resp = await client.get("/test")
     assert resp.status_code == 200
     body = resp.json()
@@ -45,8 +53,7 @@ async def test_correlation_id_set_on_request_state(app: FastAPI) -> None:
 async def test_correlation_id_in_response_header(app: FastAPI) -> None:
     from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with _client(app) as client:
         resp = await client.get("/test")
     assert resp.status_code == 200
     assert REQUEST_ID_HEADER in resp.headers
@@ -58,8 +65,7 @@ async def test_correlation_id_in_response_header(app: FastAPI) -> None:
 async def test_correlation_id_consistent(app: FastAPI) -> None:
     from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with _client(app) as client:
         resp = await client.get("/test")
     body = resp.json()
     header_cid = resp.headers[REQUEST_ID_HEADER]
@@ -77,8 +83,7 @@ async def test_correlation_id_contextvar_propagated(app: FastAPI) -> None:
         seen["during_request"] = correlation_id_var.get()
         return JSONResponse({"correlation_id": request.state.correlation_id})
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with _client(app) as client:
         resp = await client.get("/capture-cid")
 
     cid = resp.json()["correlation_id"]
@@ -90,8 +95,7 @@ async def test_correlation_id_contextvar_propagated(app: FastAPI) -> None:
 
 @pytest.mark.anyio
 async def test_unique_per_request(app: FastAPI) -> None:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with _client(app) as client:
         resp1 = await client.get("/test")
         resp2 = await client.get("/test")
     cid1 = resp1.json()["correlation_id"]
@@ -103,8 +107,7 @@ async def test_unique_per_request(app: FastAPI) -> None:
 async def test_correlation_id_on_no_state_route(app: FastAPI) -> None:
     from modulo.api.middleware.correlation_id import REQUEST_ID_HEADER
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with _client(app) as client:
         resp = await client.get("/no-state")
     assert resp.status_code == 200
     assert REQUEST_ID_HEADER in resp.headers
@@ -120,8 +123,7 @@ async def test_backward_compat_request_id(app: FastAPI) -> None:
         assert rid == cid
         return JSONResponse({"request_id": rid, "correlation_id": cid})
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with _client(app) as client:
         resp = await client.get("/check-backward")
     body = resp.json()
     assert body["request_id"] == body["correlation_id"]
