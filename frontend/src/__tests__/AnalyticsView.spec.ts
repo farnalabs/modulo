@@ -126,6 +126,34 @@ describe('serializeFilters', () => {
     expect(bare.pipeline_id).toBeUndefined()
     expect(bare.folder_id).toBeUndefined()
   })
+
+  it('maps a 1h timespan to a datetime range with group_by hour', () => {
+    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
+    expect(params.date_from).toContain('T')
+    expect(params.date_to).toContain('T')
+    expect(params.group_by).toBe('hour')
+    expect(params.date_to).toBe('2026-08-06T12:00:00.000Z')
+    expect(params.date_from).toBe('2026-08-06T11:00:00.000Z')
+    expect(Date.parse(params.date_to) - Date.parse(params.date_from)).toBe(3600000)
+  })
+
+  it('maps a 24h timespan to a datetime range with group_by hour', () => {
+    const params = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
+    expect(params.date_from).toContain('T')
+    expect(params.date_to).toContain('T')
+    expect(params.group_by).toBe('hour')
+    expect(params.date_to).toBe('2026-08-06T12:00:00.000Z')
+    expect(params.date_from).toBe('2026-08-05T12:00:00.000Z')
+    expect(Date.parse(params.date_to) - Date.parse(params.date_from)).toBe(24 * 3600000)
+  })
+
+  it('keeps day-granular ISO day strings for a 3d timespan', () => {
+    const params = serializeFilters({ timespan: '3d', groupBy: 'day' }, FIXED_NOW)
+    expect(params.date_from).not.toContain('T')
+    expect(params.date_to).not.toContain('T')
+    expect(params.group_by).toBe('day')
+    expect(Date.parse(params.date_to) - Date.parse(params.date_from)).toBe(3 * 86400000)
+  })
 })
 
 describe('previousWindowParams', () => {
@@ -134,6 +162,16 @@ describe('previousWindowParams', () => {
     const prev = previousWindowParams(params)
     expect(prev.date_to).toBe('2026-07-29')
     expect(prev.date_from).toBe('2026-07-22')
+    expect(prev.group_by).toBe(params.group_by)
+  })
+
+  it('shifts an hour-datetime window back by its own span', () => {
+    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
+    const prev = previousWindowParams(params)
+    expect(prev.date_from).toContain('T')
+    expect(prev.date_to).toContain('T')
+    expect(prev.date_to).toBe(params.date_from)
+    expect(Date.parse(prev.date_to) - Date.parse(prev.date_from)).toBe(3600000)
     expect(prev.group_by).toBe(params.group_by)
   })
 })
