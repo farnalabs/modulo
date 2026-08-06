@@ -133,6 +133,12 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     if query.dimension is not None:
         dim_col = _DIMENSION_COLUMNS[query.dimension]
         group_cols.append(dim_col)
+        # The raw dimension key must be in the SELECT list, not just GROUP BY —
+        # bucket_rows resolves each bucket's key from the row attributes, and
+        # without the column in the select the lookup always misses (collapsing
+        # every bucket under key=None). This also powers the UUID fallback for
+        # PIPELINE/TEAM when the snapshot label is NULL.
+        select_cols.append(dim_col)
         label_col = _DIMENSION_LABELS.get(query.dimension)
         if label_col is not None:
             select_cols.append(sa.func.min(label_col).label("key_label"))

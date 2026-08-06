@@ -231,6 +231,86 @@ class TestEmptyOrg:
         assert all(b["count"] == 0 for b in payload["buckets"])
 
 
+class TestDimensionedQuery:
+    async def test_trigger_type_dimension_returns_keyed_buckets(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """A dimensioned query through the endpoint must return non-None keys.
+
+        Regression guard for PR #740 review round 3: the dimension column was in
+        GROUP BY but never in the SELECT, so every bucket collapsed under
+        key=None. The raw trigger_type must reach the row and bucket_rows.
+        """
+        today = datetime.now(UTC).date()
+        for tt in ("manual", "cron", "webhook"):
+            await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=today, trigger_type=tt)
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}&dimension=trigger_type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        keys = {b["key"] for b in payload["buckets"]}
+        assert {"manual", "cron", "webhook"} <= keys, f"expected dimensioned keys, got {keys}"
+        assert None not in keys, "dimensioned buckets must carry non-None keys"
+        assert sum(b["count"] for b in payload["buckets"]) == 3
+
+    async def test_folder_dimension_returns_uuid_keys(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """folder_id dimensioned query returns the raw UUID keys (no label)."""
+        today = datetime.now(UTC).date()
+        folder = uuid.uuid4()
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO pipeline_folders (id, organisation_id, name, account_id) "
+                    "VALUES (:fid, :oid, 'QA Folder', :aid)",
+                ),
+                {"fid": str(folder), "oid": str(org_a), "aid": str(user_a)},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO run_daily_facts (id, organisation_id, run_id, run_date, created_at, trigger_type, "
+                    "status, folder_id) VALUES (:id, :oid, :rid, :day, :created, 'manual', 'complete', :fid)",
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "oid": str(org_a),
+                    "rid": str(uuid.uuid4()),
+                    "day": today,
+                    "created": datetime.combine(today, datetime.min.time(), tzinfo=UTC),
+                    "fid": str(folder),
+                },
+            )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}&dimension=folder",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        keys = {b["key"] for b in payload["buckets"]}
+        assert str(folder) in keys, f"expected the folder uuid as a bucket key, got {keys}"
+        # org_a also holds earlier null-folder facts in the same range, so None is
+        # legitimate — the regression guard is that the folder UUID key is present
+        # at all (pre-fix every bucket collapsed under None).
+        assert any(b["key"] is not None for b in payload["buckets"]), (
+            "dimensioned buckets must not all collapse under None"
+        )
+
+
 class TestPredicateStrip:
     async def test_no_org_predicate_yields_zero_rows_under_rls(
         self,

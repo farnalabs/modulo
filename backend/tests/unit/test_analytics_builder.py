@@ -140,6 +140,92 @@ class TestCompiledSql:
         assert "'complete'" not in sql and "'webhook'" not in sql, "filter values must be bound, never literal"
 
 
+class TestDimensionedSelect:
+    """The dimension column must be in the SELECT list, not just GROUP BY.
+
+    bucket_rows resolves each bucket's key from the row attributes — a column
+    present only in GROUP BY never reaches the row, so every bucket would
+    collapse under key=None (regression: PR #740 review round 3).
+    """
+
+    @pytest.mark.parametrize(
+        ("dimension", "key_attr"),
+        [
+            (AnalyticsDimension.TRIGGER_TYPE, "trigger_type"),
+            (AnalyticsDimension.STATUS, "status"),
+            (AnalyticsDimension.FOLDER, "folder_id"),
+        ],
+    )
+    def test_raw_dimension_key_is_selected(self, dimension: AnalyticsDimension, key_attr: str) -> None:
+        stmt, _ = build_facts_query(_query(dimension=dimension))
+        keys = {k.name for k in stmt.selected_columns}
+        assert key_attr in keys, (
+            f"{dimension.value} dimension: the {key_attr} column must be in the SELECT "
+            "so bucket_rows can resolve a non-None key"
+        )
+        assert "key_label" not in keys, "non-label dimensions must not emit key_label"
+
+    @pytest.mark.parametrize(
+        ("dimension", "key_attr"),
+        [
+            (AnalyticsDimension.PIPELINE, "pipeline_id"),
+            (AnalyticsDimension.TEAM, "team_id"),
+        ],
+    )
+    def test_label_dimension_selects_both_label_and_raw_key(self, dimension: AnalyticsDimension, key_attr: str) -> None:
+        stmt, _ = build_facts_query(_query(dimension=dimension))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "key_label" in keys, "label dimensions must select the MIN(snapshot label)"
+        assert key_attr in keys, (
+            f"{dimension.value} dimension: the raw {key_attr} column must be selected so a NULL "
+            "snapshot label still buckets by the UUID (the documented fallback was dead code)"
+        )
+
+    def test_build_then_bucket_rows_returns_non_none_keys(self) -> None:
+        # End-to-end within a DB-free unit test: build a trigger_type dimensioned
+        # statement, verify the raw key is selected, then feed bucket_rows rows
+        # shaped exactly like the compiled SELECT would return and assert the
+        # buckets carry the non-None dimension keys.
+        query = _query(
+            dimension=AnalyticsDimension.TRIGGER_TYPE,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        stmt, _ = build_facts_query(query)
+        keys = {k.name for k in stmt.selected_columns}
+        assert "trigger_type" in keys
+
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=1,
+                complete_count=1,
+                total_cost_usd=1.25,
+                total_tokens=100,
+                avg_duration_ms=500.0,
+                trigger_type="manual",
+            ),
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=1,
+                complete_count=0,
+                total_cost_usd=0.5,
+                total_tokens=10,
+                avg_duration_ms=100.0,
+                trigger_type="cron",
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=query.group_by,
+            dimension=query.dimension,
+            date_from=query.date_from,
+            date_to=query.date_to,
+        )
+        assert {b["key"] for b in out} == {"manual", "cron"}
+        assert all(b["key"] is not None for b in out), "dimensioned buckets must never collapse under None"
+
+
 class TestBucketing:
     def test_zero_fill_day_grid(self) -> None:
         day_from = date(2026, 8, 1)
