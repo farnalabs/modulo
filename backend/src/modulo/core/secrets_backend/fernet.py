@@ -201,7 +201,7 @@ class FernetSecretsBackend(SecretsBackend):
                 if attempt == 0:
                     logger.warning("FernetSecretsBackend: TOCTOU retry on set_secret for key %s", key)
                     continue
-                logger.error("FernetSecretsBackend: TOCTOU retry exhausted for key %s", key)
+                logger.exception("FernetSecretsBackend: TOCTOU retry exhausted for key %s", key)
                 raise
 
     async def delete_secret(self, key: str) -> None:
