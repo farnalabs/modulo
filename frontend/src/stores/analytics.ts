@@ -11,7 +11,7 @@ export type AnalyticsMeasure =
   | "tokens"
   | "duration"
   | "success_rate";
-export type AnalyticsTimespan = "1h" | "24h" | "3d" | "7d" | "30d" | "90d";
+export type AnalyticsTimespan = "24h" | "3d" | "7d" | "30d" | "90d";
 export type AnalyticsGroupBy = "day" | "week";
 export type AnalyticsDimension =
   | "trigger_type"
@@ -98,19 +98,16 @@ export const RUN_STATUSES = [
 ] as const;
 
 export const TIMESPANS: AnalyticsTimespanOption[] = [
-  { value: "1h", hours: 1, granularity: "hour" },
-  { value: "24h", days: 1, granularity: "hour" },
-  { value: "3d", days: 3, granularity: "day" },
-  { value: "7d", days: 7, granularity: "day" },
-  { value: "30d", days: 30, granularity: "day" },
-  { value: "90d", days: 90, granularity: "day" },
+  { value: "24h", days: 1 },
+  { value: "3d", days: 3 },
+  { value: "7d", days: 7 },
+  { value: "30d", days: 30 },
+  { value: "90d", days: 90 },
 ];
 
 export interface AnalyticsTimespanOption {
   value: AnalyticsTimespan;
-  days?: number;
-  hours?: number;
-  granularity?: "hour" | "day" | "week";
+  days: number;
 }
 
 export const MEASURES: { value: AnalyticsMeasure; labelKey: string }[] = [
@@ -130,7 +127,6 @@ const MEASURE_KEYS: Record<AnalyticsMeasure, keyof AnalyticsBucket> = {
 };
 
 const DAY_MS = 86400000;
-const HOUR_MS = 3600000;
 
 function isoDay(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -155,9 +151,9 @@ function shiftUtcDays(date: Date, days: number): Date {
 
 /**
  * Rolling timespan → typed query params (UTC). Filters included only when set.
- * Hour-bucketed windows (1h/24h) send a datetime range ending at `now` with
- * group_by "hour"; day-bucketed windows keep sending ISO day strings and
- * respect the user's day/week granularity control.
+ * All timespans are day-granular windows that send ISO day strings and respect
+ * the user's day/week granularity control — the backend only supports
+ * `AnalyticsGroupBy` of day/week with date-typed `date_from`/`date_to`.
  */
 export function serializeFilters(
   filters: AnalyticsFilters,
@@ -166,24 +162,14 @@ export function serializeFilters(
   const timespan =
     TIMESPANS.find((t) => t.value === filters.timespan) ??
     TIMESPANS.find((t) => t.value === DEFAULT_FILTERS.timespan)!;
+  const dateTo = parseISO(isoDay(now));
+  const dateFrom = shiftUtcDays(dateTo, timespan.days);
   const params: AnalyticsQueryParams = {
     group_by: filters.groupBy,
-    date_from: "",
-    date_to: "",
+    date_from: isoDay(dateFrom),
+    date_to: isoDay(dateTo),
     limit: 1000,
   };
-  if (timespan.granularity === "hour") {
-    const hours = timespan.hours ?? (timespan.days ?? 0) * 24;
-    const dateFrom = new Date(now.getTime() - hours * HOUR_MS); // nosemgrep: new-date-without-guard
-    params.group_by = "hour";
-    params.date_from = dateFrom.toISOString();
-    params.date_to = now.toISOString();
-  } else {
-    const dateTo = parseISO(isoDay(now));
-    const dateFrom = shiftUtcDays(dateTo, timespan.days ?? 0);
-    params.date_from = isoDay(dateFrom);
-    params.date_to = isoDay(dateTo);
-  }
   if (filters.dimension) params.dimension = filters.dimension;
   if (filters.triggerType) params.trigger_type = filters.triggerType;
   if (filters.status) params.status = filters.status;
@@ -192,22 +178,8 @@ export function serializeFilters(
   return params;
 }
 
-/**
- * Shift a window back by exactly one window (for current-vs-previous deltas).
- * Datetime windows (containing a "T") shift by their hour span; day windows
- * shift by their day span.
- */
+/** Shift a window back by exactly one window (for current-vs-previous deltas). */
 export function previousWindowParams(params: AnalyticsQueryParams): AnalyticsQueryParams {
-  if (params.date_to.includes("T") || params.date_from.includes("T")) {
-    const to = parseISO(params.date_to);
-    const from = parseISO(params.date_from);
-    if (isValid(to) && isValid(from)) {
-      const spanMs = to.getTime() - from.getTime();
-      const prevTo = new Date(from.getTime()); // nosemgrep: new-date-without-guard
-      const prevFrom = new Date(prevTo.getTime() - spanMs); // nosemgrep: new-date-without-guard
-      return { ...params, date_from: prevFrom.toISOString(), date_to: prevTo.toISOString() };
-    }
-  }
   const to = parseDay(params.date_to);
   const from = parseDay(params.date_from);
   const spanDays = Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1;

@@ -127,32 +127,32 @@ describe('serializeFilters', () => {
     expect(bare.folder_id).toBeUndefined()
   })
 
-  it('maps a 1h timespan to a datetime range with group_by hour', () => {
-    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
-    expect(params.date_from).toContain('T')
-    expect(params.date_to).toContain('T')
-    expect(params.group_by).toBe('hour')
-    expect(params.date_to).toBe('2026-08-06T12:00:00.000Z')
-    expect(params.date_from).toBe('2026-08-06T11:00:00.000Z')
-    expect(Date.parse(params.date_to) - Date.parse(params.date_from)).toBe(3600000)
+  it('maps the 24h preset to a 1-day UTC window with day granularity', () => {
+    const day = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
+    expect(day.date_to).toBe('2026-08-06')
+    expect(day.date_from).toBe('2026-08-05')
+    expect(day.group_by).toBe('day')
+
+    const week = serializeFilters({ timespan: '24h', groupBy: 'week' }, FIXED_NOW)
+    expect(week.date_to).toBe('2026-08-06')
+    expect(week.date_from).toBe('2026-08-05')
+    expect(week.group_by).toBe('week')
   })
 
-  it('maps a 24h timespan to a datetime range with group_by hour', () => {
-    const params = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
-    expect(params.date_from).toContain('T')
-    expect(params.date_to).toContain('T')
-    expect(params.group_by).toBe('hour')
-    expect(params.date_to).toBe('2026-08-06T12:00:00.000Z')
-    expect(params.date_from).toBe('2026-08-05T12:00:00.000Z')
-    expect(Date.parse(params.date_to) - Date.parse(params.date_from)).toBe(24 * 3600000)
-  })
-
-  it('keeps day-granular ISO day strings for a 3d timespan', () => {
+  it('maps the 3d preset to a 3-day UTC window', () => {
     const params = serializeFilters({ timespan: '3d', groupBy: 'day' }, FIXED_NOW)
-    expect(params.date_from).not.toContain('T')
-    expect(params.date_to).not.toContain('T')
+    expect(params.date_to).toBe('2026-08-06')
+    expect(params.date_from).toBe('2026-08-03')
     expect(params.group_by).toBe('day')
-    expect(Date.parse(params.date_to) - Date.parse(params.date_from)).toBe(3 * 86400000)
+  })
+
+  it('never emits datetime strings or an hour group_by (backend only accepts days)', () => {
+    for (const timespan of ['24h', '3d', '7d', '30d', '90d'] as const) {
+      const params = serializeFilters({ timespan, groupBy: 'day' }, FIXED_NOW)
+      expect(params.date_from).not.toContain('T')
+      expect(params.date_to).not.toContain('T')
+      expect(params.group_by).toBe('day')
+    }
   })
 })
 
@@ -165,13 +165,11 @@ describe('previousWindowParams', () => {
     expect(prev.group_by).toBe(params.group_by)
   })
 
-  it('shifts an hour-datetime window back by its own span', () => {
-    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
+  it('shifts the 24h preset back by one day window', () => {
+    const params = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
     const prev = previousWindowParams(params)
-    expect(prev.date_from).toContain('T')
-    expect(prev.date_to).toContain('T')
-    expect(prev.date_to).toBe(params.date_from)
-    expect(Date.parse(prev.date_to) - Date.parse(prev.date_from)).toBe(3600000)
+    expect(prev.date_to).toBe('2026-08-04')
+    expect(prev.date_from).toBe('2026-08-03')
     expect(prev.group_by).toBe(params.group_by)
   })
 })
