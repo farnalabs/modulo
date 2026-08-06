@@ -147,8 +147,7 @@ def test_classify_keeps_only_four_newest_weekly():
     while d <= date(2026, 6, 30):
         backups.append(make_backup(d.strftime("%Y%m%d")))
         d = date.fromordinal(d.toordinal() + 1)
-    for ds in ("20260503", "20260510", "20260517"):
-        backups.append(make_backup(ds))
+    backups.extend(make_backup(ds) for ds in ("20260503", "20260510", "20260517"))
 
     kept = kept_dates(backups)
     kept_sundays = [b.date for b in backups if b.date in kept and b.date.isocalendar().weekday == 7]

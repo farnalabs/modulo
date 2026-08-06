@@ -42,9 +42,7 @@ def _mock_profile(
 
 
 def _graph_json(*, agent_ids: list[uuid.UUID] | None = None) -> dict:
-    nodes = []
-    for aid in agent_ids or []:
-        nodes.append({"id": str(uuid.uuid4()), "agent_id": str(aid)})
+    nodes = [{"id": str(uuid.uuid4()), "agent_id": str(aid)} for aid in agent_ids or []]
     return {"nodes": nodes, "edges": []}
 
 

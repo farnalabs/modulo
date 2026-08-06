@@ -38,8 +38,7 @@ def test_dockerfile_python_version_satisfies_pyproject():
         if not dockerfile.exists():
             continue
         content = dockerfile.read_text(encoding="utf-8")
-        for minor in PYTHON_IMAGE.findall(content):
-            pinned.append((dockerfile.relative_to(PRODUCT), int(minor)))
+        pinned.extend((dockerfile.relative_to(PRODUCT), int(minor)) for minor in PYTHON_IMAGE.findall(content))
 
     if not pinned:
         pytest.skip("No python base image found in backend Dockerfiles")

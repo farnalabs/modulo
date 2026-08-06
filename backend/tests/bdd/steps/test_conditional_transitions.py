@@ -294,8 +294,7 @@ def _build_and_run_conditional_graph(ctx):
             edge["default_target"] = default_target
         edges.append(edge)
 
-    for tgt in normal_targets:
-        edges.append({"source": ctx["router_node_id"], "target": tgt, "type": "normal"})
+    edges.extend({"source": ctx["router_node_id"], "target": tgt, "type": "normal"} for tgt in normal_targets)
 
     graph_json = {"nodes": nodes, "edges": edges}
     compiled = build_graph_from_json(graph_json)

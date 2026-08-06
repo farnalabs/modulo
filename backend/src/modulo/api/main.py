@@ -335,10 +335,9 @@ async def _run_migrations(settings: Settings) -> None:
             if attempt < _MIGRATION_MAX_ATTEMPTS:
                 await asyncio.sleep(_MIGRATION_BACKOFF_SECONDS * attempt)
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "infra_blocked=migration_failed",
                 extra={"attempt": attempt, "error": str(exc)},
-                exc_info=True,
             )
             last_error = exc
             break

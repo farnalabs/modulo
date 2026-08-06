@@ -782,7 +782,6 @@ def node_not_re_executed(request: pytest.FixtureRequest, node: int) -> None:
     """
     # TODO: once the resume endpoint is real, verify that node N's
     # checkpoint indicates it was already completed.
-    pass
 
 
 @then("it is written to the PostgreSQL checkpoints table via asyncpg")

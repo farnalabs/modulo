@@ -2729,7 +2729,7 @@ _doc_index_ttl: float = 300.0  # 5 minutes
 
 
 def _get_doc_index() -> DocumentationIndex:
-    global _doc_index, _doc_index_ts, _doc_index_ttl
+    global _doc_index, _doc_index_ts
     import time as _time
 
     now = _time.time()

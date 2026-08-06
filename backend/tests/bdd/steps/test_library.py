@@ -148,7 +148,6 @@ def _community_primitives_exist(ctx: dict[str, Any]) -> None:
     This step is a no-op — the 5 built-in community primitives are
     (schema x2, agent x2, workflow x1) from modulo.core.library_service.
     """
-    pass
 
 
 @when(parsers.parse("the user requests GET {path}"))
