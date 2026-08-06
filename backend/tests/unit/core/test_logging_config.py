@@ -158,9 +158,26 @@ def test_per_module_level_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_configure_logging_runs_without_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that configure_logging() does not raise."""
+    """configure_logging() wires the root logger for structured JSON output."""
     monkeypatch.setenv("MODULO_LOG_LEVEL", "INFO")
-    configure_logging()
+    root_logger = logging.getLogger()
+    before_level = root_logger.level
+    before_handlers = set(root_logger.handlers)
+    try:
+        configure_logging()
+        assert root_logger.level == logging.DEBUG
+        added = [h for h in root_logger.handlers if h not in before_handlers]
+        assert added, "configure_logging() must attach handlers to the root logger"
+        stream_handler = next(h for h in added if isinstance(h, logging.StreamHandler))
+        assert isinstance(stream_handler.formatter, JsonFormatter)
+        assert any(
+            isinstance(f, (CorrelationIdFilter, SensitiveFieldFilter)) for f in stream_handler.filters
+        )
+    finally:
+        for handler in list(root_logger.handlers):
+            if handler not in before_handlers:
+                root_logger.removeHandler(handler)
+        root_logger.setLevel(before_level)
 
 
 def test_known_sensitive_keys_redacted_in_extra() -> None:
