@@ -49,8 +49,9 @@
             { key: 'status', label: $t('views.RunsListView.status'), sortable: true },
             { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
             { key: 'run_number', label: '#', numeric: true, sortable: true },
-            { key: 'created_at', label: $t('views.RunsListView.created'), sortable: true },
-            { key: 'started_at', label: $t('views.RunsListView.last_run'), sortable: true },
+            { key: 'started_at', label: $t('views.RunsListView.start'), sortable: true },
+            { key: 'completed_at', label: $t('views.RunsListView.end'), sortable: true },
+            { key: 'duration', label: $t('views.RunsListView.duration') },
             { key: 'total_cost_usd', label: $t('views.RunsListView.cost'), numeric: true, sortable: true },
           ]"
           :rows="runs"
@@ -76,11 +77,14 @@
           <template #cell-run_number="{ value }">
             <span class="tabular-nums">{{ value ?? '—' }}</span>
           </template>
-          <template #cell-created_at="{ value }">
-            <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) }}</span>
-          </template>
           <template #cell-started_at="{ value }">
             <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) || '—' }}</span>
+          </template>
+          <template #cell-completed_at="{ value }">
+            <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) || '—' }}</span>
+          </template>
+          <template #cell-duration="{ row }">
+            <span class="whitespace-nowrap tabular-nums text-muted-foreground">{{ formatDuration(row.started_at as string, row.completed_at as string) }}</span>
           </template>
           <template #cell-total_cost_usd="{ value }">
             <span class="tabular-nums">{{ value != null ? '$' + Number(value).toFixed(4) : '—' }}</span>
@@ -137,6 +141,22 @@ const route = useRoute()
 const pageSize = 20
 const page = ref(1)
 
+const FILTER_STORAGE_KEY = 'runs-list-filters'
+
+const filterStatus = ref(route.query.status as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.status`) || '')
+const filterTriggerType = ref(route.query.trigger_type as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.trigger_type`) || '')
+const filterSearch = ref(route.query.search as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.search`) || '')
+const filterPipelineId = ref(route.query.pipeline_id as string || '')
+
+function buildParams(): FetchRunsParams {
+  const params: FetchRunsParams = { page: page.value, page_size: pageSize }
+  if (filterStatus.value) params.status = filterStatus.value
+  if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
+  if (filterSearch.value) params.search = filterSearch.value
+  if (filterPipelineId.value) params.pipeline_id = filterPipelineId.value
+  return params
+}
+
 const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items: RunListItem[]; total: number }>(
   () => fetchRuns(buildParams()).then(
     d => ({ data: d }),
@@ -147,13 +167,6 @@ const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items:
 
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)
-
-const FILTER_STORAGE_KEY = 'runs-list-filters'
-
-const filterStatus = ref(route.query.status as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.status`) || '')
-const filterTriggerType = ref(route.query.trigger_type as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.trigger_type`) || '')
-const filterSearch = ref(route.query.search as string || localStorage.getItem(`${FILTER_STORAGE_KEY}.search`) || '')
-const filterPipelineId = ref(route.query.pipeline_id as string || '')
 
 watch([filterStatus, filterTriggerType, filterSearch], ([status, triggerType, search]) => {
   localStorage.setItem(`${FILTER_STORAGE_KEY}.status`, status)
@@ -166,15 +179,6 @@ function handleFilterUpdate(key: string, value: string) {
   else if (key === 'trigger_type') filterTriggerType.value = value
   page.value = 1
   loadRuns()
-}
-
-function buildParams(): FetchRunsParams {
-  const params: FetchRunsParams = { page: page.value, page_size: pageSize }
-  if (filterStatus.value) params.status = filterStatus.value
-  if (filterTriggerType.value) params.trigger_type = filterTriggerType.value
-  if (filterSearch.value) params.search = filterSearch.value
-  if (filterPipelineId.value) params.pipeline_id = filterPipelineId.value
-  return params
 }
 
 function resetFilters() {
@@ -202,6 +206,21 @@ function prevPage() {
 
 function navigateToDetail(id: string) {
   router.push(`/runs/${id}`)
+}
+
+function formatDuration(startIso: string | null | undefined, endIso: string | null | undefined): string {
+  if (!startIso || !endIso) return '—'
+  const start = new Date(startIso)
+  const end = new Date(endIso)
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return '—'
+  let totalSeconds = Math.max(0, Math.round((end.getTime() - start.getTime()) / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  totalSeconds -= hours * 3600
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+  return `${seconds}s`
 }
 
 </script>

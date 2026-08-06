@@ -44,15 +44,15 @@ def tmp_dir():
 @pytest.fixture
 def sample_archive(tmp_dir):
     """Create a minimal valid tar.gz with known content."""
-    content_dir = os.path.join(tmp_dir, "content")
-    os.makedirs(content_dir, exist_ok=True)
-    Path(os.path.join(content_dir, "modulo.pgdump")).write_text("fake-dump-content")
-    Path(os.path.join(content_dir, "secrets.env")).write_text("FERNET_KEY=test\n")
-    Path(os.path.join(content_dir, "manifest.json")).write_text('{"tool": "modulo-backup", "version": "1"}')
+    content_dir = Path(tmp_dir) / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    Path(content_dir, "modulo.pgdump").write_text("fake-dump-content")
+    Path(content_dir, "secrets.env").write_text("FERNET_KEY=test\n")
+    Path(content_dir, "manifest.json").write_text('{"tool": "modulo-backup", "version": "1"}')
     # write checksums
-    with open(os.path.join(content_dir, "checksums.sha256"), "w") as f:
+    with Path(content_dir, "checksums.sha256").open("w") as f:
         for name in ("modulo.pgdump", "secrets.env", "manifest.json"):
-            h = hash_file(os.path.join(content_dir, name))
+            h = hash_file(Path(content_dir, name))
             f.write(f"{h}  {name}\n")
 
     archive_path = os.path.join(tmp_dir, "backup.tar.gz")
@@ -193,7 +193,7 @@ def test_read_checksums(tmp_dir, sample_archive):
     checksums = read_checksums(content_dir)
     assert len(checksums) == 3
     assert "modulo.pgdump" in checksums
-    for name, h in checksums.items():
+    for h in checksums.values():
         assert len(h) == 64  # SHA-256 hex
 
 

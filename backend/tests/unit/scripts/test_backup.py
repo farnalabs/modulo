@@ -166,7 +166,7 @@ def test_collect_secrets_creates_env_file(tmp_manifest_dir, monkeypatch):
     assert secrets_path in files
     assert os.path.exists(secrets_path)
 
-    with open(secrets_path) as f:
+    with Path(secrets_path).open() as f:
         content = f.read()
     assert "FERNET_KEY=test-fernet-key" in content
     assert "SECRET_KEY=test-secret-key" in content
@@ -189,7 +189,7 @@ def test_collect_secrets_creates_manifest(tmp_manifest_dir):
     assert manifest_path in files
     assert os.path.exists(manifest_path)
 
-    with open(manifest_path) as f:
+    with Path(manifest_path).open() as f:
         manifest = json.load(f)
     assert manifest["tool"] == "modulo-backup"
     assert manifest["version"] == "1"
@@ -223,7 +223,7 @@ def test_write_checksums(tmp_manifest_dir):
     cs_path = write_checksums(tmp_manifest_dir, [a, b])
     assert os.path.exists(cs_path)
 
-    with open(cs_path) as f:
+    with Path(cs_path).open() as f:
         lines = f.read().strip().split("\n")
     assert len(lines) == 2
     for line in lines:

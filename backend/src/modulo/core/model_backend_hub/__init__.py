@@ -174,8 +174,8 @@ class ModelBackendHub:
                             continue
                     if parsed:
                         fallback_map[mb.id] = parsed
-            except (AttributeError, TypeError, ValueError, KeyError, BackendDecryptError) as exc:
-                logger.error("Failed to initialise backend %s: %s", mb.id, exc)
+            except (AttributeError, TypeError, ValueError, KeyError, BackendDecryptError):
+                logger.exception("Failed to initialise backend %s", mb.id)
                 continue
 
         if not backends_to_register:
