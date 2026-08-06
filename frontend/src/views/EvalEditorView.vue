@@ -216,7 +216,7 @@
                     :title="$t('common.edit')"
                     @click="startEdit(ev)"
                   >
-                    <Pencil class="h-4 w-4" />
+                    <Pencil class="h-4 w-4" aria-hidden="true" />
                   </button>
                   <button
                     v-if="deletingEvalId !== ev.id"
@@ -226,7 +226,7 @@
                     :title="$t('common.delete')"
                     @click="confirmDelete(ev.id)"
                   >
-                    <Trash2 class="h-4 w-4" />
+                    <Trash2 class="h-4 w-4" aria-hidden="true" />
                   </button>
                   <div v-else class="flex items-center gap-1">
                     <button
