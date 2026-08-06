@@ -11,6 +11,7 @@ import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from operator import attrgetter
 from typing import Any
 
 from sqlalchemy import Date, case, cast, delete, func, select, text
@@ -605,7 +606,7 @@ async def _get_run_stats_postgres(
         "p99_duration_ms": int(p99) if p99 is not None else None,
         "runs_by_day": [
             {"date": str(row.day), "count": int(row.run_count), "success": int(row.success), "failed": int(row.failed)}
-            for row in sorted(day_rows, key=lambda r: r.day)
+            for row in sorted(day_rows, key=attrgetter("day"))
         ],
         "failure_by_reason": [
             {"reason": reason, "count": int(count)}
@@ -613,7 +614,7 @@ async def _get_run_stats_postgres(
         ],
         "avg_duration_by_day": [
             {"date": str(row.day), "avg_ms": int(row.avg_duration)}
-            for row in sorted(day_rows, key=lambda r: r.day)
+            for row in sorted(day_rows, key=attrgetter("day"))
             if row.avg_duration is not None
         ],
     }
