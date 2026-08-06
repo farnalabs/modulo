@@ -700,7 +700,7 @@ class FixtureExportResponse(BaseModel):
     run_id: uuid.UUID
     pipeline_id: uuid.UUID
     status: str
-    snapshot_graph_json: dict[str, Any] = {}
+    snapshot_graph_json: dict[str, Any] = Field(default_factory=dict)
     input_payload: dict[str, Any] | None = None
     outputs_json: dict[str, Any] | None = None
     fixture_map: dict[str, str]

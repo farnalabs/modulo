@@ -834,6 +834,11 @@ def make_sandbox_agent_fn(
 
     node_id: str = str(node_def["id"])
     agent_prompt_template: str = node_def.get("agent_prompt") or ""
+    if not agent_prompt_template.strip():
+        raise ValueError(
+            f"sandbox_agent node '{node_def.get('id')}' is missing required 'agent_prompt' "
+            "— an empty prompt would dispatch the agent with no instructions"
+        )
     template_id: str = node_def.get("template_id", "opencode")
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")

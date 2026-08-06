@@ -46,6 +46,27 @@ def test_missing_agent_command_raises_value_error():
         make_sandbox_agent_fn(node_def)
 
 
+def test_missing_agent_prompt_raises_value_error():
+    """An empty/missing agent_prompt is a hard error — it would dispatch the agent with no instructions."""
+    node_def = {
+        "id": "n1",
+        "agent_command": _AGENT_COMMAND,
+    }
+    with pytest.raises(ValueError, match="missing required 'agent_prompt'"):
+        make_sandbox_agent_fn(node_def)
+
+
+def test_whitespace_only_agent_prompt_raises_value_error():
+    """A whitespace-only agent_prompt is treated as missing."""
+    node_def = {
+        "id": "n1",
+        "agent_prompt": "   ",
+        "agent_command": _AGENT_COMMAND,
+    }
+    with pytest.raises(ValueError, match="missing required 'agent_prompt'"):
+        make_sandbox_agent_fn(node_def)
+
+
 def test_missing_agent_commands_only_raises_value_error():
     """agent_commands with an empty list is the same as missing."""
     node_def = {
