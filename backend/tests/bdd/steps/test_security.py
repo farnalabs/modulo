@@ -3,8 +3,9 @@
 import contextlib
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import pytest
 from cryptography.fernet import Fernet, InvalidToken
 from pytest_bdd import given, parsers, scenarios, then, when
 
@@ -19,6 +20,22 @@ with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/security/input_sanitization.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/security/rls_enforcement.feature")
+
+
+@pytest.fixture
+def patches():
+    """Collect ``unittest.mock.patch`` instances for automatic cleanup.
+
+    Every ``given`` / ``when`` step that starts a patch should append the
+    patcher to this list.  The fixture stops all patches (in reverse order)
+    when the scenario finishes.
+    """
+    collectors: list[Any] = []
+    yield collectors
+    for p in reversed(collectors):
+        with contextlib.suppress(RuntimeError):
+            p.stop()
+
 
 # ===========================================================================
 # security/credential_store.feature  —  3 scenarios
@@ -158,20 +175,109 @@ def check_invalid_token(decrypt_error: Exception | None) -> None:
 
 
 # ===========================================================================
-# security/input_sanitization.feature  —  TODO stub (no scenarios yet)
+# security/input_sanitization.feature  —  5 scenarios (input validation)
 # ===========================================================================
 
 
-@given("I submit a prompt with Jinja2 template injection")
-def step_jinja2_injection() -> bool:
-    """Placeholder: Jinja2 sandbox enforcement scenario."""
-    return True
+def _store_response(request: pytest.FixtureRequest, resp) -> None:
+    """Persist the response for the shared status / error-mentions steps.
+
+    Shared steps read either ``request.node._resp`` (conftest status step,
+    alpha error steps) or ``request.node.response`` (change-password steps),
+    so both are populated for whichever definition is registered last.
+    """
+    request.node._resp = resp
+    request.node.response = resp
 
 
-@given("I submit a YAML payload with !!python/object tag")
-def step_yaml_injection() -> bool:
-    """Placeholder: yaml.safe_load enforcement scenario."""
-    return True
+def _patch_runs_trigger(patches, pipeline, snapshot) -> None:
+    """Wire the run-trigger route's DB calls to the given pipeline/snapshot mocks."""
+    patcher = patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock)
+    patcher.start()
+    patches.append(patcher)
+    patcher = patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline)
+    patcher.start()
+    patches.append(patcher)
+    patcher = patch(
+        "modulo.api.routes.runs.create_snapshot_from_live_graph",
+        new_callable=AsyncMock,
+        return_value=snapshot,
+    )
+    patcher.start()
+    patches.append(patcher)
+
+
+@when("I POST /api/pipelines with empty JSON body")
+def step_post_pipeline_empty_body(client, request: pytest.FixtureRequest) -> None:
+    """POST a pipeline with an empty body — Pydantic rejects the missing name."""
+    _store_response(request, client.post("/api/v1/pipelines", json={}))
+
+
+@when(parsers.parse('I create a cron trigger with expression "{expression}"'))
+def step_create_cron_trigger(expression: str, client, request: pytest.FixtureRequest) -> None:
+    """Create a cron trigger with the given expression — invalid ones get 422."""
+    _store_response(
+        request,
+        client.post(
+            f"/api/v1/pipelines/{uuid.uuid4()}/triggers",
+            json={"trigger_type": "cron", "cron_expression": expression},
+        ),
+    )
+
+
+@when("I trigger a run on a pipeline with an empty graph")
+def step_trigger_run_empty_graph(client, request: pytest.FixtureRequest, patches) -> None:
+    """POST a manual run whose snapshot graph has no nodes — rejected with 422."""
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_snapshot
+
+    pipeline = make_mock_pipeline()
+    snapshot = make_mock_snapshot(graph_json={"nodes": [], "edges": []})
+    _patch_runs_trigger(patches, pipeline, snapshot)
+
+    _store_response(
+        request,
+        client.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id), "input_payload": {}}),
+    )
+
+
+@when("I trigger a run on a pipeline with a cyclic graph")
+def step_trigger_run_cyclic_graph(client, request: pytest.FixtureRequest, patches) -> None:
+    """POST a manual run whose snapshot graph is cyclic — rejected with 422."""
+    from tests.bdd.conftest import make_mock_pipeline, make_mock_snapshot
+
+    pipeline = make_mock_pipeline()
+    node_a = uuid.uuid4()
+    node_b = uuid.uuid4()
+    snapshot = make_mock_snapshot(
+        graph_json={
+            "nodes": [
+                {"id": str(node_a), "type": "agent"},
+                {"id": str(node_b), "type": "agent"},
+            ],
+            "edges": [
+                {"source": str(node_a), "target": str(node_b)},
+                {"source": str(node_b), "target": str(node_a)},
+            ],
+        }
+    )
+    _patch_runs_trigger(patches, pipeline, snapshot)
+
+    _store_response(
+        request,
+        client.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id), "input_payload": {}}),
+    )
+
+
+@when(parsers.parse('I set a weak password "{password}"'))
+def step_set_weak_password(password: str, client, request: pytest.FixtureRequest) -> None:
+    """Change the password to a value that fails the policy — rejected with 422."""
+    _store_response(
+        request,
+        client.put(
+            "/api/v1/me/password",
+            json={"current_password": "correct-horse-battery", "new_password": password},
+        ),
+    )
 
 
 # ===========================================================================
