@@ -83,7 +83,7 @@
             <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) || '—' }}</span>
           </template>
           <template #cell-total_cost_usd="{ value }">
-            <span class="tabular-nums">{{ value != null ? '$' + Number(value).toFixed(4) : '—' }}</span>
+            <span class="tabular-nums">{{ value != null ? formatMoney(Number(value), currencyCode, 4) : '—' }}</span>
           </template>
         </DataTable>
       </div>
@@ -130,9 +130,12 @@ import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const router = useRouter()
 const route = useRoute()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 const pageSize = 20
 const page = ref(1)
@@ -203,5 +206,7 @@ function prevPage() {
 function navigateToDetail(id: string) {
   router.push(`/runs/${id}`)
 }
+
+loadCurrency()
 
 </script>
