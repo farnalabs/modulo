@@ -316,7 +316,7 @@ Modulo degrades gracefully when Redis is unavailable:
 | Feature | Without Redis | Data Loss Risk |
 |---------|--------------|----------------|
 | Task queue (SAQ) | In-process asyncio loop — tasks execute in the request process | Jobs scheduled during outage are lost if the process restarts |
-| Rate limiting | In-memory token bucket — per-process, resets on restart | No data loss, limits are temporary |
+| Rate limiting | In-memory no-op (rate limiting disabled) — allows all requests while Redis is down | No data loss |
 | Cron scheduling | In-process asyncio loop | Duplicate triggers across replicas if > 1 replica running |
 | Session cache | DB-backed sessions — slower but functional | No data loss |
 
@@ -376,49 +376,61 @@ jobs run inline.
 
 | Signal | Tool | Severity |
 |--------|------|----------|
-| SAQ queue depth > 100 | `python -m saq` admin UI or Redis `LLEN` | Medium |
+| SAQ queue depth > 100 | SAQ web UI (system worker, 127.0.0.1:8081 via `fly ssh`) or Redis `LLEN saq:runs:queued` | Medium |
 | Run start delay > 30s | Backend logs / OTel traces | High |
 | Pipeline stuck in `queued` state > 5 min | API: `GET /runs/:id` | High |
 | Worker `Received and deleted unknown message` | SAQ worker logs | Medium |
 
 ### 6.3 Inspect Queue Depth
 
-```bash
-# Check SAQ queue lengths
-docker compose -f docker-compose.prod.yml exec modulo uv run python -m modulo.core.saq_worker --queue runs
-docker compose -f docker-compose.prod.yml exec modulo uv run python -m modulo.core.saq_worker --queue system
+SAQ stores each queue's jobs in Redis under `saq:<queue>:*` keys (queue names
+derive from `SAQ_RUNS_QUEUE`, default `runs`; the system queue derives as
+`system`). The ready-to-run backlog and in-flight jobs are Redis lists, the
+total outstanding job set is a sorted set, and worker heartbeats are a sorted
+set keyed by worker ID:
 
-# Check Redis queue keys directly
-docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:job:runs
-docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:job:system
+```bash
+# Check SAQ queue depth directly in Redis
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:runs:queued        # ready-to-run backlog (list)
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:runs:active        # in-flight jobs (list)
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZCARD saq:runs:incomplete   # total outstanding incl. scheduled (zset)
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZCARD saq:runs:stats        # live runs-worker heartbeats (zset)
+
+# Start a worker if none are running — runs worker:
+docker compose -f docker-compose.prod.yml exec modulo python -m saq modulo.core.saq_worker.runs_settings
+# System worker + web UI on 127.0.0.1:8081 (no --queue flag; the custom runner
+# boots run_system_web, it does not print queue lengths):
+docker compose -f docker-compose.prod.yml exec modulo python -m modulo.core.saq_worker
 ```
 
 ### 6.4 Backpressure Response
 
 **Step 1 — Identify bottleneck:**
 ```bash
-# Are workers saturated?
-docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect stats | grep -E "(total_prefetch_count|concurrency)"
+# Live workers per queue (SAQ heartbeats — one zset entry per running worker)
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZCARD saq:runs:stats
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZCARD saq:system:stats
 
-# Are there failed/unacknowledged messages?
-docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN celery  # main queue
-docker compose -f docker-compose.prod.yml exec redis redis-cli ZCOUNT celery.reserved -inf +inf  # reserved/in-flight
+# In-flight vs queued — workers are saturated when `active` is pinned near
+# (live workers × SAQ_WORKER_CONCURRENCY, default 5) while `queued` keeps growing
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:runs:active
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:runs:queued
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZCARD saq:runs:incomplete
 ```
 
 **Step 2 — Immediate mitigation:**
 1. **Scale workers horizontally:**
    ```bash
-   docker compose -f docker-compose.prod.yml up -d --scale modulo=5
-   # Or run additional worker processes via worker/gunicorn env config
+   # Docker Compose: scale the SAQ worker services (docker-compose.yml)
+   docker compose up -d --scale saq-runner=5 --scale saq-system=2
+   # Fly.io: scale the SAQ `worker` process group (entrypoint.sh runs the workers
+   # in-container), or raise per-worker concurrency
    ```
-2. **Prioritise critical queues** — configure Celery queue routing so
-   that high-priority pipeline runs bypass the general queue:
-   ```bash
-   # Route MCP-triggered runs to a dedicated high-priority queue
-   CELERY_QUEUES=high-priority,default
-   CELERY_DEFAULT_QUEUE=default
-   CELERY_ROUTES={"modulo.pipeline.run": {"queue": "high-priority"}}
-   ```
+2. **Raise per-worker concurrency** if the backlog is caused by slow jobs rather
+   than a flood — set `SAQ_WORKER_CONCURRENCY` (default 5, max 50) and restart
+   the worker. SAQ has no Celery-style queue routing: the runs worker owns a
+   single queue (`SAQ_RUNS_QUEUE`, default `runs`), so to isolate high-volume
+   work, run a dedicated worker fleet on a separate queue name.
 3. **Reject new work** if the queue is growing faster than workers can drain:
    - Rate-limit pipeline submission per user via `uv run modulo rate-limit set`
    - Temporarily disable non-critical triggers (polling, webhooks) in settings
@@ -428,7 +440,7 @@ docker compose -f docker-compose.prod.yml exec redis redis-cli ZCOUNT celery.res
 1. Review trigger configurations — a polling interval that is too aggressive
    can flood the queue
 2. Set per-pipeline concurrency limits to prevent tenant-level DoS
-3. Increase worker concurrency or add dedicated worker pools
+3. Increase `SAQ_WORKER_CONCURRENCY` or add worker replicas/pools
 4. Consider adding queue monitoring with alerts at depth thresholds (50, 100, 500)
 
 ### 6.5 Queue Recovery After Crash
@@ -437,8 +449,8 @@ If the SAQ worker or Redis crashes mid-job, jobs may be lost or stuck:
 
 ```bash
 # 1. View in-flight jobs via SAQ admin UI (port 8081, system worker)
-#    or check Redis directly:
-docker compose -f docker-compose.prod.yml exec redis redis-cli ZRANGE saq:job:runs 0 -1
+#    or check Redis directly (job IDs in the outstanding sorted set):
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZRANGE saq:runs:incomplete 0 -1
 
 # 2. Jobs are auto-swept by SAQ sweeper; if stuck, restart the worker:
 docker compose -f docker-compose.prod.yml restart modulo
