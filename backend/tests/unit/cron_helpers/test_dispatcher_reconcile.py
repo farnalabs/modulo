@@ -280,7 +280,7 @@ class TestReconcilePredicateMatrix:
         output after the nodeless window) is terminal-failed, never re-dispatched.
         The fresh heartbeat keeps it invisible to the stale branch — that is the
         primary hang mechanism this branch closes."""
-        summary, reenqueue, ingest, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)],
         )
@@ -293,7 +293,7 @@ class TestReconcilePredicateMatrix:
     async def test_running_with_node_output_not_nodeless(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A run that finalised node output is NOT nodeless — a stale-heartbeat
         one still takes the worker-lost re-dispatch repair, never the fail."""
-        summary, reenqueue, _, _ = await _run_reconcile(
+        summary, reenqueue, _, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_RUNNING, "running", stale=True, nodeless=False)],
         )
@@ -317,7 +317,7 @@ class TestReconcilePredicateMatrix:
         branch matching, it is skipped (job exists) rather than failed."""
         row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
         row.started_at = datetime.now(UTC) - timedelta(minutes=10)
-        summary, reenqueue, _, _ = await _run_reconcile(
+        summary, reenqueue, _, _, _ = await _run_reconcile(
             monkeypatch,
             [row],
             queue_job_result=SimpleNamespace(id="saq:job:runs:run:x"),
