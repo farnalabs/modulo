@@ -37,7 +37,7 @@ class TestConnectorHealthCheck:
 
 class TestConnectorQuery:
     async def test_empty_resource_raises(self, connector_type: str, conformance_connector: ConnectorBase) -> None:
-        with pytest.raises((ValueError, KeyError, AttributeError)):
+        with pytest.raises((ValueError, KeyError)):
             await conformance_connector.query(ConnectorQuery(resource=""))
 
     async def test_unknown_resource_raises(self, connector_type: str, conformance_connector: ConnectorBase) -> None:
@@ -47,7 +47,7 @@ class TestConnectorQuery:
 
 class TestConnectorWrite:
     async def test_empty_payload_raises(self, connector_type: str, conformance_connector: ConnectorBase) -> None:
-        with pytest.raises((ValueError, KeyError, AttributeError)):
+        with pytest.raises((ValueError, KeyError)):
             await conformance_connector.write(ConnectorPayload(resource="", data={}))
 
     async def test_unknown_write_resource_raises(
