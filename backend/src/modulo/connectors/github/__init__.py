@@ -23,6 +23,9 @@ _API_VERSION = "2022-11-28"
 
 REQUIRED_SCOPES = frozenset({"repo", "read:org"})
 
+# Actions accepted by the batch commit resource (write("commit") / write("files"))
+_COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move"})
+
 # Retry/backoff configuration
 _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
 _MAX_RETRIES = 3
@@ -141,6 +144,12 @@ class GitHubConnector(ConnectorBase):
                           (returns total_count and Link-header pagination)
 
     Supported write resources:
+      "commit"          — batch file operations in one commit via the Git Database API
+                           (create/update/delete/move); data: {"repo": ..., "actions": [...],
+                           optional "message", "ref"/"branch" (default "main")}; each action is
+                           {"action": "create"|"update"|"delete"|"move", "path": ..., "content": <raw text>
+                           for create/update, "previous_path": ... for move}
+      "files"           — alias for "commit"
       "file"            — create/update a file; data: {"repo": ..., "path": ..., "content": <raw text, encoded here>
                            or "content_base64": <pre-encoded>, "message": ..., "sha": <required for update>}
       "issue"           — create an issue; data: {"repo": ..., "title": ..., "body": ...,
@@ -174,6 +183,88 @@ class GitHubConnector(ConnectorBase):
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.GITHUB
+
+    @staticmethod
+    def _ref_to_git_ref(ref: str) -> str:
+        """Convert a short branch name to a Git Database ref path.
+
+        ``main`` -> ``refs/heads/main``; already-qualified refs pass through.
+        """
+        if ref.startswith("refs/"):
+            return ref
+        return f"refs/heads/{ref}"
+
+    async def _resolve_commit_sha(self, owner_repo: str, ref: str, resource: str) -> str:
+        """Resolve a ref (branch/tag/SHA) to a commit SHA via the commits API."""
+        commit_r = await self._call_api("GET", f"/repos/{owner_repo}/commits/{ref}")
+        commit_body = await self._parse_json_object(commit_r)
+        tree_sha = commit_body.get("sha")
+        if not isinstance(tree_sha, str) or not tree_sha:
+            raise ValueError(f"GitHub {resource} could not resolve ref {ref!r} to a commit SHA")
+        return tree_sha
+
+    async def _read_file_text(self, owner_repo: str, path: str, ref: str) -> str:
+        """Read a file's text content from the Contents API (used by move actions).
+
+        Mirrors ``query("file")`` decoding: base64 content is decoded to UTF-8
+        text so a ``move`` can carry the file's content into the new blob.
+        """
+        r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
+        info = await self._parse_json_object(r)
+        content = info.get("content")
+        if not isinstance(content, str):
+            raise ValueError(f"GitHub commit write: could not read content of {path!r}")
+        if info.get("encoding") == "base64":
+            return base64.b64decode(content).decode("utf-8")
+        return content
+
+    async def _create_blob(self, owner_repo: str, content: str) -> str:
+        """Create a Git blob and return its SHA."""
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/git/blobs",
+            json={"content": content, "encoding": "utf-8"},
+        )
+        blob = await self._parse_json_object(r)
+        blob_sha = blob.get("sha")
+        if not isinstance(blob_sha, str) or not blob_sha:
+            raise ValueError("GitHub commit write: blob creation did not return a sha")
+        return blob_sha
+
+    async def _create_tree(self, owner_repo: str, base_sha: str, entries: list[dict[str, Any]]) -> str:
+        """Create a Git tree on top of a base commit and return its SHA."""
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/git/trees",
+            json={"base_tree": base_sha, "tree": entries},
+        )
+        tree = await self._parse_json_object(r)
+        tree_sha = tree.get("sha")
+        if not isinstance(tree_sha, str) or not tree_sha:
+            raise ValueError("GitHub commit write: tree creation did not return a sha")
+        return tree_sha
+
+    async def _create_commit(self, owner_repo: str, message: str, tree_sha: str, parent_sha: str) -> str:
+        """Create a Git commit with a single parent and return its SHA."""
+        r = await self._call_api(
+            "POST",
+            f"/repos/{owner_repo}/git/commits",
+            json={"message": message, "tree": tree_sha, "parents": [parent_sha]},
+        )
+        commit = await self._parse_json_object(r)
+        commit_sha = commit.get("sha")
+        if not isinstance(commit_sha, str) or not commit_sha:
+            raise ValueError("GitHub commit write: commit creation did not return a sha")
+        return commit_sha
+
+    async def _update_ref(self, owner_repo: str, ref: str, commit_sha: str) -> httpx.Response:
+        """Fast-forward a ref to a new commit via the Git refs API."""
+        git_ref = self._ref_to_git_ref(ref)
+        return await self._call_api(
+            "PATCH",
+            f"/repos/{owner_repo}/git/refs/{git_ref}",
+            json={"sha": commit_sha, "force": False},
+        )
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -324,11 +415,7 @@ class GitHubConnector(ConnectorBase):
                 owner_repo = self._require_filter(q.filters, "repo", "tree")
                 path_filter = _validate_path(q.filters["path"], "tree") if "path" in q.filters else None
                 ref = q.filters.get("ref", "main")
-                commit_r = await self._call_api("GET", f"/repos/{owner_repo}/commits/{ref}")
-                commit_body = await self._parse_json_object(commit_r)
-                tree_sha = commit_body.get("sha")
-                if not isinstance(tree_sha, str) or not tree_sha:
-                    raise ValueError(f"GitHub tree query could not resolve ref {ref!r} to a commit SHA")
+                tree_sha = await self._resolve_commit_sha(owner_repo, ref, "tree")
                 tree_params: dict[str, Any] = {}
                 if q.filters.get("recursive", True):
                     tree_params["recursive"] = "1"
@@ -491,6 +578,62 @@ class GitHubConnector(ConnectorBase):
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         match payload.resource:
+            case "commit" | "files":
+                owner_repo = self._require_write_filter(payload.data, "repo", payload.resource)
+                actions = payload.data.get("actions")
+                if not isinstance(actions, list) or not actions:
+                    raise ValueError(f"GitHub resource {payload.resource!r} requires a non-empty 'actions' list")
+                ref = payload.data.get("ref", payload.data.get("branch", "main"))
+                if not isinstance(ref, str) or not ref:
+                    raise ValueError(f"GitHub resource {payload.resource!r} requires a non-empty 'ref' or 'branch'")
+                message = payload.data.get("message", "Update via Modulo")
+                if not isinstance(message, str) or not message:
+                    raise ValueError(f"GitHub resource {payload.resource!r} requires a non-empty 'message'")
+                for action in actions:
+                    if not isinstance(action, dict):
+                        raise ValueError(f"GitHub resource {payload.resource!r}: each action must be an object")
+                    action_type = action.get("action")
+                    if action_type not in _COMMIT_ACTIONS:
+                        raise ValueError(
+                            f"GitHub resource {payload.resource!r}: action {action_type!r} must be one of "
+                            f"{sorted(_COMMIT_ACTIONS)}",
+                        )
+                    path = action.get("path")
+                    if not isinstance(path, str) or not path:
+                        raise ValueError(f"GitHub resource {payload.resource!r}: each action requires 'path'")
+                    _validate_path(path, payload.resource)
+                    if action_type == "move":
+                        previous_path = action.get("previous_path")
+                        if not isinstance(previous_path, str) or not previous_path:
+                            raise ValueError(
+                                f"GitHub resource {payload.resource!r}: move action requires 'previous_path'"
+                            )
+                        _validate_path(previous_path, payload.resource)
+                    elif action_type != "delete" and not isinstance(action.get("content"), str):
+                        raise ValueError(
+                            f"GitHub resource {payload.resource!r}: action {action_type!r} requires string "
+                            "'content'",
+                        )
+                base_sha = await self._resolve_commit_sha(owner_repo, ref, payload.resource)
+                tree_entries: list[dict[str, Any]] = []
+                for action in actions:
+                    action_type = action["action"]
+                    path = action["path"]
+                    if action_type == "delete":
+                        tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+                        continue
+                    if action_type == "move":
+                        previous_path = action["previous_path"]
+                        tree_entries.append({"path": previous_path, "mode": "100644", "type": "blob", "sha": None})
+                        content = await self._read_file_text(owner_repo, previous_path, ref)
+                    else:
+                        content = action["content"]
+                    blob_sha = await self._create_blob(owner_repo, content)
+                    tree_entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob_sha})
+                tree_sha = await self._create_tree(owner_repo, base_sha, tree_entries)
+                commit_sha = await self._create_commit(owner_repo, message, tree_sha, base_sha)
+                ref_response = await self._update_ref(owner_repo, ref, commit_sha)
+                return await self._parse_json_object(ref_response)
             case "file":
                 owner_repo = self._require_write_filter(payload.data, "repo", "file")
                 path = _validate_path(self._require_write_filter(payload.data, "path", "file"), "file")
