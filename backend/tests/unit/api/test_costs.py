@@ -605,3 +605,158 @@ class TestDismissAnomaly:
             resp = client.get(self.ENDPOINT)
 
         assert resp.status_code == 404
+
+
+class TestCostControlsCurrency:
+    """Cost-control currency/billing settings persist via org.settings_json and round-trip."""
+
+    ENDPOINT = "/api/v1/admin/costs/controls"
+
+    def _org(self, settings_json: dict | None = None) -> MagicMock:
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = None
+        org.settings_json = settings_json if settings_json is not None else {}
+        return org
+
+    def test_controls_defaults_when_unset(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["currency"] == "USD"
+        assert data["billing_period"] == "monthly"
+        assert data["circuit_breaker_enabled"] is False
+
+    def test_update_persists_currency_and_settings(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(
+                self.ENDPOINT,
+                json={"currency": "EUR", "billing_period": "quarterly", "circuit_breaker_enabled": True},
+            )
+
+        assert resp.status_code == 200
+        assert org.settings_json == {
+            "cost_controls": {
+                "currency": "EUR",
+                "billing_period": "quarterly",
+                "circuit_breaker_enabled": True,
+            }
+        }
+
+    def test_currency_round_trips_through_update_get(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            put_resp = client.put(self.ENDPOINT, json={"currency": "GBP"})
+            assert put_resp.status_code == 200
+            get_resp = client.get(self.ENDPOINT)
+
+        assert get_resp.status_code == 200
+        data = get_resp.json()
+        assert data["currency"] == "GBP"
+        assert data["billing_period"] == "monthly"
+        assert data["circuit_breaker_enabled"] is False
+
+    def test_update_preserves_existing_settings_and_budget(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "USD", "billing_period": "monthly"}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "EUR", "budget": 250.0})
+
+        assert resp.status_code == 200
+        assert org.settings_json["cost_controls"] == {
+            "currency": "EUR",
+            "billing_period": "monthly",
+        }
+
+    def test_update_org_not_found_returns_404(self, client: TestClient) -> None:
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=None),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
+
+        assert resp.status_code == 404
+
+
+class TestOrgSettingsCurrency:
+    """GET /api/v1/org/settings exposes the org currency to any tenant member."""
+
+    ENDPOINT = "/api/v1/org/settings"
+
+    def _org(self, settings_json: dict | None = None) -> MagicMock:
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.settings_json = settings_json if settings_json is not None else {}
+        return org
+
+    def test_returns_default_when_unset(self, client: TestClient) -> None:
+        org = self._org()
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "USD"}
+
+    def test_returns_persisted_currency(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "EUR", "billing_period": "quarterly"}})
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "EUR"}
+
+    def test_non_admin_tenant_member_can_read(self, operator_client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "GBP"}})
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = operator_client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "GBP"}
+
+    def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.ENDPOINT)
+        assert resp.status_code in (401, 403)
+
+    def test_missing_org_returns_default(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=None),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "USD"}
