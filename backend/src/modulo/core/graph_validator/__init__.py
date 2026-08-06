@@ -314,15 +314,30 @@ class GraphValidator:
         entry_ids: list[str],
         result: ValidationResult,
     ) -> None:
-        """Compute longest path from entries to leaf via DFS. Error if > MAX_NESTING_DEPTH."""
+        """Compute longest path from entries to leaf via iterative DFS. Error if > MAX_NESTING_DEPTH."""
 
         def _max_depth(node: str, visited: frozenset[str], _remaining: int = 1000) -> int:
-            if _remaining <= 0:
-                return 0
-            children = [c for c in adj.get(node, []) if c not in visited]
-            if not children:
-                return 0
-            return 1 + max(_max_depth(c, visited | {node}, _remaining - 1) for c in children)
+            # Iterative stack-based DFS. The previous recursive version consumed
+            # multiple Python frames per graph level, so the interpreter's
+            # recursion limit tripped before the _remaining guard could cap deep
+            # graphs — raising RecursionError instead of emitting
+            # TOPOLOGY_NESTING_EXCEEDED. Each stack frame carries the path's
+            # visited set (children outside it are followed), the remaining
+            # descent budget, and the edge count so far; the longest path found
+            # is returned, capped at _remaining like the recursive walk.
+            best = 0
+            # (node, visited-along-current-path, remaining-budget, edges-so-far)
+            stack: list[tuple[str, frozenset[str], int, int]] = [(node, visited, _remaining, 0)]
+            while stack:
+                cur, path_visited, remaining, edges = stack.pop()
+                if edges > best:
+                    best = edges
+                if remaining <= 0:
+                    continue
+                for child in adj.get(cur, []):
+                    if child not in path_visited:
+                        stack.append((child, path_visited | {cur}, remaining - 1, edges + 1))
+            return best
 
         depth = max((_max_depth(eid, frozenset()) for eid in entry_ids), default=0)
         if depth > self.MAX_NESTING_DEPTH:
