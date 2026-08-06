@@ -27,9 +27,9 @@ Concretely:
 
 ## Why Not a Materialized View
 
-1. **Redis is already a dependency.** It serves as the Celery broker, rate limiter store, event bus, and WS-token cache. Every deployment (including self-hosted) already has it via `docker-compose.yml`. Adding a materialized view would add a *second* cache layer on top of the one we already run.
+1. **Redis is already a dependency.** It serves as the SAQ broker, rate limiter store, event bus, and WS-token cache. Every deployment (including self-hosted) already has it via `docker-compose.yml`. Adding a materialized view would add a *second* cache layer on top of the one we already run.
 
-2. **No pg_cron / pg_timetable requirement.** A materialized view needs a scheduler to `REFRESH MATERIALIZED VIEW` on a cadence. That's either pg_cron (requires `shared_preload_libraries`) or a Celery task — both more operational surface area than a `setex` call.
+2. **No pg_cron / pg_timetable requirement.** A materialized view needs a scheduler to `REFRESH MATERIALIZED VIEW` on a cadence. That's either pg_cron (requires `shared_preload_libraries`) or an SAQ cron job — both more operational surface area than a `setex` call.
 
 3. **Self-hosted simplicity.** Customers who deploy without Redis (the no-Redis deployment path) fall through to the in-memory cache, which is per-process and works identically for single-worker setups — the most common self-hosted topology. A materialized view would still require Postgres and the refresh scheduler, which is strictly *more* requirements, not fewer.
 
@@ -55,7 +55,7 @@ Concretely:
 - The app scales to multiple workers without Redis (in-memory cache becomes per-worker, so each worker gets a cold cache)
 - Write volume reaches a point where the dashboard's aggregate queries contend with production writes
 
-At that point, a materialized view is a straightforward migration — the SQL is well-understood and the refresh trigger can piggyback on the existing Celery schedule.
+At that point, a materialized view is a straightforward migration — the SQL is well-understood and the refresh trigger can piggyback on the existing SAQ schedule.
 
 ## Related Documents
 

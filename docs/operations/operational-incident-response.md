@@ -315,15 +315,15 @@ Modulo degrades gracefully when Redis is unavailable:
 
 | Feature | Without Redis | Data Loss Risk |
 |---------|--------------|----------------|
-| Task queue (Celery) | In-process asyncio loop — tasks execute in the request process | Tasks scheduled during outage are lost if the process restarts |
+| Task queue (SAQ) | In-process asyncio loop — tasks execute in the request process | Jobs scheduled during outage are lost if the process restarts |
 | Rate limiting | In-memory token bucket — per-process, resets on restart | No data loss, limits are temporary |
 | Cron scheduling | In-process asyncio loop | Duplicate triggers across replicas if > 1 replica running |
 | Session cache | DB-backed sessions — slower but functional | No data loss |
 
 **Single-replica deployments** (or when Redis is optional per
 `docs/deployment.md`): The system continues to function with reduced
-capabilities. Pipeline runs that are in-flight continue, but new Celery-scheduled
-tasks may not execute.
+capabilities. Pipeline runs that are in-flight continue, but new SAQ-scheduled
+jobs may not execute.
 
 **Multi-replica deployments:** Redis is mandatory. Without it:
 1. Both replicas fire cron triggers — duplicate pipeline executions
@@ -356,7 +356,7 @@ docker compose -f docker-compose.prod.yml exec redis redis-cli PING
    cron triggers may have fired during the outage if multiple replicas
    were running in degraded mode
 2. **Verify rate limiting** is working across all replicas
-3. **Verify Celery worker** reconnection — check backend logs for
+3. **Verify SAQ worker** reconnection — check backend logs for
    `Connected to Redis` message
 4. **Monitor memory** — if evictions were occurring, increase `maxmemory`
 
@@ -366,31 +366,31 @@ docker compose -f docker-compose.prod.yml exec redis redis-cli PING
 
 ### 6.1 Queue Architecture
 
-Modulo uses Celery with Redis as the broker for task queue, cron scheduling,
-and rate limiting. When Redis is not configured, in-process asyncio loops
+Modulo uses SAQ with Redis as the broker for the task queue, cron scheduling,
+and rate limiting (SAQ replaced Celery in PR C of the Celery→SAQ migration,
+ADR 017). When Redis is not configured, in-process asyncio loops
 handle scheduling — no queue backpressure is possible in that mode since
-tasks run inline.
+jobs run inline.
 
 ### 6.2 Detection
 
 | Signal | Tool | Severity |
 |--------|------|----------|
-| Celery queue depth > 100 | `celery -A modulo inspect active` or Redis `LLEN` | Medium |
+| SAQ queue depth > 100 | `python -m saq` admin UI or Redis `LLEN` | Medium |
 | Run start delay > 30s | Backend logs / OTel traces | High |
 | Pipeline stuck in `queued` state > 5 min | API: `GET /runs/:id` | High |
-| Worker `Received and deleted unknown message` | Celery worker logs | Medium |
+| Worker `Received and deleted unknown message` | SAQ worker logs | Medium |
 
 ### 6.3 Inspect Queue Depth
 
 ```bash
-# Check Celery queue lengths
-docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect active
-docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect reserved
-docker compose -f docker-compose.prod.yml exec modulo uv run celery -A modulo.celery_app inspect scheduled
+# Check SAQ queue lengths
+docker compose -f docker-compose.prod.yml exec modulo uv run python -m modulo.core.saq_worker --queue runs
+docker compose -f docker-compose.prod.yml exec modulo uv run python -m modulo.core.saq_worker --queue system
 
 # Check Redis queue keys directly
-docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN celery
-docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN modulo.pipeline.runs
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:job:runs
+docker compose -f docker-compose.prod.yml exec redis redis-cli LLEN saq:job:system
 ```
 
 ### 6.4 Backpressure Response
@@ -433,19 +433,14 @@ docker compose -f docker-compose.prod.yml exec redis redis-cli ZCOUNT celery.res
 
 ### 6.5 Queue Recovery After Crash
 
-If the Celery worker or Redis crashes mid-job, jobs may be lost or stuck:
+If the SAQ worker or Redis crashes mid-job, jobs may be lost or stuck:
 
 ```bash
-# 1. View reserved (in-flight) tasks
-celery -A modulo.celery_app inspect active
+# 1. View in-flight jobs via SAQ admin UI (port 8081, system worker)
+#    or check Redis directly:
+docker compose -f docker-compose.prod.yml exec redis redis-cli ZRANGE saq:job:runs 0 -1
 
-# 2. Revoke stuck tasks
-celery -A modulo.celery_app control revoke <task-id>
-
-# 3. Purge the queue if tasks are unrecoverable
-celery -A modulo.celery_app purge
-
-# 4. Restart workers
+# 2. Jobs are auto-swept by SAQ sweeper; if stuck, restart the worker:
 docker compose -f docker-compose.prod.yml restart modulo
 ```
 
@@ -532,7 +527,7 @@ uv run modulo runs reset <run-id>
 | `BackendDown` | Probe failure > 3/3 on any backend instance | Critical | PagerDuty + #ops-alert | Follow §3 |
 | `HighErrorRate` | HTTP 5xx > 5% of requests over 5 min | Critical | PagerDuty + #ops-alert | Follow §3 |
 | `HighLatency` | p95 latency > 3s over 5 min | High | #ops-alert | Investigate slow endpoints |
-| `QueueBacklog` | Celery queue depth > 100 | High | #ops-alert | Follow §6 |
+| `QueueBacklog` | SAQ queue depth > 100 | High | #ops-alert | Follow §6 |
 | `ConnectionPoolExhausted` | Active connections > 80% of max | High | #ops-alert | Follow §4.2 |
 | `DiskUsageWarning` | Postgres disk > 80% | Medium | #ops-alert | Follow §4.3 |
 | `RedisMemoryPressure` | Redis memory > 80% of maxmemory | Medium | #ops-alert | Follow §5 |
@@ -560,12 +555,12 @@ groups:
           runbook: "docs/operations/operational-incident-response.md#3"
 
       - alert: QueueBacklog
-        expr: celery_queue_depth > 100
+        expr: saq_queue_depth > 100
         for: 2m
         labels:
           severity: high
         annotations:
-          summary: "Celery queue depth is {{ $value }}"
+          summary: "SAQ queue depth is {{ $value }}"
           runbook: "docs/operations/operational-incident-response.md#6"
 ```
 
