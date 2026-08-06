@@ -100,3 +100,19 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When I write resource "file" with content "base64content" and path "../escape.md"
     Then the write is an error containing "path traversal"
+
+  Scenario: Write a batch commit applies file actions
+    Given a GitHub connector with valid token
+    When I write GitHub files batch for repo "owner/repo"
+    Then the write succeeds
+    And the batch write reports a commit sha
+
+  Scenario: Batch commit with empty actions is an error
+    Given a GitHub connector with valid token
+    When I write GitHub files batch for repo "owner/repo" with no actions
+    Then the write is an error containing "non-empty 'actions' list"
+
+  Scenario: Batch commit path traversal is blocked
+    Given a GitHub connector with valid token
+    When I write GitHub files batch for repo "owner/repo" with traversal path "../evil.txt"
+    Then the write is an error containing "path traversal"
