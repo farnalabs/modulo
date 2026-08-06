@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -584,4 +585,12 @@ class TestGenerateQualityReport:
         session.execute = AsyncMock(side_effect=RuntimeError("boom"))
 
         with pytest.raises(RuntimeError, match="boom"):
+            await generate_quality_report(session, org_id)
+
+    async def test_reraises_cancelled_error(self) -> None:
+        org_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
             await generate_quality_report(session, org_id)

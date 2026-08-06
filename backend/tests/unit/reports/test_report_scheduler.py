@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import uuid
-from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -24,71 +24,7 @@ from modulo.core.reports.scheduler import (
     get_generator,
     register_report_type,
 )
-from modulo.db.models.scheduled_report import ScheduledReport
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-class _MockBegin:
-    async def __aenter__(self) -> None:
-        return None
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
-
-
-class _MockSession:
-    def __init__(self, execute_side_effect: list[MagicMock] | None = None) -> None:
-        self._execute_mock = AsyncMock(side_effect=execute_side_effect or [])
-        self.added: list[object] = []
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
-
-    def begin(self) -> _MockBegin:
-        return _MockBegin()
-
-    async def execute(self, *args: object, **kwargs: object) -> MagicMock:
-        return await self._execute_mock(*args, **kwargs)
-
-    def add(self, obj: object) -> None:
-        self.added.append(obj)
-
-    async def flush(self) -> None:
-        return None
-
-
-class _MockSessionFactory:
-    def __init__(self, session: _MockSession) -> None:
-        self._session = session
-
-    def __call__(self) -> _MockSession:
-        return self._session
-
-
-def _make_report_mock(
-    *,
-    active: bool = True,
-    report_type: str = "quality",
-    cron_expression: str = "0 9 * * 1",
-    config_json: dict | None = None,
-    recipient_config: dict | None = None,
-) -> MagicMock:
-    report = MagicMock(spec=ScheduledReport)
-    report.id = uuid.uuid4()
-    report.organisation_id = uuid.uuid4()
-    report.active = active
-    report.report_type = report_type
-    report.cron_expression = cron_expression
-    report.config_json = config_json or {}
-    report.recipient_config = recipient_config or {}
-    return report
-
+from tests.unit.reports.helpers import MockSession, MockSessionFactory, make_report_mock
 
 # ---------------------------------------------------------------------------
 # Registry tests
@@ -161,6 +97,14 @@ class TestComputeNextSend:
         with pytest.raises((ValueError, KeyError)):
             compute_next_send("not-a-cron")
 
+    def test_raises_type_error_when_croniter_returns_unexpected_type(self) -> None:
+        with patch("modulo.core.reports.scheduler.croniter") as mock_croniter:
+            fake_cron = MagicMock()
+            fake_cron.get_next.return_value = "2026-07-01"
+            mock_croniter.return_value = fake_cron
+            with pytest.raises(TypeError, match="croniter returned unexpected type"):
+                compute_next_send("0 9 * * *")
+
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -197,13 +141,13 @@ class TestFireScheduledReport:
         result_mock = MagicMock()
         result_mock.scalar_one_or_none.return_value = None
 
-        session = _MockSession(execute_side_effect=[result_mock])
+        session = MockSession(execute_side_effect=[result_mock])
 
         with (
             patch("modulo.core.reports.scheduler._get_engine"),
             patch(
                 "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=_MockSessionFactory(session),
+                return_value=MockSessionFactory(session),
             ),
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         ):
@@ -215,17 +159,17 @@ class TestFireScheduledReport:
     async def test_skips_when_report_inactive(self) -> None:
         report_id = uuid.uuid4()
         org_id = uuid.uuid4()
-        report_mock = _make_report_mock(active=False)
+        report_mock = make_report_mock(active=False)
         result_mock = MagicMock()
         result_mock.scalar_one_or_none.return_value = report_mock
 
-        session = _MockSession(execute_side_effect=[result_mock])
+        session = MockSession(execute_side_effect=[result_mock])
 
         with (
             patch("modulo.core.reports.scheduler._get_engine"),
             patch(
                 "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=_MockSessionFactory(session),
+                return_value=MockSessionFactory(session),
             ),
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         ):
@@ -237,17 +181,17 @@ class TestFireScheduledReport:
     async def test_fails_when_no_generator_registered(self) -> None:
         report_id = uuid.uuid4()
         org_id = uuid.uuid4()
-        report_mock = _make_report_mock(report_type="unknown_type")
+        report_mock = make_report_mock(report_type="unknown_type")
         result_mock = MagicMock()
         result_mock.scalar_one_or_none.return_value = report_mock
 
-        session = _MockSession(execute_side_effect=[result_mock])
+        session = MockSession(execute_side_effect=[result_mock])
 
         with (
             patch("modulo.core.reports.scheduler._get_engine"),
             patch(
                 "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=_MockSessionFactory(session),
+                return_value=MockSessionFactory(session),
             ),
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         ):
@@ -270,7 +214,7 @@ class TestFireScheduledReport:
 
         report_id = uuid.uuid4()
         org_id = uuid.uuid4()
-        report_mock = _make_report_mock(report_type="test_report", cron_expression="0 9 * * *")
+        report_mock = make_report_mock(report_type="test_report", cron_expression="0 9 * * *")
         report_mock.id = report_id
         report_mock.organisation_id = org_id
 
@@ -279,13 +223,13 @@ class TestFireScheduledReport:
 
         update_result = MagicMock()
 
-        session = _MockSession(execute_side_effect=[select_result, update_result])
+        session = MockSession(execute_side_effect=[select_result, update_result])
 
         with (
             patch("modulo.core.reports.scheduler._get_engine"),
             patch(
                 "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=_MockSessionFactory(session),
+                return_value=MockSessionFactory(session),
             ),
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
             patch(
@@ -306,7 +250,7 @@ class TestFireScheduledReport:
 
         register_report_type("minimal", dummy_generator)
         org_id = uuid.uuid4()
-        report_mock = _make_report_mock(report_type="minimal", cron_expression="0 9 * * *")
+        report_mock = make_report_mock(report_type="minimal", cron_expression="0 9 * * *")
         report_mock.id = uuid.uuid4()
 
         select_result = MagicMock()
@@ -314,13 +258,13 @@ class TestFireScheduledReport:
 
         update_result = MagicMock()
 
-        session = _MockSession(execute_side_effect=[select_result, update_result])
+        session = MockSession(execute_side_effect=[select_result, update_result])
 
         with (
             patch("modulo.core.reports.scheduler._get_engine"),
             patch(
                 "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=_MockSessionFactory(session),
+                return_value=MockSessionFactory(session),
             ),
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
             patch(
@@ -332,6 +276,36 @@ class TestFireScheduledReport:
 
         assert result["status"] == "sent"
         assert result["next_send_at"] == "2026-07-08T09:00:00+00:00"
+
+    async def test_reraises_cancelled_error_from_generator(self) -> None:
+        report_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        report_mock = make_report_mock(report_type="cancelled")
+        report_mock.id = report_id
+        report_mock.organisation_id = org_id
+
+        select_result = MagicMock()
+        select_result.scalar_one_or_none.return_value = report_mock
+
+        session = MockSession(execute_side_effect=[select_result])
+
+        async def _cancelled_generator(*args: object) -> dict[str, object]:
+            raise asyncio.CancelledError
+
+        with (
+            patch("modulo.core.reports.scheduler._get_engine"),
+            patch(
+                "modulo.core.reports.scheduler.async_sessionmaker",
+                return_value=MockSessionFactory(session),
+            ),
+            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.reports.scheduler.get_generator",
+                return_value=_cancelled_generator,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _fire_scheduled_report(report_id=report_id, org_id=org_id)
 
 
 # ---------------------------------------------------------------------------
@@ -614,6 +588,20 @@ class TestDeliverToUrls:
         assert results[0]["status_code"] is None
         assert results[0]["error"] == "down"
 
+    async def test_reports_max_retries_exceeded_with_no_response(self) -> None:
+        url = "https://hooks.example.com/x"
+
+        with (
+            patch("modulo.core.reports.scheduler._REPORT_MAX_RETRIES", 0),
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client_cls.return_value.__aenter__.return_value = _deliver_client([])
+            results = await _deliver_to_urls([url], {"a": 1})
+
+        assert results[0]["status"] == "failed"
+        assert results[0]["status_code"] is None
+        assert results[0]["error"] == "max_retries_exceeded"
+
 
 # ---------------------------------------------------------------------------
 # _sync_with_db tests
@@ -628,10 +616,10 @@ class TestFireInvalidCron:
         sched_mod._formatters.clear()
         sched_mod._deliverers.clear()
 
-    async def _make_ctx(self, report: MagicMock) -> _MockSession:
+    async def _make_ctx(self, report: MagicMock) -> MockSession:
         select_result = MagicMock()
         select_result.scalar_one_or_none.return_value = report
-        return _MockSession(execute_side_effect=[select_result, MagicMock()])
+        return MockSession(execute_side_effect=[select_result, MagicMock()])
 
     async def test_deactivates_report_on_invalid_cron(self) -> None:
         async def dummy_generator(session: object, org_id: uuid.UUID, config: dict[str, object]) -> dict[str, object]:
@@ -639,7 +627,7 @@ class TestFireInvalidCron:
 
         register_report_type("bad_cron", dummy_generator)
 
-        report = _make_report_mock(report_type="bad_cron", cron_expression="not-a-cron")
+        report = make_report_mock(report_type="bad_cron", cron_expression="not-a-cron")
         report.config_json = {"schedule_type": "recurring"}
         report.id = uuid.uuid4()
         report.organisation_id = uuid.uuid4()
@@ -650,7 +638,7 @@ class TestFireInvalidCron:
             patch("modulo.core.reports.scheduler._get_engine"),
             patch(
                 "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=_MockSessionFactory(session),
+                return_value=MockSessionFactory(session),
             ),
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
             patch(
@@ -663,6 +651,6 @@ class TestFireInvalidCron:
         assert result["status"] == "failed"
         assert "invalid_cron" in result["reason"]
 
-        update_stmt = session._execute_mock.await_args_list[1].args[0]
+        update_stmt = session.execute.await_args_list[1].args[0]
         update_values = {column.key: value.value for column, value in update_stmt._values.items()}
         assert update_values["active"] is False
