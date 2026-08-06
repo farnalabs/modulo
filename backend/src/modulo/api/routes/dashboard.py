@@ -664,6 +664,10 @@ async def dashboard_summary(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
         ) from exc
+    except HTTPException:
+        # Preserve the intended status for the days validation (422) instead of
+        # collapsing it into a 500 via the generic handler below.
+        raise
     except Exception as exc:
         _log.exception("dashboard.summary_failed")
         raise HTTPException(

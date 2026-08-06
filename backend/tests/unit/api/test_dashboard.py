@@ -1,7 +1,8 @@
 """Unit tests for /api/v1/dashboard/summary and /api/v1/dashboard/trends."""
 
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -84,6 +85,98 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
+def _make_period_mock_session(
+    *,
+    current_facts: dict[str, int | float | None] | None = None,
+    previous_facts: dict[str, int | float | None] | None = None,
+    current_status: dict[str, int] | None = None,
+    previous_status: dict[str, int] | None = None,
+    current_spend: float = 0.0,
+    previous_spend: float = 0.0,
+    current_eval: tuple[int, int] = (0, 0),
+    previous_eval: tuple[int, int] = (0, 0),
+) -> AsyncMock:
+    """Session mock whose execute() dispatches the period-scoped dashboard queries.
+
+    ``run_daily_facts`` queries are matched by their aggregate labels; the
+    ``current``/``previous`` window for each period source is resolved by call
+    order (the route queries current-then-previous, deterministic per request).
+    All other queries return benign empty/default results.
+    """
+    default_facts: dict[str, int | float | None] = {
+        "total": 10,
+        "active_pipelines": 2,
+        "tokens": 1000,
+        "avg_duration_ms": 150.0,
+        "complete": 8,
+    }
+    facts_results: list[dict[str, int | float | None]] = [
+        current_facts if current_facts is not None else default_facts,
+        previous_facts if previous_facts is not None else default_facts,
+    ]
+    status_results: list[dict[str, int]] = [current_status or {}, previous_status or {}]
+    spend_results: list[float] = [current_spend, previous_spend]
+    eval_results: list[tuple[int, int]] = [current_eval, previous_eval]
+    counters = {"facts": 0, "status": 0, "spend": 0, "eval": 0}
+
+    session = configure_mock_session(AsyncMock())
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    def _facts_result() -> _MockResult:
+        row = facts_results[counters["facts"]]
+        counters["facts"] += 1
+        return _MockResult(rows=[_MockRow(**row)])
+
+    def _status_result() -> _MockResult:
+        mapping = status_results[counters["status"]]
+        counters["status"] += 1
+        return _MockResult(rows=[_MockRow(status=status, cnt=cnt) for status, cnt in mapping.items()])
+
+    def _spend_result() -> _MockResult:
+        value = spend_results[counters["spend"]]
+        counters["spend"] += 1
+        return _MockResult(scalar_one_val=value)
+
+    def _eval_result() -> _MockResult:
+        total, passed = eval_results[counters["eval"]]
+        counters["eval"] += 1
+        return _MockResult(rows=[_MockRow(total=total, passed=passed)])
+
+    def _execute_side_effect(stmt: object, *_args: object, **_kwargs: object) -> _MockResult:
+        text = str(stmt)
+        if "model_backends" in text:
+            return _MockResult(scalar_one_val=0)
+        if "run_daily_facts" in text:
+            if "active_pipelines" in text:
+                return _facts_result()
+            return _status_result()
+        if "org_daily_run_counts" in text:
+            if "GROUP BY" in text:
+                return _MockResult()
+            return _spend_result()
+        if "eval_results" in text:
+            if "JOIN runs" in text or "GROUP BY" in text:
+                return _MockResult()
+            if "evaluated_at" in text:
+                return _eval_result()
+            return _MockResult(rows=[_MockRow(total=0, passed=0)])
+        if "FROM teams" in text:
+            return _MockResult()
+        if "pipeline_cnt" in text:
+            return _MockResult()
+        if "pipeline_name" in text:
+            return _MockResult()
+        if "archived_at" in text:
+            return _MockResult(scalar_one_val=0)
+        return _MockResult()
+
+    session.execute = AsyncMock(side_effect=_execute_side_effect)
+    return session
+
+
 @pytest.fixture()
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
@@ -107,6 +200,42 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def period_client() -> Generator[Callable[..., TestClient], None, None]:
+    """Factory fixture — returns a TestClient wired to a period-aware mock session.
+
+    Keyword arguments are forwarded to ``_make_period_mock_session`` so each
+    test can control the ``run_daily_facts`` window, ledger spend, and eval
+    rate values returned for the ``/summary?days=N`` period block.
+    """
+
+    def _build(**period_kwargs: object) -> TestClient:
+        mock_session = _make_period_mock_session(**period_kwargs)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+            username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        return TestClient(app)
+
+    yield _build
     app.dependency_overrides.clear()
 
 
@@ -199,6 +328,130 @@ class TestDashboardSummary:
     def test_requires_auth(self, unauth_client: TestClient) -> None:
         response = unauth_client.get("/api/v1/dashboard/summary")
         assert response.status_code in (401, 403)
+
+
+class TestDashboardSummaryPeriod:
+    """GET /api/v1/dashboard/summary?days=N — period-scoped block (FAR-92)."""
+
+    _PERIOD_METRIC_NAMES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "total_runs",
+            "active_pipelines",
+            "run_counts_by_status",
+            "tokens",
+            "success_rate",
+            "avg_duration_ms",
+            "eval_pass_rate",
+            "spend",
+        }
+    )
+
+    def _period_metrics(self, client: TestClient, days: str = "7") -> dict[str, object]:
+        response = client.get(f"/api/v1/dashboard/summary?days={days}")
+        assert response.status_code == 200
+        period = response.json()["period"]
+        assert period["days"] == int(days)
+        metrics = period["metrics"]
+        assert set(metrics.keys()) == self._PERIOD_METRIC_NAMES
+        return metrics
+
+    def test_days_7_returns_period_block(self, period_client: Callable[..., TestClient]) -> None:
+        client = period_client()
+        metrics = self._period_metrics(client)
+        for name, metric in metrics.items():
+            if name == "run_counts_by_status":
+                assert set(metric.keys()) == {"running", "awaiting_human", "failed", "idle"}
+                for status_metric in metric.values():
+                    assert set(status_metric.keys()) == {"current", "previous", "delta_pct"}
+            else:
+                assert set(metric.keys()) == {"current", "previous", "delta_pct"}
+        assert metrics["success_rate"]["current"] == 80.0
+
+    def test_days_1_30_90_accepted(self, period_client: Callable[..., TestClient]) -> None:
+        for days in ("1", "30", "90"):
+            # Fresh client per request: the mock session's current/previous
+            # window counters are consumed once per request.
+            response = period_client().get(f"/api/v1/dashboard/summary?days={days}")
+            assert response.status_code == 200
+            assert response.json()["period"]["days"] == int(days)
+
+    def test_days_2_rejected(self, client: TestClient) -> None:
+        # 2 is within [1, 90] but not one of {1, 7, 30, 90} → 422.
+        response = client.get("/api/v1/dashboard/summary?days=2")
+        assert response.status_code == 422
+
+    def test_days_5_rejected(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary?days=5")
+        assert response.status_code == 422
+
+    def test_period_absent_without_days(self, client: TestClient) -> None:
+        response = client.get("/api/v1/dashboard/summary")
+        assert response.status_code == 200
+        assert "period" not in response.json()
+
+    def test_delta_pct_null_when_previous_zero(self, period_client: Callable[..., TestClient]) -> None:
+        client = period_client(
+            current_facts={"total": 12, "active_pipelines": 2, "tokens": 1200, "avg_duration_ms": 150.0, "complete": 9},
+            previous_facts={
+                "total": 0,
+                "active_pipelines": 0,
+                "tokens": 0,
+                "avg_duration_ms": None,
+                "complete": 0,
+            },
+        )
+        metrics = self._period_metrics(client, days="30")
+        assert metrics["total_runs"]["previous"] == 0
+        assert metrics["total_runs"]["delta_pct"] is None
+
+    def test_delta_pct_null_when_current_null(self, period_client: Callable[..., TestClient]) -> None:
+        # Empty current window → success_rate has no value → delta is undefined.
+        client = period_client(
+            current_facts={"total": 0, "active_pipelines": 0, "tokens": 0, "avg_duration_ms": None, "complete": 0}
+        )
+        metrics = self._period_metrics(client)
+        assert metrics["success_rate"]["current"] is None
+        assert metrics["success_rate"]["delta_pct"] is None
+
+    def test_eval_pass_rate_null_without_evals(self, period_client: Callable[..., TestClient]) -> None:
+        client = period_client(current_eval=(0, 0), previous_eval=(5, 4))
+        metrics = self._period_metrics(client)
+        assert metrics["eval_pass_rate"]["current"] is None
+        assert metrics["eval_pass_rate"]["delta_pct"] is None
+
+    def test_success_rate_is_complete_over_total(self, period_client: Callable[..., TestClient]) -> None:
+        client = period_client(
+            current_facts={"total": 10, "active_pipelines": 3, "tokens": 500, "avg_duration_ms": 200.0, "complete": 8}
+        )
+        metrics = self._period_metrics(client)
+        assert metrics["total_runs"]["current"] == 10
+        assert metrics["active_pipelines"]["current"] == 3
+        assert metrics["tokens"]["current"] == 500
+        assert metrics["avg_duration_ms"]["current"] == 200.0
+        assert metrics["success_rate"]["current"] == 80.0
+
+    def test_delta_pct_computed_between_windows(self, period_client: Callable[..., TestClient]) -> None:
+        client = period_client(
+            current_facts={"total": 12, "active_pipelines": 2, "tokens": 1200, "avg_duration_ms": 150.0, "complete": 9},
+            previous_facts={
+                "total": 10,
+                "active_pipelines": 2,
+                "tokens": 1000,
+                "avg_duration_ms": 150.0,
+                "complete": 8,
+            },
+        )
+        metrics = self._period_metrics(client)
+        assert metrics["total_runs"]["current"] == 12
+        assert metrics["total_runs"]["previous"] == 10
+        assert metrics["total_runs"]["delta_pct"] == 20.0
+
+    def test_period_spend_uses_ledger_window(self, period_client: Callable[..., TestClient]) -> None:
+        client = period_client(current_spend=15.5, previous_spend=10.0)
+        metrics = self._period_metrics(client)
+        assert metrics["spend"]["current"] == 15.5
+        assert metrics["spend"]["previous"] == 10.0
+        assert metrics["spend"]["delta_pct"] == 55.0
 
 
 class TestDashboardTrends:
