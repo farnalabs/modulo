@@ -287,8 +287,10 @@ def bucket_rows(
 
     # Explicit time grid: hourly (from date_from 00:00 UTC to date_to 23:59 UTC)
     # for hour grouping, otherwise the day grid (week Mondays for week grouping).
+    # Each branch builds a single-typed list so mypy can reconcile the grid type.
+    grid_times: list[date] | list[datetime]
     if group_by == AnalyticsGroupBy.HOUR:
-        grid_times = _hour_grid(date_from, date_to)
+        grid_times = sorted(_hour_grid(date_from, date_to))
     else:
         day_from = date_from.date() if isinstance(date_from, datetime) else date_from
         day_to = date_to.date() if isinstance(date_to, datetime) else date_to
@@ -297,7 +299,7 @@ def bucket_rows(
         while day <= day_to:
             grid_days.append(day)
             day += timedelta(days=1)
-        grid_times = sorted({_week_start(d) for d in grid_days} if group_by == AnalyticsGroupBy.WEEK else grid_days)
+        grid_times = sorted({_week_start(d) for d in grid_days}) if group_by == AnalyticsGroupBy.WEEK else grid_days
 
     dim_keys: list[Any] = [None]
     if dimension is not None:
