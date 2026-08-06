@@ -431,12 +431,27 @@ def step_github_connector(ctx):
             actions = payload.data.get("actions", [])
             if not actions:
                 raise ValueError("GitHub resource 'commit' requires a non-empty 'actions' list")
+            targeted_paths: set[str] = set()
             for action in actions:
                 file_path = action.get("path", "")
                 if file_path.startswith(("/", "\\")) or any(
                     part == ".." for part in file_path.replace("\\", "/").split("/")
                 ):
                     raise ValueError(f"GitHub resource 'commit': path traversal blocked: {file_path!r}")
+                targets = (file_path,)
+                if action.get("action") == "move":
+                    previous_path = action.get("previous_path", "")
+                    if previous_path.startswith(("/", "\\")) or any(
+                        part == ".." for part in previous_path.replace("\\", "/").split("/")
+                    ):
+                        raise ValueError(f"GitHub resource 'commit': path traversal blocked: {previous_path!r}")
+                    targets = (previous_path, file_path)
+                for targeted in targets:
+                    if targeted in targeted_paths:
+                        raise ValueError(
+                            f"GitHub resource 'commit': path {targeted!r} is targeted more than once by the batch"
+                        )
+                    targeted_paths.add(targeted)
             return {"ref": "refs/heads/main", "object": {"sha": "commit123"}}
         if payload.resource in (
             "pr",

@@ -1098,6 +1098,99 @@ async def test_write_files_alias(connector):
     assert json.loads(tree_route.calls.last.request.content)["tree"][0]["path"] == "a.txt"
 
 
+@respx.mock
+async def test_write_commit_branch_alias(connector):
+    """The 'branch' fallback is used when 'ref' is absent."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/develop").mock(
+        return_value=httpx.Response(200, json={"sha": "dev123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
+        return_value=httpx.Response(201, json={"sha": "blob1"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/trees").mock(
+        return_value=httpx.Response(201, json={"sha": "tree123"})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/commits").mock(
+        return_value=httpx.Response(201, json={"sha": "commit123"})
+    )
+    ref_route = respx.patch("https://api.github.com/repos/owner/repo/git/refs/refs/heads/develop").mock(
+        return_value=httpx.Response(200, json={"ref": "refs/heads/develop"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="commit",
+            data={
+                "repo": "owner/repo",
+                "branch": "develop",
+                "actions": [{"action": "create", "path": "a.txt", "content": "x"}],
+            },
+        )
+    )
+    assert "commits/develop" in respx.calls[0].request.url.path
+    assert ref_route.calls.last.request.url.path.endswith("/refs/heads/develop")
+
+
+@respx.mock
+async def test_write_commit_duplicate_path_rejected(connector):
+    """Two actions targeting the same path in one batch fail fast, before any network call."""
+    with pytest.raises(ValueError, match="targeted more than once"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={
+                    "repo": "owner/repo",
+                    "actions": [
+                        {"action": "create", "path": "a.txt", "content": "one"},
+                        {"action": "update", "path": "a.txt", "content": "two"},
+                    ],
+                },
+            )
+        )
+    assert respx.calls == []
+
+
+@respx.mock
+async def test_write_commit_move_same_path_rejected(connector):
+    """A move whose previous_path equals its path is ambiguous and rejected."""
+    with pytest.raises(ValueError, match="targeted more than once"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={
+                    "repo": "owner/repo",
+                    "actions": [{"action": "move", "path": "a.txt", "previous_path": "a.txt"}],
+                },
+            )
+        )
+    assert respx.calls == []
+
+
+@respx.mock
+async def test_write_commit_move_binary_file_raises_descriptive_error(connector):
+    """Moving a non-UTF-8 binary file surfaces a descriptive ValueError, not a raw UnicodeDecodeError."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
+        return_value=httpx.Response(200, json={"sha": "base123"})
+    )
+    binary_b64 = base64.b64encode(b"\x80\x81binary\xff").decode()
+    respx.get("https://api.github.com/repos/owner/repo/contents/old.bin?ref=main").mock(
+        return_value=httpx.Response(200, json={"content": binary_b64, "encoding": "base64"})
+    )
+    blob_route = respx.post("https://api.github.com/repos/owner/repo/git/blobs").mock(
+        return_value=httpx.Response(201, json={"sha": "blob1"})
+    )
+    with pytest.raises(ValueError, match="not decodable UTF-8 text"):
+        await connector.write(
+            ConnectorPayload(
+                resource="commit",
+                data={
+                    "repo": "owner/repo",
+                    "actions": [{"action": "move", "path": "new.txt", "previous_path": "old.bin"}],
+                },
+            )
+        )
+    assert blob_route.calls == []
+
+
 async def test_write_commit_missing_repo(connector):
     with pytest.raises(ValueError, match="requires 'repo' in data"):
         await connector.write(ConnectorPayload(resource="commit", data={}))

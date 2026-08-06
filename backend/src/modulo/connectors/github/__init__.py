@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import binascii
 import json
 import random
 import re
@@ -198,16 +199,18 @@ class GitHubConnector(ConnectorBase):
         """Resolve a ref (branch/tag/SHA) to a commit SHA via the commits API."""
         commit_r = await self._call_api("GET", f"/repos/{owner_repo}/commits/{ref}")
         commit_body = await self._parse_json_object(commit_r)
-        tree_sha = commit_body.get("sha")
-        if not isinstance(tree_sha, str) or not tree_sha:
+        commit_sha = commit_body.get("sha")
+        if not isinstance(commit_sha, str) or not commit_sha:
             raise ValueError(f"GitHub {resource} could not resolve ref {ref!r} to a commit SHA")
-        return tree_sha
+        return commit_sha
 
     async def _read_file_text(self, owner_repo: str, path: str, ref: str) -> str:
         """Read a file's text content from the Contents API (used by move actions).
 
         Mirrors ``query("file")`` decoding: base64 content is decoded to UTF-8
-        text so a ``move`` can carry the file's content into the new blob.
+        text so a ``move`` can carry the file's content into the new blob. A
+        file that is not decodable as UTF-8 text is rejected with a descriptive
+        ``ValueError`` instead of surfacing a raw decode error.
         """
         r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
         info = await self._parse_json_object(r)
@@ -215,7 +218,12 @@ class GitHubConnector(ConnectorBase):
         if not isinstance(content, str):
             raise ValueError(f"GitHub commit write: could not read content of {path!r}")
         if info.get("encoding") == "base64":
-            return base64.b64decode(content).decode("utf-8")
+            try:
+                return base64.b64decode(content).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError):
+                raise ValueError(
+                    f"GitHub commit write: file {path!r} is not decodable UTF-8 text; cannot move a binary file",
+                ) from None
         return content
 
     async def _create_blob(self, owner_repo: str, content: str) -> str:
@@ -589,6 +597,7 @@ class GitHubConnector(ConnectorBase):
                 message = payload.data.get("message", "Update via Modulo")
                 if not isinstance(message, str) or not message:
                     raise ValueError(f"GitHub resource {payload.resource!r} requires a non-empty 'message'")
+                targeted_paths: set[str] = set()
                 for action in actions:
                     if not isinstance(action, dict):
                         raise ValueError(f"GitHub resource {payload.resource!r}: each action must be an object")
@@ -602,6 +611,7 @@ class GitHubConnector(ConnectorBase):
                     if not isinstance(path, str) or not path:
                         raise ValueError(f"GitHub resource {payload.resource!r}: each action requires 'path'")
                     _validate_path(path, payload.resource)
+                    targets: tuple[str, ...]
                     if action_type == "move":
                         previous_path = action.get("previous_path")
                         if not isinstance(previous_path, str) or not previous_path:
@@ -609,10 +619,19 @@ class GitHubConnector(ConnectorBase):
                                 f"GitHub resource {payload.resource!r}: move action requires 'previous_path'"
                             )
                         _validate_path(previous_path, payload.resource)
-                    elif action_type != "delete" and not isinstance(action.get("content"), str):
+                        targets = (previous_path, path)
+                    else:
+                        targets = (path,)
+                    for targeted in targets:
+                        if targeted in targeted_paths:
+                            raise ValueError(
+                                f"GitHub resource {payload.resource!r}: path {targeted!r} is targeted "
+                                "more than once by the batch",
+                            )
+                        targeted_paths.add(targeted)
+                    if action_type != "move" and action_type != "delete" and not isinstance(action.get("content"), str):
                         raise ValueError(
-                            f"GitHub resource {payload.resource!r}: action {action_type!r} requires string "
-                            "'content'",
+                            f"GitHub resource {payload.resource!r}: action {action_type!r} requires string 'content'",
                         )
                 base_sha = await self._resolve_commit_sha(owner_repo, ref, payload.resource)
                 tree_entries: list[dict[str, Any]] = []
