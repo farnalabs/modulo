@@ -75,6 +75,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "run_heartbeat_seconds": 30,
         "saq_worker_db_pool_size": 2,
         "saq_redis_pool_size": 50,
+        "saq_run_claim_cap": 20,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -145,6 +146,10 @@ class TestClaimRunAsync:
             claim_token = await pe.claim_run_async(engine, "run-1", "org-1")  # type: ignore[arg-type]
         assert claim_token is not None
         assert calls[0]["params"]["stale_seconds"] == 450  # type: ignore[index]
+        # Claim cap flows from settings (SAQ_RUN_CLAIM_CAP, default 20) when the
+        # caller omits claim_cap — single source of truth shared with resume
+        # (retro item 9). The old execute-only cap of 5 is retired.
+        assert calls[0]["params"]["claim_cap"] == 20  # type: ignore[index]
         # Every claim rotates to a fresh per-claim token (plan F3a), returned to
         # the caller so it can fence completion/heartbeat against successors.
         assert "claim_token=:tok" in calls[0]["stmt"]  # type: ignore[index]
@@ -701,6 +706,7 @@ _SAQ_SETTINGS_ENV = (
     "SAQ_WORKER_DB_POOL_SIZE",
     "SAQ_REDIS_POOL_SIZE",
     "SAQ_WORKER_CONCURRENCY",
+    "SAQ_RUN_CLAIM_CAP",
 )
 
 
@@ -733,6 +739,7 @@ class TestSaqSettingsDefaults:
         assert s.saq_worker_db_pool_size == 10
         assert s.saq_redis_pool_size == 50
         assert s.saq_worker_concurrency == 5
+        assert s.saq_run_claim_cap == 20
 
     def test_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("RUN_CLAIM_STALE_SECONDS", "500")
@@ -913,7 +920,8 @@ class TestSaqWorkerSettings:
         assert settings["dequeue_timeout"] == 5
         assert settings["timers"] == {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
         # PR B-2: system crons wired (fire_due_triggers, reconcile, claim-expiry,
-        # retention, webhook-dedup, stale recovery) + the cost probe (PR A2).
+        # retention, webhook-dedup, stale recovery) + the cost probe (PR A2)
+        # + the hourly missed-fire alert cron (retro item 4).
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
@@ -924,6 +932,7 @@ class TestSaqWorkerSettings:
             "webhook_dedup_cleanup",
             "stale_run_recovery",
             "cost_probe",
+            "check_missed_fire_alerts_cron",
         }
         assert settings["after_process"] is not None
 

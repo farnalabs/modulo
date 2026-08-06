@@ -49,6 +49,7 @@ class TestFunctionsWiring:
         assert "retention_cleanup" in names
         assert "webhook_dedup_cleanup" in names
         assert "stale_run_recovery" in names
+        assert "check_missed_fire_alerts_cron" in names
 
     def test_system_cron_knobs_explicit(self) -> None:
         jobs = {c.function.__name__: c for c in sw._system_cron_jobs()}
@@ -61,6 +62,7 @@ class TestFunctionsWiring:
             "stale_run_recovery",
             "cost_probe",
             "analytics_facts_maintenance",
+            "check_missed_fire_alerts_cron",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]
@@ -75,6 +77,16 @@ class TestFunctionsWiring:
         assert dr.timeout == 120
         assert dr.cron == "* * * * *"
         assert dr.unique is True
+        # check_missed_fire_alerts: hourly, 5-field form (NOT 6-field — the bug
+        # class #680 croniter seconds-field misparse), unique so overlaps are
+        # impossible (the probe has its own in-memory cooldown).
+        mf = jobs["check_missed_fire_alerts_cron"]
+        assert mf.cron == "0 * * * *"
+        assert mf.timeout == 300
+        assert mf.retries == 2
+        assert mf.heartbeat == 30
+        assert mf.ttl == 300
+        assert mf.unique is True
 
     def test_settings_after_process_and_metadata(self) -> None:
         with patch.object(sw, "get_settings", return_value=_settings()):

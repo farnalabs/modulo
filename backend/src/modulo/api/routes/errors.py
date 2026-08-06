@@ -242,13 +242,9 @@ async def ingest_errors_public(
         ) from exc
 
     # Filter events: only frontend source, reject critical level
-    valid_events = []
-    for event in ingest_request.events:
-        if event.source != "frontend":
-            continue
-        if event.level == "critical":
-            continue
-        valid_events.append(event)
+    valid_events = [
+        event for event in ingest_request.events if event.source == "frontend" and event.level != "critical"
+    ]
 
     if not valid_events:
         return {"results": []}

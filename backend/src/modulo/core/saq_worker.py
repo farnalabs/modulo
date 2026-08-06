@@ -451,6 +451,25 @@ async def analytics_facts_maintenance(ctx: dict[str, Any]) -> dict[str, Any]:
     return await run_maintenance(_make_session_factory())
 
 
+async def check_missed_fire_alerts_cron(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — hourly missed-fire probe for silent low-cadence triggers.
+
+    Delegates to :func:`modulo.core.error_tracking.check_missed_fire_alerts`,
+    which alerts for active cron/polling triggers whose cadence is >= 1h and
+    whose ``last_fired_at`` is stale (throttled by an in-memory cooldown).
+
+    Uses the 5-field expression ``"0 * * * *"`` — NOT the 6-field form, which
+    croniter parses with a leading seconds field and fires on the wrong cadence
+    (the bug class documented on ``cost_probe`` / bug #680).
+    """
+    from modulo.core.error_tracking import check_missed_fire_alerts
+
+    emitted = await check_missed_fire_alerts(_get_async_engine())
+    if emitted:
+        _log.info("saq.check_missed_fire_alerts.emitted", extra={"count": emitted})
+    return {"emitted": emitted}
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -533,6 +552,7 @@ def _system_functions() -> list[Any]:
         stale_run_recovery,
         cost_probe,
         analytics_facts_maintenance,
+        check_missed_fire_alerts_cron,
     ]
 
 
@@ -628,6 +648,20 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=60,
             retries=1,
             ttl=900,
+        ),
+        # check_missed_fire_alerts: hourly (the probe only targets triggers
+        # with a >= 1h cadence, so an hourly tick with its own cooldown is
+        # ample). NOTE: must be the 5-field form "0 * * * *" — croniter parses
+        # a 6-field expression with a leading seconds field differently (bug
+        # class #680).
+        CronJob(
+            check_missed_fire_alerts_cron,
+            cron="0 * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
         ),
     ]
 
