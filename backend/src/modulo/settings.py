@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     saq_retry_delay: int = Field(default=60, alias="SAQ_RETRY_DELAY", ge=1, le=3600)
     # Per-claim E2B idempotency key run:{id}:e2b:{claim_token} (F3a).
     saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
+    # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
+    # Single source of truth: cron_helpers reads this; pipeline_execution's
+    # SAQ_RUN_CLAIM_CAP constant must stay in sync with this default.
+    saq_run_claim_cap: int = Field(default=20, alias="SAQ_RUN_CLAIM_CAP", ge=1, le=100)
     # TEST-ONLY pause flag — hard default off; refused outside test/staging
     # (debug=false).
     saq_test_pause: bool = Field(default=False, alias="SAQ_TEST_PAUSE")

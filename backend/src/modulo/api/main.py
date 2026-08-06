@@ -53,6 +53,7 @@ from modulo.api.routes.admin_system_config import router as admin_system_config_
 from modulo.api.routes.admin_tiers import router as admin_tiers_router
 from modulo.api.routes.admin_triggers import router as admin_triggers_router
 from modulo.api.routes.agents import router as agents_router
+from modulo.api.routes.analytics import router as analytics_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
@@ -197,6 +198,8 @@ async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
     machine/process cannot interleave.
     """
     engine = get_or_create_engine(settings)
+    from modulo.db.migrations.env import set_lock_held_by_caller
+
     async with engine.connect() as conn:
         acquired = False
         for _ in range(_MIGRATION_LOCK_POLL_ATTEMPTS):
@@ -209,9 +212,15 @@ async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
                 break
             await asyncio.sleep(_MIGRATION_LOCK_POLL_INTERVAL)
         try:
+            if acquired:
+                # Tell env.py the lock is already held on a different (sync)
+                # connection so the alembic run does not re-acquire the same
+                # session-scoped key and self-deadlock.
+                set_lock_held_by_caller(True)
             yield acquired
         finally:
             if acquired:
+                set_lock_held_by_caller(False)
                 await conn.execute(
                     text("SELECT pg_advisory_unlock(:k1, :k2)"),
                     {"k1": _MIGRATION_LOCK_KEY[0], "k2": _MIGRATION_LOCK_KEY[1]},
@@ -1049,7 +1058,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _mcp_tg = await anyio.create_task_group().__aenter__()
     # FastMCP annotates this private integration slot as None despite assigning a TaskGroup at runtime.
-    session_manager = cast(_TaskGroupSessionManager, mcp.session_manager)
+    session_manager = cast("_TaskGroupSessionManager", mcp.session_manager)
     session_manager._task_group = _mcp_tg
 
     yield
@@ -1155,6 +1164,7 @@ app.include_router(admin_housekeeping_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)
+app.include_router(analytics_router)
 app.include_router(dashboard_router)
 app.include_router(deployment_router)
 app.include_router(costs_router)

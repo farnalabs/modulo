@@ -97,7 +97,7 @@ def _classify(function: str, status: Any, error: str | None, kwargs: dict[str, A
     run_id = kwargs.get("run_id")
     org_id = kwargs.get("org_id")
 
-    is_run_job = function.endswith("execute_run") or function.endswith("resume_run")
+    is_run_job = function.endswith(("execute_run", "resume_run"))
     if is_run_job and run_id:
         return {
             "action": "fail_run",
@@ -142,14 +142,24 @@ async def _ingest_error_event(
     message: str,
     error: str | None,
 ) -> None:
+    parsed = uuid.UUID(org_id)
+    if parsed == _SYSTEM_ORG_ID:
+        _log.error(
+            "SAQ system error (no tenant context) — skipping DB ingest: function=%s message=%s error=%s",
+            function,
+            message,
+            error,
+        )
+        return
+
     from modulo.core.error_tracking import ErrorIngestionService
     from modulo.db.rls import set_rls_org
 
     async with _open_factory()() as session, session.begin():
-        await set_rls_org(session, uuid.UUID(org_id))
+        await set_rls_org(session, parsed)
         await ErrorIngestionService().ingest(
             session,
-            uuid.UUID(org_id),
+            parsed,
             {
                 "level": "error",
                 "message": message,

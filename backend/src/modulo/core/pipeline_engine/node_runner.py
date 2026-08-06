@@ -838,7 +838,7 @@ def make_sandbox_agent_fn(
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
     agent_command_raw: str | None = node_def.get("agent_command")
-    if agent_commands_raw and len(agent_commands_raw) > 0:
+    if agent_commands_raw:
         agent_command = commands_concatenation_string.join(agent_commands_raw)
     elif agent_command_raw:
         agent_command = agent_command_raw
@@ -925,11 +925,96 @@ def make_sandbox_agent_fn(
 
         start_time = time.monotonic()
         sandbox: AsyncSandbox | None = None
+        e2b_claim_token: str | None = None
+        e2b_fenced = False
 
         _stdout_len = 0
         _stderr_len = 0
 
+        async def _read_current_claim_token() -> str | None:
+            """Read the run's current ``runs.claim_token`` via the shared session factory.
+
+            This is the executor's own claim token (the claim wrote it) — a
+            successor claim rotates it, so a superseded original reads a
+            different value and its fence acquire is refused.
+            """
+            if session_factory is None:
+                return None
+            org_id_raw = state.get("_org_id")
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+            except (TypeError, ValueError):
+                org_uuid = None
+            if org_uuid is None:
+                return None
+            try:
+                from sqlalchemy import text as _sql_text
+
+                from modulo.db.rls import set_rls_org
+
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_uuid)
+                    result = await session.execute(
+                        _sql_text("SELECT claim_token FROM runs WHERE id=:rid"),
+                        {"rid": run_id},
+                    )
+                    row = result.first()
+                    return str(row[0]) if row and row[0] else None
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.claim_token_read_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+                return None
+
         try:
+            # E2B idempotency fence (plan F3a) — SETNX-before-dispatch so exactly
+            # ONE executor creates a sandbox for this run. A superseded claim (run
+            # re-claimed after an event-loop stall) is refused before any sandbox
+            # is created; a transient retry within the same claim is likewise
+            # refused (no second sandbox). If the claim token is unavailable
+            # (no session factory / DB read failed) the fence is skipped
+            # fail-open — the heartbeat claim fence remains the primary guard.
+            from modulo.core.pipeline_execution import (
+                E2BIdempotencyDeniedError,
+                e2b_dispatch_acquire,
+                e2b_dispatch_release_fenced,
+                e2b_idempotency_enabled,
+            )
+
+            if e2b_idempotency_enabled():
+                e2b_claim_token = await _read_current_claim_token()
+                if e2b_claim_token is not None:
+                    try:
+                        await e2b_dispatch_acquire(run_id, e2b_claim_token)
+                        e2b_fenced = True
+                    except E2BIdempotencyDeniedError:
+                        _log.warning(
+                            "sandbox_agent.e2b_dispatch_denied",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
+                        return {
+                            "artifacts": [
+                                {
+                                    "node_id": node_id,
+                                    "status": "superseded",
+                                    "output": {
+                                        "status": "superseded",
+                                        "summary": "E2B dispatch superseded by a newer claim — sandbox not created",
+                                        "exit_code": -1,
+                                        "wall_clock_time_ms": 0,
+                                    },
+                                }
+                            ],
+                            "output": {
+                                "status": "superseded",
+                                "summary": "E2B dispatch superseded by a newer claim — sandbox not created",
+                                "wall_clock_time_ms": 0,
+                            },
+                        }
+
             sandbox = await asyncio.wait_for(
                 AsyncSandbox.create(template=template_id, timeout=sandbox_timeout),
                 timeout=min(sandbox_timeout, 120),
@@ -1147,6 +1232,16 @@ def make_sandbox_agent_fn(
         except asyncio.CancelledError:
             raise
         except Exception as _exc:
+            # Dispatch FAILURE (the sandbox was never created): fenced release so
+            # a later claim/retry can legitimately re-dispatch (plan F3a).
+            if e2b_fenced and sandbox is None:
+                try:
+                    await e2b_dispatch_release_fenced(run_id, e2b_claim_token or "")
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.e2b_fence_release_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
             elapsed = time.monotonic() - start_time
             import traceback as _tb
 
@@ -1217,6 +1312,18 @@ def make_sandbox_agent_fn(
                     _log.exception(
                         "sandbox_agent.kill_failed",
                         extra={"node_id": node_id},
+                    )
+            # Sandbox teardown — release the dispatch fence (fenced: only if the
+            # key is still ours). Success path keeps the lock for the sandbox's
+            # lifetime; releasing at teardown lets a later claim re-dispatch a
+            # fresh sandbox (plan F3a).
+            if e2b_fenced and sandbox is not None:
+                try:
+                    await e2b_dispatch_release_fenced(run_id, e2b_claim_token or "")
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.e2b_fence_release_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
                     )
 
     _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"

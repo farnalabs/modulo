@@ -42,6 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.analytics import record_run_facts
 from modulo.core.cost_controller import check_and_record_spend
 from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown, clamp_reported
 from modulo.core.cost_controller.breakdown.constants import (
@@ -387,13 +388,15 @@ async def _fallback_write(
     merged_outputs: dict[str, Any],
     error_code: str | None,
     error_detail: str | None,
+    is_terminal: bool = False,
 ) -> None:
     """The LEGACY FALLBACK write (never-fail envelope, §1.5).
 
     Persists the UN-ENRICHED merged set (so the cumulative write-back invariant
     survives a cost-path exception) with ``total = token_cost +
     legacy_sandbox_cost`` — wall-clock ONLY, flat-clamped with the shared
-    ``total_clamped`` marker.
+    ``total_clamped`` marker. On a terminal write the analytics fact is
+    recorded in the SAME transaction (fail-open, ADR 020).
     """
     total_tokens = _derive_total_tokens(merged_usage)
     token_cost = _token_cost(merged_usage)
@@ -452,6 +455,10 @@ async def _fallback_write(
         outputs_json=merged_outputs,
         total_tokens=total_tokens,
     )
+    if is_terminal:
+        run = await session.get(Run, run_id)
+        if run is not None:
+            await record_run_facts(session, run)
 
 
 def _is_abort_error(exc: Exception) -> bool:
@@ -546,7 +553,9 @@ async def _reduced_escape(
     try:
         async with session_factory() as fresh, fresh.begin():
             await set_rls_org(fresh, org_id)
-            await update_run_status(fresh, run_id, status, **finalize_fields)
+            run = await update_run_status(fresh, run_id, status, **finalize_fields)
+            if run is not None:
+                await record_run_facts(fresh, run)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -710,6 +719,8 @@ async def finalize_cost(
             total_cost_usd=Decimal(0),
             total_tokens=0,
         )
+        if is_terminal:
+            await record_run_facts(session, run)
         return
 
     # --- the never-fail envelope: component read + build + run write (§1.5) ---
@@ -752,6 +763,7 @@ async def finalize_cost(
             merged_outputs,
             error_code,
             error_detail,
+            is_terminal=is_terminal,
         )
         return
 
@@ -776,6 +788,12 @@ async def finalize_cost(
             },
             session_factory=session_factory,
         )
+
+    # --- Analytics facts — every terminal path, SAME transaction (ADR 020) ---
+    # ``record_run_facts`` is fail-open: a facts-write failure rolls back only
+    # its own savepoint and never affects the cost/ledger outcome.
+    if is_terminal:
+        await record_run_facts(session, run)
 
 
 async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:

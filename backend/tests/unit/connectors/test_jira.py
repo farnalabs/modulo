@@ -721,6 +721,376 @@ async def test_write_issue_delete_missing_key(connector):
         )
 
 
+# --- base_url (self-hosted / Jira Data Center) ---
+
+
+def test_default_base_url_is_cloud():
+    c = JiraConnector(instance=_INSTANCE, creds={"email": EMAIL, "api_token": API_TOKEN})
+    assert c._base_url == f"https://{_INSTANCE}/rest/api/3"
+
+
+def test_custom_base_url_used_as_is():
+    c = JiraConnector(
+        instance="jira.example.com",
+        creds={"email": EMAIL, "api_token": API_TOKEN},
+        base_url="https://jira.example.com/rest/api/2",
+    )
+    assert c._base_url == "https://jira.example.com/rest/api/2"
+
+
+def test_custom_base_url_trailing_slash_stripped():
+    c = JiraConnector(
+        instance="jira.example.com",
+        creds={"email": EMAIL, "api_token": API_TOKEN},
+        base_url="https://jira.example.com/rest/api/2/",
+    )
+    assert c._base_url == "https://jira.example.com/rest/api/2"
+
+
+def test_custom_base_url_bare_host_appends_api_path():
+    c = JiraConnector(
+        instance="jira.example.com",
+        creds={"email": EMAIL, "api_token": API_TOKEN},
+        base_url="https://jira.example.com",
+    )
+    assert c._base_url == "https://jira.example.com/rest/api/3"
+
+
+@respx.mock
+async def test_self_hosted_health_check_hits_custom_base_url():
+    c = JiraConnector(
+        instance="jira.example.com",
+        creds={"email": EMAIL, "api_token": API_TOKEN},
+        base_url="https://jira.example.com/rest/api/2",
+    )
+    respx.get("https://jira.example.com/rest/api/2/myself").mock(
+        return_value=httpx.Response(200, json={"displayName": "Alice"})
+    )
+    result = await c.health_check()
+    assert result.ok is True
+    assert result.detail == "Alice"
+
+
+@respx.mock
+async def test_self_hosted_query_issue():
+    c = JiraConnector(
+        instance="jira.example.com",
+        creds={"token": "pat"},
+        base_url="https://jira.example.com/rest/api/2",
+    )
+    respx.get("https://jira.example.com/rest/api/2/issue/PROJ-1").mock(
+        return_value=httpx.Response(200, json={"id": "1", "key": "PROJ-1"})
+    )
+    result = await c.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-1"}))
+    assert result.records[0]["key"] == "PROJ-1"
+
+
+# --- issue_attachments query ---
+
+
+@respx.mock
+async def test_query_issue_attachments(connector):
+    issue_data = {
+        "id": "10001",
+        "key": "PROJ-123",
+        "fields": {
+            "attachment": [
+                {"id": "10000", "filename": "spec.pdf", "mimeType": "application/pdf", "size": 1234},
+                {"id": "10001", "filename": "notes.txt", "mimeType": "text/plain", "size": 88},
+            ]
+        },
+    }
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json=issue_data))
+    result = await connector.query(ConnectorQuery(resource="issue_attachments", filters={"issue_key": "PROJ-123"}))
+    assert result.total == 2
+    assert result.records[0]["filename"] == "spec.pdf"
+
+
+@respx.mock
+async def test_query_issue_attachments_empty(connector):
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(
+        return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123", "fields": {}})
+    )
+    result = await connector.query(ConnectorQuery(resource="issue_attachments", filters={"issue_key": "PROJ-123"}))
+    assert result.records == []
+
+
+@respx.mock
+async def test_query_issue_attachments_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.query(ConnectorQuery(resource="issue_attachments", filters={}))
+
+
+# --- issue_attachment write (multipart upload) ---
+
+
+@respx.mock
+async def test_write_issue_attachment_content(connector):
+    created = [{"id": "10000", "filename": "notes.txt", "size": 10}]
+    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(return_value=httpx.Response(201, json=created))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_attachment",
+            data={"issue_key": "PROJ-123", "filename": "notes.txt", "content": "hello world"},
+        )
+    )
+    assert result[0]["filename"] == "notes.txt"
+    request = respx.calls.last.request
+    assert request.method == "POST"
+    assert request.headers.get("X-Atlassian-Token") == "no-check"
+    assert "multipart/form-data" in request.headers.get("content-type", "")
+    assert b"hello world" in request.content
+
+
+@respx.mock
+async def test_write_issue_attachment_bytes(connector):
+    created = [{"id": "10000", "filename": "data.bin", "size": 4}]
+    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(return_value=httpx.Response(201, json=created))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_attachment",
+            data={"issue_key": "PROJ-123", "filename": "data.bin", "file": b"\x00\x01\x02\x03"},
+        )
+    )
+    assert result[0]["filename"] == "data.bin"
+    assert b"\x00\x01\x02\x03" in respx.calls.last.request.content
+
+
+@respx.mock
+async def test_write_issue_attachment_missing_filename(connector):
+    with pytest.raises(ValueError, match="requires 'filename'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_attachment",
+                data={"issue_key": "PROJ-123", "content": "hello"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_attachment_missing_content(connector):
+    with pytest.raises(ValueError, match="requires 'content' or 'file'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_attachment",
+                data={"issue_key": "PROJ-123", "filename": "a.txt"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_attachment_both_content_and_file(connector):
+    with pytest.raises(ValueError, match="exactly one of 'content' or 'file'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_attachment",
+                data={"issue_key": "PROJ-123", "filename": "a.txt", "content": "hi", "file": b"hi"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_attachment_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_attachment",
+                data={"filename": "a.txt", "content": "hi"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_attachment_http_error(connector):
+    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(return_value=httpx.Response(400))
+    with pytest.raises(ValueError, match="Jira API HTTP 400"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_attachment",
+                data={"issue_key": "PROJ-123", "filename": "a.txt", "content": "hi"},
+            )
+        )
+
+
+# --- issue_remote_links query + issue_remote_link / remote_link_delete writes ---
+
+
+@respx.mock
+async def test_query_issue_remote_links(connector):
+    links = [
+        {
+            "id": "10001",
+            "self": "https://jira/rest/api/3/issue/PROJ-123/remotelink/10001",
+            "object": {"url": "https://example.com/pr/42", "title": "PR #42"},
+        },
+        {
+            "id": "10002",
+            "self": "https://jira/rest/api/3/issue/PROJ-123/remotelink/10002",
+            "object": {"url": "https://example.com/wiki/1", "title": "Design doc"},
+        },
+    ]
+    respx.get(f"{_BASE}/issue/PROJ-123/remotelink").mock(return_value=httpx.Response(200, json=links))
+    result = await connector.query(ConnectorQuery(resource="issue_remote_links", filters={"issue_key": "PROJ-123"}))
+    assert result.total == 2
+    assert result.records[0]["object"]["url"] == "https://example.com/pr/42"
+
+
+@respx.mock
+async def test_query_issue_remote_links_empty(connector):
+    respx.get(f"{_BASE}/issue/PROJ-123/remotelink").mock(return_value=httpx.Response(200, json=[]))
+    result = await connector.query(ConnectorQuery(resource="issue_remote_links", filters={"issue_key": "PROJ-123"}))
+    assert result.records == []
+
+
+@respx.mock
+async def test_query_issue_remote_links_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.query(ConnectorQuery(resource="issue_remote_links", filters={}))
+
+
+@respx.mock
+async def test_write_issue_remote_link(connector):
+    created = {"id": "10001", "self": "https://jira/rest/api/3/issue/PROJ-123/remotelink/10001"}
+    respx.post(f"{_BASE}/issue/PROJ-123/remotelink").mock(return_value=httpx.Response(201, json=created))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_remote_link",
+            data={"issue_key": "PROJ-123", "url": "https://example.com/pr/42", "title": "PR #42"},
+        )
+    )
+    assert result["id"] == "10001"
+    request = respx.calls.last.request
+    assert request.method == "POST"
+    assert request.read() == b'{"object":{"url":"https://example.com/pr/42","title":"PR #42"}}'
+
+
+@respx.mock
+async def test_write_issue_remote_link_url_only(connector):
+    respx.post(f"{_BASE}/issue/PROJ-123/remotelink").mock(return_value=httpx.Response(201, json={"id": "1"}))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="issue_remote_link",
+            data={"issue_key": "PROJ-123", "url": "https://example.com"},
+        )
+    )
+    assert result["id"] == "1"
+    assert respx.calls.last.request.read() == b'{"object":{"url":"https://example.com"}}'
+
+
+@respx.mock
+async def test_write_issue_remote_link_missing_url(connector):
+    with pytest.raises(ValueError, match="requires 'url'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_remote_link",
+                data={"issue_key": "PROJ-123"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_issue_remote_link_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="issue_remote_link",
+                data={"url": "https://example.com"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_remote_link_delete(connector):
+    respx.delete(f"{_BASE}/issue/PROJ-123/remotelink/10001").mock(return_value=httpx.Response(204))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="remote_link_delete",
+            data={"issue_key": "PROJ-123", "link_id": "10001"},
+        )
+    )
+    assert result["deleted"] is True
+    request = respx.calls.last.request
+    assert request.method == "DELETE"
+    assert request.url.path == "/rest/api/3/issue/PROJ-123/remotelink/10001"
+
+
+@respx.mock
+async def test_write_remote_link_delete_missing_link_id(connector):
+    with pytest.raises(ValueError, match="requires 'link_id'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="remote_link_delete",
+                data={"issue_key": "PROJ-123"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_remote_link_delete_missing_key(connector):
+    with pytest.raises(ValueError, match="requires 'issue_key'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="remote_link_delete",
+                data={"link_id": "10001"},
+            )
+        )
+
+
+# --- project_components / project_versions queries ---
+
+
+@respx.mock
+async def test_query_project_components(connector):
+    components = [
+        {"id": "10000", "name": "Backend", "lead": {"displayName": "Alice"}},
+        {"id": "10001", "name": "Frontend", "lead": {"displayName": "Bob"}},
+    ]
+    respx.get(f"{_BASE}/project/PROJ/components").mock(return_value=httpx.Response(200, json=components))
+    result = await connector.query(ConnectorQuery(resource="project_components", filters={"project": "PROJ"}))
+    assert result.total == 2
+    assert result.records[0]["name"] == "Backend"
+    assert result.metadata["project"] == "PROJ"
+
+
+@respx.mock
+async def test_query_project_components_missing_project(connector):
+    with pytest.raises(ValueError, match="requires 'project' filter"):
+        await connector.query(ConnectorQuery(resource="project_components", filters={}))
+
+
+@respx.mock
+async def test_query_project_components_http_error(connector):
+    respx.get(f"{_BASE}/project/NOPE/components").mock(return_value=httpx.Response(404))
+    with pytest.raises(ValueError, match="Jira API HTTP 404"):
+        await connector.query(ConnectorQuery(resource="project_components", filters={"project": "NOPE"}))
+
+
+@respx.mock
+async def test_query_project_versions(connector):
+    versions = [
+        {"id": "10000", "name": "1.0.0", "released": True},
+        {"id": "10001", "name": "1.1.0", "released": False},
+    ]
+    respx.get(f"{_BASE}/project/PROJ/versions").mock(return_value=httpx.Response(200, json=versions))
+    result = await connector.query(ConnectorQuery(resource="project_versions", filters={"project": "PROJ"}))
+    assert result.total == 2
+    assert result.records[0]["name"] == "1.0.0"
+    assert result.metadata["project"] == "PROJ"
+
+
+@respx.mock
+async def test_query_project_versions_missing_project(connector):
+    with pytest.raises(ValueError, match="requires 'project' filter"):
+        await connector.query(ConnectorQuery(resource="project_versions", filters={}))
+
+
+@respx.mock
+async def test_query_project_versions_http_error(connector):
+    respx.get(f"{_BASE}/project/NOPE/versions").mock(return_value=httpx.Response(404))
+    with pytest.raises(ValueError, match="Jira API HTTP 404"):
+        await connector.query(ConnectorQuery(resource="project_versions", filters={"project": "NOPE"}))
+
+
 # --- self-hosted / Jira Data Center support ---
 
 _SELF_HOSTED_BASE = "https://jira.example.com/rest/api/2"

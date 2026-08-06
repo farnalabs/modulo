@@ -31,6 +31,16 @@ _RATE_LIMIT_HEADERS = (
 )
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    """Coerce *value* to int, returning *default* for None or unparseable values."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from API response."""
     value = response.headers.get("Retry-After")
@@ -115,8 +125,11 @@ class JiraConnector(ConnectorBase):
 
     Config (from config_json):
       "instance"    — your-domain.atlassian.net (without https://)
-      "base_url"    — optional full API base URL for self-hosted instances,
-                      e.g. "https://jira.example.com/rest/api/2"
+      "base_url"    — optional full API base URL for self-hosted Jira Server /
+                      Data Center instances, e.g. "https://jira.example.com/rest/api/2".
+                      When omitted, "https://{instance}/rest/api/{api_version}" (Jira Cloud)
+                      is used. A bare host (e.g. "https://jira.example.com") has
+                      "/rest/api/{api_version}" appended automatically.
       "api_version" — optional REST API version, default 3 (Cloud)
 
     Credentials (from credentials_ciphertext):
@@ -126,16 +139,20 @@ class JiraConnector(ConnectorBase):
       "token"    — OAuth/Personal Access Token
 
     Supported query resources:
-      "issue"            — get a single issue; filters: {"issue_key": "PROJ-123"}
-      "search"           — JQL search; filters: {"jql": "project = PROJ", "max_results": 50}
-      "issue_comments"   — list comments on an issue; filters: {"issue_key": "PROJ-123"}
-      "transitions"      — get available transitions for an issue; filters: {"issue_key": "PROJ-123"}
-      "projects"         — list accessible projects
-      "field_metadata"   — issue types + create-issue fields for a project; filters: {"project": "PROJ"}
-      "fields"           — list all system + custom fields across the instance
-      "statuses"         — issue types + their statuses for a project; filters: {"project": "PROJ"}
-      "attachments"      — list attachments on an issue; filters: {"issue_key": "PROJ-123"}
-      "attachment"       — download an attachment's content (base64); filters: {"attachment_id": "10001"}
+      "issue"               — get a single issue; filters: {"issue_key": "PROJ-123"}
+      "search"              — JQL search; filters: {"jql": "project = PROJ", "max_results": 50}
+      "issue_comments"      — list comments on an issue; filters: {"issue_key": "PROJ-123"}
+      "issue_attachments"   — list attachments on an issue; filters: {"issue_key": "PROJ-123"}
+      "issue_remote_links"  — list remote links on an issue; filters: {"issue_key": "PROJ-123"}
+      "transitions"         — get available transitions for an issue; filters: {"issue_key": "PROJ-123"}
+      "projects"            — list accessible projects
+      "project_components"  — list components for a project; filters: {"project": "PROJ"}
+      "project_versions"    — list versions/releases for a project; filters: {"project": "PROJ"}
+      "field_metadata"      — issue types + create-issue fields for a project; filters: {"project": "PROJ"}
+      "fields"              — list all system + custom fields across the instance
+      "statuses"            — issue types + their statuses for a project; filters: {"project": "PROJ"}
+      "attachments"         — list attachments on an issue; filters: {"issue_key": "PROJ-123"}
+      "attachment"          — download an attachment's content (base64); filters: {"attachment_id": "10001"}
 
     Supported write resources:
       "issue"           — create an issue; data: {"project": {"key": "PROJ"}, "summary": "...",
@@ -148,6 +165,11 @@ class JiraConnector(ConnectorBase):
                            (all three id lookups accepted; explicit null/unassign flag removes the assignee)
       "issue_label"     — add/remove labels; data: {"issue_key": "PROJ-123", "add": ["bug"], "remove": [...]}
       "issue_delete"    — delete an issue; data: {"issue_key": "PROJ-123"}
+      "issue_attachment" — upload an attachment; data: {"issue_key": "PROJ-123", "filename": "a.txt",
+                           "content": "..." or "file": <bytes>} (exactly one of content/file)
+      "issue_remote_link" — add a remote link; data: {"issue_key": "PROJ-123", "url": "https://...",
+                           "title": "..."}
+      "remote_link_delete" — delete a remote link; data: {"issue_key": "PROJ-123", "link_id": "..."}
       "attachment"      — upload an attachment; data: {"issue_key": "PROJ-123", "filename": "a.txt",
                            "content": "..." | "file": <bytes>, "mime_type": optional}
 
@@ -169,7 +191,10 @@ class JiraConnector(ConnectorBase):
         creds = creds or {}
         self._instance = instance.rstrip("/")
         if base_url:
-            self._base_url = base_url.rstrip("/")
+            normalized = base_url.rstrip("/")
+            if "/rest/api/" not in normalized:
+                normalized = f"{normalized}/rest/api/{api_version}"
+            self._base_url = normalized
         elif self._instance:
             self._base_url = f"https://{self._instance}/rest/api/{api_version}"
         else:
@@ -307,10 +332,12 @@ class JiraConnector(ConnectorBase):
                     params["startAt"] = int(q.cursor)
                 r = await self._call_api("POST", "/search", json=params)
                 body: dict[str, Any] = await self._parse_json(r)
-                issues: list[dict[str, Any]] = body.get("issues", [])
-                total = body.get("total", len(issues))
-                start_at = body.get("startAt", 0)
-                max_results = body.get("maxResults", max_results)
+                issues = body.get("issues", [])
+                if not isinstance(issues, list):
+                    issues = []
+                total = _safe_int(body.get("total"), len(issues))
+                start_at = _safe_int(body.get("startAt"), 0)
+                max_results = _safe_int(body.get("maxResults"), max_results)
                 next_cursor: str | None = None
                 if start_at + max_results < total:
                     next_cursor = str(start_at + max_results)
@@ -330,9 +357,11 @@ class JiraConnector(ConnectorBase):
                 r = await self._call_api("GET", f"/issue/{issue_key}/comment", params=comment_params)
                 body = await self._parse_json(r)
                 comments = body.get("comments", [])
-                total = body.get("total", len(comments))
-                start_at = body.get("startAt", 0)
-                max_results = body.get("maxResults", 50)
+                if not isinstance(comments, list):
+                    comments = []
+                total = _safe_int(body.get("total"), len(comments))
+                start_at = _safe_int(body.get("startAt"), 0)
+                max_results = _safe_int(body.get("maxResults"), 50)
                 comment_next_cursor: str | None = None
                 if start_at + max_results < total:
                     comment_next_cursor = str(start_at + max_results)
@@ -353,6 +382,60 @@ class JiraConnector(ConnectorBase):
                     records=transitions,
                     total=len(transitions),
                     metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
+            case "issue_attachments":
+                if "issue_key" not in q.filters:
+                    raise ValueError("Jira issue_attachments query requires 'issue_key' filter")
+                issue_key = q.filters["issue_key"]
+                r = await self._call_api("GET", f"/issue/{issue_key}")
+                body = await self._parse_json(r)
+                attachments = body.get("fields", {}).get("attachment") or []
+                return ConnectorResult(
+                    records=attachments,
+                    total=len(attachments),
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
+            case "issue_remote_links":
+                if "issue_key" not in q.filters:
+                    raise ValueError("Jira issue_remote_links query requires 'issue_key' filter")
+                issue_key = q.filters["issue_key"]
+                r = await self._call_api("GET", f"/issue/{issue_key}/remotelink")
+                body = await self._parse_json(r)
+                remote_links: list[Any] = body if isinstance(body, list) else body.get("links", [])
+                return ConnectorResult(
+                    records=remote_links,
+                    total=len(remote_links),
+                    metadata={"rate_limit": _rate_limit_metadata(r)},
+                )
+            case "project_components":
+                if "project" not in q.filters:
+                    raise ValueError("Jira project_components query requires 'project' filter")
+                project = q.filters["project"]
+                r = await self._call_api("GET", f"/project/{project}/components")
+                data = await self._parse_json(r)
+                components: list[Any] = data if isinstance(data, list) else []
+                return ConnectorResult(
+                    records=components,
+                    total=len(components),
+                    metadata={
+                        "rate_limit": _rate_limit_metadata(r),
+                        "project": project,
+                    },
+                )
+            case "project_versions":
+                if "project" not in q.filters:
+                    raise ValueError("Jira project_versions query requires 'project' filter")
+                project = q.filters["project"]
+                r = await self._call_api("GET", f"/project/{project}/versions")
+                data = await self._parse_json(r)
+                versions: list[Any] = data if isinstance(data, list) else []
+                return ConnectorResult(
+                    records=versions,
+                    total=len(versions),
+                    metadata={
+                        "rate_limit": _rate_limit_metadata(r),
+                        "project": project,
+                    },
                 )
             case "projects":
                 r = await self._call_api("GET", "/project")
@@ -488,6 +571,33 @@ class JiraConnector(ConnectorBase):
                 r = await self._call_api("POST", f"/issue/{issue_key}/comment", json={"body": body})
                 comment: dict[str, Any] = await self._parse_json(r)
                 return comment
+            case "issue_attachment":
+                return await self._upload_attachment(payload.data)
+            case "issue_remote_link":
+                if "issue_key" not in payload.data:
+                    raise ValueError("Jira issue_remote_link requires 'issue_key' in data")
+                issue_key = payload.data["issue_key"]
+                if "url" not in payload.data:
+                    raise ValueError("Jira issue_remote_link requires 'url' in data")
+                link_object: dict[str, Any] = {"url": payload.data["url"]}
+                if "title" in payload.data:
+                    link_object["title"] = payload.data["title"]
+                r = await self._call_api(
+                    "POST",
+                    f"/issue/{issue_key}/remotelink",
+                    json={"object": link_object},
+                )
+                remote_link: dict[str, Any] = await self._parse_json(r)
+                return remote_link
+            case "remote_link_delete":
+                if "issue_key" not in payload.data:
+                    raise ValueError("Jira remote_link_delete requires 'issue_key' in data")
+                if "link_id" not in payload.data:
+                    raise ValueError("Jira remote_link_delete requires 'link_id' in data")
+                issue_key = payload.data["issue_key"]
+                link_id = payload.data["link_id"]
+                await self._call_api("DELETE", f"/issue/{issue_key}/remotelink/{link_id}")
+                return {"issue_key": issue_key, "link_id": link_id, "deleted": True}
             case "transition":
                 if "issue_key" not in payload.data:
                     raise ValueError("Jira transition requires 'issue_key' in data")
@@ -530,6 +640,41 @@ class JiraConnector(ConnectorBase):
                 return {"issue_key": issue_key, "attachments": attachments}
             case _:
                 raise ValueError(f"Unsupported Jira write resource: {payload.resource!r}")
+
+    async def _upload_attachment(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Upload a file as an issue attachment via the Jira attachments API.
+
+        Accepts ``issue_key`` + ``filename`` plus exactly one of ``content``
+        (str) or ``file`` (bytes/str). Optional extra keys (e.g. ``comment``)
+        are passed through as multipart form fields. Sends the
+        ``X-Atlassian-Token: no-check`` header Jira requires for attachment
+        uploads to bypass XSRF protection.
+        """
+        if "issue_key" not in data:
+            raise ValueError("Jira issue attachment requires 'issue_key' in data")
+        issue_key = data["issue_key"]
+        if "filename" not in data:
+            raise ValueError("Jira issue attachment requires 'filename' in data")
+        filename = data["filename"]
+        content = data.get("content")
+        file_content = data.get("file")
+        if content is None and file_content is None:
+            raise ValueError("Jira issue attachment requires 'content' or 'file' in data")
+        if content is not None and file_content is not None:
+            raise ValueError("Jira issue attachment must provide exactly one of 'content' or 'file'")
+        raw = content if content is not None else file_content
+        raw_bytes = raw.encode("utf-8") if isinstance(raw, str) else raw
+        files: dict[str, Any] = {"file": (filename, raw_bytes, "application/octet-stream")}
+        form_data = {k: v for k, v in data.items() if k not in ("issue_key", "filename", "content", "file")}
+        r = await self._call_api(
+            "POST",
+            f"/issue/{issue_key}/attachments",
+            files=files,
+            data=form_data,
+            headers={"X-Atlassian-Token": "no-check"},
+        )
+        uploaded: dict[str, Any] = await self._parse_json(r)
+        return uploaded
 
     async def _resolve_assignee(self, data: dict[str, Any]) -> dict[str, Any] | None:
         """Resolve the ``assignee`` field value for an issue.

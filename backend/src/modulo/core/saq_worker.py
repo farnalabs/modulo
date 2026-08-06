@@ -224,8 +224,8 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     oid = uuid.UUID(org_id)
     job = ctx.get("job")
 
-    claimed = await claim_run_async(aeng, run_id, org_id)
-    if not claimed:
+    claim_token = await claim_run_async(aeng, run_id, org_id)
+    if not claim_token:
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
 
@@ -252,10 +252,11 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
         org_id=org_id,
         executor=executor,
         job=job,
+        claim_token=claim_token,
         execute_fn=lambda: executor.execute(run_id=rid, org_id=oid, input_payload=run.input_payload or {}),
     )
 
-    await mark_complete(aeng, run_id, org_id)
+    await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
     return {"status": "complete"}
 
 
@@ -438,6 +439,18 @@ async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
     return await run_probe(_make_session_factory())
 
 
+async def analytics_facts_maintenance(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — daily run-facts backfill + reconcile + retention (ADR 020).
+
+    ONE plain modulo_app cron (sessions without set_rls_org — modulo_app is
+    BYPASSRLS, cross-org works, matching every existing system cron).
+    Non-Postgres backends no-op.
+    """
+    from modulo.core.analytics.maintenance import run_maintenance
+
+    return await run_maintenance(_make_session_factory())
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -491,7 +504,7 @@ async def _after_process_hook(ctx: dict[str, Any]) -> None:
 def _make_session_factory() -> Any:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=False)
+    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=True)
 
 
 def _runs_functions() -> list[tuple[str, Any]]:
@@ -519,6 +532,7 @@ def _system_functions() -> list[Any]:
         webhook_dedup_cleanup,
         stale_run_recovery,
         cost_probe,
+        analytics_facts_maintenance,
     ]
 
 
@@ -591,14 +605,29 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # cost_probe: every 5 min, retries=0 (pinned — a dead probe is caught
         # separately by the heartbeat/staleness alert), unique=True so a second
         # overlapping instance cannot double-advance probe_state (§4.7).
+        # NOTE: must be the 5-field form "*/5 * * * *" — croniter parses a
+        # 6-field expression ("0 */5 * * * *") differently and the probe fires
+        # per-5-hours instead of per-5-minutes (bug class #680).
         CronJob(
             cost_probe,
-            cron="0 */5 * * * *",
+            cron="*/5 * * * *",
             unique=True,
             timeout=300,
             heartbeat=30,
             retries=0,
             ttl=300,
+        ),
+        # analytics_facts_maintenance: daily (idempotent — the anti-join +
+        # ON CONFLICT DO NOTHING make overlap harmless), unique=True so a
+        # second instance cannot double-run a maintenance day-slice.
+        CronJob(
+            analytics_facts_maintenance,
+            cron="0 1 * * *",
+            unique=True,
+            timeout=600,
+            heartbeat=60,
+            retries=1,
+            ttl=900,
         ),
     ]
 

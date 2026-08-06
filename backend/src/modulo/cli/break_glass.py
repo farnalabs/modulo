@@ -200,7 +200,7 @@ async def _resolve_org(session: AsyncSession, ref: str) -> Organisation | None:
 async def _db_now(session: AsyncSession) -> datetime:
     """DB clock is authoritative for expiry computation (plan §2)."""
     result = await session.execute(text("SELECT current_timestamp"))
-    return cast(datetime, result.scalar_one())
+    return cast("datetime", result.scalar_one())
 
 
 def _is_live(row: Account, now: datetime) -> bool:
@@ -557,7 +557,7 @@ def _settings_from_ctx(ctx: click.Context) -> Settings:
     if settings is None:
         settings = get_settings()
         ctx.obj["settings"] = settings
-    return cast(Settings, settings)
+    return cast("Settings", settings)
 
 
 def _factory_from_ctx(ctx: click.Context, settings: Settings) -> Any:

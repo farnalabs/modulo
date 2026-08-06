@@ -251,9 +251,49 @@ jobs:
           }
           Write-Host "staging.modulo.run SHA match: $deployedSha"
 
+      - name: Ensure worker machine exists (staging)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Guard the parse: a transient `fly machine list` failure must not
+          # fail the whole deploy job. Only machines in the 'started' state
+          # count -- a stopped/crash-looping worker does not satisfy the check.
+          fly machine list --app staging-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
+          read -r WORKER_COUNT IMAGE <<< "$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          image = ""
+          for m in machines:
+              if m.get("process_group") == "app" and m.get("state") == "started":
+                  image = (m.get("config") or {}).get("image") or m.get("image") or ""
+                  break
+          print(len(started), image)
+          ' || echo '0 ')"
+          WORKER_COUNT=${WORKER_COUNT:-0}
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            if [ -n "$IMAGE" ]; then
+              echo "No started worker machine -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app staging-modulo --process-group worker --region lhr
+            else
+              echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app staging-modulo --process-group worker --region lhr
+            fi
+          else
+            echo "Started worker machine(s) already exist: $WORKER_COUNT"
+          fi
+
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [deploy-staging]
+    if: inputs.skip_staging_e2e != 'true'
     timeout-minutes: 90
     runs-on: ubicloud-standard-2
     defaults:
@@ -381,6 +421,45 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
+
+      - name: Ensure worker machine exists (production)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Guard the parse: a transient `fly machine list` failure must not
+          # fail the whole deploy job. Only machines in the 'started' state
+          # count -- a stopped/crash-looping worker does not satisfy the check.
+          fly machine list --app app-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
+          read -r WORKER_COUNT IMAGE <<< "$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          image = ""
+          for m in machines:
+              if m.get("process_group") == "app" and m.get("state") == "started":
+                  image = (m.get("config") or {}).get("image") or m.get("image") or ""
+                  break
+          print(len(started), image)
+          ' || echo '0 ')"
+          WORKER_COUNT=${WORKER_COUNT:-0}
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            if [ -n "$IMAGE" ]; then
+              echo "No started worker machine -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app app-modulo --process-group worker --region lhr
+            else
+              echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app app-modulo --process-group worker --region lhr
+            fi
+          else
+            echo "Started worker machine(s) already exist: $WORKER_COUNT"
+          fi
   prod-smoke:
     name: Prod smoke tests
     needs: [deploy-production]

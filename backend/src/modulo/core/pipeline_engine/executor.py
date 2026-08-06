@@ -6,7 +6,10 @@ Responsibilities:
   - Enforce per-pipeline max_concurrent_runs and the per-org sandbox
     concurrency cap via count-based capacity checks (no FOR UPDATE; runs
     declined at capacity are demoted back to ``pending`` with a reason
-    marker and retried by :meth:`PipelineExecutor._retry_pending`)
+    marker and recovered by ``dispatcher_reconcile`` (cron_helpers) when a
+    slot frees, with ``stale_run_recovery_sweep``'s stranded re-dispatch as
+    the durable liveness backstop — plan F3b: there is NO in-process retry
+    loop)
   - Consume astream_events() and publish to the per-run RunEventBroker
   - Set up AsyncPostgresSaver as LangGraph checkpointer
   - Stream graph execution, updating Run status on transitions
@@ -32,7 +35,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
@@ -65,7 +68,6 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.run import (
-    ERROR_CODE_CAPACITY_TIMEOUT,
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
     _graph_contains_sandbox_agent,
@@ -85,7 +87,6 @@ from modulo.db.rls import set_rls_org
 from modulo.otel_bridge import LangGraphOtelBridge
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
-_RETRY_SEMAPHORE: asyncio.Semaphore | None = None
 
 # Statuses a run may still be admitted from when a retry's backoff elapses.
 # Any terminal status (complete/failed/cancelled/eval_failed) means the run
@@ -283,13 +284,6 @@ class PipelineExecutor:
         # long-running node (progress already signalled → watchdog stands down).
         self.on_first_progress: Callable[[], None] | None = None
 
-    # Override in tests to avoid real delays.
-    _capacity_poll_interval: float = 15.0
-    # Retry backoff schedule (production: 120 → 240 → ... → 600s). Tests set
-    # these tiny so a retry cycle completes in milliseconds.
-    _retry_initial_delay: float = 120.0
-    _retry_max_delay: float = 600.0
-    _retry_max_attempts: int = 10
     # Token pricing constants
     _INPUT_TOKEN_RATE = Decimal("0.00001")
     _OUTPUT_TOKEN_RATE = Decimal("0.00003")
@@ -311,7 +305,8 @@ class PipelineExecutor:
         contains a ``sandbox_agent`` node and a cap is configured) is reached,
         the run is atomically demoted back to ``pending`` with a reason marker
         on ``error_code`` (``pipeline_capacity`` / ``org_capacity_limited``)
-        and picked up by :meth:`_retry_pending`.
+        and recovered by ``dispatcher_reconcile`` (cron_helpers) / the stale-run
+        sweep (pipeline_execution) — plan F3b: no in-process retry loop.
 
         When *max_concurrent* is 0 or negative the pipeline is unlimited, but
         the organisation sandbox cap (if configured) still applies.
@@ -383,7 +378,8 @@ class PipelineExecutor:
                 org_count=org_count,
                 org_capacity_ok=org_capacity_ok,
             )
-            # Demote to pending + reason marker so the caller's retry branch fires.
+            # Demote to pending + reason marker so the recovery sweeps
+            # (dispatcher_reconcile / stale-run) pick it up.
             await update_run_status(
                 session,
                 run_id,
@@ -456,147 +452,6 @@ class PipelineExecutor:
             ERROR_CODE_PIPELINE_CAPACITY,
             f"Pipeline max_concurrent_runs reached: {active_count} active, limit {max_concurrent}",
         )
-
-    async def _run_status_retryable(self, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
-        """True when the run is still in a retryable state (pending/running).
-
-        Guards against re-admitting a run that went terminal while a retry
-        was waiting its backoff. Fail-open True: if the status cannot be read,
-        let :meth:`execute` decide.
-        """
-        try:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                run = await get_run(session, run_id)
-                return run is not None and run.status in ("pending", "running")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(
-                "retry_pending.status_check_failed",
-                extra={"run_id": str(run_id)},
-            )
-            return True
-
-    async def _fail_capacity_timeout(self, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-        """Terminal-fail a run that stayed capacity-blocked past all retries.
-
-        Routed through ``finalize_cost`` (the capacity-timeout ``"failed"``
-        terminal write, §4.2) — a capacity-timed-out run has NO accumulated
-        sets, so it finalizes via the pre-component-read transition
-        (``total_cost_usd = 0``, ``cost_breakdown = NULL``, no ledger write).
-        """
-        try:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                run = await get_run(session, run_id)
-                if run is None or run.status != "pending":
-                    return
-                snap_result = await session.execute(
-                    select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id)
-                )
-                node_type_map = derive_node_type_map(snap_result.scalar_one_or_none())
-                await finalize_cost(
-                    session,
-                    run_id=run_id,
-                    org_id=org_id,
-                    status="failed",
-                    segment_node_token_usage=None,
-                    segment_completed_node_outputs=None,
-                    node_type_map=node_type_map,
-                    error_code=ERROR_CODE_CAPACITY_TIMEOUT,
-                    error_detail="Run stayed capacity-blocked beyond the retry window",
-                    is_terminal=True,
-                    session_factory=self._session_factory,
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception(
-                "pipeline.capacity_timeout_fail_failed",
-                extra={"run_id": str(run_id)},
-            )
-
-    async def _touch_run_heartbeat(self, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-        """Refresh ``heartbeat_at`` so the beat sweep's stale-heartbeat fence
-        sees a live retry loop.
-
-        A capacity-blocked retry can span hours (10 attempts with backoff up to
-        600s). Without a per-attempt heartbeat refresh the run would look
-        STRANDED to ``stale_run_recovery_sweep``'s re-dispatch branch even
-        though this loop is alive — the sweep would re-dispatch it, spawn a
-        second retry loop, and double-execute the run when a slot frees. The
-        refresh keeps ``heartbeat_at`` well inside
-        ``_STRANDED_REDISPATCH_TTL_MINUTES`` (12 min) for any live loop.
-        """
-        try:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await session.execute(
-                    text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid"),
-                    {"rid": run_id},
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(
-                "retry_pending.heartbeat_refresh_failed",
-                extra={"run_id": str(run_id)},
-            )
-
-    async def _retry_pending(
-        self,
-        *,
-        run_id: uuid.UUID,
-        org_id: uuid.UUID,
-        input_payload: dict[str, Any],
-    ) -> None:
-        """Retry a pending run with exponential backoff until capacity frees up.
-
-        Single-flight: the caller (``execute``) only spawns this task when NOT
-        itself called from within a retry (``from_retry``), so at most one
-        retry loop exists per blocked run. Each attempt re-checks the run's
-        status (never re-admits a terminal run), refreshes ``heartbeat_at``
-        (the beat sweep's liveness fence), exits on ``running`` or any
-        non-``pending`` terminal/hold status, and after
-        :attr:`_retry_max_attempts` terminal-fails with
-        ``capacity_timeout`` instead of looping forever.
-        """
-        global _RETRY_SEMAPHORE
-        if _RETRY_SEMAPHORE is None:
-            _RETRY_SEMAPHORE = asyncio.Semaphore(2)
-        async with _RETRY_SEMAPHORE:
-            current_delay = self._retry_initial_delay
-            attempts = 0
-            while attempts < self._retry_max_attempts:
-                attempts += 1
-                await asyncio.sleep(self._capacity_poll_interval)
-                await self._touch_run_heartbeat(run_id, org_id)
-                if not await self._run_status_retryable(run_id, org_id):
-                    return
-                try:
-                    result = await self.execute(
-                        run_id=run_id,
-                        org_id=org_id,
-                        input_payload=input_payload,
-                        from_retry=True,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception(
-                        "retry_pending attempt failed for run %s (attempt %d/%d)",
-                        run_id,
-                        attempts,
-                        self._retry_max_attempts,
-                    )
-                else:
-                    if result.status != "pending":
-                        return
-                if attempts < self._retry_max_attempts:
-                    await asyncio.sleep(current_delay)
-                    current_delay = min(current_delay * 1.5, self._retry_max_delay)
-            await self._fail_capacity_timeout(run_id=run_id, org_id=org_id)
 
     async def _load_eval_defs_for_pipeline(
         self,
@@ -1046,13 +901,12 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         org_id: uuid.UUID,
         input_payload: dict[str, Any],
-        from_retry: bool = False,
     ) -> Run:
         """Execute the run to completion. Returns the final Run row.
 
-        *from_retry* is True when called from :meth:`_retry_pending`; it
-        suppresses spawning a fresh retry task on a capacity decline so at most
-        one single-flight retry loop exists per blocked run.
+        A capacity-blocked run is returned ``pending`` (with its reason marker)
+        — there is NO in-process retry loop (plan F3b); recovery is owned by
+        ``dispatcher_reconcile`` (cron_helpers) and ``stale_run_recovery_sweep``.
         """
         # Load run + pipeline + snapshot in one short-lived transaction.
         # Query directly to avoid SQLAlchemy async lazy-load (MissingGreenlet).
@@ -1098,7 +952,8 @@ class PipelineExecutor:
         eval_defs_by_node = self._build_eval_defs_by_node(eval_rows, org_id, pipeline_id)
 
         # Non-blocking capacity check — if at limit the run is demoted back to
-        # pending (with a reason marker) and retried by _retry_pending.
+        # pending (with a reason marker) and recovered by dispatcher_reconcile /
+        # the stale-run sweep (plan F3b).
         capacity_run = await self._check_capacity(
             run_id=run_id,
             org_id=org_id,
@@ -1108,23 +963,13 @@ class PipelineExecutor:
             snapshot_id=snapshot_id,
         )
         if capacity_run.status != "running":
-            if capacity_run.status in _TERMINAL_STATUSES:
-                # The run went terminal while the capacity check ran (e.g. it
-                # was cancelled/completed while backing off). Never spawn a
-                # retry task for a terminal run — it would sleep
-                # _capacity_poll_interval while holding the global retry
-                # semaphore, then exit on the retryable check without doing
-                # anything, briefly starving genuinely blocked runs of slots.
-                return capacity_run
-            if not from_retry:
-                retry_task = asyncio.create_task(
-                    self._retry_pending(
-                        run_id=run_id,
-                        org_id=org_id,
-                        input_payload=input_payload,
-                    )
-                )
-                retry_task.add_done_callback(lambda t: t.exception())
+            # Capacity-blocked or terminal (plan F3b): return the run as-is.
+            # There is NO in-process ``_retry_pending`` loop — a capacity-blocked
+            # run stays ``pending`` with its reason marker and is recovered by
+            # ``dispatcher_reconcile`` (cron_helpers) when a slot frees, with
+            # ``stale_run_recovery_sweep``'s stranded re-dispatch as the durable
+            # liveness backstop. A terminal run (cancelled/completed while the
+            # capacity check ran) is never resurrected.
             return capacity_run
 
         final_status: str = "failed"

@@ -141,8 +141,15 @@ class TestClaimRunAsync:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         engine = _AsyncEngine()
-        assert await pe.claim_run_async(engine, "run-1", "org-1") is True  # type: ignore[arg-type]
+        with patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()) as storm:
+            claim_token = await pe.claim_run_async(engine, "run-1", "org-1")  # type: ignore[arg-type]
+        assert claim_token is not None
         assert calls[0]["params"]["stale_seconds"] == 450  # type: ignore[index]
+        # Every claim rotates to a fresh per-claim token (plan F3a), returned to
+        # the caller so it can fence completion/heartbeat against successors.
+        assert "claim_token=:tok" in calls[0]["stmt"]  # type: ignore[index]
+        assert calls[0]["params"]["tok"] == claim_token  # type: ignore[index]
+        storm.assert_awaited_once()
 
     async def test_async_claim_false_when_no_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
@@ -164,7 +171,7 @@ class TestClaimRunAsync:
 
         monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
         engine = _AsyncEngine()
-        assert await pe.claim_run_async(engine, "run-1", "org-1") is False  # type: ignore[arg-type]
+        assert await pe.claim_run_async(engine, "run-1", "org-1") is None  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +200,7 @@ class TestMarkComplete:
             patch.object(pe, "get_run", AsyncMock(return_value=run)),
             patch.object(pe, "async_sessionmaker") as mock_factory,
             patch.object(pe, "set_rls_org", AsyncMock()),
+            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -214,6 +222,7 @@ class TestMarkComplete:
             patch.object(pe, "get_run", AsyncMock(return_value=run)),
             patch.object(pe, "async_sessionmaker") as mock_factory,
             patch.object(pe, "set_rls_org", AsyncMock()),
+            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -236,6 +245,7 @@ class TestMarkComplete:
             patch.object(pe, "get_run", AsyncMock(return_value=None)) as mock_get_run,
             patch.object(pe, "async_sessionmaker") as mock_factory,
             patch.object(pe, "set_rls_org", AsyncMock()) as mock_set_rls,
+            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
         ):
             session = MagicMock()
             session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -318,6 +328,7 @@ class TestHeartbeat:
     async def test_heartbeat_loop_uses_configured_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
         heartbeat_mock = AsyncMock()
         monkeypatch.setattr(pe, "heartbeat_once", heartbeat_mock)
+        monkeypatch.setattr(pe, "_read_current_claim_token", AsyncMock(return_value="tok-a"))
         monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock(side_effect=[None, KeyboardInterrupt()]))
         engine = MagicMock()
 
@@ -326,6 +337,8 @@ class TestHeartbeat:
 
         assert pe.asyncio.sleep.await_count == 2
         assert pe.asyncio.sleep.await_args.args[0] == 45  # type: ignore[union-attr]
+        # Every heartbeat is fenced with the executor's claim token (plan F3a).
+        heartbeat_mock.assert_awaited_with(engine, "run-1", "org-1", job=None, claim_token="tok-a")
 
 
 # ---------------------------------------------------------------------------
@@ -903,6 +916,7 @@ class TestSaqWorkerSettings:
         # retention, webhook-dedup, stale recovery) + the cost probe (PR A2).
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
+            "analytics_facts_maintenance",
             "fire_due_triggers",
             "dispatcher_reconcile",
             "claim_expiry",

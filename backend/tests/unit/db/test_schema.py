@@ -53,6 +53,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "publishers",
         "remy_context_sources",
         "remy_skills",
+        "run_daily_facts",
         "runs",
         "saved_views",
         "scheduled_reports",

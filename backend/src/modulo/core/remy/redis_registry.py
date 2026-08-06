@@ -28,7 +28,7 @@ def _json_object(value: object) -> JsonObject | None:
     decoded = json.loads(value)
     if not isinstance(decoded, dict):
         return None
-    return cast(JsonObject, decoded)
+    return cast("JsonObject", decoded)
 
 
 def _json_object_list(value: object) -> list[JsonObject] | None:
@@ -37,7 +37,7 @@ def _json_object_list(value: object) -> list[JsonObject] | None:
     decoded = json.loads(value)
     if not isinstance(decoded, list) or not all(isinstance(item, dict) for item in decoded):
         return None
-    return cast(list[JsonObject], decoded)
+    return cast("list[JsonObject]", decoded)
 
 
 class RemyRedisRegistry:
@@ -62,7 +62,7 @@ class RemyRedisRegistry:
         await _redis_result(self._redis.expire(key, ttl))
 
     async def get_permission_request(self, request_id: str) -> JsonObject | None:
-        data = cast(dict[str, str], await _redis_result(self._redis.hgetall(f"remy:permission:{request_id}")))
+        data = cast("dict[str, str]", await _redis_result(self._redis.hgetall(f"remy:permission:{request_id}")))
         if not data:
             return None
         try:

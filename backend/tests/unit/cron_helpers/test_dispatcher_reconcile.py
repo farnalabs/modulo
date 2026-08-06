@@ -195,24 +195,29 @@ class TestReconcilePredicateMatrix:
         assert reenqueue.await_args.args[3] == "execute_run"
 
     @pytest.mark.asyncio
-    async def test_awaiting_human_never_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """F6a review: a waiting HITL run must NEVER be re-dispatched — its
-        execute_run job COMPLETED normally at the gate, and re-dispatching as
-        resume_run with an empty decision would auto-approve the gate."""
+    async def test_awaiting_human_stale_no_job_redispatched_as_resume_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F6a gated recovery: an awaiting_human run with a stale heartbeat and
+        NO SAQ job in Redis (a half-resumed run whose resume_run job was lost)
+        IS re-dispatched as resume_run — the gate decision is committed on the
+        checkpoint."""
         summary, reenqueue, ingest, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)]
         )
-        assert summary["repaired"] == 0
-        assert summary["skipped"] == 1
-        reenqueue.assert_not_awaited()
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "resume_run"
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_claimed_never_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_claimed_stale_no_job_redispatched_as_resume_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F6a gated recovery: a claimed run with a stale heartbeat and NO SAQ
+        job in Redis IS re-dispatched as resume_run."""
         summary, reenqueue, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)])
-        assert summary["repaired"] == 0
-        assert summary["skipped"] == 1
-        reenqueue.assert_not_awaited()
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "resume_run"
 
     @pytest.mark.asyncio
     async def test_capacity_deferred_redispatched_in_saq_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:

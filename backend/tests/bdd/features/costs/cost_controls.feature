@@ -21,7 +21,7 @@ Feature: Cost Controls
     Given org "acme" has a daily spend limit of $100.00
     And org "acme" has already spent $95.00 today
     When a new run costs $10.00
-    Then the spend is rejected with reason "Daily spend limit exceeded for organisation"
+    Then the spend is rejected with reason "daily_limit_exceeded: organisation"
     And the org run count is not incremented
 
   Scenario: Per-team spend limit enforced independently
@@ -29,7 +29,7 @@ Feature: Cost Controls
     And team "alpha" has a daily spend limit of $50.00
     And team "alpha" has already spent $45.00 today
     When a new run for team "alpha" costs $10.00
-    Then the spend is rejected with reason "Daily spend limit exceeded for team"
+    Then the spend is rejected with reason "daily_limit_exceeded: team"
     And the org run count is not incremented
 
   Scenario: Spend under both limits is approved
