@@ -56,8 +56,9 @@ async def get_org_settings(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        _log.debug("org.get_settings HTTPException (org_id=%s) detail=%s", current_user.organisation_id, exc.detail)
+        raise exc
     except asyncio.CancelledError:
         raise
     except Exception:
