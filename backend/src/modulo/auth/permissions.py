@@ -224,6 +224,8 @@ PERMISSIONS: dict[str, str] = {
     "dashboard.summary": "viewer",
     "dashboard.trends": "viewer",
     "dashboard.daily_run_counts": "viewer",
+    # analytics
+    "analytics.query": "viewer",
     # events
     "events.list": "viewer",
     # feedback
