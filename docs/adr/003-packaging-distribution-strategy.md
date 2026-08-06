@@ -13,9 +13,9 @@ Modulo currently has no automated publishing pipeline. Users can only run it by 
 - Download a pre-built artifact
 - Install via a package manager
 
-The project needs a distribution strategy that covers the spectrum from "try it in 30 seconds" to "deploy to production (Docker Compose or Fly.io)." Every distribution channel must also answer the database dependency question — Modulo requires a database (PostgreSQL default, SQLite supported) and optionally Redis for Celery.
+The project needs a distribution strategy that covers the spectrum from "try it in 30 seconds" to "deploy to production (Docker Compose or Fly.io)." Every distribution channel must also answer the database dependency question — Modulo requires a database (PostgreSQL default, SQLite supported) and optionally Redis for the SAQ task queue.
 
-The `MODULO_DB=sqlite` mode (implemented in `settings.py`, backed by `aiosqlite`) is the key technical enabler. It allows a zero-dependency standalone mode where the database is just a file on disk. Redis/Celery remains the tighter coupling — the `celery_app.py` module-level init crashes if Redis is unreachable, and the polling trigger engine depends on Celery beat.
+The `MODULO_DB=sqlite` mode (implemented in `settings.py`, backed by `aiosqlite`) is the key technical enabler. It allows a zero-dependency standalone mode where the database is just a file on disk. Redis/SAQ remains the tighter coupling — without Redis, runs execute in-process with no durability across crashes.
 
 ---
 
@@ -54,7 +54,7 @@ Publish the backend as a Python package with the built frontend embedded as pack
 |---|---|
 | Natural for Python ecosystem | Requires Python 3.12+ |
 | `uv tool install modulo` is one command | ~200MB installed (Python + deps + frontend) |
-| SQLite works out of the box | Celery + Redis still coupled |
+| SQLite works out of the box | SAQ + Redis still coupled for multi-replica |
 | | Need to build frontend in CI and embed it in the wheel |
 
 **Database story:** SQLite by default. PG via env var for production.
@@ -116,14 +116,14 @@ Adopt a **tiered distribution strategy** with three tiers corresponding to user 
 ### Tier 1 — Ship (release-blocking)
 
 5. **Docker images published to ghcr.io** — `modulo-backend` and `modulo-frontend` (separate backend and frontend images)
-6. **`docker-compose.prod.yml`** — references published images instead of building from source, includes `.env` template, health checks, Celery worker/beat services
+6. **`docker-compose.prod.yml`** — references published images instead of building from source, includes `.env` template, health checks, SAQ worker services
 7. **Production single-container image** — backend + frontend combined, gunicorn with configurable workers, nginx sidecar or FastAPI-served static files with SPA catch-all
 8. **`install.sh`** — `curl https://modulo.run/install.sh | bash` that detects Docker, downloads `docker-compose.prod.yml` and runs `docker compose up`
 
 ### Tier 2 — Ship Soon (post-launch)
 
 9. **PyPI package** — `pip install modulo` or `uv tool install modulo`. Requires:
-   - Celery optionality refactor (`celery` + `redis` as optional extras)
+   - SAQ optionality refactor (`saq` + `redis` as optional extras)
    - `modulo start` CLI command with first-run wizard (generate keys, run migrations, seed admin user)
    - Frontend build + embed in wheel
    - Manylinux CI for Rust-based deps (`cryptography`)
@@ -145,7 +145,7 @@ Adopt a **tiered distribution strategy** with three tiers corresponding to user 
 - **Positive:** SQLite-first for evaluation lowers the barrier to zero
 - **Positive:** The CI/CD pipeline gates all future releases — every PR gets linted, tested, and validated as publishable
 - **Negative:** We now maintain multiple distribution methods with different behaviours
-- **Negative:** PyPI package requires a significant refactor (Celery optionality, CLI tooling) that has no user-facing value until the package ships
+- **Negative:** PyPI package requires a significant refactor (SAQ optionality, CLI tooling) that has no user-facing value until the package ships
 - **Negative:** The all-in-one Docker image duplicates nginx logic and will never be as good as the two-container setup
 
 ---

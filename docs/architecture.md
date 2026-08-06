@@ -38,7 +38,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 ┌──────────────────────▼───────────────────────────────────────┐
 │              PostgreSQL 16 + Redis 7                          │
 │  Models → Migrations → RLS → LangGraph checkpoints            │
-│  Celery broker + result backend (optional)                    │
+│  SAQ worker jobs (Redis-backed)                                │
 │  Rate limiting (Redis token bucket or in-memory)              │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -52,7 +52,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 | **Graph execution** | LangGraph (StateGraph) | Pipeline agent orchestration |
 | **ORM** | SQLAlchemy 2.0 (async) | Database access |
 | **Migrations** | Alembic | Schema versioning |
-| **Task queue** | Celery + Redis | Async task processing (optional) |
+| **Task queue** | SAQ + Redis | Async job processing (required for multi-replica) |
 | **Auth** | PyJWT[crypto], authlib (v1) | JWT, OAuth 2.0 |
 | **LLM SDKs** | anthropic, openai | Model backend integrations |
 | **Observability** | OpenTelemetry | Tracing, metrics |
@@ -62,7 +62,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 | **Routing** | Vue Router | Client-side routing |
 | **Styling** | CSS custom properties | Theming (standard/agent) |
 | **Database** | PostgreSQL 16 | Primary data store |
-| **Cache/queue** | Redis 7 | Celery broker, rate limiting |
+| **Cache/queue** | Redis 7 | SAQ broker, rate limiting |
 | **Container** | Docker Compose | Local dev, production |
 | **Orchestration** | Docker Compose + Fly.io | Managed hosting (app.modulo.run) / self-hosted single-server |
 
@@ -281,15 +281,17 @@ Both layers must agree. This prevents scope bypass via routing misconfiguration.
 
 ### Rate limiting
 
-| Endpoint | Limit |
-|----------|-------|
-| Auth login | 10/min per IP |
-| Run creation | 60/min per API key |
-| Webhook inbound | 100/min per trigger |
-| HITL review | 20/min per user |
-| MCP tools | 200/min per client ID |
+Hardcoded sliding-window rules enforced by `RateLimitMiddleware` (see `backend/src/modulo/api/middleware/rate_limiter.py`):
 
-Redis-backed token bucket. In-memory fallback with startup warning for single-process deployments.
+| Path prefix | Limit | Window |
+|-------------|-------|--------|
+| `/api/v1/runs` | 60 | 60s |
+| `/api/v1/triggers` | 100 | 60s |
+| `/api/v1/errors/ingest` | 10 | 60s |
+| `/mcp` | 200 | 60s |
+| Auth endpoints (`/api/v1/auth/`) | 10 attempts | 60s (configurable via `MODULO_AUTH_MAX_ATTEMPTS`) |
+
+Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op when Redis is unavailable. Auth rate limiter requires Redis and is disabled without it.
 
 ## Deployment Architecture
 
