@@ -1250,8 +1250,10 @@ def _build_re_dispatch_predicate(*, reenqueue_window: int, stale_window: int) ->
     ``claimed`` runs are matched ONLY under the F6a gated recovery (stale
     heartbeat by 2*SAQ_JOB_HEARTBEAT; the no-SAQ-job gate is applied per-row
     in the loop) so a half-resumed run whose ``resume_run`` job was lost is
-    recovered. Exposed as a module function so the reconcile tests can
-    exercise it directly with mocked rows.
+    recovered. ``awaiting_human`` rows additionally require a committed HITL
+    gate decision (guard applied per-row in the loop) so a genuinely-waiting
+    run is never auto-resumed with an empty decision. Exposed as a module
+    function so the reconcile tests can exercise it directly with mocked rows.
     """
     from sqlalchemy import and_, or_
 
@@ -1295,9 +1297,45 @@ def _reconcile_job_type(status: str) -> str:
     """Re-dispatch job-type discriminator (F6a).
 
     awaiting_human/claimed -> ``resume_run`` (the gate decision is committed
-    on the checkpoint); pending/running -> ``execute_run``.
+    on the checkpoint); pending/running -> ``execute_run``. The awaiting_human
+    case is guarded per-row: the run is re-dispatched as ``resume_run`` ONLY
+    when a gate decision is actually committed (see
+    :func:`_awaiting_human_has_committed_decision`) — never with an empty
+    decision.
     """
     return "resume_run" if status in ("awaiting_human", "claimed") else "execute_run"
+
+
+async def _awaiting_human_has_committed_decision(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """True when the run has a committed HITL gate decision.
+
+    F6a auto-approve guard: an ``awaiting_human`` run may only be re-dispatched
+    as ``resume_run`` when a human actually committed a gate decision
+    (``hitl_claims.decision IS NOT NULL``). ``executor.resume`` injects the
+    resume payload as ``_hitl_decision``; the HITL gate node treats any
+    non-None decision as a human verdict (an empty ``{}`` resumes as
+    ``approved``). Re-dispatching a genuinely-waiting run — no human action, no
+    committed decision, whose completed job hash expired and heartbeat froze —
+    with EMPTY resume_data would therefore auto-approve its gates. ``claimed``
+    rows are exempt from the guard (a claim was already made, so the resume is
+    safe mid-crash recovery).
+    """
+    from modulo.db.models.hitl_claim import HitlClaim
+
+    result = await session.execute(
+        select(HitlClaim.id)
+        .where(
+            HitlClaim.organisation_id == org_id,
+            HitlClaim.run_id == run_id,
+            HitlClaim.decision.is_not(None),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
 
 
 def _saq_run_claim_cap() -> int:
@@ -1336,6 +1374,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         ``execute_run`` job hash is stored for its finish-origin ttl (300s)
         then expires, and its frozen heartbeat only crosses the stale line once
         nothing has claimed it for 2x the SAQ heartbeat window.
+
+        F6a auto-approve guard: an ``awaiting_human`` row is re-dispatched ONLY
+        when a gate decision is actually committed (``hitl_claims.decision IS
+        NOT NULL`` — checked per-row via
+        :func:`_awaiting_human_has_committed_decision`). A genuinely-waiting
+        run (no decision committed) whose job hash expired + heartbeat froze
+        must NOT be resumed: ``executor.resume`` injects the (empty) payload as
+        ``_hitl_decision``, which the HITL gate node treats as an approval —
+        auto-approving the gate. ``claimed`` rows are exempt (a claim was
+        already made — mid-resume crash recovery).
 
     On match: verify the Redis read, then PARTIAL-EVICTION repair — DEL the
     abort key, ZREM the incomplete zset, LREM queued/active (all keys derived
@@ -1464,6 +1512,28 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     if job is not None:
                         summary["skipped"] += 1
                         continue  # job still exists — nothing to repair
+
+                    # F6a auto-approve guard: an awaiting_human run may only be
+                    # re-dispatched as resume_run when a gate decision is actually
+                    # committed (hitl_claims.decision IS NOT NULL). A
+                    # genuinely-waiting run (no human action, no committed
+                    # decision) whose completed execute_run job hash expired and
+                    # whose heartbeat froze matches the F6a staleness branch, but
+                    # re-dispatching it with EMPTY resume_data would inject
+                    # {"_hitl_decision": {}} into executor.resume — the HITL gate
+                    # node treats any non-None decision as approved. Leave the row
+                    # alone; it is genuinely waiting on a human. claimed rows are
+                    # exempt (a claim was already made — mid-resume crash).
+                    if row.status == "awaiting_human" and not await _awaiting_human_has_committed_decision(
+                        session, org_id, row.id
+                    ):
+                        summary["skipped"] += 1
+                        _log.info(
+                            "dispatcher_reconcile: awaiting_human run %s has no committed HITL "
+                            "decision — not re-dispatched",
+                            row.id,
+                        )
+                        continue
 
                     # Capacity check for capacity-deferred runs (pending + no
                     # dispatched_at). Re-dispatch only when the pipeline has free
