@@ -88,8 +88,8 @@
           </template>
           <template #cell-total_cost_usd="{ value, row }">
             <span class="tabular-nums">
-              <template v-if="aggregateCosts[row.run_id] != null">
-                <span data-testid="runs-list-aggregate-cost">{{ formatMoney(aggregateCosts[row.run_id] as number, currencyCode, 4) }}</span>
+              <template v-if="aggregateCosts[row.run_id as string] != null">
+                <span data-testid="runs-list-aggregate-cost">{{ formatMoney(aggregateCosts[row.run_id as string] as number, currencyCode, 4) }}</span>
                 <span class="ml-1 text-xs text-muted-foreground">{{ $t('views.RunsListView.cost_includes_child_runs') }}</span>
               </template>
               <span v-else>{{ value != null ? formatMoney(Number(value), currencyCode, 4) : '—' }}</span>
