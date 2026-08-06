@@ -1122,6 +1122,7 @@ async def copy_to_adapt(
                 visibility="org",
                 account_id=created_by,
                 auto_update=True,
+                tier=refreshed.tier,
             )
 
     except ProgrammingError:

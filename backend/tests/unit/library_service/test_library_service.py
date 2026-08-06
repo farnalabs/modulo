@@ -96,6 +96,7 @@ def _fake_primitive(
     version: str = "1.0",
     tags: list[str] | None = None,
     content_json: dict | None = None,
+    tier: str = "native",
 ) -> MagicMock:
     p = MagicMock()
     p.id = pid or uuid.uuid4()
@@ -108,6 +109,7 @@ def _fake_primitive(
     p.version = version
     p.tags = tags or []
     p.content_json = content_json or {}
+    p.tier = tier
     return p
 
 
@@ -625,6 +627,52 @@ async def test_copy_to_adapt_bumps_version():
         await copy_to_adapt(session, org_id, source.id)
 
     assert captured["version"] == "2.4"
+
+
+async def test_copy_to_adapt_propagates_tier():
+    """A preview/in_dev primitive must keep its tier when copied (no silent downgrade to native)."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    source = _fake_primitive(visibility="org", tier="preview")
+    copied = _fake_primitive()
+
+    captured: dict = {}
+
+    async def _capture(*args, **kwargs):  # type: ignore[misc]
+        captured.update(kwargs)
+        return copied
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
+        patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
+    ):
+        await copy_to_adapt(session, org_id, source.id)
+
+    assert captured["tier"] == "preview"
+
+
+async def test_copy_to_adapt_native_tier_defaults():
+    """A native primitive keeps native tier on copy."""
+    session = _mock_session()
+    org_id = uuid.uuid4()
+    source = _fake_primitive(visibility="org", tier="native")
+    copied = _fake_primitive()
+
+    captured: dict = {}
+
+    async def _capture(*args, **kwargs):  # type: ignore[misc]
+        captured.update(kwargs)
+        return copied
+
+    with (
+        patch("modulo.core.library_service.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
+        patch("modulo.core.library_service.create_library_primitive", side_effect=_capture),
+    ):
+        await copy_to_adapt(session, org_id, source.id)
+
+    assert captured["tier"] == "native"
 
 
 # ---------------------------------------------------------------------------

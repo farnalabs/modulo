@@ -401,3 +401,53 @@ def test_update_api_key_rejects_empty_name(client: TestClient) -> None:
         json={"name": ""},
     )
     assert resp.status_code == 422
+
+
+def test_create_api_key_rejects_past_expires_at(client: TestClient) -> None:
+    resp = client.post(
+        "/api/v1/api-keys",
+        json={"name": "k", "role": "runner", "expires_at": "2020-01-01T00:00:00"},
+    )
+    assert resp.status_code == 422
+
+
+def test_create_api_key_rejects_blank_whitespace_name(client: TestClient) -> None:
+    resp = client.post("/api/v1/api-keys", json={"name": "   ", "role": "operator"})
+    assert resp.status_code == 422
+
+
+def test_create_api_key_strips_whitespace_name(client: TestClient) -> None:
+    key = _make_key()
+    key.name = "Stripped Key"
+    with (
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_key")) as create,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/api-keys", json={"name": "  Stripped Key  ", "role": "operator"})
+    assert resp.status_code == 201
+    assert create.call_args.kwargs["name"] == "Stripped Key"
+
+
+def test_update_api_key_rejects_past_expires_at(client: TestClient) -> None:
+    resp = client.put(
+        f"/api/v1/api-keys/{_KEY_ID}",
+        json={"name": "k", "expires_at": "2020-01-01T00:00:00"},
+    )
+    assert resp.status_code == 422
+
+
+def test_update_api_key_strips_whitespace_name(client: TestClient) -> None:
+    key = _make_key()
+    key.name = "Trimmed"
+    with (
+        patch("modulo.api.routes.api_keys.update_api_key", return_value=key) as update,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.put(
+            f"/api/v1/api-keys/{_KEY_ID}",
+            json={"name": "  Trimmed  "},
+        )
+    assert resp.status_code == 200
+    assert update.call_args.kwargs["name"] == "Trimmed"
