@@ -178,7 +178,12 @@ def test_calculated_allowed_excludes_reported() -> None:
 
 
 def test_validate_formula_none_is_noop() -> None:
-    validate_formula(None, _SANDBOX)  # no raise, no identifier validation attempted
+    # None is the "no formula configured" sentinel — unlike a real formula it is
+    # skipped entirely: no grammar check and no identifier validation. An empty
+    # allowlist would reject every identifier, so passing here proves None is
+    # never parsed.
+    validate_formula(None, _SANDBOX)
+    validate_formula(None, frozenset())
 
 
 def test_newline_inside_formula_is_unexpected_character() -> None:
