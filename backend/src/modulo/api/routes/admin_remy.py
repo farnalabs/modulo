@@ -73,7 +73,7 @@ class RemyConfigResponse(BaseModel):
     default_provider: str = "anthropic"
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000
-    allowed_providers: list[str] = ["anthropic", "openai", "gemini", "deepseek", "groq"]
+    allowed_providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "gemini", "deepseek", "groq"])
     allowed_models: ClassVar[list[str]] = []
 
 
