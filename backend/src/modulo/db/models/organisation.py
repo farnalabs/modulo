@@ -11,7 +11,13 @@ from modulo.db.models.base import Base
 
 class Organisation(Base):
     __tablename__ = "organisations"
-    __table_args__ = (CheckConstraint("status IN ('active', 'suspended', 'deleted')", name="ck_organisations_status"),)
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'suspended', 'deleted')", name="ck_organisations_status"),
+        CheckConstraint(
+            "NOT triggers_paused OR triggers_paused_at IS NOT NULL",
+            name="ck_organisations_triggers_paused_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -30,6 +36,13 @@ class Organisation(Base):
     # boolean column — NOT settings_json — atomic at statement level and
     # multi-backend safe. Default TRUE: enforcement is on unless explicitly off.
     authz_enforce: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # Org-wide "pause all pipeline triggers" kill-switch. When TRUE, NEW
+    # trigger-initiated runs (webhook/cron/polling/agent_signal/replay) are
+    # blocked at the create_run gate; manual runs, MCP trigger_pipeline, and
+    # scheduled reports are NOT paused. ``triggers_paused_at`` records when the
+    # pause was last enabled (CHECK-constrained to be non-NULL while paused).
+    triggers_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    triggers_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     daily_spend_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     deletion_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     deletion_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

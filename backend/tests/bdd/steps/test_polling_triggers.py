@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from modulo.connectors.base import ConnectorResult
-from modulo.core.trigger_engine.polling import fire_polling_trigger
+from modulo.core.cron_helpers import fire_polling_trigger
 from modulo.db.models.trigger import Trigger
 
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -79,6 +79,7 @@ def _setup_session(
     trigger: MagicMock,
     connector_instance: MagicMock | None,
     active_run_count: int = 0,
+    today_cost: Decimal = Decimal(0),
 ) -> None:
     trigger_result = MagicMock()
     trigger_result.scalar_one_or_none.return_value = trigger
@@ -86,6 +87,8 @@ def _setup_session(
     ci_result.scalar_one_or_none.return_value = connector_instance
     count_result = MagicMock()
     count_result.scalar_one.return_value = active_run_count
+    cost_result = MagicMock()
+    cost_result.scalar_one.return_value = today_cost
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = True
     rls_result = MagicMock()
@@ -93,6 +96,13 @@ def _setup_session(
     bind_mock = MagicMock()
     bind_mock.dialect.name = "postgresql"
     session.get_bind = MagicMock(return_value=bind_mock)
+
+    # The consolidated implementation (cron_helpers.fire_polling_trigger) reads
+    # the org-pause state inside a savepoint — give the mock a no-op one.
+    nested_cm = MagicMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
 
     async def _execute(stmt, *args, **kwargs):
         stmt_str = str(stmt).lower()
@@ -106,6 +116,8 @@ def _setup_session(
             return ci_result
         if "count(*)" in stmt_str:
             return count_result
+        if "total_cost_usd" in stmt_str or "coalesce" in stmt_str:
+            return cost_result
         if "update" in stmt_str:
             return count_result
         return rls_result
@@ -198,14 +210,18 @@ def _fire_polling_trigger(ctx: dict[str, Any]) -> dict[str, Any]:
     session.begin = MagicMock(return_value=begin_cm)
     session.add = MagicMock()
     session.flush = AsyncMock()
-    _setup_session(session, trigger, connector_instance, ctx["active_runs_count"])
+    _setup_session(
+        session,
+        trigger,
+        connector_instance,
+        ctx["active_runs_count"],
+        today_cost=ctx["today_cost"],
+    )
 
     factory = MagicMock()
     factory.return_value = session
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    engine = MagicMock()
 
     run_mock = MagicMock()
     run_mock.id = uuid.uuid4()
@@ -219,31 +235,19 @@ def _fire_polling_trigger(ctx: dict[str, Any]) -> dict[str, Any]:
             total=len(ctx["connector_records"]),
         )
 
-    # Mirror _daily_spend_limit_reached semantics: only report an over-budget
-    # cost; a trigger at or below the limit (or with no limit) must fire.
-    limit = ctx["trigger"].daily_spend_limit
-    spend_return: Decimal | None = None
-    if limit is not None and ctx["today_cost"] >= limit:
-        spend_return = ctx["today_cost"]
-
     with (
-        patch("modulo.core.trigger_engine.polling.get_settings") as mock_settings,
-        patch("modulo.core.trigger_engine.polling.create_async_engine", return_value=engine),
-        patch("modulo.core.trigger_engine.polling.async_sessionmaker", return_value=factory),
-        patch("modulo.core.trigger_engine.polling._set_rls_org", new_callable=AsyncMock),
-        patch("modulo.core.trigger_engine.polling.create_secrets_backend") as mock_backend,
+        patch("modulo.core.cron_helpers.get_settings") as mock_settings,
+        patch("modulo.core.cron_helpers._open_factory", return_value=factory),
+        patch("modulo.core.cron_helpers._set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.cron_helpers.org_is_paused", new_callable=AsyncMock, return_value=False),
+        patch("modulo.core.secrets_backend.create_secrets_backend") as mock_backend,
         patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=connector),
         patch(
-            "modulo.core.trigger_engine.polling.create_run",
+            "modulo.db.crud.run.create_run",
             new_callable=AsyncMock,
             return_value=run_mock,
         ) as mock_cr,
-        patch("modulo.core.trigger_engine.polling._log_poll_event", new_callable=AsyncMock) as mock_event,
-        patch(
-            "modulo.core.trigger_engine.polling._daily_spend_limit_reached",
-            new_callable=AsyncMock,
-            return_value=spend_return,
-        ),
+        patch("modulo.core.cron_helpers._log_poll_event", new_callable=AsyncMock) as mock_event,
     ):
         mock_settings.return_value = MagicMock(
             database_url="postgresql+asyncpg://localhost/test",
