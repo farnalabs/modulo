@@ -1,6 +1,6 @@
 """GET /api/v1/dashboard/summary — org-level dashboard widgets.
 
-Supports an optional ``days`` query param ({1, 7, 30, 90}) that makes the stat
+Supports an optional ``days`` query param ({1, 3, 7, 30, 90}) that makes the stat
 numbers period-scoped: an additive ``period`` block with ``{current, previous,
 delta_pct}`` per metric, computed from ``run_daily_facts`` (count/status/tokens/
 success/duration), the ``org_daily_run_counts`` ledger (spend) and
@@ -67,7 +67,7 @@ def _safe_float(value: object, default: float = 0.0) -> float:
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
 # Allowed rolling-window sizes for the period-scoped summary (FAR-92).
-_ALLOWED_TREND_DAYS = (1, 7, 30, 90)
+_ALLOWED_TREND_DAYS = (1, 3, 7, 30, 90)
 
 _DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached via Redis
 
@@ -299,7 +299,7 @@ async def dashboard_summary(
         if days is not None and days not in _ALLOWED_TREND_DAYS:
             raise HTTPException(
                 status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="days must be one of 1, 7, 30, 90.",
+                detail="days must be one of 1, 3, 7, 30, 90.",
             )
 
         org_id_str = str(principal.organisation_id)
