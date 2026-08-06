@@ -3,6 +3,7 @@
     :viewBox="`0 0 ${width} ${height}`"
     class="h-full w-full overflow-hidden"
     preserveAspectRatio="none"
+    aria-hidden="true"
   >
     <defs>
       <linearGradient :id="gradientId" x1="0" y1="0" x2="0" y2="1">
@@ -79,7 +80,10 @@ const chartData = computed(() => {
 
 const max = computed(() => Math.max(...chartData.value, 1));
 const min = computed(() => Math.min(...chartData.value));
-const range = computed(() => max.value - min.value || 1);
+const range = computed(() => {
+  const raw = max.value - min.value;
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+});
 
 const padding = 2;
 const stepX = computed(
