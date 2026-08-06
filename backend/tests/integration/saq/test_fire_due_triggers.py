@@ -113,3 +113,38 @@ async def test_next_tick_fires_again_after_first_epoch_consumed(
     await ch.fire_due_triggers()  # second tick
     # The second tick must NOT enqueue another fire for THIS trigger.
     assert await _count_trigger_jobs(saq_settings_env, trigger_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_paused_org_skips_enqueue_but_advances_next_fire(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """Org-wide pause: SKIP-not-defer — zero fire jobs enqueued for the paused
+    org but next_fire_at still advances (no catch-up storm on unpause)."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import text
+
+    trigger_id = await _seed_due_cron_trigger(db_engine, test_org, test_user, cron_expression="0 0 1 1 *")
+
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE organisations SET triggers_paused = TRUE WHERE id = :oid"),
+            {"oid": str(test_org)},
+        )
+
+    summary = await ch.fire_due_triggers()
+
+    assert summary["cron_enqueued"] == 0
+    assert summary["cron_skipped_paused"] >= 1
+    assert await _count_trigger_jobs(saq_settings_env, trigger_id) == 0
+
+    # SKIP-not-defer: the epoch was consumed — next_fire_at advanced past now.
+    async with db_engine.connect() as conn:
+        row = await conn.execute(
+            text("SELECT next_fire_at FROM triggers WHERE id = :tid"),
+            {"tid": str(trigger_id)},
+        )
+        next_fire_at = row.scalar_one()
+        assert next_fire_at is not None
+        assert next_fire_at > datetime.now(UTC)

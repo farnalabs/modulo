@@ -28,9 +28,9 @@ from modulo.core.trigger_engine import (
     _apply_payload_mapping,
     _extract_field,
     _is_unique_violation,
-    _sha256_hex,
-    _verify_hmac,
-    _verify_timestamp,
+    sha256_hex,
+    verify_hmac,
+    verify_timestamp,
 )
 from modulo.db.models.trigger import Trigger
 
@@ -182,6 +182,20 @@ _RAW_PAYLOAD: dict[str, Any] = {"action": "opened", "number": 42}
 _VALID_32 = "a" * 32
 
 
+@pytest.fixture(autouse=True)
+def _org_not_paused() -> Generator[None, None, None]:
+    """Default engine-level org-pause state to not-paused.
+
+    The engine now gates via ``settings_resolver.ensure_triggers_resumable``
+    (which reads ``settings_resolver.org_is_paused``) and ``create_run`` reads
+    the same helper — both must read False or the mocked sessions fail-closed
+    as paused. Paused-specific tests override this with a nested
+    ``return_value=True``.
+    """
+    with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # TestClient fixture for webhook route tests
 # ---------------------------------------------------------------------------
@@ -267,6 +281,7 @@ def webhook_client() -> Generator[TestClient, None, None]:
     with (
         patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", return_value=snapshot_mock),
         patch("modulo.core.rate_limiter.RateLimiterRegistry.check", return_value=True),
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
     ):
         yield TestClient(app, raise_server_exceptions=False)
 
@@ -279,18 +294,18 @@ def webhook_client() -> Generator[TestClient, None, None]:
 
 
 def test_sha256_hex_is_hex_string() -> None:
-    result = _sha256_hex(b"hello")
+    result = sha256_hex(b"hello")
     assert len(result) == 64
     assert all(c in "0123456789abcdef" for c in result)
 
 
 def test_sha256_hex_is_deterministic() -> None:
-    assert _sha256_hex(b"x") == _sha256_hex(b"x")
+    assert sha256_hex(b"x") == sha256_hex(b"x")
 
 
 @pytest.mark.parametrize("raw", [None, "not-bytes", 42, ["bytes"]])
 def test_sha256_hex_returns_empty_for_non_bytes(raw: object) -> None:
-    assert _sha256_hex(raw) == ""
+    assert sha256_hex(raw) == ""
 
 
 class TestVerifyTimestamp:
@@ -308,9 +323,9 @@ class TestVerifyTimestamp:
         ts = timestamp_input() if callable(timestamp_input) else timestamp_input
         if expect_raises:
             with pytest.raises(TimestampExpiredError):
-                _verify_timestamp(ts)
+                verify_timestamp(ts)
         else:
-            result = _verify_timestamp(ts)
+            result = verify_timestamp(ts)
             assert isinstance(result, int)
 
 
@@ -322,7 +337,7 @@ class TestVerifyTimestamp:
         ("secret", b"payload", lambda b, s: ("sha256=wrong", int(time.time())), False),
         ("secret", b"payload", lambda b, s: (None, int(time.time())), False),
         # Signature is bound to the timestamp: signing a different timestamp than the
-        # one presented to _verify_hmac must fail (verifies the timestamp is part of the HMAC).
+        # one presented to verify_hmac must fail (verifies the timestamp is part of the HMAC).
         ("s", b"x", lambda b, s: (_sha256_sig(b, s, timestamp=int(time.time()) - 600), int(time.time())), False),
         # Body mutation must invalidate the signature.
         (
@@ -335,7 +350,7 @@ class TestVerifyTimestamp:
 )
 def test_verify_hmac(secret, body, sig_maker, expected) -> None:
     sig, ts = sig_maker(body, secret)
-    assert _verify_hmac(body, secret, sig, timestamp=ts) is expected
+    assert verify_hmac(body, secret, sig, timestamp=ts) is expected
 
 
 @pytest.mark.parametrize(
@@ -944,6 +959,36 @@ async def test_handle_webhook_rate_limit_pass_through_sets_key() -> None:
     assert mock_create.call_args.kwargs["rate_limit_key"] == '{"repo": "acme/app"}'
 
 
+async def test_handle_webhook_paused_org_raises_and_writes_no_dedup() -> None:
+    """Org-wide pause: handle_webhook raises TriggersPausedError and does NOT
+    attempt the dedup insert (no add, no run, no accepted event)."""
+    from modulo.core.exceptions import TriggersPausedError
+
+    trigger = _make_trigger()
+    session = _make_session(trigger=trigger, active_run_count=0)
+
+    with (
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+        pytest.raises(TriggersPausedError) as exc_info,
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    assert exc_info.value.org_id == _ORG
+    assert exc_info.value.trigger_id == trigger.id
+    assert exc_info.value.trigger_type == "webhook"
+    session.add.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # TriggerEngine.replay_event — unit tests
 # ---------------------------------------------------------------------------
@@ -1180,6 +1225,38 @@ async def test_replay_event_rate_limit_exceeded() -> None:
             org_id=_ORG,
             snapshot_id=_SNAP,
         )
+
+
+async def test_replay_event_paused_org_raises() -> None:
+    """Org-wide pause: replay_event raises TriggersPausedError and writes nothing."""
+    from modulo.core.exceptions import TriggersPausedError
+
+    trigger = _make_trigger()
+    event = MagicMock()
+    event.id = uuid.uuid4()
+    event.trigger_id = trigger.id
+    session = _make_replay_session(
+        event=event,
+        trigger=trigger,
+        stored_payload=_make_stored_payload(),
+        active_run_count=0,
+    )
+
+    with (
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        pytest.raises(TriggersPausedError) as exc_info,
+    ):
+        await TriggerEngine().replay_event(
+            session,
+            event_id=event.id,
+            org_id=_ORG,
+            snapshot_id=_SNAP,
+        )
+
+    assert exc_info.value.org_id == _ORG
+    assert exc_info.value.trigger_id == event.trigger_id
+    assert exc_info.value.trigger_type == "webhook"
+    session.add.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1476,3 +1553,112 @@ async def test_cleanup_expired_dedup_hashes_none_expired() -> None:
     count = await TriggerEngine.cleanup_expired_dedup_hashes(session)
     assert count == 0
     assert call_count == 2  # lock + select, no delete
+
+
+# ---------------------------------------------------------------------------
+# agent_signal — org-wide pause early check (M10)
+# ---------------------------------------------------------------------------
+
+
+def _make_signal_trigger(*, source_node_id: str = "my-node", snapshot_id: str | None = None) -> MagicMock:
+    t = MagicMock(spec=Trigger)
+    t.id = uuid.uuid4()
+    t.pipeline_id = uuid.uuid4()
+    t.organisation_id = _ORG
+    t.active = True
+    t.max_concurrent_runs = 5
+    t.config_json = {
+        "source_pipeline_id": str(uuid.uuid4()),
+        "source_node_id": source_node_id,
+        "snapshot_id": snapshot_id,
+    }
+    return t
+
+
+class TestAgentSignalPauseCheck:
+    @pytest.mark.asyncio
+    async def test_paused_org_skips_before_concurrency_and_snapshot(self) -> None:
+        """Paused org: fire_agent_signal records exactly ONE paused event and
+        skips the trigger BEFORE the concurrency check / snapshot resolution —
+        no wasted snapshot work, no concurrency_limit_reached / invalid_snapshot_id."""
+        from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+
+        trigger = _make_signal_trigger()
+        session = MagicMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        trigger_result = MagicMock()
+        trigger_result.scalars.return_value.all.return_value = [trigger]
+
+        async def _execute(*args: object, **kwargs: object) -> MagicMock:
+            return trigger_result
+
+        session.execute = _execute
+
+        with patch(
+            "modulo.core.trigger_engine.agent_signal.org_is_paused",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            results = await fire_agent_signal(
+                session,
+                org_id=_ORG,
+                source_run_id=uuid.uuid4(),
+                source_pipeline_id=trigger.config_json["source_pipeline_id"],
+                completed_node_id="my-node",
+                node_output={"result": "ok"},
+            )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "triggers_paused"
+        # Exactly one paused event written via _log_signal_event (add + flush).
+        assert session.add.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_not_paused_org_still_fires(self) -> None:
+        """A not-paused org fires normally — the early check is a skip, not a
+        block, and the create_run gate stays the TOCTOU backstop."""
+        from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+
+        trigger = _make_signal_trigger(snapshot_id=str(uuid.uuid4()))
+        session = MagicMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        trigger_result = MagicMock()
+        trigger_result.scalars.return_value.all.return_value = [trigger]
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+
+        async def _execute(*args: object, **kwargs: object) -> MagicMock:
+            sql = str(args[0]) if args else ""
+            if "count(" in sql:
+                return count_result
+            return trigger_result
+
+        session.execute = _execute
+
+        with (
+            patch(
+                "modulo.core.trigger_engine.agent_signal.org_is_paused",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("modulo.core.trigger_engine.agent_signal.create_run", new_callable=AsyncMock) as create_run,
+        ):
+            run_mock = MagicMock(id=uuid.uuid4())
+            create_run.return_value = run_mock
+            results = await fire_agent_signal(
+                session,
+                org_id=_ORG,
+                source_run_id=uuid.uuid4(),
+                source_pipeline_id=trigger.config_json["source_pipeline_id"],
+                completed_node_id="my-node",
+                node_output={"result": "ok"},
+            )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "fired"
+        assert results[0]["run_id"] == str(run_mock.id)
