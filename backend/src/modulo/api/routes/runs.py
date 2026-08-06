@@ -1077,7 +1077,7 @@ async def get_run_events(
 
     Only ``node.stdout_chunk`` / ``node.stderr_chunk`` events (the live-output
     surface published by sandbox_agent nodes) are returned. Optionally filter
-    to a single ``node_id``. The     run's org-scoped existence is validated first
+    to a single ``node_id``. The run's org-scoped existence is validated first
     so callers can never observe another org's run events.
     """
     try:
