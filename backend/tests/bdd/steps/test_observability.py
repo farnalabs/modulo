@@ -105,7 +105,7 @@ def put_observability_settings(client, ctx, request):
 
 
 @when("I POST /api/v1/settings/observability/test")
-def test_otel_connection(client, ctx, request):
+def step_otel_connection(client, ctx, request):
     endpoint = ctx.get("otlp_endpoint", "http://otel-collector:4318")
     with patch("modulo.api.routes.observability.httpx.AsyncClient") as mock_client_cls:
         mock_client = MagicMock()
@@ -155,7 +155,7 @@ def otlp_endpoint_updated(ctx):
 
 
 @then("the test result indicates success or connection error")
-def test_result_indicates(ctx):
+def step_result_indicates(ctx):
     # Assert on the real /observability/test response, not fabricated data —
     # previously this step built its own dict and could never fail.
     body = ctx["_last_resp"].json()

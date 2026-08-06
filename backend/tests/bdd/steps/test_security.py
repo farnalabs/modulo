@@ -3,7 +3,7 @@
 import contextlib
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
@@ -190,6 +190,26 @@ def _store_response(request: pytest.FixtureRequest, resp) -> None:
     request.node.response = resp
 
 
+@then(parsers.parse('the error mentions "{text}"'))
+def step_error_mentions(text: str, request: pytest.FixtureRequest) -> None:
+    """Assert the error detail mentions the given text.
+
+    FastAPI's automatic 422 ``detail`` is a list of Pydantic validation
+    errors; each entry's ``loc`` is a path-segment list (e.g.
+    ``['body', 'name']``). Joining those segments into a dotted string lets
+    field paths like ``body.name`` match the step text, while plain-string
+    details are matched directly.
+    """
+    body = request.node._resp.json()
+    detail = body.get("detail", body)
+    haystack = str(detail)
+    if isinstance(detail, list):
+        for item in detail:
+            if isinstance(item, dict) and isinstance(item.get("loc"), list):
+                haystack += " " + ".".join(str(part) for part in item["loc"])
+    assert text.lower() in haystack.lower(), f"Expected error to mention {text!r}, got: {haystack[:500]}"
+
+
 def _patch_runs_trigger(patches, pipeline, snapshot) -> None:
     """Wire the run-trigger route's DB calls to the given pipeline/snapshot mocks."""
     patcher = patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock)
@@ -270,14 +290,28 @@ def step_trigger_run_cyclic_graph(client, request: pytest.FixtureRequest, patche
 
 @when(parsers.parse('I set a weak password "{password}"'))
 def step_set_weak_password(password: str, client, request: pytest.FixtureRequest) -> None:
-    """Change the password to a value that fails the policy — rejected with 422."""
-    _store_response(
-        request,
-        client.put(
-            "/api/v1/me/password",
-            json={"current_password": "correct-horse-battery", "new_password": password},
-        ),
-    )
+    """Change the password to a value that fails the policy — rejected with 422.
+
+    ``me.change_password`` verifies ``current_password`` against the stored
+    hash *before* password-strength validation. With the mock session the
+    account's ``password_hash`` is a MagicMock, so ``verify_password`` fails
+    and the route returns 400/500 — never the 422 the scenario asserts. Mock
+    the account lookup with a real bcrypt hash for the current password so the
+    route reaches the strength check.
+    """
+    from modulo.auth.passwords import hash_password
+
+    with patch("modulo.api.routes.me.get_account_by_id") as mock_get_account:
+        account = MagicMock()
+        account.password_hash = hash_password("correct-horse-battery")
+        mock_get_account.return_value = account
+        _store_response(
+            request,
+            client.put(
+                "/api/v1/me/password",
+                json={"current_password": "correct-horse-battery", "new_password": password},
+            ),
+        )
 
 
 # ===========================================================================
