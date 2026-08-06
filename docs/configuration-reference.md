@@ -80,8 +80,8 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
 | `SAQ_NEVER_DISPATCHED_WINDOW` | No | `300` | Legacy never-dispatched sweep window (non-SAQ rows only) |
 | `SAQ_WORKER_LOST_WINDOW` | No | `600` | Legacy worker-lost sweep window (non-SAQ rows only) |
-| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker) |
-| `SAQ_REDIS_POOL_SIZE` | No | `50` | SAQ Redis client pool size (Upstash connection budget) |
+| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker). Firefight residue — pending budget verification (`SHOW max_connections` on the deployed Postgres) before lowering. |
+| `SAQ_REDIS_POOL_SIZE` | No | `50` | SAQ Redis client pool size (Upstash connection budget). Firefight residue — pending budget verification (`CLIENT LIST` / `maxclients` on Upstash) before lowering. |
 | `SAQ_WORKER_CONCURRENCY` | No | `5` | SAQ worker job concurrency, decoupled from Redis pool size |
 | `RUN_CLAIM_STALE_SECONDS` | No | `450` | Staleness gate for re-claiming a SAQ run whose heartbeat is stale |
 | `LEGACY_RUN_CLAIM_STALE_SECONDS` | No | `180` | Legacy claim window for the shared sync claim helpers |
