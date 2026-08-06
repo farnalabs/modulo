@@ -116,9 +116,7 @@ async def test_query_file_decodes_multiline_base64_content(connector) -> None:
     respx.get("https://api.github.com/repos/owner/repo/contents/notes.txt").mock(
         return_value=httpx.Response(200, json=file_data)
     )
-    result = await connector.query(
-        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "notes.txt"})
-    )
+    result = await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "notes.txt"}))
     assert result.records[0]["content"] == raw
 
 
@@ -130,9 +128,7 @@ async def test_query_file_leaves_binary_content_encoded(connector) -> None:
     respx.get("https://api.github.com/repos/owner/repo/contents/img.png").mock(
         return_value=httpx.Response(200, json=file_data)
     )
-    result = await connector.query(
-        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "img.png"})
-    )
+    result = await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "img.png"}))
     assert result.records[0]["content"] == encoded
 
 
@@ -142,9 +138,7 @@ async def test_query_file_plain_text_untouched(connector) -> None:
     respx.get("https://api.github.com/repos/owner/repo/contents/LICENSE").mock(
         return_value=httpx.Response(200, json=file_data)
     )
-    result = await connector.query(
-        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "LICENSE"})
-    )
+    result = await connector.query(ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "LICENSE"}))
     assert result.records[0]["content"] == "plain text"
 
 
