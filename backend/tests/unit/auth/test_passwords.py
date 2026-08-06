@@ -27,7 +27,7 @@ def test_hash_and_verify_roundtrip() -> None:
     pw = "SuperSecret123!"
     h = hash_password(pw)
     assert h != pw
-    assert h.startswith("$2b$") or h.startswith("$2a$")
+    assert h.startswith(("$2b$", "$2a$"))
     assert verify_password(pw, h) is True
     assert verify_password("wrong", h) is False
 

@@ -163,8 +163,7 @@ def build_system_prompt(request, ctx) -> None:
     always_on_org = [s for s in ctx.get("org_skills", []) if s.source_mode is None or s.source_mode == "always_on"]
     if always_on_org:
         parts.append("## Organisation Skills")
-        for s in always_on_org:
-            parts.append(f"### {s.name}\n\n{s.body}")
+        parts.extend(f"### {s.name}\n\n{s.body}" for s in always_on_org)
 
     ctx["built_prompt"] = "\n\n".join(parts)
 
