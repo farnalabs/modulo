@@ -731,7 +731,11 @@ async def materialize_import(
 
     if owner_team_id is not None:
         team_exists = await session.execute(
-            select(Team).where(Team.id == owner_team_id, Team.organisation_id == org_id)
+            select(Team).where(
+                Team.id == owner_team_id,
+                Team.organisation_id == org_id,
+                Team.deleted_at.is_(None),
+            )
         )
         if team_exists.scalar_one_or_none() is None:
             raise ValueError(f"Team {owner_team_id} not found in this organisation.")

@@ -346,6 +346,36 @@ async def test_team_name_reusable_after_soft_delete(db_engine: AsyncEngine) -> N
         assert new_team.name == "Reusable Name"
 
 
+async def test_scim_list_groups_excludes_soft_deleted_teams(db_engine: AsyncEngine) -> None:
+    """SCIM group listing must not surface soft-deleted teams (FAR-95 review)."""
+    org = await _create_org(db_engine, f"scim-softdel-{uuid.uuid4().hex[:8]}")
+    user = await _create_user(db_engine, org, "scim-softdel@test.com")
+
+    from modulo.db.crud.scim import scim_list_groups
+    from modulo.db.crud.team import create_team, delete_team
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        active = await create_team(session, org_id=org, name="SCIM Active", account_id=user)
+        removed = await create_team(session, org_id=org, name="SCIM Removed", account_id=user)
+        assert await delete_team(session, removed.id) is True
+
+        items, total = await scim_list_groups(session, org)
+        assert total == 1
+        ids = {t.id for t in items}
+        assert active.id in ids
+        assert removed.id not in ids
+
+        items_filtered, total_filtered = await scim_list_groups(session, org, filter_str="Removed")
+        assert total_filtered == 0
+        assert items_filtered == []
+
+
 async def test_membership_round_trip(db_engine: AsyncEngine) -> None:
     """Full CRUD round-trip for team membership."""
     org = await _create_org(db_engine, f"mem-crud-{uuid.uuid4().hex[:8]}")

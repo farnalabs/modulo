@@ -249,6 +249,23 @@ class TestEmptyTeams:
 
         assert _candidate_names(candidates) == ["empty"]
 
+    async def test_skips_soft_deleted_teams(self, session: AsyncSession) -> None:
+        now = datetime.now(UTC)
+        empty = Team(id=uuid.uuid4(), organisation_id=_ORG_A, name="empty", account_id=_ACCOUNT)
+        deleted = Team(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="deleted",
+            account_id=_ACCOUNT,
+            deleted_at=now,
+        )
+        session.add_all([empty, deleted])
+        await session.commit()
+
+        candidates = await _scan_empty_teams(session, _ORG_A)
+
+        assert _candidate_names(candidates) == ["empty"]
+
 
 class TestStaleApiKeys:
     async def test_flags_never_used_and_stale_keys(self, session: AsyncSession) -> None:

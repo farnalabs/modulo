@@ -187,3 +187,54 @@ class TestGetTeamByName:
 
         result = await get_team_by_name(mock_session, _ORG_ID, "Non Existent")
         assert result is None
+
+
+class TestScimListGroups:
+    async def test_excludes_soft_deleted_teams(self, mock_session: AsyncMock) -> None:
+        """scim_list_groups must filter deleted_at IS NULL on both the count and page query."""
+        count_result = MagicMock()
+        count_result.scalar = MagicMock(return_value=1)
+        scalars = MagicMock()
+        scalars.all = MagicMock(return_value=[_make_team()])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                count_result,
+                MagicMock(scalars=MagicMock(return_value=scalars)),
+            ]
+        )
+
+        from modulo.db.crud.scim import scim_list_groups
+
+        items, total = await scim_list_groups(mock_session, _ORG_ID)
+        assert total == 1
+        assert len(items) == 1
+
+        assert len(mock_session.execute.await_args_list) == 2
+        for call in mock_session.execute.await_args_list:
+            sql = str(call.args[0].compile(compile_kwargs={"literal_binds": True}))
+            assert "deleted_at IS NULL" in sql
+            assert f"organisation_id = '{_ORG_ID.hex}'" in sql
+
+    async def test_excludes_soft_deleted_teams_with_filter(self, mock_session: AsyncMock) -> None:
+        """The deleted_at filter composes with an optional name filter."""
+        count_result = MagicMock()
+        count_result.scalar = MagicMock(return_value=1)
+        scalars = MagicMock()
+        scalars.all = MagicMock(return_value=[_make_team()])
+        mock_session.execute = AsyncMock(
+            side_effect=[
+                count_result,
+                MagicMock(scalars=MagicMock(return_value=scalars)),
+            ]
+        )
+
+        from modulo.db.crud.scim import scim_list_groups
+
+        items, total = await scim_list_groups(mock_session, _ORG_ID, filter_str="foo")
+        assert total == 1
+        assert len(items) == 1
+
+        for call in mock_session.execute.await_args_list:
+            sql = str(call.args[0].compile(compile_kwargs={"literal_binds": True}))
+            assert "deleted_at IS NULL" in sql
+            assert "LIKE" in sql
