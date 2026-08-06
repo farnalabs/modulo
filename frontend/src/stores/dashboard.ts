@@ -48,6 +48,31 @@ export interface ConfigWarning {
   action_url: string;
 }
 
+export interface PeriodMetric {
+  current: number | null;
+  previous: number | null;
+  delta_pct: number | null;
+}
+
+export interface DashboardPeriod {
+  days: number;
+  metrics: {
+    total_runs: PeriodMetric;
+    active_pipelines: PeriodMetric;
+    run_counts_by_status: {
+      running: PeriodMetric;
+      awaiting_human: PeriodMetric;
+      failed: PeriodMetric;
+      idle: PeriodMetric;
+    };
+    eval_pass_rate: PeriodMetric;
+    spend: PeriodMetric;
+    tokens: PeriodMetric;
+    success_rate: PeriodMetric;
+    avg_duration_ms: PeriodMetric;
+  };
+}
+
 export interface DashboardSummary {
   total_runs: number;
   active_pipelines: number;
@@ -77,19 +102,23 @@ export interface DashboardSummary {
   trend: TrendDay[];
   recent_runs: RecentRun[];
   config_warnings: ConfigWarning[];
+  period?: DashboardPeriod;
 }
 
 function validateDashboardSummary(data: unknown): DashboardSummary | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
-  const required = ["total_runs", "active_pipelines", "run_counts_by_status", "teams", "trend", "recent_runs"];
+  const required = ["total_runs", "active_pipelines", "run_counts_by_status", "teams", "recent_runs"];
   for (const key of required) {
     if (d[key] == null) return null;
   }
   if (!Array.isArray(d.teams)) return null;
-  if (!Array.isArray(d.trend)) return null;
+  // trend is optional — the toggle-off (all-time) shape and empty trend must
+  // both be accepted; default to [] so computed props never crash.
+  if (d.trend != null && !Array.isArray(d.trend)) return null;
   if (!Array.isArray(d.recent_runs)) return null;
-  return d as unknown as DashboardSummary;
+  const normalized = { ...d, trend: Array.isArray(d.trend) ? d.trend : [] };
+  return normalized as unknown as DashboardSummary;
 }
 
 interface TrendsResponse {
@@ -137,17 +166,26 @@ export const useDashboardStore = defineStore("dashboard", () => {
   const unsubHandlers: (() => void)[] = [];
 
   const totalSpend = computed(() => {
+    // Single source: the ledger-backed spend field. When a rolling window is
+    // selected use the period-scoped spend; otherwise sum the trend series.
+    const periodSpend = summary.value?.period?.metrics?.spend?.current;
+    if (periodSpend != null) return periodSpend;
     if (!Array.isArray(summary.value?.trend)) return 0;
     return summary.value.trend.reduce((sum, d) => sum + (d.token_spend_usd || 0), 0);
   });
 
-  async function fetchSummary() {
+  const daysParam = ref<number | undefined>(undefined);
+
+  async function fetchSummary(days?: number) {
     if (loading.value) return;
     loading.value = true;
+    daysParam.value = days;
     summaryError.value = null;
     try {
       const { data: result, error: err } = await withTimeout(
-        api.GET("/api/v1/dashboard/summary"),
+        api.GET("/api/v1/dashboard/summary", {
+          params: { query: days == null ? {} : { days } },
+        }),
         15000,
         "Dashboard summary request",
       );
@@ -217,7 +255,8 @@ export const useDashboardStore = defineStore("dashboard", () => {
     if (event.type !== "run" && event.type !== "pipeline") return;
     if (!syncingIds.value.has(event.id)) {
       syncingIds.value.add(event.id);
-      void fetchSummary().finally(() => {
+      // Preserve the currently selected rolling window (if any) on refresh.
+      void fetchSummary(daysParam.value).finally(() => {
         syncingIds.value.delete(event.id);
       });
     }
