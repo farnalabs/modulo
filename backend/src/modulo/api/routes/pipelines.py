@@ -518,7 +518,7 @@ def _graph_response(
             validation_issues=validation_issues or [],
         )
     except ValidationError as e:
-        logger.error("Pipeline graph data validation failed: %s", e.errors())
+        logger.exception("Pipeline graph data validation failed: %s", e.errors())
         detail = "Pipeline graph contains invalid data. This may be caused by a schema migration."
         detail += f" Validation errors: {e.errors()}"
         raise HTTPException(

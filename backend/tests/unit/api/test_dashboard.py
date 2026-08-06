@@ -367,8 +367,8 @@ class TestDashboardSummaryPeriod:
                 assert set(metric.keys()) == {"current", "previous", "delta_pct"}
         assert metrics["success_rate"]["current"] == 80.0
 
-    def test_days_1_30_90_accepted(self, period_client: Callable[..., TestClient]) -> None:
-        for days in ("1", "30", "90"):
+    def test_days_1_3_30_90_accepted(self, period_client: Callable[..., TestClient]) -> None:
+        for days in ("1", "3", "30", "90"):
             # Fresh client per request: the mock session's current/previous
             # window counters are consumed once per request.
             response = period_client().get(f"/api/v1/dashboard/summary?days={days}")
@@ -377,7 +377,7 @@ class TestDashboardSummaryPeriod:
 
     def test_arbitrary_days_in_range_accepted(self, period_client: Callable[..., TestClient]) -> None:
         # Any 1..90 is valid now (matching /trends), not just {1, 7, 30, 90}.
-        for days in ("3", "5", "45"):
+        for days in ("2", "3", "5", "45"):
             # Fresh client per request: the mock session's current/previous
             # window counters are consumed once per request.
             response = period_client().get(f"/api/v1/dashboard/summary?days={days}")

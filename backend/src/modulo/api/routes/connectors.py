@@ -169,8 +169,8 @@ async def list_connectors_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error listing connectors: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error listing connectors")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing connectors.",
@@ -258,8 +258,8 @@ async def create_connector_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error creating connector: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error creating connector")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating connector.",
@@ -299,8 +299,8 @@ async def get_connector_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error fetching connector: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error fetching connector")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching connector.",
@@ -372,8 +372,8 @@ async def update_connector_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error updating connector: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error updating connector")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating connector.",
@@ -415,8 +415,8 @@ async def delete_connector_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error deleting connector: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error deleting connector")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting connector.",

@@ -265,6 +265,89 @@ async def test_initialise_plugin_fallback_not_registered_skips():
         hub.get(ci.id)
 
 
+async def test_multiple_hubs_coexist(tmp_path):
+    """Separate ConnectorHub instances do not share connector registries.
+
+    Each run gets its own hub; clearing one hub must not affect another.
+    """
+    id1 = uuid.uuid4()
+    id2 = uuid.uuid4()
+    ci_a = _FakeCI(
+        id=id1,
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path / "a")},
+    )
+    ci_b = _FakeCI(
+        id=id2,
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path / "b")},
+    )
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    backend_a = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    backend_b = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+
+    hub_a = ConnectorHub(secrets_backend=backend_a, org_id="org-a")
+    hub_b = ConnectorHub(secrets_backend=backend_b, org_id="org-b")
+    with (
+        patch.object(backend_a, "get_secret", return_value="{}"),
+        patch.object(backend_b, "get_secret", return_value="{}"),
+    ):
+        await hub_a.initialise([ci_a])
+        await hub_b.initialise([ci_b])
+
+    # Each hub exposes exactly its own connector.
+    assert hub_a.connector_ids == frozenset({id1})
+    assert hub_b.connector_ids == frozenset({id2})
+    assert hub_a.get(id1) is not None
+    assert hub_b.get(id2) is not None
+    with pytest.raises(ConnectorNotFoundError):
+        hub_a.get(id2)
+    with pytest.raises(ConnectorNotFoundError):
+        hub_b.get(id1)
+
+    # Clearing one hub leaves the other fully intact.
+    await hub_a.__aexit__(None, None, None)
+    with pytest.raises(ConnectorNotFoundError):
+        hub_a.get(id1)
+    assert hub_b.connector_ids == frozenset({id2})
+    assert hub_b.get(id2) is not None
+
+
+async def test_multiple_hubs_concurrent_initialise(tmp_path):
+    """Concurrent initialise of separate hubs does not interleave registries.
+
+    Exercises the per-instance asyncio.Lock: simultaneous initialise calls on
+    different hubs must each build exactly their own connector set.
+    """
+    hubs_and_cis = []
+    for i in range(3):
+        cid = uuid.uuid4()
+        (tmp_path / f"dir{i}").mkdir(exist_ok=True)
+        backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+        hub = ConnectorHub(secrets_backend=backend, org_id=f"org-{i}")
+        ci = _FakeCI(
+            id=cid,
+            connector_type_id="filesystem",
+            config_json={"base_path": str(tmp_path / f"dir{i}")},
+        )
+        hubs_and_cis.append((hub, backend, ci))
+
+    async def _init(hub: ConnectorHub, backend: Any, ci: _FakeCI) -> None:
+        with patch.object(backend, "get_secret", return_value="{}"):
+            await hub.initialise([ci])
+
+    await asyncio.gather(*(_init(hub, backend, ci) for hub, backend, ci in hubs_and_cis))
+
+    for i, (hub, backend, ci) in enumerate(hubs_and_cis):
+        assert hub.connector_ids == frozenset({ci.id}), f"hub {i} saw the wrong connector set"
+        assert hub.get(ci.id) is not None
+        for other_hub, _, _ in hubs_and_cis:
+            if other_hub is not hub:
+                with pytest.raises(ConnectorNotFoundError):
+                    other_hub.get(ci.id)
+
+
 async def test_initialise_is_idempotent(tmp_path):
     """Multiple initialise calls are idempotent — second call is skipped due to _initialised guard."""
     id1 = uuid.uuid4()

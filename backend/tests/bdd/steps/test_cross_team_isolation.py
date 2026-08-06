@@ -93,10 +93,11 @@ def auth_admin_in_org(org: str) -> None:
 @when(parsers.parse("I view pipelines"))
 def i_view_pipelines(request, ctx) -> None:
     current_team_id = ctx["memberships"].get("__current__", {}).get("team_id")
-    result = []
-    for name, pdata in ctx["pipelines"].items():
-        if pdata.get("visibility") == "org" or (current_team_id and pdata.get("owner_team_id") == current_team_id):
-            result.append(pdata)
+    result = [
+        pdata
+        for pdata in ctx["pipelines"].values()
+        if pdata.get("visibility") == "org" or (current_team_id and pdata.get("owner_team_id") == current_team_id)
+    ]
 
     resp = MagicMock()
     resp.status_code = 200
@@ -107,10 +108,11 @@ def i_view_pipelines(request, ctx) -> None:
 @when(parsers.parse('user "{username}" requests the pipeline list'))
 def user_requests_pipeline_list(username: str, request, ctx) -> None:
     user_team_id = ctx["memberships"].get(username, {}).get("team_id")
-    result = []
-    for name, pdata in ctx["pipelines"].items():
-        if pdata.get("visibility") == "org" or (user_team_id and pdata.get("owner_team_id") == user_team_id):
-            result.append(pdata)
+    result = [
+        pdata
+        for pdata in ctx["pipelines"].values()
+        if pdata.get("visibility") == "org" or (user_team_id and pdata.get("owner_team_id") == user_team_id)
+    ]
 
     resp = MagicMock()
     resp.status_code = 200
