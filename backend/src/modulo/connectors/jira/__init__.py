@@ -82,11 +82,7 @@ def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
 
 def _rate_limit_detail(response: httpx.Response) -> str:
     """Summarise Jira Cloud ``X-RateLimit-*`` quota headers for error strings."""
-    parts = []
-    for header in _RATE_LIMIT_HEADERS:
-        value = response.headers.get(header)
-        if value:
-            parts.append(f"{header}={value}")
+    parts = [f"{header}={value}" for header in _RATE_LIMIT_HEADERS if (value := response.headers.get(header))]
     return "; ".join(parts)
 
 
