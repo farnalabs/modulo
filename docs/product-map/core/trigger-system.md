@@ -6,6 +6,7 @@ bdd:
   - backend/tests/bdd/features/pipelines/webhook_trigger.feature
   - backend/tests/bdd/features/pipelines/scheduling.feature
   - backend/tests/bdd/features/triggers/polling.feature
+  - backend/tests/bdd/features/triggers/pause.feature
 code:
   - backend/src/modulo/api/routes/triggers.py
   - backend/src/modulo/api/routes/admin_triggers.py
@@ -31,6 +32,10 @@ unit-tests:
   - backend/tests/unit/mcp/test_trigger_crud_tools.py
   - backend/tests/unit/mcp/test_trigger_mgmt_tools.py
   - backend/tests/unit/cleanup_jobs/test_webhook_dedup_cleanup.py
+  - backend/tests/unit/api/test_webhooks_endpoint.py
+  - backend/tests/integration/test_org_trigger_pause.py
+  - backend/tests/integration/saq/test_fire_due_triggers.py
+  - backend/tests/bdd/steps/test_org_pause.py
 status: partial
 ---
 
@@ -143,6 +148,21 @@ concurrency management via `max_concurrent_runs`.
 - [x] Multiple agent_signal triggers can fire from a single node completion (org-scoped query returns all matching triggers)
 - [x] TriggerEvent logged with `trigger_type='agent_signal'` and result `signal_fired`
 
+### Org-wide Pause (Kill-Switch)
+
+- [x] Org-wide pause toggle at `PUT /api/v1/admin/orgs/{org_id}/triggers/pause` — admin-only (`org.triggers.pause.manage`), `kill_switch_eligible=False` so the authz kill-switch cannot lift it
+- [x] Idempotent toggle: re-PUTting the current state writes no audit event
+- [x] Toggle audited as `triggers_paused` (payload `{paused: bool}`) with fail-open-with-alert audit (toggle always commits; audit failures loudly logged)
+- [x] `create_run` is the SINGLE authority gate: blocks NEW trigger-initiated runs (webhook/replay/cron/polling/agent_signal) when the org is paused; manual, `test_trigger`, feedback correction, and variant runs pass
+- [x] Paused webhook/replay delivery → HTTP 202 `{"status":"paused"}` with NO `run_id` and exactly one committed `TriggerEvent` with `validation_result='paused'` (skipped entirely if the org row was HARD-deleted — an orphan trigger insert would violate the organisations FK)
+- [x] Cron/polling fire jobs on a paused org → `{"status":"skipped","reason":"triggers_paused"}` (early check + `create_run` race backstop; no paused event from the fire path)
+- [x] Agent signal on a paused org → exactly one `paused` TriggerEvent, result `skipped/triggers_paused`
+- [x] `fire_due_triggers` SKIP-not-defer: cron/polling enqueue skipped for paused orgs while `next_fire_at` still advances; `cron_skipped_paused`/`polling_skipped_paused` counters; scheduled reports still enqueue
+- [x] `list_triggers` returns top-level `triggers_paused` + `paused_at` reflecting the SAME predicate as the gate (`org_row_is_paused` = `triggers_paused` column OR non-active org `status`) — a suspended/deleted org shows the paused banner
+- [x] Pause read failure handling: scheduler batched read and per-item fire jobs degrade to not-paused on a pre-migration `ProgrammingError` (inside a savepoint for per-item jobs — transaction never poisoned); any other `SQLAlchemyError` RE-RAISES so the tick/job fails and SAQ retries — never fabricate "paused" on a DB error
+- [x] Migration 0069 adds `organisations.triggers_paused`/`triggers_paused_at` + CHECK and widens `ck_trigger_events_validation_result` to the full 19-value vocabulary (dialect-guarded: Postgres `NOT VALID`/`VALIDATE`; SQLite via Alembic batch mode)
+- [x] Validation-result vocabulary extended to 19 values (adds `event_type_not_accepted`, `spend_limit_reached`, `no_pipeline`, `test`, `paused`) — fixes pre-existing IntegrityError on those writes
+
 ## Edge Cases
 
 - [ ] `next_fire_at` is `None` → cron/polling schedulers skip without firing (comparison `<= now()` is false)
@@ -219,6 +239,7 @@ concurrency management via `max_concurrent_runs`.
 
 ## QA History
 
+- 2026-08-04: Added the org-wide "pause all pipeline triggers" kill-switch. New `PUT /api/v1/admin/orgs/{org_id}/triggers/pause` admin endpoint, `create_run` authority gate, paused webhook contract (202 `{"status":"paused"}` + committed `paused` TriggerEvent), cron/polling SKIP-not-defer skip-with-advance, agent-signal pause event, `list_triggers` top-level `triggers_paused`/`paused_at`, and migration 0069 (new org columns + widened 19-value `ck_trigger_events_validation_result` — fixing a pre-existing IntegrityError on `event_type_not_accepted`/`spend_limit_reached`/`no_pipeline`/`test` writes). New BDD feature `triggers/pause.feature`, integration `test_org_trigger_pause.py`, and saq pause test. Behaviours marked [x] against code.
 - 2026-08-02 (round 2): improve-architecture: RESOLVED the Known Gap "Trigger-level `daily_spend_limit` is enforced at fire time by both cron and polling but not exposed via the trigger CRUD/polling-config API". `daily_spend_limit` is now accepted on `TriggerCreate`, `TriggerUpdate`, and `PollingConfigUpdate` (validated `ge=0`; explicit `null` clears via `model_fields_set`, omitted `None` leaves unchanged) and echoed on every trigger response (`list_triggers`, `create_trigger`, `update_trigger`, `restore_trigger`, `update_polling_config`, `list_pipeline_triggers`). MCP `create_trigger` now also accepts `max_concurrent_runs` + `daily_spend_limit`. Marked "Cron trigger with `daily_spend_limit=0` → all runs blocked" [x] (verified `0 >= 0` short-circuit in `cron_helpers.py`). Added 7 unit tests in `test_triggers_endpoint.py`.
 - 2026-08-02: improve-architecture: RESOLVED the "Daily spend limit applies to cron triggers only — polling has no spend limit check" known gap. `fire_polling_trigger` now enforces `trigger.daily_spend_limit` (new `_daily_spend_limit_reached()` helper) — over-budget triggers log a `spend_limit_reached` TriggerEvent, advance `next_fire_at`, and skip. Wired up the previously-orphaned `triggers/polling.feature` (9 executable fire-path scenarios + 3 spend-limit scenarios) via `tests/bdd/steps/test_polling_triggers.py` and added 5 unit tests (`TestDailySpendLimit`). Updated frontmatter (`bdd:`/`unit-tests:`).
 - 2026-07-05: Cross-cutting QA (index 169): Added `SQLAlchemyError` catch → 503 to all 16 trigger route handlers (triggers.py: 12, admin_triggers.py: 1 route with 2 try/except blocks, webhooks.py: 3). Fixed silent cursor-parsing error swallowing in admin_triggers.py (now logs warning). Added test_trigger_sqlalchemy_error.py with 18 tests covering SQLAlchemyError→503 for all trigger route handlers. Updated product map: marked all 50+ previously unchecked behaviours as [x] (verified against code implementation), added Error Handling checkbox for SQLAlchemyError→503, added Resilience & Integration Robustness section (8 checkboxes: 4 [x] + 4 [ ]). All existing unit tests continue to pass. Status: partial.
