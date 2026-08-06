@@ -2,7 +2,7 @@
   <div class="h-72 w-full" data-testid="analytics-chart">
     <component
       :is="ChartRenderer"
-      v-if="series.length > 1"
+      v-if="series.length > 0"
       :option="chartOption"
       autoresize
       class="h-full w-full"

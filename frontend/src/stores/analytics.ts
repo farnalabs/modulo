@@ -183,15 +183,69 @@ export function measureValue(
   return typeof raw === "number" ? raw : null;
 }
 
+/**
+ * Roll up per-(date, dimension-key) backend buckets into one summary bucket per
+ * key. The backend returns one bucket per (grid time x dim key), so a dimensioned
+ * series has many buckets per key; the chart/table render one entry per key.
+ * Counts/cost/tokens are summed; avg_duration_ms and success_rate are weighted by
+ * count (mirroring the backend's own duration weighting in bucket_rows).
+ */
+export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
+  const groups = new Map<string, AnalyticsBucket & { durSum: number; durN: number }>();
+  for (const b of buckets) {
+    const groupKey = b.key ?? "";
+    let g = groups.get(groupKey);
+    if (!g) {
+      g = {
+        date: b.date,
+        key: b.key ?? null,
+        count: 0,
+        durSum: 0,
+        durN: 0,
+      };
+      groups.set(groupKey, g);
+    }
+    g.count += b.count;
+    if (typeof b.total_cost_usd === "number") {
+      g.total_cost_usd = (g.total_cost_usd ?? 0) + b.total_cost_usd;
+    }
+    if (typeof b.total_tokens === "number") {
+      g.total_tokens = (g.total_tokens ?? 0) + b.total_tokens;
+    }
+    if (typeof b.avg_duration_ms === "number" && b.count > 0) {
+      g.durSum += b.avg_duration_ms * b.count;
+      g.durN += b.count;
+    }
+    if (typeof b.success_rate === "number" && b.count > 0) {
+      g.success_rate = (g.success_rate ?? 0) + b.success_rate * b.count;
+    }
+  }
+  return [...groups.values()].map((g) => ({
+    date: g.date,
+    key: g.key,
+    count: g.count,
+    total_cost_usd: g.total_cost_usd,
+    total_tokens: g.total_tokens,
+    avg_duration_ms: g.durN > 0 ? g.durSum / g.durN : null,
+    success_rate: g.success_rate != null && g.count > 0 ? g.success_rate / g.count : null,
+  }));
+}
+
+/** True when a series carries dimension keys (backend emits per-key buckets). */
+export function isDimensioned(series: AnalyticsBucket[]): boolean {
+  return series.some((b) => b.key != null && b.key !== "");
+}
+
 /** Pure series → ECharts option mapping. The backend is the sole bucketing authority. */
 export function buildChartOption(
   series: AnalyticsBucket[],
   measure: AnalyticsMeasure,
   _groupBy: string,
 ): Record<string, unknown> {
-  const dimensioned = series.some((b) => b.key != null && b.key !== "");
-  const labels = series.map((b) => b.key ?? b.date);
-  const values = series.map((b) => measureValue(b, measure));
+  const dimensioned = isDimensioned(series);
+  const buckets = dimensioned ? aggregateByKey(series) : series;
+  const labels = buckets.map((b) => b.key ?? b.date);
+  const values = buckets.map((b) => measureValue(b, measure));
   return {
     tooltip: { trigger: "axis" },
     grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
@@ -217,7 +271,6 @@ export function computeTrendDelta(
 ): TrendDirection {
   if (current == null || previous == null) return null;
   if (previous === 0) return null;
-  if (current === 0 && previous === 0) return null;
   if (current > previous) return "up";
   if (current < previous) return "down";
   return "flat";
@@ -229,7 +282,6 @@ export function formatDeltaPercent(
   previous: number | null | undefined,
 ): string | null {
   if (current == null || previous == null || previous === 0) return null;
-  if (current === 0 && previous === 0) return null;
   const pct = ((current - previous) / previous) * 100;
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
 }
@@ -247,7 +299,7 @@ export function formatMeasureValue(
     case "duration":
       return `${Math.round(value)}ms`;
     case "success_rate":
-      return `${value.toFixed(1)}%`;
+      return `${(value * 100).toFixed(1)}%`;
     default:
       return String(Math.round(value));
   }
@@ -290,7 +342,14 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   const earliestAvailableDate = ref<string | null>(null);
 
   const buckets = computed(() => results.value?.buckets ?? []);
-  const hasData = computed(() => buckets.value.some((b) => b.count > 0));
+  const hasData = computed(() =>
+    buckets.value.some(
+      (b) =>
+        b.count > 0 ||
+        (b.total_cost_usd != null && b.total_cost_usd > 0) ||
+        (b.total_tokens != null && b.total_tokens > 0),
+    ),
+  );
   const groupBy = computed(() => filters.value.groupBy);
 
   function setFilters(patch: Partial<AnalyticsFilters>): void {
@@ -345,11 +404,16 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     }
   }
 
+  // Monotonic request token: rapid filter changes issue concurrent queries, and
+  // only the latest request may commit results (out-of-order resolution must not
+  // overwrite a newer window with an older one).
+  let requestToken = 0;
+
   async function fetchQuery(): Promise<void> {
-    if (loading.value) return;
     loading.value = true;
     error.value = null;
     flagOff.value = false;
+    const token = ++requestToken;
     try {
       const params = serializeFilters(filters.value);
       const current = await fetchWindow(params);
@@ -360,15 +424,17 @@ export const useAnalyticsStore = defineStore("analytics", () => {
         // The previous window is best-effort: a failure there must not hide the current series.
         console.warn("[analytics] failed to load previous window:", formatApiErrorMessage(e));
       }
+      if (token !== requestToken) return; // a newer request superseded this one
       results.value = current;
       previousResults.value = previous;
       earliestAvailableDate.value = deriveEarliestDate(current.buckets);
     } catch (e: unknown) {
+      if (token !== requestToken) return;
       const problem = toProblemDetail(e);
       error.value = problem;
       flagOff.value = problem.status === 402;
     } finally {
-      loading.value = false;
+      if (token === requestToken) loading.value = false;
     }
   }
 

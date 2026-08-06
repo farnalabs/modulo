@@ -115,6 +115,8 @@ import {
   computeTrendDelta,
   formatDeltaPercent,
   formatMeasureValue,
+  isDimensioned,
+  aggregateByKey,
   measureValue,
   type AnalyticsFilters,
   type AnalyticsMeasure,
@@ -152,8 +154,13 @@ const currentMeasureLabel = computed(() => {
 });
 
 const tableRows = computed<TableRow[]>(() => {
-  const current = store.buckets;
-  const previous = store.previousResults?.buckets ?? [];
+  const currentBuckets = store.buckets;
+  const previousBuckets = store.previousResults?.buckets ?? [];
+  const dimensioned = isDimensioned(currentBuckets);
+  // Dimensioned queries return one bucket per (date x key): roll each window up
+  // by key so the table shows one row per key with an apples-to-apples delta.
+  const current = dimensioned ? aggregateByKey(currentBuckets) : currentBuckets;
+  const previous = dimensioned ? aggregateByKey(previousBuckets) : previousBuckets;
   const measure = store.measure;
   return current.map((bucket, index) => {
     const label = bucket.key ?? bucket.date;

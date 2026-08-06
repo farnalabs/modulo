@@ -20,6 +20,8 @@ import {
   buildChartOption,
   computeTrendDelta,
   formatDeltaPercent,
+  formatMeasureValue,
+  aggregateByKey,
   previousWindowParams,
   type AnalyticsBucket,
 } from '../stores/analytics'
@@ -39,7 +41,7 @@ const validResponse = {
       total_cost_usd: 1.5,
       total_tokens: 1200,
       avg_duration_ms: 2500,
-      success_rate: 66.7,
+      success_rate: 0.667,
     },
     {
       date: '2026-08-02',
@@ -47,7 +49,7 @@ const validResponse = {
       total_cost_usd: 2.5,
       total_tokens: 2100,
       avg_duration_ms: 3000,
-      success_rate: 80,
+      success_rate: 0.8,
     },
   ],
 }
@@ -167,6 +169,21 @@ describe('buildChartOption', () => {
     expect(option.series[0].data).toEqual([3, 1.5])
   })
 
+  it('aggregates a dimensioned series by key across dates', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'manual', count: 2, total_cost_usd: 1 },
+      { date: '2026-08-02', key: 'manual', count: 4, total_cost_usd: 3 },
+      { date: '2026-08-01', key: 'webhook', count: 3, total_cost_usd: 2 },
+      { date: '2026-08-02', key: 'webhook', count: 1, total_cost_usd: 0.5 },
+    ]
+    const option = buildChartOption(series, 'count', 'day') as {
+      xAxis: { data: string[] }
+      series: Array<{ data: Array<number | null> }>
+    }
+    expect(option.xAxis.data).toEqual(['manual', 'webhook'])
+    expect(option.series[0].data).toEqual([6, 4])
+  })
+
   it('renders null (gap) rather than zero for pre-coverage buckets', () => {
     const series: AnalyticsBucket[] = [
       { date: '2026-08-01', count: 0, total_cost_usd: null },
@@ -176,6 +193,44 @@ describe('buildChartOption', () => {
       series: Array<{ data: Array<number | null> }>
     }
     expect(option.series[0].data).toEqual([null, 2.5])
+  })
+})
+
+describe('aggregateByKey', () => {
+  it('sums counts, cost, and tokens per dimension key', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'manual', count: 2, total_cost_usd: 1, total_tokens: 100 },
+      { date: '2026-08-02', key: 'manual', count: 4, total_cost_usd: 3, total_tokens: 300 },
+    ]
+    const agg = aggregateByKey(series)
+    expect(agg).toHaveLength(1)
+    expect(agg[0].key).toBe('manual')
+    expect(agg[0].count).toBe(6)
+    expect(agg[0].total_cost_usd).toBe(4)
+    expect(agg[0].total_tokens).toBe(400)
+  })
+
+  it('weights avg_duration_ms and success_rate by count', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'manual', count: 2, avg_duration_ms: 1000, success_rate: 0.5 },
+      { date: '2026-08-02', key: 'manual', count: 4, avg_duration_ms: 2000, success_rate: 0.75 },
+    ]
+    const agg = aggregateByKey(series)
+    expect(agg).toHaveLength(1)
+    expect(agg[0].avg_duration_ms).toBeCloseTo(1666.67, 1)
+    expect(agg[0].success_rate).toBeCloseTo(0.6667, 3)
+  })
+
+  it('keeps count-less buckets cost as a sum', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'webhook', count: 0, total_cost_usd: 2.5 },
+      { date: '2026-08-02', key: 'webhook', count: 0, total_cost_usd: 1.25 },
+    ]
+    const agg = aggregateByKey(series)
+    expect(agg[0].count).toBe(0)
+    expect(agg[0].total_cost_usd).toBe(3.75)
+    expect(agg[0].avg_duration_ms).toBeNull()
+    expect(agg[0].success_rate).toBeNull()
   })
 })
 
@@ -208,6 +263,24 @@ describe('formatDeltaPercent', () => {
     expect(formatDeltaPercent(0, 0)).toBeNull()
     expect(formatDeltaPercent(5, 0)).toBeNull()
     expect(formatDeltaPercent(null, 5)).toBeNull()
+  })
+})
+
+describe('formatMeasureValue', () => {
+  it('formats success_rate from the backend 0..1 fraction to a percentage', () => {
+    expect(formatMeasureValue(0.75, 'success_rate')).toBe('75.0%')
+    expect(formatMeasureValue(0.667, 'success_rate')).toBe('66.7%')
+    expect(formatMeasureValue(0, 'success_rate')).toBe('0.0%')
+    expect(formatMeasureValue(1, 'success_rate')).toBe('100.0%')
+    expect(formatMeasureValue(null, 'success_rate')).toBe('—')
+  })
+
+  it('formats cost, tokens, duration, and count', () => {
+    expect(formatMeasureValue(1.5, 'cost')).toBe('$1.50')
+    expect(formatMeasureValue(1200, 'tokens')).toBe('1,200')
+    expect(formatMeasureValue(2500, 'duration')).toBe('2500ms')
+    expect(formatMeasureValue(5, 'count')).toBe('5')
+    expect(formatMeasureValue(null, 'count')).toBe('—')
   })
 })
 
@@ -264,6 +337,64 @@ describe('analytics store', () => {
     expect(store.error).not.toBeNull()
     expect(store.flagOff).toBe(false)
     expect(store.results).toBeNull()
+  })
+
+  it('commits only the latest query when responses resolve out of order', async () => {
+    const older = {
+      group_by: 'day',
+      dimension: null,
+      date_from: '2026-08-05',
+      date_to: '2026-08-06',
+      buckets: [{ date: '2026-08-05', count: 3 }],
+    }
+    const newer = {
+      group_by: 'day',
+      dimension: null,
+      date_from: '2026-05-09',
+      date_to: '2026-08-06',
+      buckets: [{ date: '2026-07-01', count: 9 }],
+    }
+    let resolveOlder!: () => void
+    let resolveNewer!: () => void
+    let queryCalls = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/analytics/query') {
+        queryCalls += 1
+        if (queryCalls === 1) {
+          return new Promise((resolve) => {
+            resolveOlder = () => resolve({ data: older, error: undefined })
+          })
+        }
+        if (queryCalls === 2) {
+          return new Promise((resolve) => {
+            resolveNewer = () => resolve({ data: newer, error: undefined })
+          })
+        }
+        return Promise.resolve({ data: { group_by: 'day', dimension: null, buckets: [] }, error: undefined })
+      }
+      if (url === '/api/v1/pipeline-folders') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    store.setFilters({ timespan: '24h' })
+    const first = store.fetchQuery()
+    store.setFilters({ timespan: '90d' })
+    const second = store.fetchQuery()
+    // The newer (second) request resolves first, then the older one.
+    resolveNewer()
+    await flushPromises()
+    resolveOlder()
+    await Promise.all([first, second])
+    await flushPromises()
+    expect(queryCalls).toBe(4)
+    expect(store.results).toEqual(newer)
+    expect(store.loading).toBe(false)
   })
 })
 
@@ -366,6 +497,58 @@ describe('AnalyticsView', () => {
     })
     const wrapper = mount(AnalyticsView)
     await flushPromises()
+    const arrows = wrapper.findAll('[data-testid="analytics-trend-arrow"]')
+    expect(arrows.length).toBe(2)
+    expect(arrows[0].text()).toContain('▲')
+    expect(arrows[1].text()).toContain('▼')
+  })
+
+  it('renders one table row per dimension key with deltas against the previous window', async () => {
+    const response = {
+      group_by: 'day',
+      dimension: 'trigger_type',
+      date_from: '2026-07-30',
+      date_to: '2026-08-06',
+      buckets: [
+        { date: '2026-08-01', key: 'manual', count: 3 },
+        { date: '2026-08-01', key: 'webhook', count: 4 },
+        { date: '2026-08-02', key: 'manual', count: 2 },
+        { date: '2026-08-02', key: 'webhook', count: 3 },
+      ],
+    }
+    const previousResponse = {
+      group_by: 'day',
+      dimension: 'trigger_type',
+      date_from: '2026-07-23',
+      date_to: '2026-07-29',
+      buckets: [
+        { date: '2026-07-23', key: 'manual', count: 3 },
+        { date: '2026-07-23', key: 'webhook', count: 9 },
+        { date: '2026-07-24', key: 'manual', count: 1 },
+        { date: '2026-07-24', key: 'webhook', count: 2 },
+      ],
+    }
+    let queryCalls = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/analytics/query') {
+        queryCalls += 1
+        return Promise.resolve({ data: queryCalls === 1 ? response : previousResponse, error: undefined })
+      }
+      if (url === '/api/v1/pipeline-folders') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    const tableText = wrapper.find('[data-testid="analytics-table"]').text()
+    expect(tableText).toContain('manual')
+    expect(tableText).toContain('webhook')
+    // Aggregated per key: manual=5 vs 4 (up), webhook=7 vs 11 (down).
     const arrows = wrapper.findAll('[data-testid="analytics-trend-arrow"]')
     expect(arrows.length).toBe(2)
     expect(arrows[0].text()).toContain('▲')
