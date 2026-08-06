@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import secrets
-import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -17,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
+from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 
@@ -29,6 +29,7 @@ from modulo.db.crud.error_tracking import (
     upsert_error_group,
 )
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
+from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -387,17 +388,40 @@ def _trigger_period_seconds(
         return None
 
 
+# Missed-fire alert cooldown is Redis-backed (SAQ follow-up, retro item 5): the
+# pre-cutover in-memory dict reset on every worker restart and duplicated
+# alerts across the multiple system-cron workers. Key scheme:
+# ``saq:alert:cooldown:missed_fire:{org_id}:{trigger_id}`` with a TTL equal to
+# the cooldown window; the atomic ``SET NX EX`` is both the check and the mark,
+# so concurrent cron workers can never double-alert. On a Redis failure the
+# probe FAILS OPEN (the alert fires) and logs — an alerting cooldown must never
+# suppress a real alert because Redis is down.
+#
+# ``_missed_fire_cooldowns`` is retained ONLY so legacy callers/tests that
+# ``clear()`` the old in-memory dict keep working; the operative cooldown lives
+# in Redis (see :func:`_missed_fire_cooldown_ok`).
+_MISSED_FIRE_COOLDOWN_KEY_PREFIX = "saq:alert:cooldown:missed_fire"
 _missed_fire_cooldowns: dict[str, float] = {}
 
 
-def _missed_fire_cooldown_ok(org_id: str, trigger_id: Any) -> bool:
-    key = f"{org_id}:{trigger_id}"
-    last = _missed_fire_cooldowns.get(key)
-    return last is None or (time.monotonic() - last) >= _MISSED_FIRE_COOLDOWN_SECONDS
+async def _missed_fire_cooldown_ok(redis_client: Any, org_id: str, trigger_id: Any) -> bool:
+    """Atomically check-and-mark the missed-fire alert cooldown.
 
-
-def _mark_missed_fire_cooldown(org_id: str, trigger_id: Any) -> None:
-    _missed_fire_cooldowns[f"{org_id}:{trigger_id}"] = time.monotonic()
+    Returns True when the trigger is NOT within the cooldown window (the alert
+    may fire now); False when a recent alert already marked the window. The
+    ``SET key 1 NX EX <window>`` round-trip is atomic, so concurrent cron
+    workers cannot race past the cooldown. A Redis failure FAILS OPEN (returns
+    True so the alert fires) and is logged — the cooldown must never suppress
+    a real alert because Redis is unavailable.
+    """
+    key = f"{_MISSED_FIRE_COOLDOWN_KEY_PREFIX}:{org_id}:{trigger_id}"
+    try:
+        return bool(await redis_client.set(key, "1", nx=True, ex=_MISSED_FIRE_COOLDOWN_SECONDS))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("error_tracking.missed_fire_cooldown_redis_failed trigger=%s", trigger_id)
+        return True
 
 
 async def check_missed_fire_alerts(
@@ -410,10 +434,13 @@ async def check_missed_fire_alerts(
 
     For every active cron/polling trigger whose cadence is >= 1h, alert when
     ``last_fired_at`` is NULL or older than ``cadence + grace_seconds``. Emits
-    one error_event (source='saq') per affected trigger, throttled by an
-    in-memory cooldown so a dead trigger alerts once per 6h window instead of
-    every cron tick. Runs per-org under RLS; pass ``org_id`` to probe a single
-    org (system context) or None to scan all orgs.
+    one error_event (source='saq') per affected trigger, throttled by a
+    Redis-backed cooldown (``saq:alert:cooldown:missed_fire:*``, one per 6h
+    window) so a dead trigger alerts once per window instead of every cron
+    tick — across ALL system-cron workers. Runs per-org under RLS; pass
+    ``org_id`` to probe a single org (system context) or None to scan all orgs.
+    A Redis failure fails open: the alert still fires (never suppressed) but is
+    logged.
 
     Returns the number of alerts emitted.
     """
@@ -424,6 +451,11 @@ async def check_missed_fire_alerts(
 
     emitted = 0
     now = datetime.now(UTC)
+    redis_client = AsyncRedis.from_url(
+        get_settings().redis_url,
+        socket_connect_timeout=5,
+        socket_keepalive=True,
+    )
     try:
         async with aengine.connect() as c:
             if org_id is not None:
@@ -480,9 +512,8 @@ async def check_missed_fire_alerts(
                     # A brand-new trigger that has not yet had its first scheduled
                     # fire is not "missed" — only probe it once it is old enough.
                     continue
-                if not _missed_fire_cooldown_ok(str(oid_uuid), row.id):
+                if not await _missed_fire_cooldown_ok(redis_client, str(oid_uuid), row.id):
                     continue
-                _mark_missed_fire_cooldown(str(oid_uuid), row.id)
                 message = f"Trigger {row.id} ({row.trigger_type}) has not fired for >= {period}s"
                 fingerprint = ErrorIngestionService.fingerprint(message=message, source="saq")
                 async with factory() as session, session.begin():
@@ -508,3 +539,10 @@ async def check_missed_fire_alerts(
     except Exception:
         _log.exception("error_tracking.missed_fire_check_failed")
         return 0
+    finally:
+        try:
+            await redis_client.aclose()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("error_tracking.missed_fire_redis_close_failed")
