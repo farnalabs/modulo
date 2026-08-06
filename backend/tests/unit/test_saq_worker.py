@@ -7,6 +7,7 @@ knobs, worker metadata hostname, and the SAQ execute/resume wrappers.
 from __future__ import annotations
 
 import os
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp.web
@@ -260,6 +261,14 @@ class TestExecuteResumeWrappers:
     @pytest.mark.asyncio
     async def test_execute_run_claims_and_completes(self) -> None:
         ctx: dict = {"job": MagicMock()}
+
+        async def _pass_through(aeng: Any, **kwargs: Any) -> dict[str, str]:
+            # Faithfully execute the executor body (the real watchdog wiring is
+            # covered by pipeline_execution tests) so the assertions below see
+            # the executor.execute call and its return path.
+            await kwargs["execute_fn"]()
+            return {"status": "complete"}
+
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
             patch(
@@ -267,7 +276,10 @@ class TestExecuteResumeWrappers:
             ) as claim,
             patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
             patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
-            patch("modulo.core.pipeline_execution.heartbeat_loop", new_callable=AsyncMock) as heartbeat,
+            patch(
+                "modulo.core.pipeline_execution.run_executor_with_watchdog",
+                side_effect=_pass_through,
+            ) as watchdog,
         ):
             run = MagicMock()
             run.input_payload = {"a": 1}
@@ -283,8 +295,9 @@ class TestExecuteResumeWrappers:
         executor.execute.assert_awaited_once()
         complete.assert_awaited_once()
         assert complete.await_args.kwargs["claim_token"] == "tok-claim"
-        heartbeat.assert_called_once()
-        assert heartbeat.call_args.kwargs["claim_token"] == "tok-claim"
+        watchdog.assert_awaited_once()
+        assert watchdog.await_args.kwargs["job"] is not None
+        assert watchdog.await_args.kwargs["claim_token"] == "tok-claim"
 
     @pytest.mark.asyncio
     async def test_execute_run_not_claimed_returns_early(self) -> None:
@@ -297,6 +310,34 @@ class TestExecuteResumeWrappers:
                 {}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
             )
         assert result == {"status": "not_claimed"}
+        complete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_run_setup_failure_fails_run_terminal(self) -> None:
+        """A run claimed but whose load_and_setup raises (e.g. a DB
+        OperationalError during checkpointer setup) must be terminal-failed —
+        never left 'running' with no worker — and the SAQ job returns cleanly."""
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=True),
+            patch(
+                "modulo.core.pipeline_execution.load_and_setup",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("OperationalError: FK corrupt"),
+            ),
+            patch(
+                "modulo.core.pipeline_execution.fail_run_terminal",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as fail,
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+        ):
+            result = await sw.execute_run(
+                {}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
+            )
+        assert result == {"status": "setup_failed"}
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "executor_setup_failed"
         complete.assert_not_awaited()
 
     @pytest.mark.asyncio

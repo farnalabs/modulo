@@ -44,7 +44,6 @@ and the web app in the same process, calling ``aiohttp.web.run_app(host=
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 import sys
@@ -199,12 +198,25 @@ def _probe_database() -> None:
 
 
 async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[str, Any]:
-    """SAQ ``execute_run`` job — claim + execute + complete (SAQ claim window)."""
+    """SAQ ``execute_run`` job — claim + execute + complete (SAQ claim window).
+
+    Zombie protection (2026-08-05): the heartbeat loop starts BEFORE
+    ``executor.execute``, so a run hung in the pre-node setup window (checkpointer
+    setup, graph compile, connector hub init, or a DB ``OperationalError``) would
+    otherwise stay ``running`` forever with a fresh heartbeat. Two guards:
+    1. ``load_and_setup`` failures are caught and the run is terminal-failed
+       (``executor_setup_failed``) instead of being left running.
+    2. ``run_executor_with_watchdog`` starts a zombie watchdog that fails the
+       run (``executor_stalled``) if no node dispatches within the setup grace
+       window, and cancels the hung executor.
+    """
     from modulo.core.pipeline_execution import (
+        EXECUTOR_SETUP_FAILED_ERROR_CODE,
         claim_run_async,
-        heartbeat_loop,
+        fail_run_terminal,
         load_and_setup,
         mark_complete,
+        run_executor_with_watchdog,
     )
 
     aeng = _get_async_engine()
@@ -217,26 +229,32 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
 
-    run, executor = await load_and_setup(aeng, rid, oid)
-    if run is None:
-        return {"status": "missing"}
-
-    heartbeat_task: asyncio.Task[Any] | None = None
     try:
-        heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(aeng, run_id, org_id, job=job, claim_token=claim_token),
-            name=f"saq-heartbeat-{rid}",
-        )
-        await executor.execute(run_id=rid, org_id=oid, input_payload=run.input_payload or {})
+        run, executor = await load_and_setup(aeng, rid, oid)
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.exception("SAQ execute_run failed for run %s", rid)
-    finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
+        _log.exception("SAQ execute_run: load_and_setup failed for run %s", rid)
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="load_and_setup failed before any node could run",
+        )
+        return {"status": "setup_failed"}
+    if run is None:
+        return {"status": "missing"}
+
+    await run_executor_with_watchdog(
+        aeng,
+        run_id=run_id,
+        org_id=org_id,
+        executor=executor,
+        job=job,
+        claim_token=claim_token,
+        execute_fn=lambda: executor.execute(run_id=rid, org_id=oid, input_payload=run.input_payload or {}),
+    )
 
     await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
     return {"status": "complete"}
