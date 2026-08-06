@@ -427,6 +427,32 @@ def step_github_connector(ctx):
                 "content": {"name": "new.md"},
                 "commit": {"sha": "abc123"},
             }
+        if payload.resource in ("commit", "files"):
+            actions = payload.data.get("actions", [])
+            if not actions:
+                raise ValueError("GitHub resource 'commit' requires a non-empty 'actions' list")
+            targeted_paths: set[str] = set()
+            for action in actions:
+                file_path = action.get("path", "")
+                if file_path.startswith(("/", "\\")) or any(
+                    part == ".." for part in file_path.replace("\\", "/").split("/")
+                ):
+                    raise ValueError(f"GitHub resource 'commit': path traversal blocked: {file_path!r}")
+                targets = (file_path,)
+                if action.get("action") == "move":
+                    previous_path = action.get("previous_path", "")
+                    if previous_path.startswith(("/", "\\")) or any(
+                        part == ".." for part in previous_path.replace("\\", "/").split("/")
+                    ):
+                        raise ValueError(f"GitHub resource 'commit': path traversal blocked: {previous_path!r}")
+                    targets = (previous_path, file_path)
+                for targeted in targets:
+                    if targeted in targeted_paths:
+                        raise ValueError(
+                            f"GitHub resource 'commit': path {targeted!r} is targeted more than once by the batch"
+                        )
+                    targeted_paths.add(targeted)
+            return {"ref": "refs/heads/main", "object": {"sha": "commit123"}}
         if payload.resource in (
             "pr",
             "pr_merge",
@@ -804,6 +830,78 @@ def step_github_write_returns_error(status_code, reason, ctx):
     connector.write = mock_write
     ctx["query_error"] = None
     ctx["_expected_operation"] = "write"
+
+
+@when(parsers.parse('I write GitHub files batch for repo "{repo}"'))
+def step_github_write_files_batch(repo, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="commit",
+        data={
+            "repo": repo,
+            "message": "Batch update via Modulo",
+            "actions": [
+                {"action": "create", "path": "src/a.py", "content": "print(1)"},
+                {"action": "update", "path": "src/b.py", "content": "print(2)"},
+                {"action": "delete", "path": "src/old.py"},
+            ],
+        },
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitHub files batch for repo "{repo}" with no actions'))
+def step_github_write_files_batch_no_actions(repo, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="commit",
+        data={"repo": repo, "actions": []},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@when(parsers.parse('I write GitHub files batch for repo "{repo}" with traversal path "{path}"'))
+def step_github_write_files_batch_traversal(repo, path, ctx):
+    from modulo.connectors.base import ConnectorPayload
+
+    payload = ConnectorPayload(
+        resource="commit",
+        data={"repo": repo, "actions": [{"action": "create", "path": path, "content": "x"}]},
+    )
+    import asyncio
+
+    try:
+        result = asyncio.run(ctx["connector"].write(payload))
+        ctx["write_result"] = result
+        ctx["query_error"] = None
+    except Exception as exc:
+        ctx["write_result"] = None
+        ctx["query_error"] = str(exc)
+
+
+@then("the batch write reports a commit sha")
+def step_github_batch_commit_sha(ctx):
+    result = ctx.get("write_result")
+    assert result is not None, "No batch write result"
+    assert result.get("object", {}).get("sha"), f"Expected a commit sha in {result}"
 
 
 # ============================================================================
