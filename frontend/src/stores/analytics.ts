@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import { parseISO, isValid } from "date-fns";
 import { api } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { toProblemDetail, type ProblemDetail } from "../lib/api/formatError";
@@ -126,7 +127,20 @@ function isoDay(date: Date): string {
 }
 
 function parseDay(value: string): Date {
-  return new Date(`${value}T00:00:00.000Z`);
+  const parsed = parseISO(`${value}T00:00:00.000Z`);
+  if (!isValid(parsed)) {
+    throw new Error(`Invalid day value: ${value}`);
+  }
+  return parsed;
+}
+
+/**
+ * Shift a UTC day by a whole number of days. Epoch arithmetic keeps the result at
+ * UTC midnight regardless of local timezone. The epoch is derived from an existing
+ * valid Date minus integer days, so it can never be an Invalid Date.
+ */
+function shiftUtcDays(date: Date, days: number): Date {
+  return new Date(date.getTime() - days * DAY_MS); // nosemgrep: new-date-without-guard
 }
 
 /** Rolling timespan → typed query params (UTC). Filters included only when set. */
@@ -135,8 +149,8 @@ export function serializeFilters(
   now: Date = new Date(),
 ): AnalyticsQueryParams {
   const timespan = TIMESPANS.find((t) => t.value === filters.timespan) ?? TIMESPANS[1];
-  const dateTo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const dateFrom = new Date(dateTo.getTime() - timespan.days * DAY_MS);
+  const dateTo = parseISO(isoDay(now));
+  const dateFrom = shiftUtcDays(dateTo, timespan.days);
   const params: AnalyticsQueryParams = {
     group_by: filters.groupBy,
     date_from: isoDay(dateFrom),
@@ -156,8 +170,8 @@ export function previousWindowParams(params: AnalyticsQueryParams): AnalyticsQue
   const to = parseDay(params.date_to);
   const from = parseDay(params.date_from);
   const spanDays = Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1;
-  const prevTo = new Date(from.getTime() - DAY_MS);
-  const prevFrom = new Date(prevTo.getTime() - (spanDays - 1) * DAY_MS);
+  const prevTo = shiftUtcDays(from, 1);
+  const prevFrom = shiftUtcDays(prevTo, spanDays - 1);
   return { ...params, date_from: isoDay(prevFrom), date_to: isoDay(prevTo) };
 }
 

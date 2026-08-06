@@ -24,7 +24,8 @@ import {
   type AnalyticsBucket,
 } from '../stores/analytics'
 
-const FIXED_NOW = new Date('2026-08-06T12:00:00Z')
+// Fixed UTC instant for deterministic assertions — the ISO literal is always valid.
+const FIXED_NOW = new Date('2026-08-06T12:00:00Z') // nosemgrep: new-date-without-guard
 
 const validResponse = {
   group_by: 'day',
