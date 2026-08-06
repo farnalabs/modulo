@@ -1,8 +1,9 @@
 <template>
   <svg
     :viewBox="`0 0 ${width} ${height}`"
-    class="h-full w-full overflow-visible"
+    class="h-full w-full overflow-hidden"
     preserveAspectRatio="none"
+    aria-hidden="true"
   >
     <defs>
       <linearGradient :id="gradientId" x1="0" y1="0" x2="0" y2="1">
@@ -24,6 +25,26 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+
+// Module-level counter + hash so the gradient id is URL-safe and unique per
+// instance. A raw color string like "var(--color-primary)" contains
+// parentheses that break the url(#...) reference, and two sparklines on the
+// same page must never share an id.
+let sparklineUid = 0;
+
+function hashString(value: string): string {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 defineOptions({ name: "SparklineChart" });
 
 const props = withDefaults(
@@ -40,12 +61,15 @@ const props = withDefaults(
   },
 );
 
-const gradientId = computed(
-  () => `sparkline-${props.data.join("-")}-${props.color}`,
-);
+const gradientId = computed(() => {
+  const seed = `${props.data.join(",")}|${props.color}`;
+  return `sparkline-${++sparklineUid}-${hashString(seed)}`;
+});
 
+// Number.isFinite excludes Infinity/-Infinity (isNaN does not), which would
+// otherwise leak into max/range and produce NaN, out-of-viewBox geometry.
 const normalizedData = computed(() =>
-  props.data.filter((v) => typeof v === "number" && !isNaN(v)),
+  props.data.filter((v) => typeof v === "number" && Number.isFinite(v)),
 );
 
 const chartData = computed(() => {
@@ -56,7 +80,10 @@ const chartData = computed(() => {
 
 const max = computed(() => Math.max(...chartData.value, 1));
 const min = computed(() => Math.min(...chartData.value));
-const range = computed(() => max.value - min.value || 1);
+const range = computed(() => {
+  const raw = max.value - min.value;
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+});
 
 const padding = 2;
 const stepX = computed(
@@ -66,11 +93,17 @@ const stepX = computed(
 const linePoints = computed(() => {
   return chartData.value
     .map((v, i) => {
-      const x = padding + i * stepX.value;
-      const y =
+      // Clamp x and y to the viewBox so pathological input can never escape
+      // the chart area (previously rendered as a "black mountain" over
+      // neighbouring cards via overflow-visible).
+      const x = clamp(padding + i * stepX.value, padding, props.width - padding);
+      const y = clamp(
         props.height -
-        padding -
-        ((v - min.value) / range.value) * (props.height - padding * 2);
+          padding -
+          ((v - min.value) / range.value) * (props.height - padding * 2),
+        padding,
+        props.height - padding,
+      );
       return `${x},${y}`;
     })
     .join(" ");
@@ -78,11 +111,14 @@ const linePoints = computed(() => {
 
 const areaPoints = computed(() => {
   const pts = chartData.value.map((v, i) => {
-    const x = padding + i * stepX.value;
-    const y =
+    const x = clamp(padding + i * stepX.value, padding, props.width - padding);
+    const y = clamp(
       props.height -
-      padding -
-      ((v - min.value) / range.value) * (props.height - padding * 2);
+        padding -
+        ((v - min.value) / range.value) * (props.height - padding * 2),
+      padding,
+      props.height - padding,
+    );
     return `${x},${y}`;
   });
   const firstX = pts[0].split(",")[0];

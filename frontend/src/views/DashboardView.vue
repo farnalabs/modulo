@@ -34,7 +34,7 @@
             ]"
             @click="selectWindow(w.value)"
           >
-            {{ w.label }}
+            {{ $t(w.labelKey) }}
           </button>
         </div>
       </div>
@@ -311,14 +311,12 @@ const spendSparklineData = computed(() => {
 })
 
 // --- Rolling-window toggle (FAR-92) ---
-// Labels are inline pending i18n keys — TODO: add views.DashboardView.trend_24h /
-// trend_7d / trend_30d / trend_90d to frontend/src/locales/en-US.js in a follow-up
-// (locales file is outside this delivery's allowlist).
 const trendWindows = [
-  { label: 'Last 24h', value: 1 },
-  { label: 'Last 7d', value: 7 },
-  { label: 'Last 30d', value: 30 },
-  { label: 'Last 90d', value: 90 },
+  { labelKey: 'views.DashboardView.trend_24h', value: 1 },
+  { labelKey: 'views.DashboardView.trend_3d', value: 3 },
+  { labelKey: 'views.DashboardView.trend_7d', value: 7 },
+  { labelKey: 'views.DashboardView.trend_30d', value: 30 },
+  { labelKey: 'views.DashboardView.trend_90d', value: 90 },
 ]
 
 const selectedWindow = ref<number | null>(null)
@@ -388,16 +386,7 @@ const trendsRaw = computed(() => dashboardStore.trends)
 
 const trendData = computed(() => {
   const tr = trendsRaw.value
-  if (!tr) {
-    // Fall back to summary trend when /trends hasn't been fetched yet
-    if (!summary.value?.trend) return []
-    return summary.value.trend.map(d => ({
-      date: d.date,
-      run_count: d.run_count,
-      eval_pass_rate: d.eval_pass_rate,
-      token_spend_usd: d.token_spend_usd,
-    }))
-  }
+  if (!tr) return []
   const items: Array<{ date: string; run_count: number; eval_pass_rate: number | null; token_spend_usd: number }> = []
   const evalMap = new Map(tr.eval_pass_rates.map(r => [r.date, r.pass_rate]))
   const spendMap = new Map(tr.token_spend.map(r => [r.date, r.total_spend_usd]))

@@ -50,8 +50,13 @@ class TestFilesystemConnector:
             await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "../etc/passwd"}))
 
     async def test_invalid_path_empty(self, fs_connector: FilesystemConnector) -> None:
-        with pytest.raises(IsADirectoryError):
+        with pytest.raises(IsADirectoryError, match="Cannot read directory as file"):
             await fs_connector.query(ConnectorQuery(resource="file", filters={"path": ""}))
+
+    async def test_read_directory_as_file_raises(self, fs_connector: FilesystemConnector) -> None:
+        await fs_connector.write(ConnectorPayload(resource="file", data={"path": "sub/inner.txt", "content": "x"}))
+        with pytest.raises(IsADirectoryError, match="Cannot read directory as file"):
+            await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "sub"}))
 
     async def test_write_to_nested_path_creates_intermediate_dirs(self, fs_connector: FilesystemConnector) -> None:
         content = "nested"

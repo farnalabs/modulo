@@ -99,10 +99,7 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
     ctx["users"].get(username, {"id": str(uuid.uuid4())})
     is_member = username in ctx.get("memberships", {})
 
-    pipelines = []
-    for pname, pdata in ctx["pipelines"].items():
-        if pdata.get("visibility") == "org" or is_member:
-            pipelines.append(pdata)
+    pipelines = [pdata for pdata in ctx["pipelines"].values() if pdata.get("visibility") == "org" or is_member]
 
     with patch(
         "modulo.api.routes.pipelines.list_pipelines",

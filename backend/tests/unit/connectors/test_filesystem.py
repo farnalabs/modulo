@@ -85,3 +85,42 @@ def test_connector_type(connector):
     from modulo.connectors.base import ConnectorType
 
     assert connector.connector_type == ConnectorType.FILESYSTEM
+
+
+def test_init_rejects_empty_base_path():
+    with pytest.raises(ValueError, match="base_path must be a non-empty directory path"):
+        FilesystemConnector(base_path="")
+
+
+async def test_query_file_requires_path_filter(connector):
+    with pytest.raises(ValueError, match="requires 'path' filter"):
+        await connector.query(ConnectorQuery(resource="file"))
+
+
+async def test_write_requires_path_key(connector):
+    with pytest.raises(ValueError, match="requires 'path' in data"):
+        await connector.write(ConnectorPayload(resource="file", data={"content": "x"}))
+
+
+async def test_write_requires_content(connector):
+    with pytest.raises(ValueError, match="requires 'content' in data"):
+        await connector.write(ConnectorPayload(resource="file", data={"path": "out.txt"}))
+
+
+async def test_query_directory_respects_limit(connector, tmp_path):
+    for i in range(3):
+        (tmp_path / f"f{i}.txt").write_text(str(i), encoding="utf-8")
+    result = await connector.query(ConnectorQuery(resource="directory", limit=2))
+    assert len(result.records) == 2
+    assert result.total == 2
+
+
+async def test_list_missing_directory_raises(connector):
+    with pytest.raises(FileNotFoundError):
+        await connector.query(ConnectorQuery(resource="directory", filters={"path": "missing_dir"}))
+
+
+async def test_read_directory_as_file_raises(connector, tmp_path):
+    (tmp_path / "sub").mkdir()
+    with pytest.raises(IsADirectoryError, match="Cannot read directory as file"):
+        await connector.query(ConnectorQuery(resource="file", filters={"path": "sub"}))

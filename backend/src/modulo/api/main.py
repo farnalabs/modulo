@@ -280,7 +280,7 @@ async def _run_break_glass_watchdog(settings: Settings) -> None:
         validate_break_glass_boot(settings)
     except RuntimeError as exc:
         set_break_glass_watchdog("failed", str(exc))
-        logger.error("infra_blocked=break_glass_config_failed %s", exc)
+        logger.exception("infra_blocked=break_glass_config_failed")
         raise
     set_break_glass_watchdog("ok", "break-glass boot config assertions passed")
     logger.info("startup.break_glass_watchdog_ok")

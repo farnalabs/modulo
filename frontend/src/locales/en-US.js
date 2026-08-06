@@ -809,6 +809,7 @@ export default {
       "subtitle": "Run volume, cost, token, duration and success trends for your pipelines",
       "timespan": "Timespan",
       "timespan_24h": "Last 24h",
+      "timespan_3d": "3d",
       "timespan_7d": "Last 7d",
       "timespan_30d": "Last 30d",
       "timespan_90d": "Last 90d",
@@ -885,6 +886,8 @@ export default {
       "improving": "Improving",
       "declining": "Declining",
       "stable": "Stable",
+      "trend_24h": "Last 24h",
+      "trend_3d": "3d",
       "trend_7d": "7d",
       "trend_30d": "30d",
       "trend_90d": "90d",
@@ -2485,7 +2488,8 @@ export default {
     "failed_to_save": "Failed to save",
     "configuration_saved": "Configuration saved",
     "reset": "Reset",
-    "create": "Create"
+    "create": "Create",
+    "deleting": "Deleting..."
   },
   "nav": {
     "analytics": "Analytics",
