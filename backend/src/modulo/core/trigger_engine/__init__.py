@@ -10,7 +10,15 @@ Webhook processing pipeline:
   7. Create Run + TriggerEvent in one transaction
   8. Dedup hash committed with run (single atomic unit)
 
-All outcomes (pass and fail) are recorded as a TriggerEvent row.
+All outcomes (pass and fail) are recorded as a TriggerEvent row, with two
+exceptions documented here for accuracy:
+  * Paused deliveries (org-wide kill-switch) do NOT write a TriggerEvent in the
+    engine — the route's in-transaction catch is the single writer and commits
+    a ``validation_result='paused'`` row.
+  * Other failure events (hmac_failed, timestamp_expired, ...) ARE written by
+    the engine, but the caller's transaction may roll them back when it maps
+    the typed exception to an HTTP response (a documented pre-existing
+    limitation, out of scope for the pause feature).
 The caller is responsible for background execution of the created run.
 """
 
@@ -37,6 +45,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
+from modulo.db.settings_resolver import ensure_triggers_resumable
 
 _log = logging.getLogger(__name__)
 
@@ -119,10 +128,15 @@ _ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_
 # ---------------------------------------------------------------------------
 
 
-def _sha256_hex(data: bytes | None) -> str:
+def sha256_hex(data: bytes | None) -> str:
     if not isinstance(data, bytes):
         return ""
     return hashlib.sha256(data).hexdigest()
+
+
+# Backward-compatible private aliases — legacy callers and tests import the
+# underscore names. New code should use the public names.
+_sha256_hex = sha256_hex
 
 
 def _is_unique_violation(exc: IntegrityError) -> bool:
@@ -154,7 +168,7 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     return False
 
 
-def _verify_timestamp(modulo_timestamp: str | None) -> int:
+def verify_timestamp(modulo_timestamp: str | None) -> int:
     """Validate and return the Unix timestamp from the X-Modulo-Timestamp header.
 
     Raises TimestampExpiredError if the header is missing, malformed, or outside
@@ -172,7 +186,7 @@ def _verify_timestamp(modulo_timestamp: str | None) -> int:
     return ts
 
 
-def _verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, timestamp: int | None = None) -> bool:
+def verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, timestamp: int | None = None) -> bool:
     """Return True if the HMAC-SHA256 signature matches ``timestamp.body``.
 
     When *timestamp* is provided, the HMAC is computed over
@@ -184,6 +198,12 @@ def _verify_hmac(raw_body: bytes, secret: str, signature_header: str | None, tim
     payload = f"{timestamp}.".encode() + raw_body if timestamp is not None else raw_body
     expected = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature_header)
+
+
+# Backward-compatible private aliases — legacy callers and tests import the
+# underscore names. New code should use the public names.
+_verify_timestamp = verify_timestamp
+_verify_hmac = verify_hmac
 
 
 def _extract_field(payload: dict[str, Any], path: str) -> Any:
@@ -242,11 +262,11 @@ class TriggerEngine:
             raise TriggerBusyError(trigger_id)
         try:
             trigger = await self._load_trigger(session, trigger_id, org_id)
-            payload_hash = _sha256_hex(raw_body)
+            payload_hash = sha256_hex(raw_body)
 
             # X-Modulo-Timestamp replay window check
             try:
-                ts = _verify_timestamp(modulo_timestamp)
+                ts = verify_timestamp(modulo_timestamp)
             except TimestampExpiredError as exc:
                 _log.warning("Webhook timestamp validation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
                 await self._log_event(
@@ -261,7 +281,7 @@ class TriggerEngine:
             # HMAC validation (only if secret is configured)
             cfg = trigger.config_json or {}
             hmac_secret: str | None = cfg.get("hmac_secret")
-            if hmac_secret is not None and not _verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+            if hmac_secret is not None and not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                 _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
                 await self._log_event(
                     session,
@@ -271,6 +291,14 @@ class TriggerEngine:
                     result="hmac_failed",
                 )
                 raise HmacValidationError()
+
+            # Org-wide pause kill-switch. Checked AFTER timestamp+HMAC
+            # validation (an unauthenticated delivery still gets its typed
+            # error) but BEFORE the dedup insert — a paused delivery must not
+            # consume a dedup slot. The engine writes NO TriggerEvent here; the
+            # route's in-transaction catch is the single writer of the
+            # ``paused`` event. Read failures propagate (never fabricate).
+            await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
             # Event type filtering - skip if payload doesn't contain any accepted event
             accepted_events: list[str] | None = cfg.get("accepted_events")
@@ -451,6 +479,11 @@ class TriggerEngine:
             if not trigger.active:
                 raise TriggerInactiveError(event.trigger_id)
 
+            # Org-wide pause kill-switch — a replay is a trigger-initiated run
+            # and must honour the pause. No event write here; the route's
+            # in-transaction catch writes the ``paused`` event.
+            await ensure_triggers_resumable(session, org_id, trigger_id=event.trigger_id, trigger_type="webhook")
+
             # Load raw payload from WebhookPayload
             payload_result = await session.execute(
                 select(WebhookPayload).where(
@@ -466,7 +499,7 @@ class TriggerEngine:
             raw_body = stored.raw_body
 
             # Run the rest of the pipeline (skip HMAC + timestamp validation)
-            payload_hash = _sha256_hex(raw_body)
+            payload_hash = sha256_hex(raw_body)
 
             # No dedup check for replays - this is an intentional re-fire.
             # The original event already went through dedup validation.

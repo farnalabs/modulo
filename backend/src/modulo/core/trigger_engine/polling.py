@@ -1,16 +1,17 @@
 """Polling triggers — periodically polls external sources and fires on schedule.
 
-Each polling trigger queries its configured external source on an interval and
-creates a run when its condition matches. Fire logic lives in
-``fire_polling_trigger()``, enqueued as a per-item SAQ fire job.
+The fire logic lives in ONE place: ``cron_helpers.fire_polling_trigger``,
+enqueued as a per-item SAQ fire job by ``fire_due_triggers`` (system cron).
+This module keeps the connector builder + JMESPath condition evaluation
+(imported by other code) and re-exports the fire function so legacy callers
+and tests keep importing ``polling.fire_polling_trigger``. The old duplicated
+~200-line copy was removed (M2 drift fix); the legacy beat path (Celery) was
+removed in PR C of the Celery->SAQ migration.
 """
 
-import asyncio
 import datetime
 import hashlib
-import json
 import logging
-import threading
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -18,39 +19,16 @@ from typing import Any
 import jmespath
 import jmespath.exceptions
 from sqlalchemy import func, select, text, update
-from sqlalchemy.exc import TimeoutError as SATimeoutError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult
-from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-from modulo.core.secrets_backend import create_secrets_backend
-from modulo.db.crud.run import create_run
-from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.connectors.base import ConnectorBase, ConnectorResult
 from modulo.db.models.run import Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
-from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 
 _ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
-
-_engine: Any = None
-_engine_lock = threading.Lock()
-
-
-def _get_engine() -> Any:
-    global _engine
-    if _engine is None:
-        with _engine_lock:
-            if _engine is None:
-                _engine = create_async_engine(
-                    get_settings().database_url,
-                    pool_pre_ping=True,
-                    pool_recycle=300,
-                    connect_args={"timeout": 10},
-                )
-    return _engine
 
 
 # ---------------------------------------------------------------------------
@@ -142,250 +120,16 @@ def evaluate_condition(
 
 
 # ---------------------------------------------------------------------------
-# Fire logic — shared async core (per-item SAQ fire job)
+# Fire logic — single implementation in cron_helpers (per-item SAQ fire job)
 # ---------------------------------------------------------------------------
 
+# Re-export the single implementation. The historical duplicate copy in this
+# module drifted (spend-limit check, SATimeoutError vs builtin TimeoutError);
+# the live path has always been ``saq_worker -> cron_helpers.fire_polling_trigger``.
+from modulo.core.cron_helpers import fire_polling_trigger  # noqa: E402
 
-async def fire_polling_trigger(
-    *,
-    trigger_id: uuid.UUID,
-    org_id: uuid.UUID,
-    pipeline_id: uuid.UUID,
-    connector_instance_id: uuid.UUID,
-    poll_query: str,
-    condition_expression: str | None,
-) -> dict[str, Any]:
-    """Fire a polling trigger — runs the connector query and evaluates the condition.
-
-    Shared between the SAQ scheduler and the in-process asyncio path.
-    Opens its own DB connection so it can be called from both sync and async contexts.
-    """
-    settings = get_settings()
-    factory = async_sessionmaker(_get_engine(), expire_on_commit=False, autobegin=False)
-
-    async with factory() as session, session.begin():
-        await _set_rls_org(session, org_id)
-
-        # Re-read trigger with pg_try_advisory_xact_lock to serialise concurrent fires
-        # (auto-released on transaction end — no manual unlock needed)
-        key1, key2 = _uuid_to_lock_keys(trigger_id)
-        lock_result = await session.execute(
-            text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
-            {"key1": key1, "key2": key2},
-        )
-        if not lock_result.scalar_one():
-            return {"status": "skipped", "reason": "trigger_busy"}
-        result = await session.execute(
-            select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
-        )
-        trigger = result.scalar_one_or_none()
-        if trigger is None or not trigger.active:
-            return {"status": "skipped", "reason": "trigger_inactive_or_missing"}
-        if trigger.next_fire_at is not None and trigger.next_fire_at > datetime.datetime.now(datetime.UTC):
-            return {"status": "skipped", "reason": "already_fired_this_cycle"}
-
-        # Concurrency check
-        active_count = await _count_active_runs(session, trigger_id)
-        if active_count >= trigger.max_concurrent_runs:
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="concurrency_limit_reached",
-                error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
-            )
-            return {
-                "status": "skipped",
-                "reason": "concurrency_limit",
-                "active_runs": active_count,
-            }
-
-        # Daily spend limit check (mirrors cron_helpers.fire_cron_trigger) — run
-        # before the connector query so an over-budget trigger stops polling the
-        # external service instead of running the query every cycle.
-        today_cost = await _daily_spend_limit_reached(session, trigger, org_id)
-        if today_cost is not None:
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="spend_limit_reached",
-                error_detail=f"Daily spend limit {trigger.daily_spend_limit} reached (today: {today_cost})",
-            )
-            await _update_next_fire_no_last(session, trigger)
-            return {
-                "status": "skipped",
-                "reason": "spend_limit",
-                "daily_spend_limit": str(trigger.daily_spend_limit),
-                "today_cost": str(today_cost),
-            }
-
-        # Load connector instance
-        conn_result = await session.execute(
-            select(ConnectorInstance).where(
-                ConnectorInstance.id == connector_instance_id,
-                ConnectorInstance.organisation_id == org_id,
-            )
-        )
-        connector_instance = conn_result.scalar_one_or_none()
-        if connector_instance is None:
-            _log.warning("Connector instance %s not found for polling trigger %s", connector_instance_id, trigger_id)
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="poll_error",
-                error_detail=f"Connector instance {connector_instance_id} not found",
-            )
-            await _update_next_fire_no_last(session, trigger)
-            return {"status": "error", "reason": "connector_not_found"}
-
-        # Decrypt credentials and build connector
-        try:
-            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-            raw_creds = await secrets_backend.get_secret(str(connector_instance.id))
-            creds: dict[str, Any] = json.loads(raw_creds)
-            connector = _build_polling_connector(
-                connector_instance.connector_type_id,
-                connector_instance.config_json,
-                creds,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning(
-                "Failed to initialise connector for polling trigger %s: %s",
-                trigger_id,
-                str(exc)[:200],
-                exc_info=True,
-            )
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="poll_error",
-                error_detail=f"Failed to initialise connector: {str(exc)[:200]}",
-            )
-            await _update_next_fire_no_last(session, trigger)
-            return {"status": "error", "reason": "connector_init_failed"}
-
-        # Run poll query
-        try:
-            query = ConnectorQuery(resource=poll_query)
-            query_result = await asyncio.wait_for(connector.query(query), timeout=60)
-        except SATimeoutError:
-            _log.warning("Poll query timed out for trigger %s", trigger_id, exc_info=True)
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="poll_error",
-                error_detail="Poll query timed out after 60s",
-            )
-            await _update_next_fire_no_last(session, trigger)
-            return {"status": "error", "reason": "query_timeout"}
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning("Poll query failed for trigger %s: %s", trigger_id, str(exc)[:200], exc_info=True)
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="poll_error",
-                error_detail=f"Poll query failed: {str(exc)[:200]}",
-            )
-            await _update_next_fire_no_last(session, trigger)
-            return {"status": "error", "reason": "query_failed", "error": str(exc)[:200]}
-
-        # Evaluate condition
-        try:
-            condition_met = evaluate_condition(query_result, condition_expression)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            _log.warning("Condition evaluation failed for trigger %s: %s", trigger_id, exc, exc_info=True)
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="poll_error",
-                error_detail=f"Condition evaluation failed: {str(exc)[:200]}",
-            )
-            await _update_next_fire_no_last(session, trigger)
-            return {"status": "error", "reason": "condition_eval_failed", "error": str(exc)}
-
-        if not condition_met:
-            # Log no_match — condition not satisfied this cycle
-            await _log_poll_event(
-                session,
-                trigger=trigger,
-                org_id=org_id,
-                result="no_match",
-            )
-            # Update next_fire_at on no-match (separate function avoids setting
-            # last_fired_at which would be semantically misleading — the trigger
-            # didn't actually fire).
-            await _update_next_fire_no_last(session, trigger)
-            return {"status": "no_match"}
-
-        # Snapshot ID from trigger config
-        config = trigger.config_json or {}
-        snapshot_id_str = config.get("snapshot_id")
-        if snapshot_id_str:
-            try:
-                snapshot_id = uuid.UUID(snapshot_id_str)
-            except (ValueError, TypeError):
-                snapshot_id = uuid.UUID(int=0)
-        else:
-            snapshot_id = uuid.UUID(int=0)
-
-        if snapshot_id == uuid.UUID(int=0):
-            _log.warning("Polling trigger %s has no valid snapshot_id in config", trigger_id, exc_info=True)
-
-        # Build input payload from query result
-        input_payload: dict[str, Any] = {
-            "records": query_result.records,
-            "total": query_result.total,
-            "poll_query": poll_query,
-        }
-
-        # Create the run
-        run = await create_run(
-            session,
-            org_id=org_id,
-            pipeline_id=pipeline_id,
-            snapshot_id=snapshot_id,
-            trigger_type="polling",
-            trigger_id=trigger_id,
-            input_payload=input_payload,
-        )
-
-        # Log TriggerEvent — condition_met
-        event = await _log_poll_event(
-            session,
-            trigger=trigger,
-            org_id=org_id,
-            result="condition_met",
-            run_id=run.id,
-        )
-
-        # Update last_fired_at and next_fire_at
-        await _update_next_fire(session, trigger)
-
-        _log.info(
-            "Polling trigger %s fired -> run %s (condition met)",
-            trigger_id,
-            run.id,
-        )
-
-        return {
-            "status": "fired",
-            "run_id": str(run.id),
-            "event_id": str(event.id),
-        }
-
-    return {"status": "error", "reason": "unexpected"}
+# Backward-compatible alias — tests import the old private name.
+_fire_polling_trigger = fire_polling_trigger
 
 
 async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
@@ -488,7 +232,3 @@ async def _log_poll_event(
     session.add(event)
     await session.flush()
     return event
-
-
-# Backward-compatible alias — tests import the old private name.
-_fire_polling_trigger = fire_polling_trigger

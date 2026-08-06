@@ -1935,7 +1935,16 @@ export default {
       "please_select_a_pipeline": "Please select a pipeline.",
       "headers_must_be_valid_json": "Headers must be valid JSON.",
       "failed_to_delete_trigger": "Failed to delete trigger: {detail}",
-      "failed_to_toggle_trigger": "Failed to toggle trigger: {detail}"
+      "failed_to_toggle_trigger": "Failed to toggle trigger: {detail}",
+      "paused_banner_title": "All triggers are paused",
+      "paused_banner_body": "Webhooks are rejected (202) and cron/polling fires are skipped. Running pipelines continue; manual runs and scheduled reports still work.",
+      "paused_at_label": "Paused at {at}",
+      "pause_all_triggers": "Pause all triggers",
+      "pause_all_triggers_description": "Org-wide kill-switch: pauses new trigger-initiated runs (webhook, cron, polling, agent signal, replay). Manual runs and scheduled reports are not paused.",
+      "pause_all_triggers_action": "Pause all",
+      "resume_triggers": "Resume triggers",
+      "failed_to_update_pause": "Failed to update trigger pause state: {detail}",
+      "error_updating_pause": "Error updating trigger pause state: {detail}"
     },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",

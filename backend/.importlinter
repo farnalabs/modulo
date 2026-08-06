@@ -73,6 +73,7 @@ forbidden_modules =
     modulo.api
 ignore_imports =
     modulo.db.crud.pipeline_snapshot -> modulo.core.exceptions
+    modulo.db.settings_resolver -> modulo.core.exceptions
     modulo.db.crud.pipeline_snapshot -> modulo.core.composite_engine.expander
     modulo.db.crud.sso_provider -> modulo.core.audit_logger
     modulo.db.crud.pipeline -> modulo.core.audit_logger
