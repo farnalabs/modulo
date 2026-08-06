@@ -52,6 +52,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminCostControlsView from '../views/AdminCostControlsView.vue'
+import { Select } from '../components/ui/select'
 
 describe('AdminCostControlsView', () => {
   let pinia: ReturnType<typeof createPinia>
@@ -157,6 +158,69 @@ describe('AdminCostControlsView', () => {
       '/api/v1/admin/costs/controls',
       expect.objectContaining({
         body: expect.objectContaining({ alert_thresholds: [50, 75, 90, 100] }),
+      }),
+    )
+  })
+
+  it('loads persisted billing period and circuit breaker into the UI', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs/controls') {
+        return Promise.resolve({
+          data: { budget: 10000, currency: 'USD', billing_period: 'quarterly', alert_thresholds: [50, 75, 90], circuit_breaker_enabled: true },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    pinia = createPinia()
+    setActivePinia(pinia)
+
+    const wrapper = mount(AdminCostControlsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    expect(vm.settings.billingPeriod).toBe('quarterly')
+    expect(vm.settings.circuitBreakerEnabled).toBe(true)
+    expect((wrapper.find('[data-testid="cc-circuit-breaker"] input').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('sends snake_case billing_period and circuit_breaker_enabled keys on save', async () => {
+    const wrapper = await mountView()
+    mockPut.mockClear()
+
+    const cbInput = wrapper.find('[data-testid="cc-circuit-breaker"] input')
+    ;(cbInput.element as HTMLInputElement).checked = true
+    await cbInput.trigger('change')
+    await flushPromises()
+
+    expect(mockPut).toHaveBeenCalledWith(
+      '/api/v1/admin/costs/controls',
+      expect.objectContaining({
+        body: expect.objectContaining({ circuit_breaker_enabled: true }),
+      }),
+    )
+
+    mockPut.mockClear()
+    const billingSelect = wrapper
+      .findAllComponents(Select)
+      .find((s) => s.find('[data-testid="cc-billing-period"]').exists())
+    expect(billingSelect).toBeTruthy()
+    await billingSelect!.vm.$emit('update:model-value', 'annual')
+    await flushPromises()
+
+    expect(mockPut).toHaveBeenCalledWith(
+      '/api/v1/admin/costs/controls',
+      expect.objectContaining({
+        body: expect.objectContaining({ billing_period: 'annual' }),
       }),
     )
   })
