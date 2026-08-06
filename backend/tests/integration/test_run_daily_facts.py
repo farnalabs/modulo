@@ -137,15 +137,19 @@ async def _insert_run(
         "langgraph_thread_id": f"thread-{run_id.hex[:16]}",
         "run_number": int(run_id.int % 10**9) + 1,
     }
-    for col, value in (
-        ("started_at", started_at),
-        ("completed_at", completed_at),
-        ("created_at", created_at),
-        ("total_cost_usd", total_cost_usd),
-        ("total_tokens", total_tokens),
-    ):
-        if value is not None:
-            values[col] = value
+    values.update(
+        {
+            col: value
+            for col, value in (
+                ("started_at", started_at),
+                ("completed_at", completed_at),
+                ("created_at", created_at),
+                ("total_cost_usd", total_cost_usd),
+                ("total_tokens", total_tokens),
+            )
+            if value is not None
+        }
+    )
     await session.execute(sa_insert(Run).values(**values))
     return run_id
 

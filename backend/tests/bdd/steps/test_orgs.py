@@ -2,9 +2,9 @@
 
 import contextlib
 import json
-import os
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,17 +34,16 @@ def ctx():
 def _cleanup_onboarding_state():
     """Remove test onboarding state before and after each scenario."""
     path = _onboarding_state_path()
-    if os.path.exists(path):
-        os.remove(path)
+    if path.exists():
+        path.unlink()
     yield
-    if os.path.exists(path):
-        os.remove(path)
+    if path.exists():
+        path.unlink()
 
 
-def _onboarding_state_path():
+def _onboarding_state_path() -> Path:
     """Return the real path used by the onboarding module."""
-    base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "src", "modulo", "api", "routes")
-    return os.path.join(base, "..", "..", "..", "..", ".onboarding-state.json")
+    return Path(__file__).resolve().parent.parent.parent.parent / ".onboarding-state.json"
 
 
 # ===========================================================================
@@ -236,15 +235,15 @@ def user_deactivated(username: str, ctx):
 def new_org_signup(ctx):
     # Ensure no onboarding state file exists
     path = _onboarding_state_path()
-    if os.path.exists(path):
-        os.remove(path)
+    if path.exists():
+        path.unlink()
 
 
 @given("the welcome flow is completed")
 def welcome_flow_completed(ctx):
     path = _onboarding_state_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
         json.dump({"is_first_run": True, "completed_steps": []}, f)
     ctx["all_steps_done"] = False
 
