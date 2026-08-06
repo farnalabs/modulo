@@ -15,8 +15,7 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import UTC, date, datetime, timedelta
-from datetime import time as dt_time
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -28,6 +27,7 @@ from starlette import status as http_status
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.analytics.builder import (
+    HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
     AnalyticsGroupBy,
     AnalyticsQuery,
@@ -35,7 +35,9 @@ from modulo.core.analytics.builder import (
     AnalyticsTriggerType,
     bucket_rows,
     build_facts_query,
+    hour_groupby_span_exceeds,
     resolve_group_by,
+    to_utc_aware,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -163,6 +165,18 @@ async def analytics_query(
     today = datetime.now(UTC).date()
     effective_to = date_to or today
     effective_from = date_from or (effective_to - timedelta(days=364))
+
+    # Normalise BOTH bounds to aware UTC datetimes BEFORE any comparison or
+    # arithmetic: a bare date parses as a NAIVE datetime while an ISO datetime
+    # with a 'Z'/offset parses as AWARE — comparing or subtracting a mixed pair
+    # raises TypeError ("can't compare offset-naive and offset-aware"), which
+    # would escape the try/except below as a 500. Normalising first turns that
+    # into a clean 422. Aware non-UTC offsets are converted (astimezone), so
+    # +05:00 inputs bucket from their UTC-converted instant. Bare dates expand
+    # to 00:00 / 23:59:59 so hourly bucketing covers the whole day.
+    effective_from = to_utc_aware(effective_from)
+    effective_to = to_utc_aware(effective_to, end_of_day=True)
+
     if effective_from > effective_to:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -174,19 +188,17 @@ async def analytics_query(
             detail="date range must be 365 days or less",
         )
 
-    # Normalise to aware UTC datetimes: bare dates expand to 00:00 / 23:59:59 so
-    # hourly bucketing covers the whole day.
-    def _utc_dt(value: date | datetime, *, end_of_day: bool) -> datetime:
-        if isinstance(value, datetime):
-            return value.replace(tzinfo=UTC) if value.tzinfo is None else value
-        if end_of_day:
-            return datetime.combine(value, dt_time(23, 59, 59), tzinfo=UTC)
-        return datetime.combine(value, dt_time.min, tzinfo=UTC)
-
-    effective_from = _utc_dt(effective_from, end_of_day=False)
-    effective_to = _utc_dt(effective_to, end_of_day=True)
-
     effective_group_by = resolve_group_by(group_by, effective_from, effective_to) if auto_granularity else group_by
+
+    # Explicit hour grouping over a wide range would explode the hour grid (up
+    # to 24 buckets/day per dimension key) before limit truncation — reject it
+    # cleanly. auto_granularity never selects hour for spans this wide, so this
+    # only fires on an explicit group_by=hour.
+    if effective_group_by == AnalyticsGroupBy.HOUR and hour_groupby_span_exceeds(effective_from, effective_to):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"hour granularity supports ranges of {HOUR_GROUPBY_MAX_RANGE_DAYS} days or less",
+        )
 
     query = AnalyticsQuery(
         org_id=org_id,

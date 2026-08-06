@@ -500,6 +500,72 @@ class TestValidation:
         )
         assert resp.status_code == 422, f"Expected 422 for limit > 1000, got {resp.status_code}: {resp.text}"
 
+    async def test_mixed_naive_aware_bounds_do_not_500(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """A bare-date date_from mixed with an aware date_to must NOT 500.
+
+        Pre-fix the range checks compared/subtracted a naive date_from against
+        an aware date_to and raised ``TypeError`` (which escaped the handler's
+        try/except as a 500). Both bounds are now normalised to aware UTC before
+        any comparison, so the request must return a clean 200.
+        """
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?date_from=2026-08-01&date_to=2026-08-05T14:00:00Z",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+    async def test_non_utc_offset_bounds_convert_to_utc_before_bucketing(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """A -05:00 date_from crossing a date boundary must bucket from the
+        UTC-converted date.
+
+        2026-07-31T21:00-05:00 is 2026-08-01T02:00Z, so the day grid must start
+        at 2026-08-01 — never the raw local date 2026-07-31 (the pre-fix
+        re-labelling behaviour).
+        """
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?date_from=2026-07-31T21:00:00-05:00&date_to=2026-08-03T00:00:00-05:00",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        buckets = resp.json()["buckets"]
+        assert buckets, "expected zero-filled buckets for the range"
+        assert buckets[0]["date"] == "2026-08-01", (
+            "the -05:00 date_from 2026-07-31T21:00 must convert to 2026-08-01 02:00Z — "
+            f"first bucket is {buckets[0]['date']}"
+        )
+
+    async def test_explicit_hour_over_fourteen_days_returns_422(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """Explicit group_by=hour over a >14-day range must return a clean 422.
+
+        The hour-grid amplification guard (PR #766 review finding 4): without
+        it, the bucket grid would materialise up to 24 buckets/day per dimension
+        key before limit truncation.
+        """
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?group_by=hour&date_from=2026-01-01&date_to=2026-01-20",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+        assert "hour" in resp.json()["detail"].lower()
+
 
 class TestStatementTimeout:
     async def test_statement_timeout_maps_to_503(

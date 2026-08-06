@@ -31,6 +31,7 @@ import sqlalchemy as sa
 from modulo.db.models.run_daily_facts import RunDailyFact
 
 __all__ = [
+    "HOUR_GROUPBY_MAX_RANGE_DAYS",
     "AnalyticsDimension",
     "AnalyticsGroupBy",
     "AnalyticsQuery",
@@ -38,10 +39,18 @@ __all__ = [
     "AnalyticsTriggerType",
     "bucket_rows",
     "build_facts_query",
+    "hour_groupby_span_exceeds",
     "resolve_group_by",
+    "to_utc_aware",
 ]
 
 _COMPLETE_STATUS = "complete"
+
+# Hour-granularity range cap: an EXPLICIT ``group_by=hour`` over a wider span
+# would materialise up to 24 buckets/day per dimension key before limit
+# truncation (hour-grid amplification). ``auto_granularity`` never selects hour
+# for spans over 3 days, so this only constrains an explicit hour choice.
+HOUR_GROUPBY_MAX_RANGE_DAYS = 14
 
 
 class AnalyticsGroupBy(StrEnum):
@@ -196,6 +205,38 @@ def _hour_grid(date_from: date, date_to: date) -> list[datetime]:
     return grid
 
 
+def to_utc_aware(value: date | datetime, *, end_of_day: bool = False) -> datetime:
+    """Normalise a date/datetime to an aware UTC instant.
+
+    Naive datetimes are treated as UTC (``tzinfo=UTC``); aware datetimes with a
+    NON-UTC offset are CONVERTED to UTC via ``.astimezone(UTC)`` — never
+    re-labelled, so ``2026-08-06T14:00:00+05:00`` buckets/labels from the
+    UTC-converted instant (09:00Z). Bare dates expand to 00:00 UTC (or 23:59:59
+    with ``end_of_day``) so an hour grid covers the whole day.
+    """
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return datetime.combine(value, time(23, 59, 59) if end_of_day else time.min, tzinfo=UTC)
+
+
+def hour_groupby_span_exceeds(
+    date_from: date | datetime,
+    date_to: date | datetime,
+    *,
+    max_days: int = HOUR_GROUPBY_MAX_RANGE_DAYS,
+) -> bool:
+    """True when the effective range spans more than *max_days* days.
+
+    Guard for hour-granularity bucket amplification. ``auto_granularity`` never
+    selects hour for wide ranges, so this only fires on an EXPLICIT
+    ``group_by=hour`` over a wide range. Both bounds are normalised to aware UTC
+    before the span arithmetic, so mixed naive/aware inputs are safe.
+    """
+    frm = to_utc_aware(date_from)
+    to = to_utc_aware(date_to, end_of_day=True)
+    return (to - frm).days > max_days
+
+
 def resolve_group_by(
     group_by: AnalyticsGroupBy | None,
     date_from: date | datetime | None,
@@ -211,16 +252,8 @@ def resolve_group_by(
         return group_by or AnalyticsGroupBy.DAY
     if date_from is None or date_to is None:
         return AnalyticsGroupBy.DAY
-    frm = (
-        date_from.replace(tzinfo=UTC)
-        if isinstance(date_from, datetime)
-        else datetime.combine(date_from, time.min, tzinfo=UTC)
-    )
-    to = (
-        date_to.replace(tzinfo=UTC)
-        if isinstance(date_to, datetime)
-        else datetime.combine(date_to, time(23, 59, 59), tzinfo=UTC)
-    )
+    frm = to_utc_aware(date_from)
+    to = to_utc_aware(date_to, end_of_day=True)
     span = (to - frm).days
     if span <= 3:
         return AnalyticsGroupBy.HOUR
