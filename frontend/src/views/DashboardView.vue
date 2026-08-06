@@ -91,7 +91,7 @@
         <router-link to="/admin/costs" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
           <div class="flex items-baseline gap-2">
-            <p class="text-2xl font-semibold tabular-nums">${{ totalSpend.toFixed(2) }}</p>
+            <p class="text-2xl font-semibold tabular-nums">{{ formatMoney(totalSpend, currencyCode, 2) }}</p>
             <span v-if="spendDeltaPct != null" :class="spendDeltaClass" class="text-xs font-medium">
               <span aria-hidden="true">{{ spendDeltaArrow }}</span>{{ spendDeltaPctText }}
             </span>
@@ -245,8 +245,12 @@ import {
 } from '../components/ui/tooltip'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 import { RUN_STATUS } from '../constants/filters'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const { t } = useI18n()
+
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 const planStore = usePlanStore()
 const dashboardStore = useDashboardStore()
@@ -410,6 +414,7 @@ onMounted(async () => {
   const promises: Promise<unknown>[] = [
     dashboardStore.fetchSummary(),
     dashboardStore.fetchTrends(7),
+    loadCurrency(),
   ];
   if (!planStore.currentTier || planStore.currentTier === 'community') {
     promises.push(planStore.fetchPlan());
