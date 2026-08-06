@@ -28,9 +28,11 @@ from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 from modulo.core.trigger_engine import TriggerEngine
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
+from modulo.db.settings_resolver import org_row_is_paused
 
 _log = logging.getLogger(__name__)
 
@@ -80,6 +82,28 @@ async def list_triggers(
             offset = (page - 1) * page_size
             q = q.order_by(Trigger.created_at.desc()).offset(offset).limit(page_size)
             rows = (await session.execute(q)).scalars().all()
+
+            # Org-wide trigger pause state — the SAME predicate the create_run
+            # gate applies (org_row_is_paused: triggers_paused column OR a
+            # non-active org status). A suspended/deleted org therefore shows the
+            # paused banner and the toggle state matches the server truth. Fresh
+            # column-level read (never the ORM identity map).
+            org_state = (
+                await session.execute(
+                    select(
+                        Organisation.triggers_paused,
+                        Organisation.triggers_paused_at,
+                        Organisation.status,
+                    ).where(Organisation.id == principal.organisation_id)
+                )
+            ).one_or_none()
+            if org_state is None:
+                org_triggers_paused = False
+                org_paused_at = None
+            else:
+                triggers_paused_col, paused_at, status = org_state
+                org_triggers_paused = org_row_is_paused(status, triggers_paused_col)
+                org_paused_at = paused_at.isoformat() if paused_at else None
     except ProgrammingError:
         _log.exception("triggers.list_triggers")
         raise HTTPException(
@@ -122,6 +146,8 @@ async def list_triggers(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "triggers_paused": org_triggers_paused,
+        "paused_at": org_paused_at,
     }
 
 
