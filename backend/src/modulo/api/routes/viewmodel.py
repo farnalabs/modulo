@@ -104,7 +104,7 @@ class PendingHitlGate(BaseModel):
 
 class LicenseInfo(BaseModel):
     tier: str = "community"
-    features: list[str] = []
+    features: list[str] = Field(default_factory=list)
     is_valid: bool = True
 
 
