@@ -129,7 +129,7 @@ async def test_paused_org_skips_enqueue_but_advances_next_fire(
 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text("UPDATE organisations SET triggers_paused = TRUE WHERE id = :oid"),
+            text("UPDATE organisations SET triggers_paused = TRUE, triggers_paused_at = now() WHERE id = :oid"),
             {"oid": str(test_org)},
         )
 
