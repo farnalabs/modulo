@@ -87,6 +87,7 @@ _MAX_ERROR_MSG = 500
 _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
+_SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
 
 # The raw_reported display clamp for the node-output surface: the RAW value
 # rides for audit, the SEPARATE clamped display field is what the UI/money
@@ -802,6 +803,40 @@ async def resolve_env_var_refs(
     return resolved
 
 
+async def _wait_command_with_idle_watchdog(
+    handle: Any,
+    *,
+    total_timeout: float,
+    idle_timeout: float,
+    last_activity: Callable[[], float],
+) -> Any:
+    """Wait for a background command, failing fast if the agent goes silent.
+
+    The E2B SDK's commands.run(timeout=...) only enforces a CONNECT timeout;
+    the response stream has no read timeout, so a stalled agent blocks the
+    node until total_timeout expires. This helper polls handle.wait() in
+    idle_timeout slices and raises TimeoutError as soon as the agent has
+    produced no output for idle_timeout seconds (FAR-97). The caller should
+    track last_activity via on_stdout/on_stderr callbacks.
+    """
+    deadline = time.monotonic() + total_timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"command exceeded total timeout of {total_timeout:.0f}s")
+        try:
+            return await asyncio.wait_for(handle.wait(), timeout=min(idle_timeout, remaining))
+        except TimeoutError:
+            if time.monotonic() - last_activity() >= idle_timeout:
+                # Kill the command so the still-running agent cannot write a
+                # fabricated /home/user/output.json, then fail fast.
+                try:
+                    await asyncio.wait_for(handle.kill(), timeout=10.0)
+                except Exception:
+                    _log.exception("sandbox_agent.idle_watchdog_kill_failed")
+                raise TimeoutError(f"command produced no output for {idle_timeout:.0f}s (stalled)") from None
+
+
 def make_sandbox_agent_fn(
     node_def: dict[str, Any],
     *,
@@ -1043,9 +1078,23 @@ def make_sandbox_agent_fn(
             )
 
             try:
-                cmd_result = await asyncio.wait_for(
+                # Track the last time the agent emitted output so the idle
+                # watchdog can fail fast on stalls (FAR-97). The callbacks run
+                # from the SDK's event task and may be async or sync.
+                _activity: dict[str, float] = {"last": time.monotonic()}
+
+                async def _on_stdout(chunk: str) -> None:
+                    _activity["last"] = time.monotonic()
+
+                async def _on_stderr(chunk: str) -> None:
+                    _activity["last"] = time.monotonic()
+
+                cmd_handle = await asyncio.wait_for(
                     sandbox.commands.run(
                         agent_command,
+                        background=True,
+                        on_stdout=_on_stdout,
+                        on_stderr=_on_stderr,
                         timeout=sandbox_timeout,
                         envs={
                             # System env vars first -- provide defaults from the host.
@@ -1067,7 +1116,13 @@ def make_sandbox_agent_fn(
                             **env_vars_extra,
                         },
                     ),
-                    timeout=sandbox_timeout,
+                    timeout=min(sandbox_timeout, 120),
+                )
+                cmd_result = await _wait_command_with_idle_watchdog(
+                    cmd_handle,
+                    total_timeout=sandbox_timeout,
+                    idle_timeout=_SANDBOX_IDLE_TIMEOUT,
+                    last_activity=lambda: _activity["last"],
                 )
             except asyncio.CancelledError:
                 raise
@@ -1111,24 +1166,40 @@ def make_sandbox_agent_fn(
                     "No stdout/stderr was captured — the agent likely hung before "
                     "writing any result."
                 )
+                # The command stalled or timed out. Kill the sandbox BEFORE
+                # reading output.json: the interrupted-but-alive process could
+                # otherwise write a fabricated completion in the grace window
+                # (FAR-97 — Improve Tests reported "improvement applied" with
+                # changed_files: [] exactly this way).
+                try:
+                    await asyncio.wait_for(
+                        sandbox.kill(request_timeout=_OUTPUT_READ_TIMEOUT),
+                        timeout=_OUTPUT_READ_TIMEOUT,
+                    )
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.kill_before_output_read_failed",
+                        extra={"node_id": node_id},
+                    )
 
             raw_output: str = ""
             output_json: Any = None
-            try:
-                _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
-                raw_output = await asyncio.wait_for(
-                    sandbox.files.read(
-                        "/home/user/output.json",
-                        request_timeout=_remaining_after_cmd,
-                    ),
-                    timeout=_remaining_after_cmd,
-                )
-                output_json = json.loads(raw_output)
-            except Exception:
-                _log.info(
-                    "sandbox_agent.no_output_json",
-                    extra={"node_id": node_id, "exit_code": exit_code, "command_error": command_error},
-                )
+            if cmd_result is not None:
+                try:
+                    _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
+                    raw_output = await asyncio.wait_for(
+                        sandbox.files.read(
+                            "/home/user/output.json",
+                            request_timeout=_remaining_after_cmd,
+                        ),
+                        timeout=_remaining_after_cmd,
+                    )
+                    output_json = json.loads(raw_output)
+                except Exception:
+                    _log.info(
+                        "sandbox_agent.no_output_json",
+                        extra={"node_id": node_id, "exit_code": exit_code, "command_error": command_error},
+                    )
 
             _span = _otel_trace.get_current_span()
             if _span.is_recording():
