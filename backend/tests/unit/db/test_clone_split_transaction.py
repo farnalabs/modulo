@@ -63,8 +63,7 @@ def _make_read_session(
     pins_by_snap: dict[str, list[_Row]],
 ) -> AsyncMock:
     results = [_scalar_result(source), _scalars_result(edges), _scalars_result(snapshots)]
-    for snap in snapshots:
-        results.append(_scalars_result(pins_by_snap.get(str(snap.id), [])))
+    results.extend(_scalars_result(pins_by_snap.get(str(snap.id), [])) for snap in snapshots)
 
     session = AsyncMock()
     session.execute = AsyncMock(side_effect=results)

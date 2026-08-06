@@ -224,9 +224,7 @@ class GraphValidator:
     def _strip_warnings(self, result: ValidationResult) -> ValidationResult:
         """Return a copy containing only error-severity issues."""
         out = ValidationResult()
-        for issue in result.issues:
-            if issue.severity == "error":
-                out.issues.append(issue)
+        out.issues = [issue for issue in result.issues if issue.severity == "error"]
         return out
 
     # ------------------------------------------------------------------
@@ -635,11 +633,12 @@ class GraphValidator:
         """Field-level schema: output fields must exist in input with compatible types."""
         pins = self._build_schema_pins_map(graph_json)
 
-        all_pins: dict[tuple[uuid.UUID, str], None] = {}
-        for node_pins in pins.values():
-            for direction_pin in node_pins.values():
-                if direction_pin is not None:
-                    all_pins[direction_pin] = None
+        all_pins: dict[tuple[uuid.UUID, str], None] = {
+            direction_pin: None
+            for node_pins in pins.values()
+            for direction_pin in node_pins.values()
+            if direction_pin is not None
+        }
 
         if not all_pins:
             return

@@ -70,6 +70,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import DashboardView from '../views/DashboardView.vue'
+import StatCard from '../components/StatCard.vue'
 
 function setupDefaultMocks() {
   mockGet.mockImplementation((url: string) => {
@@ -210,12 +211,67 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('No runs yet')
   })
 
-  it('shows trend duration buttons', async () => {
+  it('shows the rolling-window toggle with 4 values', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
-    const buttons = wrapper.findAll('button')
-    const trendButtons = buttons.filter(b => ['7d', '30d', '90d'].includes(b.text()))
-    expect(trendButtons.length).toBe(3)
+    const toggles = wrapper.findAll('[data-testid^="trend-toggle-"]')
+    expect(toggles.length).toBe(4)
+    expect(wrapper.findAll('[data-testid="trend-toggle-1"]').length).toBe(1)
+    expect(wrapper.findAll('[data-testid="trend-toggle-7"]').length).toBe(1)
+    expect(wrapper.findAll('[data-testid="trend-toggle-30"]').length).toBe(1)
+    expect(wrapper.findAll('[data-testid="trend-toggle-90"]').length).toBe(1)
+  })
+
+  it('fetches a period-scoped summary when a window is selected', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/summary',
+      expect.objectContaining({ params: { query: { days: 7 } } }),
+    )
+  })
+
+  it('renders period-scoped stat values and trend arrows when a window is selected', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            period: {
+              days: 7,
+              metrics: {
+                total_runs: { current: 50, previous: 40, delta_pct: 25.0 },
+                active_pipelines: { current: 8, previous: 9, delta_pct: -11.1 },
+                run_counts_by_status: {
+                  running: { current: 0, previous: 0, delta_pct: null },
+                  awaiting_human: { current: 0, previous: 0, delta_pct: null },
+                  failed: { current: 5, previous: 3, delta_pct: 66.7 },
+                  idle: { current: 0, previous: 0, delta_pct: null },
+                },
+                eval_pass_rate: { current: 82.5, previous: 80.0, delta_pct: 3.1 },
+                spend: { current: 100.25, previous: 90.0, delta_pct: 11.4 },
+                tokens: { current: 15000, previous: 12000, delta_pct: 25.0 },
+                success_rate: { current: 85.0, previous: 80.0, delta_pct: 6.2 },
+                avg_duration_ms: { current: 1250.5, previous: 1300.0, delta_pct: -3.8 },
+              },
+            },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('25.0%') // total runs up
+    expect(wrapper.text()).toContain('66.7%') // failed up
+    expect(wrapper.text()).toContain('11.4%') // spend up
   })
 
   it('shows error alert when fetch fails', async () => {
@@ -245,5 +301,65 @@ describe('DashboardView', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).toContain('No eval data yet')
+  })
+})
+
+describe('StatCard delta arrow', () => {
+  it('renders no arrow when delta_pct is null (previous = 0)', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Running',
+        value: 0,
+        delta: { current: 0, previous: 0, delta_pct: null },
+      },
+    })
+    expect(wrapper.text()).not.toContain('%')
+    expect(wrapper.text()).not.toContain('▲')
+    expect(wrapper.text()).not.toContain('▼')
+  })
+
+  it('renders a down arrow for a negative delta at 1dp', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 4,
+        delta: { current: 4, previous: 8, delta_pct: -50 },
+      },
+    })
+    expect(wrapper.text()).toContain('▼')
+    expect(wrapper.text()).toContain('50.0%')
+  })
+
+  it('renders an up arrow for a positive delta at 1dp', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 8,
+        delta: { current: 8, previous: 4, delta_pct: 100 },
+      },
+    })
+    expect(wrapper.text()).toContain('▲')
+    expect(wrapper.text()).toContain('100.0%')
+  })
+
+  it('renders a neutral arrow for a zero delta', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 8,
+        delta: { current: 8, previous: 8, delta_pct: 0 },
+      },
+    })
+    expect(wrapper.text()).toContain('→')
+    expect(wrapper.text()).toContain('0.0%')
+  })
+
+  it('renders unchanged when no delta prop is provided', () => {
+    const wrapper = mount(StatCard, {
+      props: { label: 'Total Runs', value: 8 },
+    })
+    expect(wrapper.text()).not.toContain('%')
+    expect(wrapper.text()).toContain('Total Runs')
+    expect(wrapper.text()).toContain('8')
   })
 })

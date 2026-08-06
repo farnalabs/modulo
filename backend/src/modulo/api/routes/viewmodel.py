@@ -268,6 +268,7 @@ async def viewmodel_current(
                     select(Team).where(
                         Team.id == view_as_team,
                         Team.organisation_id == current_user.organisation_id,
+                        Team.deleted_at.is_(None),
                     )
                 )
                 team = team_result.scalar_one_or_none()

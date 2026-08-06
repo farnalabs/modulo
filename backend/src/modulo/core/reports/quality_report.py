@@ -75,9 +75,7 @@ async def generate_quality_report(
             )
 
         daily_eval = await _query_daily_eval_rates(session, org_id, current_start, today)
-        daily_eval_map: dict[date, float | None] = {}
-        for d, total, passed in daily_eval:
-            daily_eval_map[d] = round(passed / total * 100, 1) if total > 0 else None
+        daily_eval_map = {d: round(passed / total * 100, 1) if total > 0 else None for d, total, passed in daily_eval}
 
         trend: list[dict[str, Any]] = []
         for i in range(_REPORT_PERIOD_DAYS):

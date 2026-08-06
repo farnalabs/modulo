@@ -548,6 +548,7 @@ async def _scan_empty_teams(session: AsyncSession, org_id: uuid.UUID) -> list[Ca
             await session.execute(
                 select(Team).where(
                     Team.organisation_id == org_id,
+                    Team.deleted_at.is_(None),
                     Team.id.notin_(select(teams_with_members.c.team_id)),
                 )
             )

@@ -104,6 +104,7 @@ def test_depth_exceeded() -> None:
 def test_depth_exactly_max_accepted() -> None:
     ok = "(" * MAX_FORMULA_DEPTH + "1" + ")" * MAX_FORMULA_DEPTH
     validate_formula(ok, _SANDBOX)  # no raise
+    assert evaluate_formula(ok, _params(), _SANDBOX) == Decimal(1)
 
 
 def test_attack_strings_rejected() -> None:
@@ -177,7 +178,7 @@ def test_calculated_allowed_excludes_reported() -> None:
 
 
 def test_validate_formula_none_is_noop() -> None:
-    validate_formula(None, _SANDBOX)
+    validate_formula(None, _SANDBOX)  # no raise, no identifier validation attempted
 
 
 def test_newline_inside_formula_is_unexpected_character() -> None:

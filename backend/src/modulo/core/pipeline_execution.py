@@ -28,6 +28,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -56,27 +57,59 @@ RUN_COMPLETE_STATUS = "complete"
 CAPACITY_TIMEOUT_TTL_MINUTES = 120
 
 # Re-dispatch TTL for stranded capacity-blocked runs. A run demoted to
-# ``pending`` with a capacity marker is normally retried in-process by
-# ``PipelineExecutor._retry_pending``, which refreshes ``heartbeat_at`` on each
-# attempt. If the worker process hosting that loop dies (deploy/crash/restart)
-# the run would otherwise sit ``pending`` until the 120-min capacity_timeout
-# sweep TERMINAL-FAILS a legitimate never-executed run. This window re-dispatches
-# a stranded run long before that — but ONLY when its heartbeat is stale (the
-# in-process loop is provably gone), and never once it is already past the
-# capacity_timeout TTL (those must fail, not be resurrected forever).
-#
-# Sized ABOVE the retry loop's worst-case backoff sleep (600s) plus the 15s
-# poll interval, so a LIVE loop's per-attempt heartbeat refresh never trips the
-# fence (a 10-minute TTL would race the 600s backoff and risk double-retry
-# loops). A genuinely stranded run gets ~10 re-dispatch attempts (120/12) before
-# the capacity_timeout backstop fails it.
+# ``pending`` with a capacity marker stays pending — there is NO in-process
+# retry loop since the Tier 3 removal of ``_retry_pending`` (plan F3b) — and is
+# recovered by the durable sweep paths: ``dispatcher_reconcile`` re-dispatches
+# it when capacity frees; ``stale_run_recovery_sweep`` re-dispatches stranded
+# capacity-blocked runs whose heartbeat is stale (the in-process loop is
+# provably gone); and the ``CAPACITY_TIMEOUT_TTL_MINUTES`` backstop
+# TERMINAL-FAILS a legitimate never-executed run past the 120-min window.
+# This window re-dispatches a stranded run long before that backstop — but
+# ONLY when its heartbeat is stale (the in-process loop is provably gone), and
+# never once it is already past the capacity_timeout TTL (those must fail, not
+# be resurrected forever).
 _STRANDED_REDISPATCH_TTL_MINUTES = 12
 
-_DEFAULT_CLAIM_CAP = 5
+# Claim caps are a SINGLE source of truth: ``SAQ_RUN_CLAIM_CAP`` in settings
+# (default 20). Execute (plan F4) and resume (plan F6a) claims both resolve the
+# cap from settings via :func:`_resolve_claim_cap` — the old execute-only
+# ``_DEFAULT_CLAIM_CAP=5`` firefight value was retired (retro item 9). SAQ
+# retries reuse the same saq_job_id, so the cap bounds re-claims on an
+# at-most-once boundary.
 
-# SAQ run claim cap (plan F6a) — distinct per-claim value; SAQ retries reuse the
-# same saq_job_id, so the cap bounds re-claims on an at-most-once boundary.
-SAQ_RUN_CLAIM_CAP = 20
+# Zombie-run error codes (2026-08-05). A claimed run that never dispatches a
+# node must be TERMINAL-FAILED (never left 'running' with a live heartbeat):
+#   - ``executor_setup_failed``: load_and_setup / executor setup raised (e.g.
+#     a DB OperationalError during checkpointer or graph setup) before any node
+#     could run.
+#   - ``executor_stalled``: the execute_run zombie watchdog found the executor
+#     still running with zero node progress after SAQ_SETUP_GRACE_SECONDS and
+#     cancelled it.
+EXECUTOR_SETUP_FAILED_ERROR_CODE = "executor_setup_failed"
+EXECUTOR_STALLED_ERROR_CODE = "executor_stalled"
+
+
+# E2B idempotency fence (plan F3a): the run-level dispatch lock is kept until
+# the run is terminal, bounded by an ~8h upper TTL (>= execute_run timeout 7200s
+# * retries 5 + margin). A successor claim can only re-dispatch after a fenced
+# release (dispatch failure / teardown) or terminal DEL.
+E2B_IDEMPOTENCY_TTL_SECONDS = 8 * 3600
+
+
+class ClaimSupersededError(Exception):
+    """Raised when this executor's claim token no longer matches the run's current claim.
+
+    Signals a superseded executor (a successor re-claimed the run after an
+    event-loop stall) so it aborts before overwriting the successor's state.
+    """
+
+
+class E2BIdempotencyError(Exception):
+    """Base error for the E2B dispatch idempotency fence."""
+
+
+class E2BIdempotencyDeniedError(E2BIdempotencyError):
+    """The E2B dispatch fence was already won — do not create a second sandbox."""
 
 
 def get_settings() -> Any:
@@ -91,8 +124,6 @@ class SchedulerDBError(Exception):
     Relocated from ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1) so
     the SAQ scheduler modules never import the deleted Celery task module.
     """
-
-    pass
 
 
 def _make_sync_url(database_url: str) -> str:
@@ -114,7 +145,44 @@ def _resolve_claim_stale_seconds(*, stale_seconds: int | None) -> int:
     return int(get_settings().run_claim_stale_seconds)
 
 
-def build_claim_update(*, stale_seconds: int, claim_cap: int = _DEFAULT_CLAIM_CAP) -> Any:
+def _resolve_claim_cap(claim_cap: int | None) -> int:
+    """Resolve the per-claim cap from settings (single source of truth, retro 9).
+
+    Reads ``get_settings().saq_run_claim_cap`` (default 20, alias
+    ``SAQ_RUN_CLAIM_CAP``). An explicit ``claim_cap`` overrides settings (used
+    by tests). Execute and resume claims share this one knob — the old
+    execute-only ``_DEFAULT_CLAIM_CAP=5`` firefight value is retired.
+    """
+    if claim_cap is not None:
+        return claim_cap
+    return int(get_settings().saq_run_claim_cap)
+
+
+_CLAIM_UPDATE_SQL = text(
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
+    "WHERE id=:rid AND organisation_id=:oid "
+    "AND (status = 'pending' "
+    "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
+    "AND claim_count < :claim_cap "
+    "RETURNING id"
+)
+
+_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok "
+    "WHERE id=:rid AND organisation_id=:oid "
+    "AND (status = 'pending' "
+    "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
+    "AND claim_count < :claim_cap "
+    "RETURNING id"
+)
+
+
+def build_claim_update(
+    *,
+    stale_seconds: int,
+    claim_cap: int | None = None,
+    claim_token: str | None = None,
+) -> Any:
     """Build the atomic claim UPDATE for a pipeline run.
 
     The statement is a single ``UPDATE ... WHERE ... RETURNING id``: exactly one
@@ -125,23 +193,61 @@ def build_claim_update(*, stale_seconds: int, claim_cap: int = _DEFAULT_CLAIM_CA
       * ``status = 'pending'`` always.
       * ``status = 'running'`` when the heartbeat is older than *stale_seconds*.
 
-    ``claim_cap`` bounds the number of claims (claim_count) per run.
+    ``claim_cap`` bounds the number of claims (claim_count) per run; callers
+    resolve it from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap` — the value is bound at execute time, not baked
+    into this template.
+
+    When *claim_token* is given the claim also rotates ``runs.claim_token`` to a
+    FRESH per-claim value (plan F3a) — each re-claim gets a distinct token so a
+    superseded original's heartbeat/E2B fence can detect it was replaced.
 
     Callers pass the full parameter dict (rid / oid / stale_seconds / claim_cap)
     at execute time.
     """
-    return text(
-        "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
-        "WHERE id=:rid AND organisation_id=:oid "
-        "AND (status = 'pending' "
-        "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
-        "AND claim_count < :claim_cap "
-        "RETURNING id"
-    )
+    if claim_token is not None:
+        return _CLAIM_UPDATE_SQL_WITH_TOKEN
+    return _CLAIM_UPDATE_SQL
 
 
-def _claim_params(run_id: str, org_id: str, stale_seconds: int, claim_cap: int) -> dict[str, object]:
-    return {"rid": run_id, "oid": org_id, "stale_seconds": stale_seconds, "claim_cap": claim_cap}
+def _claim_params(
+    run_id: str,
+    org_id: str,
+    stale_seconds: int,
+    claim_cap: int,
+    claim_token: str | None = None,
+) -> dict[str, object]:
+    params: dict[str, object] = {"rid": run_id, "oid": org_id, "stale_seconds": stale_seconds, "claim_cap": claim_cap}
+    if claim_token is not None:
+        params["tok"] = claim_token
+    return params
+
+
+async def _maybe_alert_retry_storm(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
+    """Best-effort SAQ retry-storm alert (plan F1 probe 6 / F3a).
+
+    Fires an error_event (source='saq') when a re-claim pushes the run's
+    ``claim_count`` past the threshold in
+    :func:`modulo.core.error_tracking.emit_saq_retry_storm_alert`. Runs only
+    after a successful claim and never breaks the claim path (best-effort).
+    """
+    try:
+        async with aengine.connect() as c:
+            await c.execute(
+                text("SELECT set_config('app.organisation_id', :val, true)"),
+                {"val": org_id},
+            )
+            result = await c.execute(text("SELECT claim_count FROM runs WHERE id=:rid"), {"rid": run_id})
+            row = result.first()
+        if row is None:
+            return
+        from modulo.core.error_tracking import emit_saq_retry_storm_alert
+
+        await emit_saq_retry_storm_alert(aengine, org_id, run_id, int(row[0]))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline_execution.retry_storm_alert_failed run=%s", run_id)
 
 
 async def claim_run_async(
@@ -150,25 +256,41 @@ async def claim_run_async(
     org_id: str,
     stale_seconds: int | None = None,
     *,
-    claim_cap: int = _DEFAULT_CLAIM_CAP,
-) -> bool:
+    claim_cap: int | None = None,
+) -> str | None:
     """Claim a pending or stale-running run via an atomic SQL update (async).
 
-    Used by the SAQ execute path.
+    Used by the SAQ execute path. Rotates ``runs.claim_token`` to a fresh
+    per-claim value (plan F3a) so a superseded original executor can detect it
+    was replaced.
+
+    ``claim_cap`` bounds the number of claims (claim_count) per run; when
+    omitted it resolves from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap`.
+
+    Returns the fresh claim token when the row was claimed, or ``None`` when
+    the run is not claimable (or the claim failed). The token is threaded into
+    ``heartbeat_loop``/``mark_complete`` so a superseded original can neither
+    complete the run out from under a successor nor DEL its E2B dispatch key.
     """
     window = _resolve_claim_stale_seconds(stale_seconds=stale_seconds)
+    cap = _resolve_claim_cap(claim_cap)
+    claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
             result = await c.execute(
-                build_claim_update(stale_seconds=window, claim_cap=claim_cap),
-                _claim_params(run_id, org_id, window, claim_cap),
+                build_claim_update(stale_seconds=window, claim_cap=cap, claim_token=claim_token),
+                _claim_params(run_id, org_id, window, cap, claim_token),
             )
-            return result.fetchone() is not None
+            claimed = result.fetchone() is not None
+        if claimed:
+            await _maybe_alert_retry_storm(aengine, run_id, org_id)
+        return claim_token if claimed else None
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("pipeline_execution.claim_failed run=%s", run_id)
-        return False
+        return None
 
 
 async def set_rls_org(session: Any, org_id: uuid.UUID) -> None:
@@ -204,18 +326,42 @@ async def load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> t
     return cur, executor
 
 
+async def _read_current_claim_token(aeng: AsyncEngine, run_id: str, org_id: str) -> str | None:
+    """Read the run's current ``claim_token`` from the DB (RLS-scoped)."""
+    async with aeng.connect() as c:
+        await c.execute(
+            text("SELECT set_config('app.organisation_id', :val, true)"),
+            {"val": org_id},
+        )
+        result = await c.execute(text("SELECT claim_token FROM runs WHERE id=:rid"), {"rid": run_id})
+        row = result.first()
+        return str(row[0]) if row and row[0] else None
+
+
 async def heartbeat_once(
     aeng: AsyncEngine,
     run_id: str,
     org_id: str,
     *,
     job: Any = None,
+    claim_token: str | None = None,
 ) -> None:
     """Write the DB heartbeat_at and (for SAQ) touch the job hash.
 
     ``job.update()`` refreshes ``touched`` in the SAQ job hash so the sweeper
     does not re-queue a live run (saq.queue.base.update sets touched=now()).
+
+    When *claim_token* is provided the write is fenced (plan F3a): the run's
+    current ``claim_token`` must still match this executor's token, otherwise a
+    superseded original could overwrite the successor's fresh heartbeat. A
+    mismatch raises :class:`ClaimSupersededError` BEFORE any DB write.
     """
+    if claim_token is not None:
+        current = await _read_current_claim_token(aeng, run_id, org_id)
+        if current is not None and current != claim_token:
+            raise ClaimSupersededError(
+                f"claim token superseded for run {run_id} (had {claim_token}, current {current})"
+            )
     async with aeng.connect() as c:
         await c.execute(
             text("SELECT set_config('app.organisation_id', :val, true)"),
@@ -237,33 +383,261 @@ async def heartbeat_loop(
     *,
     interval_seconds: int | None = None,
     job: Any = None,
+    claim_token: str | None = None,
 ) -> None:
-    """Periodic heartbeat every ``RUN_HEARTBEAT_SECONDS`` to keep the run alive."""
+    """Periodic heartbeat every ``RUN_HEARTBEAT_SECONDS`` to keep the run alive.
+
+    The executor's claim token is captured at loop start (the claim just wrote
+    it) and used to fence every heartbeat: once a successor re-claims the run
+    and rotates the token, the superseded original aborts its heartbeat instead
+    of overwriting the successor's fresh heartbeat.
+    """
     if interval_seconds is None:
         interval_seconds = get_settings().run_heartbeat_seconds
+    if claim_token is None:
+        claim_token = await _read_current_claim_token(aeng, run_id, org_id)
     while True:
         try:
             await asyncio.sleep(interval_seconds)
-            await heartbeat_once(aeng, run_id, org_id, job=job)
+            await heartbeat_once(aeng, run_id, org_id, job=job, claim_token=claim_token)
+        except ClaimSupersededError:
+            _log.warning("Heartbeat superseded for run %s — aborting heartbeat", run_id)
+            break
         except asyncio.CancelledError:
             break
         except Exception:
             _log.warning("Heartbeat failed for run %s", run_id)
 
 
-async def mark_complete(aeng: AsyncEngine, run_id: str, org_id: str) -> None:
+async def mark_complete(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    claim_token: str | None = None,
+) -> None:
     """Mark a still-running run complete using the DB enum value ('complete').
 
     Idempotent: only transitions a run that is currently ``running`` and never
     overwrites a failure/cancellation/awaiting_human state.
+
+    When *claim_token* is provided, completion is fenced (plan F3a): a superseded
+    original (claim token rotated by a successor) cannot complete the run out
+    from under the successor. On completion the E2B idempotency key is released
+    (plan F3a — terminal DEL).
     """
     factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, uuid.UUID(org_id))
         cur = await get_run(session, uuid.UUID(run_id))
         if cur is not None and cur.status == "running":
+            if claim_token is not None and getattr(cur, "claim_token", None) != claim_token:
+                _log.warning("mark_complete skipped for run %s (claim superseded)", run_id)
+                return
             cur.status = RUN_COMPLETE_STATUS
             cur.completed_at = datetime.now(UTC)
+    try:
+        if e2b_idempotency_enabled():
+            await e2b_dispatch_release_terminal(run_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("mark_complete: E2B idempotency key release failed for run %s", run_id)
+
+
+async def fail_run_terminal(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    *,
+    error_code: str,
+    error_detail: str,
+) -> bool:
+    """Terminal-fail a claimed-but-stuck run (zombie protection).
+
+    Only transitions a run that is currently ``running`` (a run already
+    terminal, or capacity-deferred back to ``pending``, is left untouched —
+    the capacity machinery owns pending runs). Idempotent and safe against a
+    concurrent claimer: the ``running`` guard plus the row write inside the
+    transaction means a second claimer that already reset the run to
+    ``running`` simply overwrites with the same failure.
+    """
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, uuid.UUID(org_id))
+        cur = await get_run(session, uuid.UUID(run_id))
+        if cur is None or cur.status != "running":
+            return False
+        cur.status = "failed"
+        cur.error_code = error_code
+        cur.error_detail = error_detail[:5000]
+        cur.completed_at = datetime.now(UTC)
+    _log.warning(
+        "run.terminal_failed run=%s error_code=%s",
+        run_id,
+        error_code,
+    )
+    return True
+
+
+async def zombie_watchdog(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    first_progress: asyncio.Event,
+    *,
+    exec_task: asyncio.Task[Any],
+    stall_requested: asyncio.Event | None = None,
+    grace_seconds: int | None = None,
+) -> None:
+    """Fail a claimed-but-nodeless run when no node dispatches in time.
+
+    The heartbeat loop starts before ``executor.execute`` so a run hung in the
+    pre-node setup window (checkpointer setup, graph compile, connector hub
+    init, a DB ``OperationalError``) would otherwise stay ``running`` forever
+    with a fresh heartbeat. This watchdog bounds that window: it waits up to
+    *grace_seconds* (default ``SAQ_SETUP_GRACE_SECONDS``) for the executor to
+    signal first progress (first node dispatched via ``on_first_progress``).
+
+    If the executor task finishes first (completion, exception, or
+    capacity-deferral back to ``pending``) the watchdog stands down — a
+    capacity-deferred run is NOT failed. If the window elapses with the
+    executor still running and zero node progress, the watchdog cancels the
+    executor task, signals *stall_requested* (so the wrapper can tell a
+    watchdog-initiated cancellation from a worker shutdown), and terminal-fails
+    the run (``executor_stalled``). Cancelling the executor FIRST ensures a
+    late-returning ``execute`` cannot overwrite the failure through
+    ``finalize_cost``.
+    """
+    if grace_seconds is None:
+        grace_seconds = int(get_settings().saq_setup_grace_seconds)
+    try:
+        await asyncio.wait_for(first_progress.wait(), timeout=grace_seconds)
+        return
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        raise
+
+    if exec_task.done():
+        return
+
+    _log.warning(
+        "zombie_watchdog.stalled run=%s no node dispatched within %ds — cancelling executor and failing run",
+        run_id,
+        grace_seconds,
+    )
+    exec_task.cancel()
+    if stall_requested is not None:
+        stall_requested.set()
+    await fail_run_terminal(
+        aeng,
+        run_id,
+        org_id,
+        error_code=EXECUTOR_STALLED_ERROR_CODE,
+        error_detail=(
+            f"Executor dispatched no node within {grace_seconds}s setup grace (claimed-but-nodeless zombie watchdog)"
+        ),
+    )
+
+
+async def run_executor_with_watchdog(
+    aeng: AsyncEngine,
+    *,
+    run_id: str,
+    org_id: str,
+    executor: Any,
+    job: Any,
+    execute_fn: Callable[[], Awaitable[Any]],
+    claim_token: str | None = None,
+) -> dict[str, Any]:
+    """Run ``execute_fn`` under the DB heartbeat loop + zombie watchdog.
+
+    Shared by ``saq_worker.execute_run`` and ``resume_run``. Expected flow:
+
+    * The caller has already claimed the run (``status='running'``) and loaded
+      the executor via :func:`load_and_setup`.
+    * The executor must expose ``on_first_progress`` (a no-arg callable); this
+      helper wires it to an :class:`asyncio.Event` that the zombie watchdog
+      waits on. The executor calls it when the first node dispatches.
+    * The heartbeat loop starts concurrently (as today) and keeps the run alive
+      during legitimate node execution.
+    * If no progress is signalled within ``SAQ_SETUP_GRACE_SECONDS`` the
+      watchdog cancels the executor and fails the run (``executor_stalled``) —
+      this is the fix for the 30h+ zombies seen on app.modulo.run.
+    * An ``asyncio.CancelledError`` raised by the executor task is swallowed
+      ONLY when the watchdog caused it (the run is already terminal); a worker
+      shutdown cancellation re-raises. Because the watchdog is still inside its
+      ``fail_run_terminal`` DB write when this handler runs, it is awaited to
+      completion here before the ``finally`` block cancels it — cancelling the
+      watchdog mid-write would abort the terminal-fail transaction and leave
+      the run ``running`` forever.
+
+    Returns ``{"status": "complete"}`` — the caller still runs
+    ``mark_complete`` (a no-op once the run is terminal).
+    """
+    rid = uuid.UUID(run_id)
+
+    first_progress = asyncio.Event()
+    stall_requested = asyncio.Event()
+    if executor is not None:
+        executor.on_first_progress = first_progress.set
+
+    async def _execute() -> Any:
+        return await execute_fn()
+
+    exec_task = asyncio.create_task(_execute(), name=f"saq-exec-{rid}")
+    watchdog_task = asyncio.create_task(
+        zombie_watchdog(
+            aeng,
+            run_id,
+            org_id,
+            first_progress,
+            exec_task=exec_task,
+            stall_requested=stall_requested,
+        ),
+        name=f"saq-zombie-watchdog-{rid}",
+    )
+    heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
+        heartbeat_loop(aeng, run_id, org_id, job=job, claim_token=claim_token),
+        name=f"saq-heartbeat-{rid}",
+    )
+    try:
+        await exec_task
+    except asyncio.CancelledError:
+        # Distinguish watchdog-initiated cancellation from worker shutdown:
+        # the watchdog cancels ONLY the executor task and signals
+        # ``stall_requested`` as it starts failing the run. Await it to
+        # completion so its ``fail_run_terminal`` transaction commits before
+        # the ``finally`` below cancels the watchdog — otherwise the terminal
+        # write is aborted, the run stays ``running``, and a stray
+        # ``CancelledError`` leaks into the SAQ worker. A genuine
+        # ``fail_run_terminal`` error propagates so the reconcile net remains
+        # the backstop instead of ``mark_complete`` wrongly succeeding the run.
+        if stall_requested.is_set():
+            if watchdog_task is not None and not watchdog_task.done():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog_task
+            _log.warning("run_executor_with_watchdog: execution cancelled by zombie watchdog for run %s", rid)
+        else:
+            raise
+    except Exception:
+        _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
+    finally:
+        if watchdog_task is not None:
+            watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog_task
+        if exec_task is not None and not exec_task.done():
+            exec_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await exec_task
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+    return {"status": "complete"}
 
 
 async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
@@ -464,7 +838,31 @@ async def stale_run_recovery_sweep(
 # ---------------------------------------------------------------------------
 
 
-def build_resume_claim_update(*, stale_seconds: int, claim_cap: int = SAQ_RUN_CLAIM_CAP) -> Any:
+_RESUME_CLAIM_UPDATE_SQL = text(
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
+    "WHERE id=:rid AND organisation_id=:oid "
+    "AND (status IN ('awaiting_human', 'claimed') "
+    "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
+    "AND claim_count < :claim_cap "
+    "RETURNING id"
+)
+
+_RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
+    "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1, claim_token=:tok "
+    "WHERE id=:rid AND organisation_id=:oid "
+    "AND (status IN ('awaiting_human', 'claimed') "
+    "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
+    "AND claim_count < :claim_cap "
+    "RETURNING id"
+)
+
+
+def build_resume_claim_update(
+    *,
+    stale_seconds: int,
+    claim_cap: int | None = None,
+    claim_token: str | None = None,
+) -> Any:
     """Build the atomic claim UPDATE for a resumed HITL run.
 
     Claimable rows (plan F6a):
@@ -477,19 +875,31 @@ def build_resume_claim_update(*, stale_seconds: int, claim_cap: int = SAQ_RUN_CL
     The single ``UPDATE ... WHERE ... RETURNING id`` claims atomically
     (no check-then-act window); a concurrent claimer loses because the row
     transitions out of the claimable state in the same statement.
+
+    ``claim_cap`` bounds the number of claims (claim_count) per run; callers
+    resolve it from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap` — the value is bound at execute time, not baked
+    into this template.
+
+    When *claim_token* is given the claim rotates ``runs.claim_token`` to a
+    fresh per-claim value (plan F3a).
     """
-    return text(
-        "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
-        "WHERE id=:rid AND organisation_id=:oid "
-        "AND (status IN ('awaiting_human', 'claimed') "
-        "     OR (status = 'running' AND heartbeat_at < now() - (:stale_seconds * interval '1 second'))) "
-        "AND claim_count < :claim_cap "
-        "RETURNING id"
-    )
+    if claim_token is not None:
+        return _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN
+    return _RESUME_CLAIM_UPDATE_SQL
 
 
-def _resume_claim_params(run_id: str, org_id: str, stale_seconds: int, claim_cap: int) -> dict[str, object]:
-    return {"rid": run_id, "oid": org_id, "stale_seconds": stale_seconds, "claim_cap": claim_cap}
+def _resume_claim_params(
+    run_id: str,
+    org_id: str,
+    stale_seconds: int,
+    claim_cap: int,
+    claim_token: str | None = None,
+) -> dict[str, object]:
+    params: dict[str, object] = {"rid": run_id, "oid": org_id, "stale_seconds": stale_seconds, "claim_cap": claim_cap}
+    if claim_token is not None:
+        params["tok"] = claim_token
+    return params
 
 
 async def claim_resume_run_async(
@@ -497,27 +907,40 @@ async def claim_resume_run_async(
     run_id: str,
     org_id: str,
     *,
-    claim_cap: int = SAQ_RUN_CLAIM_CAP,
-) -> bool:
+    claim_cap: int | None = None,
+) -> str | None:
     """Claim an awaiting_human/claimed (or stale-running) run for resume.
 
     Idempotent: a second claimer finds the row already ``running`` with a fresh
     heartbeat and loses the atomic UPDATE. The gate decision itself is committed
-    by the caller (HITL endpoints / recover-node) before dispatch.
+    by the caller (HITL endpoints / recover-node) before dispatch. Rotates
+    ``runs.claim_token`` to a fresh per-claim value (plan F3a).
+
+    ``claim_cap`` bounds the number of claims (claim_count) per run; when
+    omitted it resolves from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap`.
+
+    Returns the fresh claim token when the row was claimed, or ``None`` when it
+    is not claimable (or the claim failed) — threaded into ``heartbeat_loop``/
+    ``mark_complete`` so a superseded original cannot complete the run or DEL
+    the successor's E2B dispatch key.
     """
     stale_seconds = int(get_settings().run_claim_stale_seconds)
+    cap = _resolve_claim_cap(claim_cap)
+    claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
             result = await c.execute(
-                build_resume_claim_update(stale_seconds=stale_seconds, claim_cap=claim_cap),
-                _resume_claim_params(run_id, org_id, stale_seconds, claim_cap),
+                build_resume_claim_update(stale_seconds=stale_seconds, claim_cap=cap, claim_token=claim_token),
+                _resume_claim_params(run_id, org_id, stale_seconds, cap, claim_token),
             )
-            return result.fetchone() is not None
+            claimed = result.fetchone() is not None
+        return claim_token if claimed else None
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("pipeline_execution.resume_claim_failed run=%s", run_id)
-        return False
+        return None
 
 
 async def resume_run(
@@ -527,44 +950,155 @@ async def resume_run(
     org_id: str,
     resume_data: dict[str, Any] | None = None,
     job: Any = None,
-    claim_cap: int = SAQ_RUN_CLAIM_CAP,
+    claim_cap: int | None = None,
 ) -> dict[str, Any]:
     """Resume an interrupted HITL run (SAQ ``resume_run`` job).
 
     Claims the run via :func:`claim_resume_run_async`, loads the executor, and
     streams the graph from the checkpoint with *resume_data* as the gate
     decision (plan F6a). Mirrors :func:`execute_run`'s cancellation-safe
-    heartbeat/complete structure: the heartbeat loop is cancelled in ``finally``
-    and completion is written by :func:`mark_complete` (genuine completion only).
+    heartbeat/complete structure and shares the zombie watchdog: a resume that
+    hangs in the pre-stream setup window (checkpointer reload, graph compile)
+    is terminal-failed by :func:`zombie_watchdog` instead of running forever.
+    The heartbeat loop is cancelled in ``finally`` and completion is written by
+    :func:`mark_complete` (genuine completion only).
+
+    ``claim_cap`` bounds the number of claims (claim_count) per run; when
+    omitted it resolves from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap`.
     """
     rid = uuid.UUID(run_id)
     oid = uuid.UUID(org_id)
 
-    claimed = await claim_resume_run_async(async_engine, str(rid), str(oid), claim_cap=claim_cap)
-    if not claimed:
+    cap = _resolve_claim_cap(claim_cap)
+    claim_token = await claim_resume_run_async(async_engine, str(rid), str(oid), claim_cap=cap)
+    if not claim_token:
         _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
         return {"status": "not_claimed"}
 
-    run, executor = await load_and_setup(async_engine, rid, oid)
-    if run is None:
-        return {"status": "missing"}
-
-    heartbeat_task: asyncio.Task[Any] | None = None
     try:
-        heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-            heartbeat_loop(async_engine, str(rid), str(oid), job=job),
-            name=f"resume-heartbeat-{rid}",
-        )
-        await executor.resume(run_id=rid, org_id=oid, resume_data=resume_data or {})
+        run, executor = await load_and_setup(async_engine, rid, oid)
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.exception("resume_run failed for run %s", rid)
-    finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
+        _log.exception("resume_run: load_and_setup failed for run %s", rid)
+        await fail_run_terminal(
+            async_engine,
+            str(rid),
+            str(oid),
+            error_code=EXECUTOR_SETUP_FAILED_ERROR_CODE,
+            error_detail="load_and_setup failed during resume (pre-stream setup)",
+        )
+        return {"status": "setup_failed"}
+    if run is None:
+        return {"status": "missing"}
 
-    await mark_complete(async_engine, str(rid), str(oid))
+    await run_executor_with_watchdog(
+        async_engine,
+        run_id=str(rid),
+        org_id=str(oid),
+        executor=executor,
+        job=job,
+        claim_token=claim_token,
+        execute_fn=lambda: executor.resume(run_id=rid, org_id=oid, resume_data=resume_data or {}),
+    )
+
+    await mark_complete(async_engine, str(rid), str(oid), claim_token=claim_token)
     return {"status": "complete"}
+
+
+# ---------------------------------------------------------------------------
+# E2B dispatch idempotency fence (plan F3a)
+#
+# The at-most-once mitigation for event-loop stalls (>= RUN_CLAIM_STALE_SECONDS):
+# a superseded executor must never create a second sandbox for the same run.
+#
+# Mechanism — a RUN-LEVEL Redis key ``run:{run_id}:e2b`` storing the claim token:
+#
+#   * ``e2b_dispatch_acquire`` SETNX-before-dispatch (atomic): exactly one
+#     executor wins. If the key already exists, the dispatch is ABORTED whether
+#     the value is our token (a live dispatch within the same claim — a transient
+#     retry must not create a second sandbox) or a different token (superseded).
+#   * On dispatch FAILURE: ``e2b_dispatch_release_fenced`` DELs ONLY if the value
+#     still equals our own token, so a superseded original cannot delete the
+#     successor's key.
+#   * On success the key is kept until the run is terminal: ``mark_complete``
+#     calls ``e2b_dispatch_release_terminal`` (DEL) and the sandbox teardown in
+#     the node runner releases it too. Upper TTL bound ~8h
+#     (``E2B_IDEMPOTENCY_TTL_SECONDS``, >= timeout*retries + margin).
+# ---------------------------------------------------------------------------
+
+
+def e2b_idempotency_enabled() -> bool:
+    """Return whether the SAQ E2B idempotency fence is enabled (settings knob)."""
+    return bool(get_settings().saq_e2b_idempotency)
+
+
+async def _e2b_client() -> Any:
+    """Create a short-lived Redis client for one fence operation.
+
+    Per-call client (opened and closed within the operation) matches the
+    codebase pattern (dispatch.py / cron_helpers.py) and avoids leaking a
+    process-lifetime connection pool into tests and worker teardown.
+    """
+    from redis.asyncio import Redis as _AsyncRedis
+
+    settings = get_settings()
+    return _AsyncRedis.from_url(
+        settings.redis_url,
+        socket_connect_timeout=10,
+        socket_keepalive=True,
+    )
+
+
+def _e2b_key(run_id: str) -> str:
+    return f"run:{run_id}:e2b"
+
+
+def _coerce_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+async def e2b_dispatch_acquire(run_id: str, claim_token: str) -> None:
+    """SETNX-before-dispatch for an E2B sandbox (plan F3a).
+
+    Exactly one executor wins the run-level dispatch lock. Raises
+    :class:`E2BIdempotencyDeniedError` (and does NOT create a sandbox) when the key
+    already exists — whether held by a live dispatch from the same claim
+    (transient retry) or by a superseded/different claim.
+    """
+    redis = await _e2b_client()
+    try:
+        key = _e2b_key(run_id)
+        won = await redis.set(key, claim_token, nx=True, ex=E2B_IDEMPOTENCY_TTL_SECONDS)
+        if won:
+            return
+        current = _coerce_str(await redis.get(key))
+        if current == claim_token:
+            raise E2BIdempotencyDeniedError(f"run {run_id}: same-claim E2B dispatch already live")
+        raise E2BIdempotencyDeniedError(f"run {run_id}: E2B dispatch superseded by a different claim")
+    finally:
+        await redis.aclose()
+
+
+async def e2b_dispatch_release_fenced(run_id: str, claim_token: str) -> None:
+    """Fenced release on dispatch FAILURE — DEL only if the value is our token."""
+    redis = await _e2b_client()
+    try:
+        key = _e2b_key(run_id)
+        current = _coerce_str(await redis.get(key))
+        if current == claim_token:
+            await redis.delete(key)
+    finally:
+        await redis.aclose()
+
+
+async def e2b_dispatch_release_terminal(run_id: str) -> None:
+    """Terminal DEL — the run finished, the dispatch lock is released."""
+    redis = await _e2b_client()
+    try:
+        await redis.delete(_e2b_key(run_id))
+    finally:
+        await redis.aclose()

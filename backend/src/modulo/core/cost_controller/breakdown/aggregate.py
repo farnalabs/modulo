@@ -13,6 +13,7 @@ from __future__ import annotations
 import decimal
 import logging
 from decimal import ROUND_HALF_UP, Decimal
+from operator import attrgetter
 from typing import Any
 
 from modulo.core.cost_controller.breakdown.constants import (
@@ -241,7 +242,7 @@ def build_cost_breakdown(
     ``eval_error`` entry + metric, never a crash.
     """
     live = [c for c in components or [] if c.enabled]
-    live.sort(key=lambda c: (c.sort_order, c.name))
+    live.sort(key=attrgetter("sort_order", "name"))
 
     with decimal.localcontext() as ctx:
         ctx.traps[decimal.DivisionByZero] = True

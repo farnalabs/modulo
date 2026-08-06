@@ -643,6 +643,24 @@ The split keeps per-commit hooks fast (<5s typical). Heavy hooks (mypy,
 vue-tsc, pip-audit) run when you gate via `gate.ps1`, which calls
 `pre-commit run --all-files --hook-stage manual` as Phase 1d.
 
+### Platform-agnostic hooks (Windows + Linux)
+
+The `eslint`, `vue-tsc`, and `semgrep` hooks are platform-agnostic wrappers in `scripts/`:
+
+- `scripts/run_frontend_npm.py` runs `npm run <script>` in `frontend/` via the
+  platform's npm (`npm.cmd` on Windows, `npm` on Linux). Replaces the old
+  `bash -c 'cd frontend && npm run ...'` entries, which broke on Windows where
+  `bash` resolves to WSL and cannot execute Windows-installed `node_modules`.
+- `scripts/run_semgrep.py` skips the incremental semgrep scan on Windows
+  (semgrep-core cannot complete the full `backend/src/` scan with
+  `--baseline-commit` on Windows — it hangs). Semgrep remains enforced on
+  Linux: CI (`ci.yml`, `deploy.yml`) and E2B sandbox commits.
+
+Windows note: when `ruff-format`, `mixed-line-ending`, or `end-of-file-fixer`
+report "files were modified by this hook", they have normalised a Windows-tool
+CRLF file back to LF (the committed blob is LF via `.gitattributes`). `git add`
+the fixed files and re-commit — that is the fixer loop working as designed.
+
 Migration collision check (`check-migration-heads.ps1`) runs both in
 pre-commit (when migration files staged) and in gate.ps1 Phase 0 (even
 with `-SkipTests`). If blocked: renumber your migration to the next free

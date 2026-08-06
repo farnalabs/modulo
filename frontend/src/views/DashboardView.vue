@@ -21,27 +21,45 @@
 
     <template v-else-if="summary">
 
+      <!-- Rolling-window toggle (FAR-92): period-scopes the stat cards below -->
+      <div class="flex justify-end mb-4">
+        <div class="flex gap-1">
+          <button
+            v-for="w in trendWindows"
+            :key="w.value"
+            :data-testid="'trend-toggle-' + w.value"
+            :class="[
+              'px-3 py-1 text-xs font-medium rounded transition-colors',
+              selectedWindow === w.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80',
+            ]"
+            @click="selectWindow(w.value)"
+          >
+            {{ w.label }}
+          </button>
+        </div>
+      </div>
+
       <!-- Row 1: Summary stat cards -->
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard :label="$t('views.DashboardView.pipelines')" :value="summary.active_pipelines" color="primary" to="/pipelines">
+        <StatCard :label="$t('views.DashboardView.pipelines')" :value="summary.period?.metrics?.active_pipelines?.current ?? summary.active_pipelines" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null">
           <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.total_runs" color="primary" to="/runs">
+        <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.period?.metrics?.total_runs?.current ?? summary.total_runs" color="primary" to="/runs" :delta="periodMetrics?.total_runs ?? null">
           <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.running')" :value="summary.run_counts_by_status?.running ?? 0" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`">
+        <StatCard :label="$t('views.DashboardView.running')" :value="summary.period?.metrics?.run_counts_by_status?.running?.current ?? summary.run_counts_by_status?.running ?? 0" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`" :delta="periodMetrics?.run_counts_by_status?.running ?? null">
           <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`">
+        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.period?.metrics?.run_counts_by_status?.awaiting_human?.current ?? summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`" :delta="periodMetrics?.run_counts_by_status?.awaiting_human ?? null">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
         </StatCard>
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.run_counts_by_status?.failed ?? 0" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`">
+        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.period?.metrics?.run_counts_by_status?.failed?.current ?? summary.run_counts_by_status?.failed ?? 0" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`" :delta="periodMetrics?.run_counts_by_status?.failed ?? null">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.idle')" :value="summary.run_counts_by_status?.idle ?? 0" color="muted" to="/pipelines">
+        <StatCard :label="$t('views.DashboardView.idle')" :value="summary.period?.metrics?.run_counts_by_status?.idle?.current ?? summary.run_counts_by_status?.idle ?? 0" color="muted" to="/pipelines" :delta="periodMetrics?.run_counts_by_status?.idle ?? null">
           <template #icon><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></template>
         </StatCard>
       </div>
@@ -52,9 +70,12 @@
         <router-link to="/eval-editor" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.eval_pass_rate') }}</p>
           <div v-if="summary.eval_pass_rate != null">
-            <p class="text-2xl font-semibold tabular-nums">{{ summary.eval_pass_rate.overall_pass_rate }}%</p>
+            <p class="text-2xl font-semibold tabular-nums">{{ evalRateDisplay }}</p>
             <div class="flex items-center gap-2 mt-1">
-              <span :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
+              <span v-if="evalPeriodDelta?.delta_pct != null" :class="evalDeltaClass" class="inline-flex items-center text-sm font-medium">
+                <span aria-hidden="true">{{ evalDeltaArrow }}</span>{{ evalDeltaPctText }}
+              </span>
+              <span v-else :class="evalTrendClass" class="inline-flex items-center text-sm font-medium">
                 <svg v-if="evalTrend === 'up'" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
                 <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                 {{ evalTrendLabel }}
@@ -69,8 +90,13 @@
         <!-- Token spend card -->
         <router-link to="/admin/costs" class="card card-hover p-4 block">
           <p class="text-sm font-medium text-muted-foreground mb-2">{{ $t('views.DashboardView.token_spend_7d') }}</p>
-          <p class="text-2xl font-semibold tabular-nums">${{ totalSpend.toFixed(2) }}</p>
-          <p class="text-xs text-muted-foreground mt-1">{{ summary.trend?.length ?? 0 }} {{ $t('views.DashboardView.days_tracked') }}</p>
+          <div class="flex items-baseline gap-2">
+            <p class="text-2xl font-semibold tabular-nums">${{ totalSpend.toFixed(2) }}</p>
+            <span v-if="spendDeltaPct != null" :class="spendDeltaClass" class="text-xs font-medium">
+              <span aria-hidden="true">{{ spendDeltaArrow }}</span>{{ spendDeltaPctText }}
+            </span>
+          </div>
+          <p class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
           <Sparkline class="mt-2 h-10 w-full" :data="spendSparklineData" color="var(--color-warning)" />
         </router-link>
       </div>
@@ -146,14 +172,6 @@
       <div class="card p-4">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-base font-semibold">{{ $t('views.DashboardView.run_activity') }}</h2>
-          <div class="flex gap-1">
-            <button v-for="d in trendDurations" :key="d.value" :data-testid="'trend-duration-btn-' + d.value"
-                    :class="['px-3 py-1 text-xs font-medium rounded transition-colors',
-                             trendDuration === d.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80']"
-                    @click="switchTrendDuration(d.value)">
-              {{ d.label }}
-            </button>
-          </div>
         </div>
 
         <div v-if="trendData.length > 1" class="space-y-4">
@@ -292,12 +310,79 @@ const spendSparklineData = computed(() => {
   return summary.value.trend.map(d => d.token_spend_usd)
 })
 
-const trendDuration = ref(7)
-const trendDurations = [
-  { label: t('views.DashboardView.trend_7d'), value: 7 },
-  { label: t('views.DashboardView.trend_30d'), value: 30 },
-  { label: t('views.DashboardView.trend_90d'), value: 90 },
+// --- Rolling-window toggle (FAR-92) ---
+// Labels are inline pending i18n keys — TODO: add views.DashboardView.trend_24h /
+// trend_7d / trend_30d / trend_90d to frontend/src/locales/en-US.js in a follow-up
+// (locales file is outside this delivery's allowlist).
+const trendWindows = [
+  { label: 'Last 24h', value: 1 },
+  { label: 'Last 7d', value: 7 },
+  { label: 'Last 30d', value: 30 },
+  { label: 'Last 90d', value: 90 },
 ]
+
+const selectedWindow = ref<number | null>(null)
+
+function selectWindow(days: number) {
+  selectedWindow.value = days
+  void dashboardStore.fetchSummary(days)
+}
+
+// --- Period-scoped metrics (same-source/same-window value AND arrow) ---
+const periodMetrics = computed(() => summary.value?.period?.metrics ?? null)
+
+const evalPeriodDelta = computed(() => periodMetrics.value?.eval_pass_rate ?? null)
+const evalRateDisplay = computed(() => {
+  if (selectedWindow.value != null) {
+    const current = evalPeriodDelta.value?.current
+    return current == null ? '—' : `${current}%`
+  }
+  const allTime = summary.value?.eval_pass_rate?.overall_pass_rate
+  return allTime == null ? '—' : `${allTime}%`
+})
+const evalDeltaDirection = computed(() => deltaDirection(evalPeriodDelta.value?.delta_pct ?? null))
+const evalDeltaArrow = computed(() => {
+  if (evalDeltaDirection.value === 'up') return '▲'
+  if (evalDeltaDirection.value === 'down') return '▼'
+  return '→'
+})
+const evalDeltaClass = computed(() => {
+  if (evalDeltaDirection.value === 'up') return 'text-success'
+  if (evalDeltaDirection.value === 'down') return 'text-destructive'
+  return 'text-muted-foreground'
+})
+const evalDeltaPctText = computed(() => {
+  const d = evalPeriodDelta.value?.delta_pct
+  return typeof d === 'number' && Number.isFinite(d) ? `${Math.abs(d).toFixed(1)}%` : ''
+})
+
+const spendDeltaPct = computed(() => {
+  const d = summary.value?.period?.metrics?.spend?.delta_pct
+  return typeof d === 'number' && Number.isFinite(d) ? d : null
+})
+const spendDeltaDirection = computed(() => deltaDirection(spendDeltaPct.value))
+const spendDeltaArrow = computed(() => {
+  if (spendDeltaDirection.value === 'up') return '▲'
+  if (spendDeltaDirection.value === 'down') return '▼'
+  return '→'
+})
+const spendDeltaClass = computed(() => {
+  if (spendDeltaDirection.value === 'up') return 'text-success'
+  if (spendDeltaDirection.value === 'down') return 'text-destructive'
+  return 'text-muted-foreground'
+})
+const spendDeltaPctText = computed(() => {
+  const d = spendDeltaPct.value
+  return d == null ? '' : `${Math.abs(d).toFixed(1)}%`
+})
+const spendTrackedDays = computed(() => summary.value?.period?.days ?? summary.value?.trend?.length ?? 0)
+
+function deltaDirection(deltaPct: number | null): 'up' | 'down' | 'flat' | null {
+  if (deltaPct == null) return null
+  if (deltaPct > 0) return 'up'
+  if (deltaPct < 0) return 'down'
+  return 'flat'
+}
 
 const trendsRaw = computed(() => dashboardStore.trends)
 
@@ -328,16 +413,9 @@ const trendData = computed(() => {
   return items
 })
 
-function switchTrendDuration(days: number) {
-  trendDuration.value = days
-  dashboardStore.fetchTrends(days)
-}
-
 const trendRunCounts = computed(() => trendData.value.map(d => d.run_count))
 const trendEvalRates = computed(() => trendData.value.map(d => d.eval_pass_rate ?? 0))
 const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd))
-
-
 
 onMounted(async () => {
   const promises: Promise<unknown>[] = [

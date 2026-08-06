@@ -301,9 +301,7 @@ class TestSharedBackendContracts:
                 yield c
 
         backend._model.astream = _astream
-        chunks = []
-        async for chunk in backend.stream([HumanMessage(content="hi")]):
-            chunks.append(chunk)
+        chunks = [chunk async for chunk in backend.stream([HumanMessage(content="hi")])]
         assert [c.content for c in chunks] == ["chunk1", "chunk2"]
 
     @pytest.mark.parametrize(

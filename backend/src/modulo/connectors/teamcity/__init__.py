@@ -56,6 +56,28 @@ class TeamCityConnector(ConnectorBase):
             timeout=30,
         )
 
+    def _run_from_build(self, data: dict[str, Any], *, fallback_run_id: str = "") -> CIRun:
+        """Build a :class:`CIRun` from a TeamCity build resource."""
+        state = data.get("state", "")
+        raw_status = data.get("status")
+        status = _parse_teamcity_status(state, raw_status)
+        href = data.get("href", "")
+        bt = data.get("buildType")
+        build_type_id = bt.get("buildTypeId", bt.get("id", "")) if bt else ""
+        response_id = data.get("id")
+        return CIRun(
+            id=str(response_id if response_id is not None else fallback_run_id),
+            pipeline_id=build_type_id,
+            status=status,
+            url=f"{self._base_url}{href}" if href else "",
+            branch=data.get("branchName", ""),
+            commit_sha=data.get("revision", ""),
+            created_at=str(data.get("startDate", "")),
+            updated_at=str(data.get("finishDate", "")),
+            duration_seconds=data.get("duration"),
+            triggered_by="",
+        )
+
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as client:
@@ -105,27 +127,7 @@ class TeamCityConnector(ConnectorBase):
             r = await client.get(f"/app/rest/builds/id:{run_id}")
             r.raise_for_status()
             data = r.json()
-        state = data.get("state", "")
-        raw_status = data.get("status")
-        status = _parse_teamcity_status(state, raw_status)
-        href = data.get("href", "")
-        build_type_id = ""
-        bt = data.get("buildType")
-        if bt:
-            build_type_id = bt.get("buildTypeId", bt.get("id", ""))
-        response_id = data.get("id")
-        return CIRun(
-            id=str(response_id if response_id is not None else run_id),
-            pipeline_id=build_type_id,
-            status=status,
-            url=f"{self._base_url}{href}" if href else "",
-            branch=data.get("branchName", ""),
-            commit_sha=data.get("revision", ""),
-            created_at=str(data.get("startDate", "")),
-            updated_at=str(data.get("finishDate", "")),
-            duration_seconds=data.get("duration", None),
-            triggered_by="",
-        )
+        return self._run_from_build(data, fallback_run_id=run_id)
 
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
         async with self._client() as client:
@@ -156,28 +158,7 @@ class TeamCityConnector(ConnectorBase):
             r.raise_for_status()
             data = r.json()
             builds: list[dict[str, Any]] = data.get("build", [])
-            runs = []
-            for b in builds:
-                state = b.get("state", "")
-                raw_status = b.get("status")
-                run_status = _parse_teamcity_status(state, raw_status)
-                href = b.get("href", "")
-                bt = b.get("buildType")
-                build_type_id = bt.get("buildTypeId", bt.get("id", "")) if bt else ""
-                runs.append(
-                    CIRun(
-                        id=str(b.get("id", "")),
-                        pipeline_id=build_type_id,
-                        status=run_status,
-                        url=f"{self._base_url}{href}" if href else "",
-                        branch=b.get("branchName", ""),
-                        commit_sha=b.get("revision", ""),
-                        created_at=str(b.get("startDate", "")),
-                        updated_at=str(b.get("finishDate", "")),
-                        duration_seconds=b.get("duration", None),
-                        triggered_by="",
-                    ),
-                )
+            runs = [self._run_from_build(b) for b in builds]
             if status:
                 runs = [r for r in runs if r.status == status]
             return runs

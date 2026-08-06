@@ -104,7 +104,7 @@ class ShutdownMiddleware:
     Usage::
 
         manager = ShutdownManager()
-        app.add_middleware(ShutdownMiddleware, manager=manager)  # noqa
+        app.add_middleware(ShutdownMiddleware, manager=manager)
     """
 
     def __init__(self, app: Any, manager: ShutdownManager) -> None:

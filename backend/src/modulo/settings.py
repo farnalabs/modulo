@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     saq_retry_delay: int = Field(default=60, alias="SAQ_RETRY_DELAY", ge=1, le=3600)
     # Per-claim E2B idempotency key run:{id}:e2b:{claim_token} (F3a).
     saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
+    # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
+    # Single source of truth (retro item 9): execute and resume claims in
+    # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers
+    # reads it directly.
+    saq_run_claim_cap: int = Field(default=20, alias="SAQ_RUN_CLAIM_CAP", ge=1, le=100)
     # TEST-ONLY pause flag — hard default off; refused outside test/staging
     # (debug=false).
     saq_test_pause: bool = Field(default=False, alias="SAQ_TEST_PAUSE")
@@ -124,10 +129,51 @@ class Settings(BaseSettings):
     saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
     saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
     saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
+    # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
+    # least one node within this setup window or the execute_run zombie watchdog
+    # fails it. Covers the pre-node hang window: checkpointer setup, graph
+    # compile, connector/model-backend hub init, and the first astream_events
+    # super-step. MUST exceed any legitimate pre-first-node setup but stay well
+    # below the run_claim_stale_seconds claim fence so the watchdog wins before
+    # a stale-heartbeat re-claim can double-execute the hung run.
+    saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
+    # heartbeat but ZERO LangGraph checkpoints for its thread after this many
+    # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
+    # normally fails it at SAQ_SETUP_GRACE_SECONDS; this branch catches the case
+    # where the worker process itself is wedged and cannot run the watchdog).
+    # MUST exceed the pipeline's max node timeout so a legitimate long first
+    # node (which writes its first checkpoint only after completing) is never
+    # failed. Default 45 min > the 1800s node timeout used by agent pipelines.
+    saq_claimed_nodeless_minutes: int = Field(default=45, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
+    # KEPT at 10 after budget verification (2026-08-06). Verified against the
+    # deployed Postgres (modulo-app-db, Fly Postgres 17.9):
+    #   SHOW max_connections  -> 300; current connections ~40 at sample time.
+    # Budget math: 10 x 2 workers (runs + system) x up to 5 machines = 100 +
+    # the web process pools + per-run checkpointer connections — well under the
+    # 300 cap with only ~40 in use. The firefight-era raise to 10 (to relieve
+    # "Too many connections") is justified by the verified budget, so it stays.
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
-    saq_redis_pool_size: int = Field(default=50, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+    # LOWERED to 20 after budget verification (2026-08-06). Verified prod facts:
+    # the SAQ_REDIS_POOL_SIZE secret is pinned to 5 and Upstash showed ~15
+    # connected clients at sample time — the firefight default of 50 (raised
+    # during the cutover) was over-provisioned (500 potential conns across 5
+    # machines vs ~15 actual). With worker concurrency 5, workers hold pool
+    # conns only while running jobs (~5 jobs x 2 workers = 10 live conns per
+    # machine), so 20 gives ample headroom (up to 200 across 5 machines).
+    # Operators on a small Redis tier may lower to 5, matching prod.
+    # The reserve clamp in saq_worker._max_concurrent_ops() must stay strictly
+    # below this pool so the semaphore can never exhaust every connection.
+    saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+    # SAQ worker concurrency (how many jobs run at once per worker).
+    # KEPT at 5 — the accepted design target (5 per worker x up to 5 machines
+    # = up to 25 concurrent runs), verified-safe against the prod Postgres
+    # 300-connection cap (only ~40 in use). Decoupled from Redis pool size —
+    # pool=20 handles bursty Redis ops while concurrency=5 prevents runaway
+    # job parallelism.
+    saq_worker_concurrency: int = Field(default=5, alias="SAQ_WORKER_CONCURRENCY", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second
     # sandbox uptime). Default reflects the dashboard-confirmed opencode

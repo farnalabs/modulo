@@ -85,10 +85,16 @@ def _build_polling_connector(type_id: str, config: dict[str, Any], creds: dict[s
         case "linear":
             return LinearConnector(api_key=creds["api_key"])
         case "jira":
-            instance = config.get("instance", config.get("base_url", ""))
-            if not instance:
-                raise ValueError("JiraConnector requires 'instance' in config_json")
-            return JiraConnector(instance=instance, creds=creds)
+            instance = config.get("instance", "")
+            base_url = config.get("base_url")
+            if not instance and not base_url:
+                raise ValueError("JiraConnector requires 'instance' or 'base_url' in config_json")
+            return JiraConnector(
+                instance=instance,
+                creds=creds,
+                base_url=base_url,
+                api_version=config.get("api_version", 3),
+            )
         case "slack":
             return SlackConnector(bot_token=creds["bot_token"])
         case _:
@@ -114,7 +120,7 @@ def evaluate_condition(
     non-zero number, ``True`` boolean, or a non-null value).
     """
     if not condition_expression:
-        return len(result.records) > 0
+        return bool(result.records)
 
     try:
         compiled = jmespath.compile(condition_expression)
@@ -129,9 +135,9 @@ def evaluate_condition(
     if isinstance(value, (int, float)):
         return value != 0
     if isinstance(value, (list, dict)):
-        return len(value) > 0
+        return bool(value)
     if isinstance(value, str):
-        return len(value) > 0
+        return bool(value)
     return True
 
 

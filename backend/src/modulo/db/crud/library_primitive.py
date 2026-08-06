@@ -61,6 +61,7 @@ async def copy_to_adapt(
         owner_team_id=target_team_id,
         visibility="org",
         account_id=account_id,
+        tier=source.tier,
     )
     session.add(copied)
     await session.flush()

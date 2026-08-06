@@ -154,7 +154,7 @@ def _serialize_checkpoint(checkpoint: Checkpoint) -> str:
 
 
 def _deserialize_checkpoint(raw: str) -> Checkpoint:
-    return cast(Checkpoint, json.loads(raw))
+    return cast("Checkpoint", json.loads(raw))
 
 
 _log = logging.getLogger(__name__)
@@ -211,7 +211,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             if raw.get("__encrypted__") and self._fernet is not None:
                 plain = self._decrypt_with_fallback(raw["data"].encode())
                 return _deserialize_checkpoint(plain.decode())
-            return cast(Checkpoint, raw)
+            return cast("Checkpoint", raw)
         if isinstance(raw, str) and raw.startswith('{"__encrypted__"'):
             try:
                 wrapper = json.loads(raw)
@@ -500,7 +500,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # ------------------------------------------------------------------
 
     def get_tuple(self, config: dict[str, Any]) -> CheckpointTuple | None:  # type: ignore[override]
-        return cast(CheckpointTuple | None, self._run_sync(self.aget_tuple(config)))
+        return cast("CheckpointTuple | None", self._run_sync(self.aget_tuple(config)))
 
     def list(  # type: ignore[override]
         self,
@@ -511,7 +511,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         limit: int | None = None,
     ) -> Sequence[CheckpointTuple]:
         return cast(
-            Sequence[CheckpointTuple],
+            "Sequence[CheckpointTuple]",
             self._run_sync(self._alist_sync(config, filter=filter, before=before, limit=limit)),
         )
 
@@ -523,7 +523,10 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         before: dict[str, Any] | None = None,
         limit: int | None = None,
     ) -> list[CheckpointTuple]:  # type: ignore[valid-type]
-        return [item async for item in self.alist(config, filter=filter, before=before, limit=limit)]
+        results: list[CheckpointTuple] = [
+            item async for item in self.alist(config, filter=filter, before=before, limit=limit)
+        ]
+        return results
 
     def put(  # type: ignore[override]
         self,
@@ -532,7 +535,10 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         metadata: CheckpointMetadata,
         new_versions: dict[str, str | int | float | bool] | None = None,
     ) -> dict[str, Any]:
-        return cast(dict[str, Any], self._run_sync(self.aput(config, checkpoint, metadata, new_versions=new_versions)))
+        return cast(
+            "dict[str, Any]",
+            self._run_sync(self.aput(config, checkpoint, metadata, new_versions=new_versions)),
+        )
 
     def put_writes(  # type: ignore[override]
         self,

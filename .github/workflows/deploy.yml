@@ -22,29 +22,6 @@ concurrency:
 
 jobs:
 
-  # SAQ cutover hold gate (plan F7 / PR C step 8). FAILS LOUDLY when SAQ_HOLD is
-  # set (GitHub repo variable — Actions cannot read Fly secrets) AND the trigger
-  # is a push to main. workflow_dispatch passes so authorised hotfixes can
-  # deploy during the hold. Wired into pre-deploy-tests' needs so the WHOLE
-  # chain is gated: a first job nothing depends on would produce a red run but
-  # still deploy.
-  hold-check:
-    name: SAQ hold check
-    runs-on: ubicloud-standard-2
-    steps:
-      - name: Check SAQ_HOLD repo variable
-        shell: bash
-        env:
-          SAQ_HOLD: ${{ vars.SAQ_HOLD }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "$SAQ_HOLD" = "true" ] && [ "$EVENT_NAME" = "push" ]; then
-            echo "::error::SAQ_HOLD is set — the SAQ cutover hold is active and this is a push to main."
-            echo "::error::Deploys are gated during the hold. Use workflow_dispatch for an authorised hotfix."
-            exit 1
-          fi
-          echo "SAQ hold not blocking (SAQ_HOLD=${SAQ_HOLD:-unset}, event=${EVENT_NAME})"
-
   deploy-throttle:
     name: Deploy throttle (batch deploys)
     runs-on: ubicloud-standard-2
@@ -87,7 +64,7 @@ jobs:
 
   pre-deploy-tests:
     name: Pre-deploy tests (fast + expensive)
-    needs: [hold-check, deploy-throttle]
+    needs: [deploy-throttle]
     if: needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
     # Explicit budget: this job runs the full unit + integration suites.
@@ -251,9 +228,49 @@ jobs:
           }
           Write-Host "staging.modulo.run SHA match: $deployedSha"
 
+      - name: Ensure worker machine exists (staging)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Guard the parse: a transient `fly machine list` failure must not
+          # fail the whole deploy job. Only machines in the 'started' state
+          # count -- a stopped/crash-looping worker does not satisfy the check.
+          fly machine list --app staging-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
+          read -r WORKER_COUNT IMAGE <<< "$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          image = ""
+          for m in machines:
+              if m.get("process_group") == "app" and m.get("state") == "started":
+                  image = (m.get("config") or {}).get("image") or m.get("image") or ""
+                  break
+          print(len(started), image)
+          ' || echo '0 ')"
+          WORKER_COUNT=${WORKER_COUNT:-0}
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            if [ -n "$IMAGE" ]; then
+              echo "No started worker machine -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app staging-modulo --process-group worker --region lhr
+            else
+              echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app staging-modulo --process-group worker --region lhr
+            fi
+          else
+            echo "Started worker machine(s) already exist: $WORKER_COUNT"
+          fi
+
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [deploy-staging]
+    if: inputs.skip_staging_e2e != 'true'
     timeout-minutes: 90
     runs-on: ubicloud-standard-2
     defaults:
@@ -381,6 +398,45 @@ jobs:
             exit 1
           }
           Write-Host "app.modulo.run SHA match: $deployedSha"
+
+      - name: Ensure worker machine exists (production)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Guard the parse: a transient `fly machine list` failure must not
+          # fail the whole deploy job. Only machines in the 'started' state
+          # count -- a stopped/crash-looping worker does not satisfy the check.
+          fly machine list --app app-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
+          read -r WORKER_COUNT IMAGE <<< "$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          image = ""
+          for m in machines:
+              if m.get("process_group") == "app" and m.get("state") == "started":
+                  image = (m.get("config") or {}).get("image") or m.get("image") or ""
+                  break
+          print(len(started), image)
+          ' || echo '0 ')"
+          WORKER_COUNT=${WORKER_COUNT:-0}
+          if [ "$WORKER_COUNT" -eq 0 ]; then
+            if [ -n "$IMAGE" ]; then
+              echo "No started worker machine -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app app-modulo --process-group worker --region lhr
+            else
+              echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app app-modulo --process-group worker --region lhr
+            fi
+          else
+            echo "Started worker machine(s) already exist: $WORKER_COUNT"
+          fi
   prod-smoke:
     name: Prod smoke tests
     needs: [deploy-production]

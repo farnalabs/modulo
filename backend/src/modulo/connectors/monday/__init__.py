@@ -223,9 +223,7 @@ class MondayConnector(ConnectorBase):
                     raise ValueError("Monday items query requires 'board_id' filter")
                 data = await self._graphql(_ITEMS_QUERY, {"board_id": [board_id]})
                 boards_list = data.get("boards", [])
-                items: list[dict[str, Any]] = []
-                for b in boards_list:
-                    items.extend(b.get("items", []))
+                items: list[dict[str, Any]] = [item for b in boards_list for item in b.get("items", [])]
                 return ConnectorResult(records=items, total=len(items))
 
             case "item":

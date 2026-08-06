@@ -102,3 +102,95 @@ Feature: Jira Connector
     Given a Jira connector with valid credentials
     When I query statuses without a project
     Then the result is an error
+
+
+  Scenario: List attachments on an issue
+    Given a Jira connector with valid credentials
+    When I query attachments on issue "PROJ-123"
+    Then the result has records
+    And the result lists issue attachments
+
+  Scenario: Upload an attachment to an issue
+    Given a Jira connector with valid credentials
+    When I upload attachment "notes.txt" to issue "PROJ-123" with content
+    Then the write succeeds
+    And the write returns an uploaded attachment
+
+  Scenario: Missing content on attachment upload raises an error
+    Given a Jira connector with valid credentials
+    When I upload an attachment to issue "PROJ-123" without content
+    Then the result is an error
+
+  Scenario: List remote links on an issue
+    Given a Jira connector with valid credentials
+    When I list remote links on issue "PROJ-123"
+    Then the result has records
+    And the records list issue remote links
+
+  Scenario: Add a remote link to an issue
+    Given a Jira connector with valid credentials
+    When I add remote link "https://example.com/pr/42" to issue "PROJ-123"
+    Then the write succeeds
+    And the write returns the created remote link
+
+  Scenario: Delete a remote link from an issue
+    Given a Jira connector with valid credentials
+    When I delete remote link "10001" from issue "PROJ-123"
+    Then the write succeeds
+    And the write returns remote link deletion for "PROJ-123"
+
+  Scenario: Query project components
+    Given a Jira connector with valid credentials
+    When I query components for project "PROJ"
+    Then the result has records
+    And the result lists project components
+
+  Scenario: Missing project filter for components raises an error
+    Given a Jira connector with valid credentials
+    When I query components without a project
+    Then the result is an error
+
+  Scenario: Query project versions
+    Given a Jira connector with valid credentials
+    When I query versions for project "PROJ"
+    Then the result has records
+    And the result lists project versions
+
+  Scenario: Missing project filter for versions raises an error
+    Given a Jira connector with valid credentials
+    When I query versions without a project
+    Then the result is an error
+
+
+  Scenario: Upload an attachment with content to an issue
+    Given a Jira connector with valid credentials
+    When I upload attachment "report.pdf" with content "PDF data" to issue "PROJ-123"
+    Then the write succeeds
+    And the write returns the uploaded attachment
+
+  Scenario: Uploading an attachment without content raises an error
+    Given a Jira connector with valid credentials
+    When I upload attachment "report.pdf" with no content to issue "PROJ-123"
+    Then the result is an error
+
+  Scenario: List attachments for an issue
+    Given a Jira connector with valid credentials
+    When I query attachments for issue "PROJ-123"
+    Then the result has records
+    And the records include attachment files
+
+  Scenario: Listing attachments without an issue key raises an error
+    Given a Jira connector with valid credentials
+    When I query attachments without an issue key
+    Then the result is an error
+
+  Scenario: Download an attachment by id
+    Given a Jira connector with valid credentials
+    When I query attachment "20001"
+    Then the result has records
+    And the attachment content is returned
+
+  Scenario: Downloading an attachment without an id raises an error
+    Given a Jira connector with valid credentials
+    When I query attachment content without an id
+    Then the result is an error

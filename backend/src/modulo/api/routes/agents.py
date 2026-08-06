@@ -63,7 +63,7 @@ class AgentCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_command_fields(self) -> "AgentCreate":
-        if self.agent_command is not None and self.agent_commands is not None and len(self.agent_commands) > 0:
+        if self.agent_command is not None and self.agent_commands:
             raise ValueError("Cannot specify both 'command' and 'commands' — use 'commands' as an array")
         return self
 
@@ -87,7 +87,7 @@ class AgentUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_command_fields(self) -> "AgentUpdate":
-        if self.agent_command is not None and self.agent_commands is not None and len(self.agent_commands) > 0:
+        if self.agent_command is not None and self.agent_commands:
             raise ValueError("Cannot specify both 'command' and 'commands' — use 'commands' as an array")
         return self
 
@@ -831,7 +831,7 @@ async def diff_prompt_versions(
             return agent.prompt_template
         for entry in history:
             if entry.get("version") == version:
-                tpl = cast(str | None, entry.get("template"))
+                tpl = cast("str | None", entry.get("template"))
                 return tpl or ""
         return None
 

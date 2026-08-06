@@ -14,6 +14,7 @@ from modulo.api.routes.cost_components import (
     validate_rate_fallback,
 )
 from modulo.core.cost_controller.breakdown.formula import CostFormulaError
+from modulo.core.cost_controller.breakdown.params import REGISTERED_RATE_FALLBACKS
 from modulo.core.seed_data.cost_components import DEFAULT_COST_COMPONENTS, seed_cost_components_for_org
 from modulo.db.crud.cost_component import create_cost_component
 
@@ -62,7 +63,11 @@ def test_reserved_report_key_rejected() -> None:
 
 
 def test_model_cost_usd_not_reserved_as_report_key() -> None:
+    # model_cost_usd is reserved as a NAME but deliberately NOT as a report_key
+    # (components may report their own model cost). Pin that asymmetry.
     validate_component_fields(name=None, report_key="model_cost_usd")  # no raise
+    with pytest.raises(CostFormulaError):
+        validate_component_fields(name="model_cost_usd", report_key=None)
 
 
 # --- rate_fallback registry ---------------------------------------------------
@@ -77,6 +82,7 @@ def test_unknown_rate_fallback_rejected() -> None:
 def test_registered_rate_fallback_ok() -> None:
     validate_rate_fallback("e2b_rate")  # no raise
     validate_rate_fallback(None)  # no raise
+    assert "e2b_rate" in REGISTERED_RATE_FALLBACKS
 
 
 # --- cross-field formula validation -------------------------------------------
@@ -103,13 +109,13 @@ def test_rate_without_source_rejected() -> None:
 def test_rate_with_fallback_ok() -> None:
     validate_component_formula(
         kind="calculated", formula="rate * wall_clock_hours", rate_usd=None, rate_fallback="e2b_rate"
-    )
+    )  # no raise — a registered fallback satisfies the 'rate' reference
 
 
 def test_rate_with_rate_usd_ok() -> None:
     validate_component_formula(
         kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback=None
-    )
+    )  # no raise — an explicit rate_usd satisfies the 'rate' reference
 
 
 # --- CRUD guards (mocked session) ---------------------------------------------

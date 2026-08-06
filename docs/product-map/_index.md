@@ -47,6 +47,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-agent-model](core/agent-model.md) => PRD 8.2
 - [feat-core-ai-schema-gen](core/ai-schema-gen.md) => PRD 8.16
 - [feat-core-alpha-exit-verification](core/alpha-exit-verification.md) => PRD 10.3b
+- [feat-core-analytics](core/analytics.md) => PRD 8.32
 - [feat-core-api-versioning](core/api-versioning.md) => PRD 6
 - [feat-core-audit-crypto-chain](core/audit-crypto-chain.md) => PRD 8.12
 - [feat-core-audit-trail](core/audit-trail.md) => PRD 8.12

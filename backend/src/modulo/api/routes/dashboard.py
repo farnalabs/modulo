@@ -1,7 +1,16 @@
-"""GET /api/v1/dashboard/summary — org-level dashboard widgets."""
+"""GET /api/v1/dashboard/summary — org-level dashboard widgets.
+
+Supports an optional ``days`` query param ({1, 7, 30, 90}) that makes the stat
+numbers period-scoped: an additive ``period`` block with ``{current, previous,
+delta_pct}`` per metric, computed from ``run_daily_facts`` (count/status/tokens/
+success/duration), the ``org_daily_run_counts`` ledger (spend) and
+``eval_results`` (eval pass rate). When ``days`` is omitted the response is
+unchanged (all-time scalars) — non-breaking for existing consumers.
+"""
 
 import json
 import logging
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -16,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.analytics import compute_delta
 from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
@@ -24,6 +34,7 @@ from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
@@ -55,10 +66,20 @@ def _safe_float(value: object, default: float = 0.0) -> float:
 
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
+# Allowed rolling-window sizes for the period-scoped summary (FAR-92).
+_ALLOWED_TREND_DAYS = (1, 7, 30, 90)
+
 _DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached via Redis
 
 
-async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
+def _dashboard_cache_key(org_id: str, days: int | None) -> str:
+    """Cache key — the no-days key keeps the legacy flag-off path unchanged."""
+    if days is None:
+        return f"dashboard:summary:{org_id}"
+    return f"dashboard:summary:{org_id}:{days}"
+
+
+async def _get_cached_dashboard(org_id: str, days: int | None = None) -> dict[str, Any] | None:
     """Read cached dashboard summary from Redis."""
     settings = get_settings()
     redis: Redis | None = None
@@ -66,7 +87,7 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        key = f"dashboard:summary:{org_id}"
+        key = _dashboard_cache_key(org_id, days)
         cached = await redis.get(key)
         if cached:
             cached_data: dict[str, Any] = json.loads(cached)
@@ -79,7 +100,7 @@ async def _get_cached_dashboard(org_id: str) -> dict[str, Any] | None:
     return None
 
 
-async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
+async def _set_cached_dashboard(org_id: str, data: dict[str, Any], days: int | None = None) -> None:
     """Write dashboard summary to Redis cache."""
     settings = get_settings()
     redis: Redis | None = None
@@ -87,7 +108,7 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        key = f"dashboard:summary:{org_id}"
+        key = _dashboard_cache_key(org_id, days)
         await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
     except Exception:
         _log.warning("dashboard.cache_write_failed", exc_info=True)
@@ -96,25 +117,206 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any]) -> None:
             await redis.aclose()
 
 
+def _period_metric(current: float | None, previous: float | None) -> dict[str, Any]:
+    """``{current, previous, delta_pct}`` for one period-scoped metric.
+
+    ``delta_pct`` is null when the previous window is zero/absent (no baseline),
+    when the current window has no data, or when both are zero — see
+    ``compute_delta``.
+    """
+    if current is None:
+        # No current-window data → no baseline comparison (delta undefined).
+        return {"current": None, "previous": previous, "delta_pct": None}
+    return {
+        "current": current,
+        "previous": previous,
+        "delta_pct": compute_delta(previous, current),
+    }
+
+
+async def _facts_window(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[str, Any]:
+    """Aggregate ``run_daily_facts`` for one window (count/tokens/duration/success).
+
+    Isolation invariant: the explicit ``organisation_id = :org`` predicate is
+    the control (modulo_app is BYPASSRLS; RLS is defense-in-depth only) — same
+    invariant the analytics foundation uses.
+    """
+    row = (
+        await session.execute(
+            select(
+                func.count().label("total"),
+                func.count(func.distinct(RunDailyFact.pipeline_id)).label("active_pipelines"),
+                func.sum(RunDailyFact.total_tokens).label("tokens"),
+                func.avg(RunDailyFact.duration_ms).label("avg_duration_ms"),
+                func.count().filter(RunDailyFact.status == "complete").label("complete"),
+            ).where(
+                RunDailyFact.organisation_id == org_id,
+                RunDailyFact.created_at >= window_start,
+                RunDailyFact.created_at < window_end,
+            )
+        )
+    ).one()
+    total = _safe_int(row.total)
+    complete = _safe_int(row.complete)
+    return {
+        "total_runs": total,
+        "active_pipelines": _safe_int(row.active_pipelines),
+        "tokens": _safe_int(row.tokens),
+        "avg_duration_ms": round(float(row.avg_duration_ms), 1) if row.avg_duration_ms is not None else None,
+        "success_rate": round(complete / total * 100, 1) if total > 0 else None,
+    }
+
+
+async def _facts_status_counts(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[str, int]:
+    """Facts count grouped by status for one window."""
+    rows = (
+        await session.execute(
+            select(RunDailyFact.status, func.count().label("cnt"))
+            .where(
+                RunDailyFact.organisation_id == org_id,
+                RunDailyFact.created_at >= window_start,
+                RunDailyFact.created_at < window_end,
+            )
+            .group_by(RunDailyFact.status)
+        )
+    ).all()
+    return {row.status: _safe_int(row.cnt) for row in rows}
+
+
+async def _ledger_spend_window(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    start_date: date,
+    end_date: date,
+) -> float:
+    """Org-level ledger spend (``team_id IS NULL`` row) summed over one window."""
+    total = (
+        await session.execute(
+            select(func.sum(OrgDailyRunCount.total_spend_usd)).where(
+                OrgDailyRunCount.organisation_id == org_id,
+                OrgDailyRunCount.team_id.is_(None),
+                OrgDailyRunCount.run_date >= start_date,
+                OrgDailyRunCount.run_date < end_date,
+            )
+        )
+    ).scalar_one()
+    return float(total) if total is not None else 0.0
+
+
+async def _eval_rate_window(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    window_start: datetime,
+    window_end: datetime,
+) -> float | None:
+    """Eval pass rate (percent) over one window — the series /trends uses."""
+    row = (
+        await session.execute(
+            select(
+                func.count().label("total"),
+                func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+            ).where(
+                EvalResult.organisation_id == org_id,
+                EvalResult.evaluated_at >= window_start,
+                EvalResult.evaluated_at < window_end,
+            )
+        )
+    ).one()
+    total = int(row.total) if row.total is not None else 0
+    passed = int(row.passed) if row.passed is not None else 0
+    return round(passed / total * 100, 1) if total > 0 else None
+
+
+async def _compute_period_metrics(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    days: int,
+) -> dict[str, Any]:
+    """Period-scoped metrics with same-source/same-window value AND arrow.
+
+    Current window ends now; the previous window is the immediately-preceding
+    equal-length window. Every metric compares the same source over the same
+    window so the value and its trend arrow are always consistent.
+    """
+    now = datetime.now(UTC)
+    current_start = now - timedelta(days=days)
+    prev_start = now - timedelta(days=2 * days)
+    today = now.date()
+
+    current_facts = await _facts_window(session, org_id, current_start, now)
+    previous_facts = await _facts_window(session, org_id, prev_start, current_start)
+
+    current_status = await _facts_status_counts(session, org_id, current_start, now)
+    previous_status = await _facts_status_counts(session, org_id, prev_start, current_start)
+
+    current_spend = await _ledger_spend_window(session, org_id, today - timedelta(days=days), today)
+    previous_spend = await _ledger_spend_window(
+        session, org_id, today - timedelta(days=2 * days), today - timedelta(days=days)
+    )
+
+    current_eval = await _eval_rate_window(session, org_id, current_start, now)
+    previous_eval = await _eval_rate_window(session, org_id, prev_start, current_start)
+
+    status_metrics = {
+        status: _period_metric(current_status.get(status, 0), previous_status.get(status, 0))
+        for status in _TRACKED_STATUSES
+    }
+
+    return {
+        "days": days,
+        "metrics": {
+            "total_runs": _period_metric(current_facts["total_runs"], previous_facts["total_runs"]),
+            "active_pipelines": _period_metric(current_facts["active_pipelines"], previous_facts["active_pipelines"]),
+            "run_counts_by_status": status_metrics,
+            "tokens": _period_metric(current_facts["tokens"], previous_facts["tokens"]),
+            "success_rate": _period_metric(current_facts["success_rate"], previous_facts["success_rate"]),
+            "avg_duration_ms": _period_metric(current_facts["avg_duration_ms"], previous_facts["avg_duration_ms"]),
+            "eval_pass_rate": _period_metric(current_eval, previous_eval),
+            "spend": _period_metric(current_spend, previous_spend),
+        },
+    }
+
+
 @handle_db_errors("dashboard.dashboard_summary")
 @router.get("/summary")
 async def dashboard_summary(
+    days: int | None = Query(None, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("dashboard.summary"),
 ) -> dict[str, Any]:
     """Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend."""
     try:
+        if days is not None and days not in _ALLOWED_TREND_DAYS:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="days must be one of 1, 7, 30, 90.",
+            )
+
         org_id_str = str(principal.organisation_id)
 
-        cached = await _get_cached_dashboard(org_id_str)
+        cached = await _get_cached_dashboard(org_id_str, days)
         if cached is not None:
             return cached
 
+        period_metrics: dict[str, Any] | None = None
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
 
             org_id = principal.organisation_id
+
+            if days is not None:
+                period_metrics = await _compute_period_metrics(session, org_id, days)
 
             # --- Queries that can all run independently (no dependencies between them) ---
 
@@ -147,11 +349,13 @@ async def dashboard_summary(
             for tracked_status in _TRACKED_STATUSES:
                 status_counts.setdefault(tracked_status, 0)
 
-            _idle_statuses = ("pending", "claimed", "waiting_for_lock")
-            idle_count = sum(status_counts.get(s, 0) for s in _idle_statuses)
+            idle_statuses = ("pending", "claimed", "waiting_for_lock")
+            idle_count = sum(status_counts.get(s, 0) for s in idle_statuses)
             status_counts["idle"] = idle_count
 
-            teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id).order_by(Team.name))
+            teams_result = await session.execute(
+                select(Team).where(Team.organisation_id == org_id, Team.deleted_at.is_(None)).order_by(Team.name)
+            )
             teams = list(teams_result.scalars().all())
 
             team_run_query = (
@@ -192,18 +396,14 @@ async def dashboard_summary(
                 tid = str(tr_row.owner_team_id)
                 team_run_data.setdefault(tid, {})[tr_row.status] = _safe_int(tr_row.cnt)
 
-            team_pipeline_data: dict[str, int] = {}
-            for tp_row in team_pipeline_rows:
-                team_pipeline_data[str(tp_row.owner_team_id)] = int(tp_row.pipeline_cnt)
+            team_pipeline_data = {str(tp_row.owner_team_id): int(tp_row.pipeline_cnt) for tp_row in team_pipeline_rows}
 
             team_metrics: list[dict[str, Any]] = []
             for team in teams:
                 tid = str(team.id)
                 run_data = team_run_data.get(tid, {})
                 team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
-                team_statuses: dict[str, int] = {}
-                for tracked_status in _TRACKED_STATUSES:
-                    team_statuses[tracked_status] = run_data.get(tracked_status, 0)
+                team_statuses = {s: run_data.get(s, 0) for s in _TRACKED_STATUSES}
                 team_idle_from_db = sum(run_data.get(s, 0) for s in ("pending", "claimed", "waiting_for_lock"))
                 team_statuses["idle"] = team_idle_from_db
 
@@ -439,7 +639,7 @@ async def dashboard_summary(
                     _log.warning("dashboard.config_warnings.remy_failed", exc_info=True)
 
         total_runs = sum(status_counts.values())
-        result = {
+        result: dict[str, Any] = {
             "total_runs": total_runs,
             "active_pipelines": active_pipelines,
             "run_counts_by_status": status_counts,
@@ -449,8 +649,10 @@ async def dashboard_summary(
             "recent_runs": recent_runs,
             "config_warnings": config_warnings,
         }
+        if period_metrics is not None:
+            result["period"] = period_metrics
 
-        await _set_cached_dashboard(org_id_str, result)
+        await _set_cached_dashboard(org_id_str, result, days)
         return result
     except ProgrammingError as exc:
         _log.exception("dashboard.dashboard_summary")
@@ -464,6 +666,10 @@ async def dashboard_summary(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The database is temporarily unavailable.",
         ) from exc
+    except HTTPException:
+        # Preserve the intended status for the days validation (422) instead of
+        # collapsing it into a 500 via the generic handler below.
+        raise
     except Exception as exc:
         _log.exception("dashboard.summary_failed")
         raise HTTPException(

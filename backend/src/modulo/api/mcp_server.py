@@ -291,7 +291,6 @@ def _record_api_key_role_cap(
 
 def get_api_key_role_cap_count() -> int:
     """Return the total number of API-key role-cap clamps recorded."""
-    global _api_key_role_cap_count
     with _api_key_role_cap_lock:
         return _api_key_role_cap_count
 
@@ -1439,9 +1438,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         # Detect masked fields by scanning for the bullet mask character.
         masked_fields: list[str] = []
         if isinstance(masked, dict):
-            for k, v in masked.items():
-                if isinstance(v, str) and "\u2022" in v:
-                    masked_fields.append(k)
+            masked_fields = [k for k, v in masked.items() if isinstance(v, str) and "\u2022" in v]
 
         return {
             "node_id": node_id,
@@ -1578,8 +1575,8 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            _terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
-            if run.status in _terminal_statuses:
+            terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+            if run.status in terminal_statuses:
                 detail = f"Run is already in terminal status: {run.status}"
                 return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
             # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
@@ -1613,25 +1610,26 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import func, select
 
+        from modulo.db.models.run import Run
+
+        terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
+            base_where = (
+                HitlClaim.organisation_id == org_id,
+                HitlClaim.decision.is_(None),
+                Run.status.not_in(terminal_statuses),
+            )
             total_result = await s.execute(
-                select(func.count())
-                .select_from(HitlClaim)
-                .where(
-                    HitlClaim.organisation_id == org_id,
-                    HitlClaim.decision.is_(None),
-                )
+                select(func.count()).select_from(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*base_where)
             )
             total = total_result.scalar_one()
 
             offset = (page - 1) * page_size
             result = await s.execute(
                 select(HitlClaim)
-                .where(
-                    HitlClaim.organisation_id == org_id,
-                    HitlClaim.decision.is_(None),
-                )
+                .join(Run, HitlClaim.run_id == Run.id)
+                .where(*base_where)
                 .offset(offset)
                 .limit(page_size)
             )
@@ -2731,7 +2729,7 @@ _doc_index_ttl: float = 300.0  # 5 minutes
 
 
 def _get_doc_index() -> DocumentationIndex:
-    global _doc_index, _doc_index_ts, _doc_index_ttl
+    global _doc_index, _doc_index_ts
     import time as _time
 
     now = _time.time()
@@ -2907,13 +2905,12 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         elif section in {"plan", "rate_limits"}:
             key_prefixes = ["feature_flags", "default_plan", "rate_limits"]
 
-        filtered = []
-        for cfg in configs:
-            if key_prefixes is not None and not any(cfg.key.startswith(p) for p in key_prefixes):
-                continue
-            if _is_sensitive_key(cfg.key):
-                continue
-            filtered.append(cfg)
+        filtered = [
+            cfg
+            for cfg in configs
+            if (key_prefixes is None or any(cfg.key.startswith(p) for p in key_prefixes))
+            and not _is_sensitive_key(cfg.key)
+        ]
 
         if not filtered:
             section_label = section or "org"
@@ -3488,7 +3485,9 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         gate = result.scalar_one_or_none()
         required_team_name = None
         if gate is not None and gate.required_team_id is not None:
-            team_result = await s.execute(select(Team).where(Team.id == gate.required_team_id))
+            team_result = await s.execute(
+                select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None))
+            )
             team = team_result.scalar_one_or_none()
             required_team_name = team.name if team else None
     if gate is None:
@@ -3501,8 +3500,12 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         f"Claimed by: {gate.account_id or 'unclaimed'}",
     ]
     if gate.required_team_id:
-        parts.append(f"Required team: {gate.required_team_id}")
-        parts.append(f"Required team name: {required_team_name or 'unknown'}")
+        parts.extend(
+            [
+                f"Required team: {gate.required_team_id}",
+                f"Required team name: {required_team_name or 'unknown'}",
+            ]
+        )
     if gate.expires_at:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")
     return "\n".join(parts)

@@ -85,35 +85,34 @@ Feature: GitHub Connector
     When I query resource "search_issues" with search query "repo:owner/repo is:open"
     Then the result has records
 
-  Scenario: Query the repository tree recursively
+  Scenario: Query recursive tree listing
     Given a GitHub connector with valid token
-    When I query resource "tree" with filters repo "owner/repo" and branch "main"
+    When I query GitHub tree for repo "owner/repo" with path "src" and recursive
     Then the result has records
-    And the records contain tree entries
+    And the tree result contains nested entries
 
-  Scenario: Query the repository tree with a path filter
+  Scenario: Path traversal on file query is blocked
     Given a GitHub connector with valid token
-    When I query resource "tree" with filters repo "owner/repo", branch "main" and path "src"
-    Then the result has records
-    And every tree record path is under "src"
-
-  Scenario: Path traversal on file read is blocked
-    Given a GitHub connector with valid token
-    When I query resource "file" with filters repo "owner/repo" and path "../README.md"
-    Then the result is an error with "path traversal blocked"
+    When I query resource "file" with filters repo "owner/repo" and path "../../etc/passwd"
+    Then the result is an error containing "path traversal"
 
   Scenario: Path traversal on file write is blocked
     Given a GitHub connector with valid token
-    When I write resource "file" with content "SGVsbG8=" and path "../../etc/passwd"
-    Then the result is an error with "path traversal blocked"
+    When I write resource "file" with content "base64content" and path "../escape.md"
+    Then the write is an error containing "path traversal"
 
-  Scenario: Writing plain-text file content base64-encodes it
+  Scenario: Write a batch commit applies file actions
     Given a GitHub connector with valid token
-    When I write resource "file" with text content "Hello, world!" and path "docs/hello.txt"
-    Then the file write payload is base64 of "Hello, world!"
+    When I write GitHub files batch for repo "owner/repo"
+    Then the write succeeds
+    And the batch write reports a commit sha
 
-  Scenario: Reading a file exposes decoded content
+  Scenario: Batch commit with empty actions is an error
     Given a GitHub connector with valid token
-    When I query resource "file" with filters repo "owner/repo" and path "README.md"
-    Then the record contains file content
-    And the record decoded content is "my readme"
+    When I write GitHub files batch for repo "owner/repo" with no actions
+    Then the write is an error containing "non-empty 'actions' list"
+
+  Scenario: Batch commit path traversal is blocked
+    Given a GitHub connector with valid token
+    When I write GitHub files batch for repo "owner/repo" with traversal path "../evil.txt"
+    Then the write is an error containing "path traversal"

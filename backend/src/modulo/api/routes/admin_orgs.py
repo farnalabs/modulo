@@ -563,7 +563,7 @@ async def admin_set_org_authz_enforce(
     try:
         async with session.begin():
             result = cast(
-                CursorResult[Any],
+                "CursorResult[Any]",
                 await session.execute(
                     update(Organisation).where(Organisation.id == org_id).values(authz_enforce=req.enforce)
                 ),

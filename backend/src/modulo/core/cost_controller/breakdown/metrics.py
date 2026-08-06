@@ -49,14 +49,23 @@ def _get_meter() -> Any:
 
 
 def _ensure() -> None:
-    global _eval_errors_total, _clamped_total, _out_of_band_high_total, _settings_warning_total
-    global _fallback_legacy_total
-    global _ledger_clamped_total, _ledger_refused_clamped_total
-    global _finalize_deferred_total, _limit_refused_total
-    global _duplicate_terminal_total
-    global _probe_mismatch_runs_total, _probe_total_eq_mismatch_total
-    global _probe_clamped_skip_total, _probe_missing_ledger_row_total
-    global _probe_last_success_ts, _schema_drift_total
+    global \
+        _eval_errors_total, \
+        _clamped_total, \
+        _out_of_band_high_total, \
+        _settings_warning_total, \
+        _fallback_legacy_total, \
+        _ledger_clamped_total, \
+        _ledger_refused_clamped_total, \
+        _finalize_deferred_total, \
+        _limit_refused_total, \
+        _duplicate_terminal_total, \
+        _probe_mismatch_runs_total, \
+        _probe_total_eq_mismatch_total, \
+        _probe_clamped_skip_total, \
+        _probe_missing_ledger_row_total, \
+        _probe_last_success_ts, \
+        _schema_drift_total
     if _eval_errors_total is not None:
         return
     meter = _get_meter()

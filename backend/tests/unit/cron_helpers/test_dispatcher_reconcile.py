@@ -53,7 +53,7 @@ class _MockSession:
         return self._get_bind()
 
     async def get(self, model: Any, pk: Any) -> SimpleNamespace:
-        return SimpleNamespace(max_concurrent_runs=5)
+        return SimpleNamespace(max_concurrent_runs=5, status="running")
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         self.executed.append((stmt, params))
@@ -76,7 +76,14 @@ def _rows_result(rows: list[Any]) -> MagicMock:
     return r
 
 
-def _run_row(run_id: uuid.UUID, status: str, *, dispatched: bool = True, stale: bool = True) -> SimpleNamespace:
+def _run_row(
+    run_id: uuid.UUID,
+    status: str,
+    *,
+    dispatched: bool = True,
+    stale: bool = True,
+    nodeless: bool = False,
+) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     return SimpleNamespace(
         id=run_id,
@@ -84,6 +91,11 @@ def _run_row(run_id: uuid.UUID, status: str, *, dispatched: bool = True, stale: 
         status=status,
         dispatched_at=datetime.now(UTC) if dispatched else None,
         heartbeat_at=heartbeat,
+        # Non-None by default (has finalised node output → NOT nodeless); a
+        # nodeless zombie has never finalised any node.
+        node_token_usage=None if nodeless else {},
+        outputs_json=None if nodeless else {},
+        started_at=datetime.now(UTC) - timedelta(minutes=60) if nodeless else datetime.now(UTC) - timedelta(minutes=1),
     )
 
 
@@ -92,6 +104,7 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_runs_queue": "runs",
         "saq_reenqueue_window": 600,
         "saq_job_heartbeat": 300,
+        "saq_claimed_nodeless_minutes": 45,
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
     }
@@ -120,6 +133,7 @@ async def _run_reconcile(
     queue_job_result: Any = None,
     dispatch_result: tuple[str, str | None] = ("enqueued", "new-job-id"),
     capacity_free: bool = True,
+    awaiting_committed: bool = True,
 ) -> dict[str, Any]:
     _patch_env(monkeypatch)
     session = _MockSession([_org_result([ORG]), _rows_result(rows)])
@@ -136,6 +150,12 @@ async def _run_reconcile(
         patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
         patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result) as reenqueue,
         patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        patch.object(
+            ch,
+            "_awaiting_human_has_committed_decision",
+            new_callable=AsyncMock,
+            return_value=awaiting_committed,
+        ) as awaiting_guard,
     ):
         if capacity_free is False:
             with patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5):
@@ -144,13 +164,13 @@ async def _run_reconcile(
             with patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0):
                 summary = await ch.dispatcher_reconcile()
 
-    return summary, reenqueue, ingest, redis_client
+    return summary, reenqueue, ingest, redis_client, awaiting_guard
 
 
 class TestReconcilePredicateMatrix:
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_free_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, ingest, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)]
         )
         assert summary["repaired"] == 1
@@ -160,7 +180,7 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_full_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _ingest, _ = await _run_reconcile(
+        summary, reenqueue, _ingest, _, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)], capacity_free=False
         )
         assert summary["repaired"] == 0
@@ -169,7 +189,7 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_pending_dispatched_stale_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _, _ = await _run_reconcile(
+        summary, reenqueue, _, _, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_PENDING_DISPATCHED, "pending", dispatched=True, stale=True)]
         )
         assert summary["repaired"] == 1
@@ -177,35 +197,63 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_running_stale_redispatch_execute(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
+        summary, reenqueue, _, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
         assert summary["repaired"] == 1
         assert reenqueue.await_args.args[3] == "execute_run"
 
     @pytest.mark.asyncio
-    async def test_awaiting_human_never_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """F6a review: a waiting HITL run must NEVER be re-dispatched — its
-        execute_run job COMPLETED normally at the gate, and re-dispatching as
-        resume_run with an empty decision would auto-approve the gate."""
-        summary, reenqueue, ingest, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)]
+    async def test_awaiting_human_committed_decision_stale_redispatched_as_resume_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F6a gated recovery WITH a committed gate decision: an awaiting_human
+        run with a stale heartbeat, NO SAQ job in Redis (a half-resumed run
+        whose resume_run job was lost), and a committed HITL decision IS
+        re-dispatched as resume_run."""
+        summary, reenqueue, ingest, _, awaiting_guard = await _run_reconcile(
+            monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=True
+        )
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "resume_run"
+        ingest.assert_not_awaited()
+        awaiting_guard.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_awaiting_human_stale_no_committed_decision_not_redispatched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F6a auto-approve guard: an awaiting_human run with a stale heartbeat
+        and NO SAQ job but NO committed gate decision (a genuinely-waiting run
+        whose finished job hash expired + heartbeat froze) must NOT be
+        re-dispatched — resume_run with empty resume_data would inject
+        {"_hitl_decision": {}} and auto-approve the gate."""
+        summary, reenqueue, ingest, _, awaiting_guard = await _run_reconcile(
+            monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=False
         )
         assert summary["repaired"] == 0
         assert summary["skipped"] == 1
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
+        awaiting_guard.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_claimed_never_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)])
-        assert summary["repaired"] == 0
-        assert summary["skipped"] == 1
-        reenqueue.assert_not_awaited()
+    async def test_claimed_stale_no_job_redispatched_as_resume_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F6a gated recovery: a claimed run with a stale heartbeat and NO SAQ
+        job in Redis IS re-dispatched as resume_run (a claim was already made —
+        the guard does not apply)."""
+        summary, reenqueue, _, _, awaiting_guard = await _run_reconcile(
+            monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)]
+        )
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "resume_run"
+        awaiting_guard.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_capacity_deferred_redispatched_in_saq_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Capacity-deferred runs (pending, dispatched_at NULL, dispatcher NULL)
         must be reachable and re-dispatched when capacity frees (F3c)."""
-        summary, reenqueue, ingest, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)],
             capacity_free=True,
@@ -217,7 +265,7 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_job_still_exists_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, ingest, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_WITH_JOB, "running", stale=True)],
             queue_job_result=SimpleNamespace(id="saq:job:runs:run:x"),
@@ -225,6 +273,58 @@ class TestReconcilePredicateMatrix:
         assert summary["skipped"] == 1
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_running_nodeless_fresh_heartbeat_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A claimed-but-nodeless zombie (running + FRESH heartbeat + zero node
+        output after the nodeless window) is terminal-failed, never re-dispatched.
+        The fresh heartbeat keeps it invisible to the stale branch — that is the
+        primary hang mechanism this branch closes."""
+        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)],
+        )
+        assert summary["nodeless_failed"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_running_with_node_output_not_nodeless(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run that finalised node output is NOT nodeless — a stale-heartbeat
+        one still takes the worker-lost re-dispatch repair, never the fail."""
+        summary, reenqueue, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_RUNNING, "running", stale=True, nodeless=False)],
+        )
+        assert summary["repaired"] == 1
+        assert summary["nodeless_failed"] == 0
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+
+    @pytest.mark.asyncio
+    async def test_nodeless_age_gate_requires_staleness(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Age-gate unit check: a nodeless-but-recently-started run is NOT
+        matched (the predicate age gate protects a legitimate long first node)."""
+        row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
+        row.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        assert ch._is_nodeless_zombie_row(row, 45) is False
+
+    @pytest.mark.asyncio
+    async def test_nodeless_with_recent_start_falls_through_to_job_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A nodeless run that started recently (age gate not elapsed) is not
+        failed by the nodeless branch; with a fresh heartbeat and no other
+        branch matching, it is skipped (job exists) rather than failed."""
+        row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
+        row.started_at = datetime.now(UTC) - timedelta(minutes=10)
+        summary, reenqueue, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [row],
+            queue_job_result=SimpleNamespace(id="saq:job:runs:run:x"),
+        )
+        assert summary["nodeless_failed"] == 0
+        assert summary["skipped"] == 1
+        reenqueue.assert_not_awaited()
 
 
 class TestReconcileRedisFailSafe:

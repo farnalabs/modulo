@@ -88,8 +88,7 @@ class RuntimeConfigStore:
         self._env_values: dict[str, str | None] = {}
         self._lock = RLock()
 
-        for key in KNOWN_KEYS:
-            self._defaults[key] = DEFAULT_VALUES.get(key)
+        self._defaults = {key: DEFAULT_VALUES.get(key) for key in KNOWN_KEYS}
         self._refresh_env_values()
 
     @classmethod
@@ -151,8 +150,7 @@ class RuntimeConfigStore:
 
     def _refresh_env_values(self) -> None:
         """Read all known keys from the process environment."""
-        for key in KNOWN_KEYS:
-            self._env_values[key] = os.environ.get(key)
+        self._env_values = {key: os.environ.get(key) for key in KNOWN_KEYS}
 
     def reload(self) -> None:
         """Re-read os.environ to detect drift for all known keys."""

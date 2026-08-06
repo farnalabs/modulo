@@ -5,6 +5,10 @@
 > **Superseded — tracker retired.** This ADR references task IDs (`task-saq-migration-pr-a/b/c`) from the
 > retired delivery-plan.json tracker. The tracker is retired (source of truth: Linear); task IDs here are
 > historical references only.
+>
+> **Cutover hold retired — 2026-08-05.** The PR C "48–72h hold" was implemented as the deploy.yml
+> `hold-check` job gated on the GitHub `SAQ_HOLD` repo variable. That gate is now **deleted**: the
+> cutover is complete (PRs #725/#726/#734 merged) and deploys are no longer gated by `SAQ_HOLD`.
 
 **Date**: 2026-07-31
 **Status**: Accepted
@@ -37,6 +41,55 @@ Replace Celery with **SAQ 0.26.4** as the task queue substrate, pinned in `pypro
 - `runs_manual` + `runs_automated` collapse into **ONE `runs` queue**. Celery consumes both today via `task_queues`, but the entire worker process is deleted, so the collapse loses nothing.
 - Global run concurrency: 2/machine × 2–5 machines = 4–10 concurrent runs.
 
+### Concurrency model (2026-08-05 revision)
+
+Worker concurrency was coupled to the Redis pool size during the cutover
+firefight, then decoupled. Current (post-fix) model:
+
+- **`SAQ_WORKER_CONCURRENCY`** (default `5`) is the only worker-concurrency
+  knob, decoupled from the Redis pool size. This is a NEW knob: during the
+  cutover, the #663 coupling bug meant raising `SAQ_REDIS_POOL_SIZE` 5 → 20 →
+  50 silently raised worker concurrency 5 → 20 → 50, multiplying in-flight jobs
+  (and therefore DB/Redis load) with every pool resize. Decoupling makes the
+  two budgets independent and independently tunable.
+- **`SAQ_REDIS_POOL_SIZE`** (default `20`) and **`SAQ_WORKER_DB_POOL_SIZE`**
+  (default `10`) were firefight residues: both were raised during the cutover to
+  relieve "Too many connections" pressure and were never re-derived from the
+  actual connection budgets. **Budget verification CLOSED — 2026-08-06**
+  (FAR-88 / the tier ticket). Verified facts from prod (`fly ssh console`):
+  deployed Postgres (modulo-app-db, Fly Postgres 17.9) reports
+  `max_connections` = **300** with ~**40** connections in use at sample time;
+  Upstash showed ~**15** connected clients at sample time and prod pins the
+  `SAQ_REDIS_POOL_SIZE` secret to **5** (maxclients is hidden on Upstash).
+  Re-derived defaults: `SAQ_WORKER_DB_POOL_SIZE` stays **10** (10 x 2 workers x
+  up to 5 machines = 100 + web pools + checkpointer, comfortably under 300) and
+  `SAQ_REDIS_POOL_SIZE` is lowered 50 → **20** (workers hold pool conns only
+  while running jobs — ~5 jobs x 2 workers = 10 live conns per machine — so 20
+  caps at 200 potential conns across 5 machines; operators on a small Redis
+  tier may lower to 5, matching prod). Accepted design target: concurrency 5
+  per worker x up to 5 machines = up to 25 concurrent runs, verified-safe
+  against the 300-connection cap.
+- **`max_concurrent_ops` reserve clamp** (SAQ RedisQueue semaphore): must stay
+  strictly below the pool size so the semaphore can never exhaust every
+  connection. Reserve formula: pool ≤ 1 → `pool`; pool 2–5 → `pool − 1`; pool
+  > 5 → `pool − 5`. Implemented as `_max_concurrent_ops()` in
+  `backend/src/modulo/core/saq_worker.py` and covered by unit tests.
+
+### Concurrency: product vs infra
+
+The connection-pool knobs (`SAQ_REDIS_POOL_SIZE`, `SAQ_WORKER_DB_POOL_SIZE`,
+`SAQ_WORKER_CONCURRENCY`) are **infra-specific server configs**: operators tune
+them to their deployment's Postgres/Redis capacity (the verified budget above).
+They are not product concurrency controls.
+
+The **product-facing** concurrency control is the number of concurrent
+runs/pipelines a customer runs — `Pipeline.max_concurrent_runs` (per pipeline,
+default 5) plus the org-level sandbox cap — which customers set to suit THEIR
+infra. SAQ pool knobs exist to make the chosen product concurrency fit the
+underlying Postgres/Redis; a capacity-blocked run stays `pending` and is
+re-dispatched by `dispatcher_reconcile` when capacity frees. No new product
+feature is implied here — this is a positioning note only.
+
 ### Database as system of record
 
 - The DB remains the system of record for run state. Three columns are added: `dispatcher`, `saq_job_id`, `claim_token`. `re_enqueue_count` is cut (re-enqueue detection moved to log-line ingestion).
@@ -47,7 +100,7 @@ Replace Celery with **SAQ 0.26.4** as the task queue substrate, pinned in `pypro
 
 - **PR A**: foundation + spike (hard gate) + tests-first. The SPIKE runs a throwaway worker against an identically-configured dev Upstash instance (never production) and settles the remaining empirical unknowns: Upstash maxmemory-policy, ttl semantics, retry timing, E2B transient-retry distribution. Raw spike evidence will be committed with PR A.
 - **PR B**: routing (`dispatch_run` single gating point) + the 3 columns + `saq` error enum + shadow mode + staging smoke. SAQ runs in shadow on production (`SAQ_ENABLED=false`): `execute_run` keeps routing to Celery (`dispatcher=NULL`), `resume_run` routes to SAQ (`dispatcher='saq'`). The staging smoke flips `SAQ_ENABLED=true` on dedicated Upstash + Postgres with queue prefixes `staging-runs`/`staging-system` so the acceptance (`dispatcher='saq'` + `claim_count==1`) is reachable.
-- **PR C**: cutover + Celery removal, with a **48–72h hold**. Sequenced rollout: deploy the image with BOTH Celery+SAQ and `SAQ_ENABLED=true` on all machines first, verify SAQ green, then deploy the Celery-removal image — never a scheduler-less window.
+- **PR C**: cutover + Celery removal, with a **48–72h hold** (retired 2026-08-05 — see header note; the deploy gate it described no longer exists). Sequenced rollout: deploy the image with BOTH Celery+SAQ and `SAQ_ENABLED=true` on all machines first, verify SAQ green, then deploy the Celery-removal image — never a scheduler-less window.
 
 ### At-most-once residual and its mitigations
 

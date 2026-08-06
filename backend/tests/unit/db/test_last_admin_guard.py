@@ -74,6 +74,11 @@ class TestAssertNotLastAdminCounting:
             target_role_after="operator",
             target_active_after=False,
         )
+        assert len(session.executed) == 2, "guard must run the target lookup and the admin count"
+        count_sql = next(str(s) for s in session.executed if "count(*)" in str(s))
+        assert "organisation_id" in count_sql
+        assert "account_id" in count_sql
+        assert "is_break_glass" in count_sql
 
     @pytest.mark.asyncio
     async def test_allows_when_target_remains_active_admin(self) -> None:
@@ -85,6 +90,8 @@ class TestAssertNotLastAdminCounting:
             target_role_after="admin",
             target_active_after=True,
         )
+        assert len(session.executed) == 2, "guard must run the target lookup and the admin count"
+        assert any("count(*)" in str(s) for s in session.executed)
 
     @pytest.mark.asyncio
     async def test_blocks_when_no_active_admin_would_remain(self) -> None:

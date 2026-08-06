@@ -395,19 +395,13 @@ async def restore_endpoint(
 def _ep_to_response(ep: NotificationEndpoint) -> NotificationEndpointResponse:
     raw_events: object = ep.events
     events: list[str] = []
-    if isinstance(raw_events, list):
-        if not raw_events:
-            events = []
-        elif not any(not isinstance(event, str) for event in raw_events):
-            events = raw_events
+    if isinstance(raw_events, list) and not any(not isinstance(event, str) for event in raw_events):
+        events = raw_events
     if isinstance(raw_events, str):
         with contextlib.suppress(json.JSONDecodeError, TypeError):
             parsed = json.loads(raw_events)
-            if isinstance(parsed, list):
-                if not parsed:
-                    events = []
-                elif not any(not isinstance(event, str) for event in parsed):
-                    events = parsed
+            if isinstance(parsed, list) and not any(not isinstance(event, str) for event in parsed):
+                events = parsed
     return NotificationEndpointResponse(
         id=ep.id,
         url=ep.url,

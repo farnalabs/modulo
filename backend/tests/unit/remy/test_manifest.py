@@ -164,7 +164,7 @@ class TestManifestEndpoint:
 
         path = get_manifest_path()
         assert path.exists(), f"Manifest file not found at {path}"
-        with open(path) as f:
+        with path.open() as f:
             data = yaml.safe_load(f)
         assert data is not None
         assert data.get("schema_version") == 1

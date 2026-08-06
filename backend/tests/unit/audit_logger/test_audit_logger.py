@@ -259,6 +259,104 @@ class TestVerifyChain:
         assert result["first_gap_index"] == 1
         assert result["first_tampered_id"] == str(event_id2)
 
+    async def test_verify_chain_break_detail_reports_expected_vs_actual_hash(self, session):
+        """A chain break must surface the expected vs stored previous_hash in `detail`."""
+        org_id = uuid.uuid4()
+        event_id1 = uuid.uuid4()
+        event_id2 = uuid.uuid4()
+
+        h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
+        e1 = _make_event(event_id=event_id1, org_id=org_id, event_type="e1", previous_hash=None, created_at_val="t1")
+        e2 = _make_event(
+            event_id=event_id2,
+            org_id=org_id,
+            event_type="e2",
+            previous_hash="bad-hash",
+            created_at_val="t2",
+        )
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(2)
+            return _scalars_result([e1, e2])
+
+        session.execute = _execute
+
+        result = await verify_chain(session, org_id)
+        detail = result["detail"]
+        assert result["valid"] is False
+        assert detail is not None
+        assert str(event_id2) in detail
+        assert "bad-hash" in detail
+        assert h1 in detail
+
+    async def test_verify_chain_break_detail_first_event(self, session):
+        """A break on the very first event reports the 'first event' case clearly."""
+        org_id = uuid.uuid4()
+        event_id1 = uuid.uuid4()
+
+        e1 = _make_event(
+            event_id=event_id1,
+            org_id=org_id,
+            event_type="e1",
+            previous_hash="stray-hash",
+            created_at_val="t1",
+        )
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(1)
+            return _scalars_result([e1])
+
+        session.execute = _execute
+
+        result = await verify_chain(session, org_id)
+        assert result["valid"] is False
+        assert result["first_gap_index"] == 0
+        assert result["detail"] is not None
+        assert "stray-hash" in result["detail"]
+        assert "first event" in result["detail"]
+
+    async def test_verify_valid_chain_has_no_detail(self, session):
+        """An intact chain must not include a detail message."""
+        org_id = uuid.uuid4()
+        event_id1 = uuid.uuid4()
+        event_id2 = uuid.uuid4()
+
+        h1 = _compute_event_hash("e1", None, None, None, {}, None, None, str(event_id1), str(org_id), "t1")
+        h2 = _compute_event_hash("e2", None, None, None, {}, None, h1, str(event_id2), str(org_id), "t2")
+
+        e1 = _make_event(event_id=event_id1, org_id=org_id, event_type="e1", previous_hash=None, created_at_val="t1")
+        e2 = _make_event(event_id=event_id2, org_id=org_id, event_type="e2", previous_hash=h1, created_at_val="t2")
+
+        call_count = 0
+
+        async def _execute(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _scalar_result(2)
+            if call_count == 2:
+                return _scalars_result([e1, e2])
+            head = MagicMock()
+            head.last_event_hash = h2
+            head.event_count = 2
+            return _head_result(head)
+
+        session.execute = _execute
+
+        result = await verify_chain(session, org_id)
+        assert result["valid"] is True
+        assert result["detail"] is None
+
     async def test_verify_missing_head_is_invalid(self, session):
         """Events exist but no chain head -> chain is treated as corrupted."""
         org_id = uuid.uuid4()

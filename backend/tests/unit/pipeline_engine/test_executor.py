@@ -19,20 +19,6 @@ from modulo.core.pipeline_engine.executor import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _reset_retry_semaphore():
-    """Reset the module-global retry semaphore between tests.
-
-    A leaked ``_RETRY_SEMAPHORE`` (permits never released after a killed
-    retry loop) starves the shared ``Semaphore(2)`` and breaks later tests.
-    """
-    import modulo.core.pipeline_engine.executor as executor_mod
-
-    executor_mod._RETRY_SEMAPHORE = None
-    yield
-    executor_mod._RETRY_SEMAPHORE = None
-
-
 class _InterruptState(TypedDict, total=False):
     artifacts: list[dict[str, Any]]
 
@@ -427,6 +413,19 @@ def test_seed_state_skips_autonomy_when_snapshot_has_none():
     assert "_pipeline_default_autonomy" not in state["run_context"]
 
 
+def test_seed_state_seeds_iteration_counts():
+    """The loop-edge counter must be seeded so router mutations persist.
+
+    Without ``_iteration_counts`` in the initial LangGraph state the loop
+    router's ``state.get("_iteration_counts", {})`` returns a brand-new dict
+    on every call and the mutation is lost, so ``max_iterations`` never trips
+    and the loop edge runs forever.
+    """
+    snap = _make_snapshot()
+    state = _seed_state(snap, {})
+    assert state["_iteration_counts"] == {}
+
+
 # ---------------------------------------------------------------------------
 # PipelineExecutor.execute — happy path
 # ---------------------------------------------------------------------------
@@ -521,6 +520,40 @@ async def test_execute_seeds_state_with_run_context():
     assert captured_state["run_context"]["cancelled"] is False
     assert captured_state["run_context"]["input"] == {"task": "do it"}
     assert captured_state["artifacts"] == []
+
+
+async def test_execute_fires_on_first_progress_once():
+    """_stream_graph fires on_first_progress exactly once — at the FIRST node
+    dispatch — so the execute_run zombie watchdog stands down once real node
+    work begins (pipeline_execution.zombie_watchdog)."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    events = [
+        {"event": "on_chain_start", "name": "node-a", "data": {}},
+        {"event": "on_chain_end", "name": "node-a", "data": {"output": {"status": "ok"}}},
+    ]
+    compiled = _mock_compiled(events)
+    registry = _mock_registry()
+    progress: list[str] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor.on_first_progress = lambda: progress.append("first")
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert progress == ["first"]
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +857,6 @@ async def test_execute_proceeds_when_under_capacity():
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
     ):
         executor = PipelineExecutor(MagicMock())
-        executor._capacity_poll_interval = 0.01
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
     assert result.status == "running"
@@ -833,8 +865,6 @@ async def test_execute_proceeds_when_under_capacity():
 # ---------------------------------------------------------------------------
 # PipelineExecutor.execute — cancellation
 # ---------------------------------------------------------------------------
-
-
 async def test_execute_sets_cancelled_on_run_cancelled_error():
     from modulo.core.pipeline_engine.decorator import RunCancelledError
 
@@ -1146,10 +1176,6 @@ def _make_capacity_executor(session: AsyncMock) -> PipelineExecutor:
 
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = MagicMock(side_effect=lambda: _ctx())
-    executor._capacity_poll_interval = 0.001
-    executor._retry_initial_delay = 0.001
-    executor._retry_max_delay = 0.002
-    executor._retry_max_attempts = 3
     return executor
 
 
@@ -1481,144 +1507,47 @@ async def test_check_capacity_fail_open_when_graph_scan_raises():
 
 
 # ---------------------------------------------------------------------------
-# _retry_pending — single-flight admission retry loop
+# PipelineExecutor.execute — capacity-deferred (plan F3b, no _retry_pending)
 # ---------------------------------------------------------------------------
 
 
-async def test_retry_pending_exits_on_running():
-    session = _make_capacity_session()
-    executor = _make_capacity_executor(session)
-    run = _capacity_run(status="running")
-    running_run = _capacity_run(status="running")
-    mock_exec = AsyncMock(return_value=running_run)
-    mock_fail = AsyncMock()
+async def test_execute_capacity_blocked_returns_pending_without_retry_task():
+    """A capacity-blocked run is returned pending with NO in-process retry loop.
 
-    with (
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(executor, "execute", new=mock_exec),
-        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
-    ):
-        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
-
-    mock_exec.assert_awaited_once()
-    mock_fail.assert_not_awaited()
-
-
-async def test_retry_pending_exits_on_terminal_status():
-    session = _make_capacity_session()
-    executor = _make_capacity_executor(session)
-    run = _capacity_run(status="failed")
-    mock_exec = AsyncMock()
-    mock_fail = AsyncMock()
-
-    with (
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(executor, "execute", new=mock_exec),
-        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
-    ):
-        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
-
-    # A terminal run is never re-admitted — the status pre-check returns early.
-    mock_exec.assert_not_awaited()
-    mock_fail.assert_not_awaited()
-
-
-async def test_retry_pending_passes_from_retry_flag():
-    session = _make_capacity_session()
-    executor = _make_capacity_executor(session)
-    run = _capacity_run(status="pending")
-    running_run = _capacity_run(status="running")
-    mock_exec = AsyncMock(return_value=running_run)
-
-    with (
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(executor, "execute", new=mock_exec),
-        patch.object(executor, "_fail_capacity_timeout", new=AsyncMock()),
-    ):
-        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
-
-    assert mock_exec.await_args.kwargs.get("from_retry") is True
-
-
-async def test_retry_pending_exhaustion_fails_capacity_timeout():
-    session = _make_capacity_session()
-    executor = _make_capacity_executor(session)
-    run = _capacity_run(status="pending")
-    still_pending = _capacity_run(status="pending")
-    mock_exec = AsyncMock(return_value=still_pending)
-    mock_fail = AsyncMock()
-
-    with (
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(executor, "execute", new=mock_exec),
-        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
-    ):
-        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
-
-    assert mock_exec.await_count == 3
-    mock_fail.assert_awaited_once()
-
-
-async def test_retry_pending_skips_when_run_no_longer_retryable():
-    session = _make_capacity_session()
-    executor = _make_capacity_executor(session)
-    run = _capacity_run(status="complete")
-    mock_exec = AsyncMock()
-    mock_fail = AsyncMock()
-
-    with (
-        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch.object(executor, "execute", new=mock_exec),
-        patch.object(executor, "_fail_capacity_timeout", new=mock_fail),
-    ):
-        await executor._retry_pending(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
-
-    mock_exec.assert_not_awaited()
-    mock_fail.assert_not_awaited()
-
-
-async def test_execute_does_not_spawn_retry_when_called_from_retry():
+    Plan F3b removed the ``_retry_pending`` detached loop: a capacity-blocked
+    run stays ``pending`` (with its reason marker) and is recovered by
+    ``dispatcher_reconcile`` / ``stale_run_recovery_sweep``. execute() must
+    return the pending run without spawning any retry task.
+    """
     run = _make_run()
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
+    pending_run = _make_run(run_id=run.id, status="pending")
     create_task = AsyncMock()
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=run),
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
-        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=999),
-        patch("modulo.core.pipeline_engine.executor.count_active_sandbox_runs_for_org", return_value=0),
-        patch("modulo.core.pipeline_engine.executor.get_sandbox_concurrency_limit", return_value=None),
+        patch.object(PipelineExecutor, "_check_capacity", new=AsyncMock(return_value=pending_run)),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch("modulo.core.pipeline_engine.executor.asyncio.create_task", new=create_task),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id,
-            org_id=uuid.uuid4(),
-            input_payload={},
-            from_retry=True,
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
+    assert result is pending_run
     assert result.status == "pending"
-    create_task.assert_not_awaited()
+    create_task.assert_not_called()
 
 
 @pytest.mark.parametrize("terminal_status", ["complete", "failed", "cancelled", "eval_failed"])
-async def test_execute_does_not_spawn_retry_for_terminal_run(terminal_status: str):
-    """A terminal run returned by _check_capacity must not spawn a retry task.
+async def test_execute_returns_terminal_run_without_retry_task(terminal_status: str):
+    """A terminal run returned by _check_capacity is returned as-is, never resurrected.
 
-    Spawning _retry_pending for a terminal run would sleep
-    _capacity_poll_interval while holding the global retry semaphore, then
-    exit without doing anything — needlessly starving genuinely blocked runs.
+    The old ``_retry_pending`` loop was deleted (plan F3b); execute() must not
+    spawn any task for a terminal run.
     """
     run = _make_run()
     snapshot = _make_snapshot()
@@ -1638,5 +1567,6 @@ async def test_execute_does_not_spawn_retry_for_terminal_run(terminal_status: st
         executor = PipelineExecutor(MagicMock())
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
+    assert result is terminal_run
     assert result.status == terminal_status
     create_task.assert_not_called()

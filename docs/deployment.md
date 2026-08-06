@@ -4,7 +4,7 @@
 
 - Python 3.12+
 - PostgreSQL 16+
-- Redis 7+ (for Celery task queue)
+- Redis 7+ (for SAQ task queue, multi-replica coordination)
 
 ## Installation
 
@@ -288,7 +288,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `FERNET_KEY` | **Yes** | — | 44-char base64 Fernet key for credential encryption |
 | `MODULO_USERS` | Alpha | — | Comma-separated `user:pass` pairs for initial user seed |
 | `MODULO_DB` | No | `postgres` | Database backend (`postgres` or `sqlite`) |
-| `REDIS_URL` | With Celery | — | `redis://host:port/db` for task queue |
+| `REDIS_URL` | For multi-replica | — | `redis://host:port/db` for SAQ broker |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
@@ -319,13 +319,13 @@ modulo start         # starts server, opens browser
 | Database | SQLite file (`./modulo.db`), no server process needed |
 | Task scheduling | In-process asyncio loops — cron and polling triggers work |
 | Task queue | In-process, no durability across crashes |
-| Rate limiting | In-memory token bucket, single-user safe |
+| Rate limiting | In-memory no-op (rate limiting disabled) |
 | Concurrency | Single process, single worker |
 
 **What you lose vs. full deployment:**
 - **No horizontal scaling** — one process, one user at a time
 - **No task durability** — if the process crashes mid-run, the run is lost (re-run manually)
-- **No distributed rate limiting** — the in-memory bucket doesn't coordinate across processes
+- **No distributed rate limiting** — without Redis the limiter is a per-process no-op, so limits don't coordinate across processes
 
 **What you keep:**
 - Cron-triggered pipelines ✓
@@ -343,12 +343,12 @@ curl https://modulo.run/install.sh | bash
 | Component | How it runs |
 |---|---|
 | Database | PostgreSQL 16 (separate container) |
-| Task scheduling | In-process asyncio loops (default) or Celery beat (with Redis) |
-| Task queue | In-process (default) or Celery workers (with Redis) |
-| Rate limiting | In-memory (default) or Redis token bucket (with Redis) |
+| Task scheduling | In-process asyncio loops (default) or SAQ system worker cron (with Redis) |
+| Task queue | In-process (default) or SAQ workers (with Redis) |
+| Rate limiting | In-memory no-op (default) or Redis sliding window (with Redis) |
 | Concurrency | Single backend replica, multiple simultaneous requests |
 
-If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use Celery + Redis. If Redis is absent, everything still works via in-process fallbacks with a startup notice.
+If Redis is configured (`REDIS_URL` set), the app automatically upgrades scheduling, queuing, and rate limiting to use SAQ + Redis. If Redis is absent, everything still works via in-process fallbacks with a startup notice.
 
 ### Kubernetes (production, multi-replica)
 
@@ -368,10 +368,10 @@ For more than one backend replica, **Redis is mandatory.** Here's why:
 
 | Feature | Without Redis | With Redis | What goes wrong at 2+ replicas |
 |---|---|---|---|
-| Cron triggers | In-process asyncio loop | Celery beat | Both replicas fire every trigger. Runs execute twice. |
-| Polling triggers | In-process asyncio loop | Celery worker | Same — duplicate execution. |
-| Task queue | In-process | Celery broker + result backend | Tasks are scheduled in the replica that received the request. If that replica crashes or is scaled down, the task disappears. |
-| Rate limiting | In-memory dict | Redis token bucket | Each replica has its own counter. A user hitting both replicas effectively doubles their rate limit. |
+| Cron triggers | In-process asyncio loop | SAQ system worker cron | Both replicas fire every trigger. Runs execute twice. |
+| Polling triggers | In-process asyncio loop | SAQ system worker cron | Same — duplicate execution. |
+| Task queue | In-process | SAQ broker (Redis) | Jobs are scheduled in the replica that received the request. If that replica crashes or is scaled down, the job disappears. |
+| Rate limiting | In-memory no-op | Redis sliding window | Without Redis the limiter is disabled (no-op); with Redis, all replicas share one sliding-window counter in Redis |
 | Lock coordination | PG advisory locks | PG advisory locks | These work across replicas via PostgreSQL — no Redis needed for locks. |
 
 **The pattern:** without Redis, each replica independently runs its own scheduler and rate limiter. They don't coordinate. This is fine for a single replica. For two or more, the system behaves incorrectly.

@@ -65,7 +65,7 @@ def _tagged_dep(
     object.__setattr__(dep, "permission_kind", permission_kind)
     if min_role is not None:
         object.__setattr__(dep, "min_role", min_role)
-    return cast(DependsParameter, dep)
+    return cast("DependsParameter", dep)
 
 
 def require_permission(permission: str) -> Any:
@@ -462,7 +462,7 @@ def require_feature(feature_name: str) -> DependsParameter:
                 instance=feature_name,
             )
 
-    return cast(DependsParameter, Depends(_check))
+    return cast("DependsParameter", Depends(_check))
 
 
 def pg_connection_string(database_url: str) -> str:

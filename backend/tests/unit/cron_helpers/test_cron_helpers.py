@@ -9,6 +9,7 @@ that gates enqueue) and by a real-Redis two-process integration test.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -761,8 +762,10 @@ class TestIngestSaqError:
         assert payload["context_json"]["trigger_id"] == str(TRIGGER_A)
 
     @pytest.mark.asyncio
-    async def test_ingest_failure_is_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Error ingestion must never crash the scheduler tick."""
+    async def test_ingest_failure_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Error ingestion must never crash the scheduler tick — but the failure must reach the logs."""
         _patch_env(monkeypatch)
         session = _MockSession([])
         factory = MagicMock(return_value=session)
@@ -770,11 +773,14 @@ class TestIngestSaqError:
         service.ingest = AsyncMock(side_effect=RuntimeError("ingest down"))
 
         with (
+            caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"),
             patch.object(ch, "_open_factory", return_value=factory),
             patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.error_tracking.ErrorIngestionService", return_value=service),
         ):
             await ch._ingest_saq_error(session, ORG, function="fire_due_triggers", message="boom")
+
+        assert any("cron_helpers.ingest_saq_error_failed" in r.message for r in caplog.records)
 
 
 class TestResolveSnapshotId:
@@ -1263,9 +1269,14 @@ class TestClearReportFailureCounter:
         redis_client.delete.assert_awaited_once_with(ch._report_failure_counter_key(REPORT))
 
     @pytest.mark.asyncio
-    async def test_swallows_redis_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_swallows_redis_errors(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         _patch_env(monkeypatch)
         redis_client = AsyncMock()
         redis_client.delete = AsyncMock(side_effect=RuntimeError("redis down"))
 
-        await ch._clear_report_failure_counter(redis_client, REPORT)
+        with caplog.at_level(logging.WARNING, logger="modulo.core.cron_helpers"):
+            await ch._clear_report_failure_counter(redis_client, REPORT)
+
+        assert any("clear_report_failure_counter failed" in r.message for r in caplog.records)

@@ -551,10 +551,7 @@ async def validate_parameter_values_endpoint(
 
             params = schema.parameters if isinstance(schema.parameters, list) else []
             errors: list[ValidationErrorItem] = []
-            param_map: dict[str, dict[str, Any]] = {}
-            for p in params:
-                if isinstance(p, dict):
-                    param_map[p.get("name", "")] = p
+            param_map = {p.get("name", ""): p for p in params if isinstance(p, dict)}
 
             for p_name, p_def in param_map.items():
                 p_type = p_def.get("type", "string")
