@@ -34,7 +34,7 @@
             ]"
             @click="selectWindow(w.value)"
           >
-            {{ w.label }}
+            {{ $t(w.labelKey) }}
           </button>
         </div>
       </div>
@@ -311,15 +311,12 @@ const spendSparklineData = computed(() => {
 })
 
 // --- Rolling-window toggle (FAR-92) ---
-// Labels are inline pending i18n keys — TODO: add views.DashboardView.trend_24h /
-// trend_7d / trend_30d / trend_90d to frontend/src/locales/en-US.js in a follow-up
-// (locales file is outside this delivery's allowlist).
 const trendWindows = [
-  { label: 'Last 24h', value: 1 },
-  { label: '3d', value: 3 },
-  { label: 'Last 7d', value: 7 },
-  { label: 'Last 30d', value: 30 },
-  { label: 'Last 90d', value: 90 },
+  { labelKey: 'views.DashboardView.trend_24h', value: 1 },
+  { labelKey: 'views.DashboardView.trend_3d', value: 3 },
+  { labelKey: 'views.DashboardView.trend_7d', value: 7 },
+  { labelKey: 'views.DashboardView.trend_30d', value: 30 },
+  { labelKey: 'views.DashboardView.trend_90d', value: 90 },
 ]
 
 const selectedWindow = ref<number | null>(null)
