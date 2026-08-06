@@ -86,6 +86,26 @@ describe('TeamComparisonView', () => {
     expect(wrapper.text()).toContain('Team Comparison')
   })
 
+  it('does not crash when dashboard summary omits the new optional trend/period fields', async () => {
+    mockApiGet((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        const summary = createMockSummary() as Record<string, unknown>
+        delete summary.trend
+        delete summary.config_warnings
+        return Promise.resolve({ data: summary, error: undefined })
+      }
+      if (url === '/api/v1/admin/teams') {
+        return Promise.resolve({ data: createMockTeams(), error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(TeamComparisonView)
+    await waitForAsync()
+    expect(wrapper.exists()).toBe(true)
+    expect(wrapper.text()).toContain('Team Comparison')
+    expect(wrapper.text()).toContain('Alpha')
+  })
+
   it('shows error alert when dashboard summary API fails', async () => {
     mockApiGet((url: string) => {
       if (url === '/api/v1/dashboard/summary') {
