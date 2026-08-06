@@ -21,7 +21,7 @@ except ImportError:
 
 
 def parse_uv_lock(lock_path: Path) -> list[dict]:
-    with open(lock_path, "rb") as f:
+    with lock_path.open("rb") as f:
         data = tomllib.load(f)
 
     components = []
@@ -55,7 +55,7 @@ def parse_uv_lock(lock_path: Path) -> list[dict]:
 
 
 def parse_package_lock(lock_path: Path) -> list[dict]:
-    with open(lock_path, encoding="utf-8") as f:
+    with lock_path.open(encoding="utf-8") as f:
         data = json.load(f)
 
     components = []
@@ -133,13 +133,13 @@ def main():
 
     # Read version from pyproject.toml
     pyproject_path = repo_root / "backend" / "pyproject.toml"
-    with open(pyproject_path, "rb") as f:
+    with pyproject_path.open("rb") as f:
         pyproject = tomllib.load(f)
     version = pyproject.get("project", {}).get("version", "0.0.0")
 
     # Read SBOM config (supplier, product name)
     config_path = repo_root / "backend" / "scripts" / "sbom-config.json"
-    with open(config_path, encoding="utf-8") as f:
+    with config_path.open(encoding="utf-8") as f:
         config = json.load(f)
     supplier = config.get("supplier", "Farnalabs")
     product = config.get("product", "Modulo")

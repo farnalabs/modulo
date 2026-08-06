@@ -25,7 +25,7 @@ def load_manifest() -> Manifest:
     path = get_manifest_path()
     if path.exists():
         try:
-            with open(path) as f:
+            with path.open() as f:
                 loaded = yaml.safe_load(f)
                 if not isinstance(loaded, dict):
                     raise ValueError("manifest root must be a mapping")

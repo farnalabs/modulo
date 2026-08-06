@@ -114,9 +114,7 @@ def _given_n_subscribers(count: int, request: Any) -> None:
     broker = ctx.get("broker")
     assert broker is not None, "No active broker — use 'run \"X\" has an active event broker' first"
 
-    queues: list[asyncio.Queue] = []
-    for _ in range(count):
-        queues.append(broker.subscribe())
+    queues: list[asyncio.Queue] = [broker.subscribe() for _ in range(count)]
     ctx["queues"] = queues
 
 

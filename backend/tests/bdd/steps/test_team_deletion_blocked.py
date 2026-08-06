@@ -88,14 +88,10 @@ def delete_team(team_name: str, request, ctx) -> None:
 
     if has_resources:
         resource_types = []
-        for pname in ctx.get("pipelines", {}):
-            resource_types.append("pipeline")
-        for cname in ctx.get("connectors", {}):
-            resource_types.append("connector")
-        for sname in ctx.get("stages", {}):
-            resource_types.append("stage")
-        for mname in ctx.get("model_backends", {}):
-            resource_types.append("model backend")
+        resource_types.extend("pipeline" for _ in ctx.get("pipelines", {}))
+        resource_types.extend("connector" for _ in ctx.get("connectors", {}))
+        resource_types.extend("stage" for _ in ctx.get("stages", {}))
+        resource_types.extend("model backend" for _ in ctx.get("model_backends", {}))
 
         details = ", ".join(f"{rt}(s)" for rt in set(resource_types))
         resp = MagicMock()

@@ -118,24 +118,20 @@ def _get_all_apiroutes() -> list[APIRoute]:
         elif tn == "_IncludedRouter" and hasattr(r, "original_router"):
             sub_router = r.original_router
             if hasattr(sub_router, "routes"):
-                for sr in sub_router.routes:
-                    if isinstance(sr, APIRoute):
-                        routes.append(sr)
+                routes.extend(sr for sr in sub_router.routes if isinstance(sr, APIRoute))
     return routes
 
 
 def get_api_routes() -> list[dict]:
-    routes = []
-    for route in _get_all_apiroutes():
-        if route.path.startswith("/api/"):
-            routes.append(
-                {
-                    "path": route.path,
-                    "methods": sorted((route.methods or set()) - {"HEAD", "OPTIONS"}),
-                    "response_model": route.response_model,
-                }
-            )
-    return routes
+    return [
+        {
+            "path": route.path,
+            "methods": sorted((route.methods or set()) - {"HEAD", "OPTIONS"}),
+            "response_model": route.response_model,
+        }
+        for route in _get_all_apiroutes()
+        if route.path.startswith("/api/")
+    ]
 
 
 def validate_shape(resp_data: dict, model: type[BaseModel]) -> None:

@@ -220,11 +220,10 @@ class ConnectorHub:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    logger.error(
+                    logger.exception(
                         "Unexpected error skipping connector %s (%s) — programming bug",
                         ci.id,
                         ci.connector_type_id,
-                        exc_info=True,
                     )
             self._initialised = True
 
