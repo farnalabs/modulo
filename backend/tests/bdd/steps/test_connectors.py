@@ -366,6 +366,38 @@ def step_github_connector(ctx):
                         {"full_name": "owner/repo2", "name": "repo2"},
                     ],
                     total=2,
+                    metadata={
+                        "rate_limit": {
+                            "X-RateLimit-Limit": "5000",
+                            "X-RateLimit-Remaining": "4998",
+                            "X-RateLimit-Used": "2",
+                            "X-RateLimit-Reset": "1754160000",
+                            "X-RateLimit-Resource": "core",
+                        }
+                    },
+                )
+            case "rate_limit":
+                return ConnectorResult(
+                    records=[
+                        {
+                            "core": {
+                                "limit": 5000,
+                                "remaining": 4998,
+                                "reset": 1754160000,
+                                "used": 2,
+                                "resource": "core",
+                            },
+                            "search": {"limit": 30, "remaining": 30, "reset": 1754160000, "used": 0},
+                        }
+                    ],
+                    total=1,
+                    metadata={
+                        "rate_limit": {
+                            "X-RateLimit-Limit": "5000",
+                            "X-RateLimit-Remaining": "4998",
+                            "X-RateLimit-Reset": "1754160000",
+                        }
+                    },
                 )
             case "file":
                 file_path = q.filters.get("path", "")
@@ -773,6 +805,31 @@ def step_result_reports_no_next_cursor(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
     assert result.next_cursor is None, f"Expected no next page cursor but got {result.next_cursor!r}"
+
+
+@then("the query result exposes rate-limit metadata")
+def step_github_result_exposes_rate_limit_metadata(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    meta = result.metadata.get("rate_limit", {})
+    assert meta, f"Expected rate-limit metadata but got: {result.metadata}"
+    assert "X-RateLimit-Remaining" in meta, f"Missing X-RateLimit-Remaining in {meta}"
+    assert "X-RateLimit-Reset" in meta, f"Missing X-RateLimit-Reset in {meta}"
+
+
+@when("the GitHub API is rate limited with zero remaining quota")
+def step_github_api_rate_limited_zero_quota(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise ValueError(
+            "GitHub API HTTP 429: Rate limit exceeded "
+            "(quota: X-RateLimit-Limit=5000; X-RateLimit-Remaining=0; X-RateLimit-Reset=1754160000)"
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
 
 
 @when(parsers.parse('the API returns HTTP {status_code:d} "{reason}"'))
