@@ -108,7 +108,7 @@ async def org_is_paused(session: AsyncSession, org_id: uuid.UUID) -> bool:
     result = await session.execute(
         select(Organisation.triggers_paused, Organisation.status).where(Organisation.id == org_id)
     )
-    row = result.scalar_one_or_none()
+    row = result.one_or_none()
     if row is None:
         return True
     triggers_paused, status = row

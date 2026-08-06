@@ -671,8 +671,8 @@ async def admin_set_org_triggers_paused(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating org trigger pause state.",
         ) from exc
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        raise exc
     except Exception:
         logger.exception("Unexpected error in admin_set_org_triggers_paused")
         raise HTTPException(

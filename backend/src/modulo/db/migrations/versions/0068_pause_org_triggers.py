@@ -1,7 +1,7 @@
 """Org-wide "pause all pipeline triggers" kill-switch.
 
-Revision ID: 0065_pause_org_triggers
-Revises: 0064_merge_heads_0037
+Revision ID: 0068_pause_org_triggers
+Revises: 0067_run_daily_facts
 Create Date: 2026-08-04
 
 Two changes:
@@ -36,8 +36,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import bindparam, text
 
-revision: str = "0065_pause_org_triggers"
-down_revision: str | None = "0064_merge_heads_0037"
+revision: str = "0068_pause_org_triggers"
+down_revision: str | None = "0067_run_daily_facts"
 
 # Full validation_result vocabulary. Keep in sync with
 # ``modulo.db.models.trigger_event.VALIDATION_RESULT_VALUES``.

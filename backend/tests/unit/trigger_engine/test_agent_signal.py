@@ -66,9 +66,13 @@ def _setup_session(
     count_result.scalar_one.return_value = count
     snapshot_result = MagicMock()
     snapshot_result.scalar_one_or_none.return_value = snapshot_id
+    org_result = MagicMock()
+    org_result.one_or_none.return_value = (False, "active")
 
     async def side_effect(*args: Any, **kwargs: Any) -> Any:
         sql = str(args[0]) if args else ""
+        if "organisations" in sql:
+            return org_result
         if "count(" in sql:
             return count_result
         if "pipeline_snapshots" in sql:
