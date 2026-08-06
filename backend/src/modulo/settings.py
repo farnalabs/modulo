@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic import Field, field_validator, model_validator
@@ -113,6 +114,11 @@ class Settings(BaseSettings):
     saq_retry_delay: int = Field(default=60, alias="SAQ_RETRY_DELAY", ge=1, le=3600)
     # Per-claim E2B idempotency key run:{id}:e2b:{claim_token} (F3a).
     saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
+    # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
+    # Single source of truth (retro item 9): execute and resume claims in
+    # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers
+    # reads it directly.
+    saq_run_claim_cap: int = Field(default=20, alias="SAQ_RUN_CLAIM_CAP", ge=1, le=100)
     # TEST-ONLY pause flag — hard default off; refused outside test/staging
     # (debug=false).
     saq_test_pause: bool = Field(default=False, alias="SAQ_TEST_PAUSE")
@@ -123,15 +129,102 @@ class Settings(BaseSettings):
     saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
     saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
     saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
+    # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
+    # least one node within this setup window or the execute_run zombie watchdog
+    # fails it. Covers the pre-node hang window: checkpointer setup, graph
+    # compile, connector/model-backend hub init, and the first astream_events
+    # super-step. MUST exceed any legitimate pre-first-node setup but stay well
+    # below the run_claim_stale_seconds claim fence so the watchdog wins before
+    # a stale-heartbeat re-claim can double-execute the hung run.
+    saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
+    # heartbeat but ZERO LangGraph checkpoints for its thread after this many
+    # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
+    # normally fails it at SAQ_SETUP_GRACE_SECONDS; this branch catches the case
+    # where the worker process itself is wedged and cannot run the watchdog).
+    # MUST exceed the pipeline's max node timeout so a legitimate long first
+    # node (which writes its first checkpoint only after completing) is never
+    # failed. Default 45 min > the 1800s node timeout used by agent pipelines.
+    saq_claimed_nodeless_minutes: int = Field(default=45, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
+    # KEPT at 10 after budget verification (2026-08-06). Verified against the
+    # deployed Postgres (modulo-app-db, Fly Postgres 17.9):
+    #   SHOW max_connections  -> 300; current connections ~40 at sample time.
+    # Budget math: 10 x 2 workers (runs + system) x up to 5 machines = 100 +
+    # the web process pools + per-run checkpointer connections — well under the
+    # 300 cap with only ~40 in use. The firefight-era raise to 10 (to relieve
+    # "Too many connections") is justified by the verified budget, so it stays.
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
-    saq_redis_pool_size: int = Field(default=5, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+    # LOWERED to 20 after budget verification (2026-08-06). Verified prod facts:
+    # the SAQ_REDIS_POOL_SIZE secret is pinned to 5 and Upstash showed ~15
+    # connected clients at sample time — the firefight default of 50 (raised
+    # during the cutover) was over-provisioned (500 potential conns across 5
+    # machines vs ~15 actual). With worker concurrency 5, workers hold pool
+    # conns only while running jobs (~5 jobs x 2 workers = 10 live conns per
+    # machine), so 20 gives ample headroom (up to 200 across 5 machines).
+    # Operators on a small Redis tier may lower to 5, matching prod.
+    # The reserve clamp in saq_worker._max_concurrent_ops() must stay strictly
+    # below this pool so the semaphore can never exhaust every connection.
+    saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+    # SAQ worker concurrency (how many jobs run at once per worker).
+    # KEPT at 5 — the accepted design target (5 per worker x up to 5 machines
+    # = up to 25 concurrent runs), verified-safe against the prod Postgres
+    # 300-connection cap (only ~40 in use). Decoupled from Redis pool size —
+    # pool=20 handles bursty Redis ops while concurrency=5 prevents runaway
+    # job parallelism.
+    saq_worker_concurrency: int = Field(default=5, alias="SAQ_WORKER_CONCURRENCY", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second
     # sandbox uptime). Default reflects the dashboard-confirmed opencode
     # template = 2 vCPU / 2 GiB at E2B per-second rates (~$0.133/hr).
     e2b_sandbox_usd_per_hour: float = Field(default=0.13, alias="E2B_SANDBOX_USD_PER_HOUR", ge=0)
+
+    # ------------------------------------------------------------------
+    # Cost-tracking knobs (multi-component per-run cost tracking — PR A1)
+    # ------------------------------------------------------------------
+    # These are the operator-tunable anti-abuse bounds for self-reported
+    # model cost. All are Decimal-typed so the runtime never mixes float and
+    # Decimal min()/comparison operations. A violating env value fails at
+    # Settings LOAD (fail-fast), never silently accepted.
+    #
+    # The floor: any self-reported model_cost_usd below this is NOT a report
+    # (closes the spend-evasion hole where a 1e-9 report suppressed the
+    # estimate). ge-bounded so a sub-floor knob cannot silently disable the
+    # floor.
+    max_reportable_usd_min: Decimal = Field(
+        default=Decimal("0.000001"),
+        alias="MODULO_MAX_REPORTABLE_USD_MIN",
+        ge=Decimal("0.000001"),
+    )
+    # The per-node clamp: an absurd single-node report is clamped here. The
+    # WRITE-PATH effective value is min(knob, Decimal("99999999.999999")) —
+    # the Numeric(14,6) column cap — so a 1e9 env value cannot silently
+    # disable the load-bearing per-node clamp. ge-bounded (a sub-floor knob
+    # would disable the floor).
+    max_self_reported_usd: Decimal = Field(
+        default=Decimal("10000.0"),
+        alias="MODULO_MAX_SELF_REPORTED_USD",
+        ge=Decimal("0.000001"),
+    )
+    # The band ceiling — the TOP OF THE SANITY BAND, the trust boundary for
+    # self-reported model cost at the backend extraction boundary. Any
+    # producer is clamped here (band < per-node cap by default, so the band
+    # dominates). ge-bounded like the other knobs.
+    max_reportable_band_usd: Decimal = Field(
+        default=Decimal("50.0"),
+        alias="MODULO_MAX_REPORTABLE_BAND_USD",
+        ge=Decimal("0.000001"),
+    )
+    # Dynamic rate_usd bound for cost_components writes: a rate above this is
+    # rejected 422. The WRITE-PATH effective value is
+    # min(knob, Decimal("999999999999.999999")) — the Numeric(18,6) column
+    # cap. ge-bounded at 0.
+    max_rate_usd: Decimal = Field(
+        default=Decimal("100000.0"),
+        alias="MODULO_MAX_RATE_USD",
+        ge=Decimal(0),
+    )
 
     # ------------------------------------------------------------------
     # Health check timeouts (seconds) — configurable per-check limits for
@@ -395,6 +488,70 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_cost_knobs(self) -> "Settings":
+        """Cost-knob invariants — enforced at Settings LOAD, never log-only.
+
+        A violating combination is UNREPRESENTABLE: every process that
+        constructs Settings (including the SAQ system worker) fails fast
+        identically, and the boot self-test surfaces the operator-facing
+        recovery message.
+
+        All comparisons are DECIMAL-TYPED: knobs are coerced with
+        Decimal(str(value)) so a float/str env override cannot raise
+        TypeError or compare lexicographically.
+
+        Guards:
+        1. Ordering invariant — max_reportable_usd_min >= max_self_reported_usd
+           would silently disable self-reporting (no report can clear the
+           floor), so it raises.
+        2. Floor-vs-band guard (BOOT-FATAL) — max_reportable_usd_min >=
+           max_reportable_band_usd omits every plausible report (reports are
+           bounded by the band ceiling), so it raises.
+        3. Knob-below-band guard — max_reportable_band_usd > max_self_reported_usd
+           makes the out_of_band_high marker unreachable (no report can exceed
+           the band), so it raises.
+        """
+        floor = Decimal(str(self.max_reportable_usd_min))
+        clamp = Decimal(str(self.max_self_reported_usd))
+        band = Decimal(str(self.max_reportable_band_usd))
+        if floor >= clamp:
+            raise ValueError(
+                "Cost-knob ordering violation: MODULO_MAX_REPORTABLE_USD_MIN ("
+                f"{floor}) >= MODULO_MAX_SELF_REPORTED_USD ({clamp}) — a floor at "
+                "or above the per-node clamp silently disables self-reporting. "
+                "Set MODULO_MAX_REPORTABLE_USD_MIN to a value strictly below "
+                f"MODULO_MAX_SELF_REPORTED_USD (valid range: 0.000001 .. {clamp})."
+            )
+        if floor >= band:
+            raise ValueError(
+                "Cost-knob floor-vs-band violation (BOOT-FATAL): "
+                f"MODULO_MAX_REPORTABLE_USD_MIN ({floor}) >= "
+                f"MODULO_MAX_REPORTABLE_BAND_USD ({band}) — a floor at or above the "
+                "band ceiling omits EVERY plausible self-report. Set "
+                f"MODULO_MAX_REPORTABLE_USD_MIN strictly below {band} (valid "
+                f"range: 0.000001 .. {band})."
+            )
+        if band > clamp:
+            raise ValueError(
+                "Cost-knob knob-below-band violation (BOOT-FATAL): "
+                f"MODULO_MAX_REPORTABLE_BAND_USD ({band}) > "
+                f"MODULO_MAX_SELF_REPORTED_USD ({clamp}) — the out_of_band_high "
+                "marker can never fire because no report can exceed the band. "
+                f"Set MODULO_MAX_REPORTABLE_BAND_USD <= {clamp} (default 50.0)."
+            )
+        return self
+
+    @property
+    def effective_max_self_reported_usd(self) -> Decimal:
+        """The write-path per-node clamp: min-capped at the Numeric(14,6) column cap."""
+        return min(Decimal(str(self.max_self_reported_usd)), Decimal("99999999.999999"))
+
+    @property
+    def effective_max_rate_usd(self) -> Decimal:
+        """The write-path rate_usd bound: min-capped at the Numeric(18,6) column cap."""
+        return min(Decimal(str(self.max_rate_usd)), Decimal("999999999999.999999"))
+
 
 @lru_cache
 def get_settings(_fresh: bool = False) -> Settings:
@@ -473,3 +630,25 @@ def validate_break_glass_boot(settings: Settings) -> None:
             raise RuntimeError("Break-glass boot config assertion FAILED:\n  " + "\n".join(blocking))
     for _is_blocking, message in findings:
         _log.warning("break_glass.boot_config %s", message)
+
+
+def run_cost_settings_self_test() -> None:
+    """Boot self-test for the cost knobs — operator-facing surface.
+
+    The guards themselves live in the Settings LOAD path (every process that
+    constructs Settings fails fast identically). This function exists for the
+    interactive-boot surface: it constructs Settings and prints a CLEAR
+    recovery message (the offending knob + the valid range) before exiting
+    when a violating env combination is present, so the operator sees the
+    exact fix rather than a bare pydantic trace.
+    """
+    try:
+        Settings()
+    except Exception as exc:
+        _log.error("cost_settings_self_test.failed")
+        # Operator-facing recovery surface: the plain-print is deliberate so the
+        # offending knob + valid range reach the console even when JSON logs are
+        # not rendered (Fly logs lesson).
+        print(f"ERROR: cost Settings validation failed: {exc}", flush=True)  # noqa: T201
+        raise
+    _log.info("cost_settings_self_test.ok")

@@ -23,9 +23,7 @@ def get_all_apiroutes(app: object) -> list:
         elif tn == "_IncludedRouter" and hasattr(r, "original_router"):
             sub_router = r.original_router
             if hasattr(sub_router, "routes"):
-                for sr in sub_router.routes:
-                    if type(sr).__name__ == "APIRoute":
-                        routes.append(sr)
+                routes.extend(sr for sr in sub_router.routes if type(sr).__name__ == "APIRoute")
     return routes
 
 

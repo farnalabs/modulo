@@ -1360,19 +1360,18 @@ async def save_as_composite_endpoint(
 
             # Extract edges that connect selected nodes
             all_edges_raw = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
-            sub_edges = []
-            for edge in all_edges_raw.scalars().all():
-                if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str:
-                    sub_edges.append(
-                        {
-                            "id": str(edge.id),
-                            "source_node_id": str(edge.source_node_id),
-                            "target_node_id": str(edge.target_node_id),
-                            "edge_type": edge.edge_type,
-                            "condition_expression": edge.condition_expression,
-                            "hitl_gate_config": edge.hitl_gate_config,
-                        }
-                    )
+            sub_edges = [
+                {
+                    "id": str(edge.id),
+                    "source_node_id": str(edge.source_node_id),
+                    "target_node_id": str(edge.target_node_id),
+                    "edge_type": edge.edge_type,
+                    "condition_expression": edge.condition_expression,
+                    "hitl_gate_config": edge.hitl_gate_config,
+                }
+                for edge in all_edges_raw.scalars().all()
+                if str(edge.source_node_id) in sub_node_ids_str and str(edge.target_node_id) in sub_node_ids_str
+            ]
 
             # Create the composite template
             template = await create_composite_template(

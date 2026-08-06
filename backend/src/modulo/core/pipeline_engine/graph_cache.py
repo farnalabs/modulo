@@ -190,18 +190,46 @@ def _make_llm_router(
     return _router
 
 
-def _make_loop_router(
-    source: str,
+def _make_loop_counter_id(source: str, target: str) -> str:
+    """Return the deterministic synthetic node id for a loop edge's counter."""
+    return f"__loop_counter_{source}_{target}"
+
+
+def make_loop_counter_fn(loop_key: str) -> Any:
+    """Return an async node function that increments a loop edge's counter.
+
+    LangGraph discards in-place mutations of the state dict performed by
+    routers (the state dict is shallow-copied per superstep), so a router
+    cannot persist ``_iteration_counts`` across iterations and
+    ``max_iterations`` never trips — the run loops until GraphRecursionError.
+
+    The idiomatic fix is a real NODE that returns the incremented counter as
+    a state update. This node does no LLM/sandbox work: it reads the current
+    counts, bumps the one for *loop_key*, and returns
+    ``{"_iteration_counts": counts}`` (a genuine update the reducer persists).
+    """
+
+    async def _counter_node(state: dict[str, Any]) -> dict[str, Any]:
+        counts = dict(state.get("_iteration_counts") or {})
+        counts[loop_key] = int(counts.get(loop_key, 0)) + 1
+        return {"_iteration_counts": counts}
+
+    _counter_node.__name__ = f"loop_counter_{loop_key}"
+    return _counter_node
+
+
+def _make_loop_counter_router(
+    loop_key: str,
     target: str,
     default_target: str,
     max_iterations: int,
     condition_expression: str | None,
 ) -> Callable[[dict[str, Any]], str]:
-    """Build a router for loop edges.
+    """Build a read-only router for a loop edge's counter node.
 
-    Reads ``_iteration_counts`` from state, increments the counter for this
-    loop edge's source->target pair, and decides whether to continue looping
-    or exit to *default_target*.
+    The counter node just returned the incremented count as a real state
+    update, so this router reads ``_iteration_counts`` and decides whether to
+    continue looping or exit to *default_target*. It never mutates state.
 
     Router logic (first match wins):
     1. If *max_iterations* > 0 and counter >= max_iterations → exit to default_target
@@ -210,13 +238,11 @@ def _make_loop_router(
     4. If neither condition nor max_iterations → always loop back to *target*
        (relies on RunawayGuard for infinite-loop protection)
     """
-    loop_key = f"{source}->{target}"
     compiled_expr = jmespath.compile(condition_expression) if condition_expression else None
 
     def _router(state: dict[str, Any]) -> str:
-        iteration_counts: dict[str, int] = state.get("_iteration_counts", {})
-        count: int = iteration_counts.get(loop_key, 0) + 1
-        iteration_counts[loop_key] = count
+        counts = state.get("_iteration_counts")
+        count = int(counts.get(loop_key, 0)) if isinstance(counts, dict) else 0
 
         if max_iterations > 0 and count >= max_iterations:
             return default_target
@@ -285,7 +311,7 @@ def build_graph_from_json(
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
-    state_schema = cast(type[Any], Annotated[dict[str, Any], _pipeline_state_reducer])
+    state_schema = cast("type[Any]", Annotated[dict[str, Any], _pipeline_state_reducer])
     graph: StateGraph[Any] = StateGraph(state_schema)
 
     nodes: list[dict[str, Any]] = graph_json.get("nodes", [])
@@ -352,13 +378,11 @@ def build_graph_from_json(
             )
 
     # Build reject-edge lookup for kick-back routing.
-    reject_targets_by_source: dict[str, str] = {}
-    for edge_def in edges:
-        etype = _get_edge_type(edge_def)
-        if etype == "reject":
-            src = _get_edge_val(edge_def, "source", "source_node_id")
-            tgt = _get_edge_val(edge_def, "target", "target_node_id")
-            reject_targets_by_source[src] = tgt
+    reject_targets_by_source = {
+        _get_edge_val(edge_def, "source", "source_node_id"): _get_edge_val(edge_def, "target", "target_node_id")
+        for edge_def in edges
+        if _get_edge_type(edge_def) == "reject"
+    }
 
     # Group forwarding edges by source (skip reject).
     source_edges: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -383,11 +407,8 @@ def build_graph_from_json(
         normal = [e for e in src_edges if _get_edge_type(e) not in ("conditional", "loop")]
 
         if loop_edges:
-            normal_targets: list[str] = []
-            for edge_def in normal:
-                tgt = _get_edge_val(edge_def, "target", "target_node_id")
-                normal_targets.append(tgt)
-                target_ids.add(tgt)
+            normal_targets = [_get_edge_val(edge_def, "target", "target_node_id") for edge_def in normal]
+            target_ids.update(normal_targets)
 
             for loop_edge in loop_edges:
                 target = _get_edge_val(loop_edge, "target", "target_node_id")
@@ -402,14 +423,25 @@ def build_graph_from_json(
                     msg = f"loop edge from '{source}' requires default_target (no normal targets available)"
                     raise ValueError(msg)
 
-                router = _make_loop_router(
-                    source,
+                # The counter lives on a synthetic NODE, not the router:
+                # LangGraph discards router-side in-place state mutations across
+                # supersteps, so max_iterations would never trip and the run
+                # would hang until GraphRecursionError. The counter node returns
+                # the incremented count as a real state update, and a read-only
+                # router on it picks the next hop.
+                loop_key = f"{source}->{target}"
+                counter_id = _make_loop_counter_id(source, target)
+                graph.add_node(counter_id, make_loop_counter_fn(loop_key))
+                graph.add_edge(source, counter_id)
+
+                counter_router = _make_loop_counter_router(
+                    loop_key,
                     target,
                     default_target_str,
                     max_iterations,
                     condition_expression,
                 )
-                graph.add_conditional_edges(source, router)
+                graph.add_conditional_edges(counter_id, counter_router)
                 target_ids.add(target)
                 target_ids.add(default_target_str)
 

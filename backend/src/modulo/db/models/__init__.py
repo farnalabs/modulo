@@ -5,6 +5,7 @@ from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.base import Base, OrgScoped, TimestampMixin
 from modulo.db.models.composite_template import CompositeTemplate
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.cost_component import CostComponent, CostComponentKind
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.error_event import ErrorEvent
@@ -44,6 +45,7 @@ from modulo.db.models.remy_message import ChatMessage
 from modulo.db.models.remy_session import ChatSession
 from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.models.secret import Secret
@@ -74,6 +76,8 @@ __all__ = [
     "ChatSession",
     "CompositeTemplate",
     "ConnectorInstance",
+    "CostComponent",
+    "CostComponentKind",
     "Dismissal",
     "EnvironmentProfile",
     "ErrorEvent",
@@ -116,6 +120,7 @@ __all__ = [
     "RemyContextSource",
     "RemySkill",
     "Run",
+    "RunDailyFact",
     "SavedView",
     "ScheduledReport",
     "Schema",

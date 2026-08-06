@@ -826,7 +826,12 @@ async def _analyse_bundle(
                 if mb_name and mb_name in mb_id_by_name:
                     agent["model_backend_id"] = mb_id_by_name[mb_name]
 
-            teams_result = await session.execute(select(Team).where(Team.organisation_id == principal.organisation_id))
+            teams_result = await session.execute(
+                select(Team).where(
+                    Team.organisation_id == principal.organisation_id,
+                    Team.deleted_at.is_(None),
+                )
+            )
             teams = list(teams_result.scalars())
     except IntegrityError:
         _log.exception("library._analyse_bundle")
@@ -1476,7 +1481,6 @@ async def admin_publish_contribution_endpoint(
             session,
             principal.organisation_id,
             primitive_id,
-            approved_by=principal.account_id,
         )
     except ContributionNotFoundError:
         raise HTTPException(

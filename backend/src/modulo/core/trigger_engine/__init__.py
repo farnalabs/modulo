@@ -162,7 +162,7 @@ def _is_unique_violation(exc: IntegrityError) -> bool:
     # MariaDB / MySQL DBAPI errors expose the numeric code in args[0].
     if isinstance(orig, Exception):
         err_args = getattr(orig, "args", None)
-        if err_args and len(err_args) > 0 and err_args[0] == 1062:
+        if err_args and err_args[0] == 1062:
             return True
 
     return False

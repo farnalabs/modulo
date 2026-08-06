@@ -21,9 +21,11 @@ The application refuses to start if any required variable is absent or invalid.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | **Yes** | — | `postgresql+asyncpg://user:pass@host:port/db` |
-| `MODULO_DB` | No | `postgres` | Database backend: `postgres` or `sqlite` |
+| `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
 
-`MODULO_DB=sqlite` switches to SQLite for local development. See [`docs/system-requirements.md`](./system-requirements.md) for SQLite limitations.
+`MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).  
+`MODULO_DB=mariadb` or `mysql` uses the aiomysql driver (MariaDB is deprecated since 2026-07-11).  
+See [`docs/system-requirements.md`](./system-requirements.md) for backend limitations.
 
 ---
 
@@ -70,7 +72,7 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SAQ_RUNS_QUEUE` | No | `runs` | Runs-queue name (`staging-runs` on staging for isolation) |
-| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when THIS machine's SAQ workers are stale. Set `false` after the cutover hold to relax to degraded (alerting continues) |
+| `SAQ_HARD_GATE` | No | `true` | Healthz/ready 503-gates when THIS machine's SAQ workers are stale. Set `false` to relax to degraded (alerting continues). The cutover deploy-hold was retired 2026-08-05 — this readiness gate is the only gate left |
 | `SAQ_AUTH_PASSWORD` | Yes (system worker) | — | Fail-closed web UI auth password; refuse to boot without it |
 | `SAQ_AUTH_USERNAME` | Yes (system worker) | — | Fail-closed web UI auth user; maps to the `AUTH_USER` env SAQ's web reads |
 | `SAQ_RUN_RETRIES` | No | `5` | SAQ retries per run job — `N` is N total attempts (N-1 retries) |
@@ -80,16 +82,18 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
 | `SAQ_NEVER_DISPATCHED_WINDOW` | No | `300` | Legacy never-dispatched sweep window (non-SAQ rows only) |
 | `SAQ_WORKER_LOST_WINDOW` | No | `600` | Legacy worker-lost sweep window (non-SAQ rows only) |
-| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker) |
-| `SAQ_REDIS_POOL_SIZE` | No | `5` | SAQ Redis client pool size (Upstash connection budget) |
+| `SAQ_WORKER_DB_POOL_SIZE` | No | `10` | SAQ worker Postgres pool size (per worker). Verified 2026-08-06: deployed Postgres `max_connections=300` with ~40 in use at sample time — 10 x 2 workers x up to 5 machines = 100 + web pools + checkpointer fits with headroom. |
+| `SAQ_REDIS_POOL_SIZE` | No | `20` | SAQ Redis client pool size (Upstash connection budget). Verified 2026-08-06: prod pins this to `5` as a secret with ~15 actual connected clients at sample time, so the old firefight default of 50 was over-provisioned (500 potential conns across 5 machines). 20 caps at 200 potential conns; operators on a small Redis tier may lower to 5, matching prod. |
+| `SAQ_WORKER_CONCURRENCY` | No | `5` | SAQ worker job concurrency, decoupled from Redis pool size. Design target 5/worker x up to 5 machines = up to 25 concurrent runs — verified-safe against the prod Postgres 300-connection cap. |
 | `RUN_CLAIM_STALE_SECONDS` | No | `450` | Staleness gate for re-claiming a SAQ run whose heartbeat is stale |
 | `LEGACY_RUN_CLAIM_STALE_SECONDS` | No | `180` | Legacy claim window for the shared sync claim helpers |
 | `RUN_HEARTBEAT_SECONDS` | No | `30` | DB heartbeat cadence (keep below the 300s SAQ sweep threshold) |
 | `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
 
 `SAQ_HARD_GATE` replaces the removed `SAQ_ENABLED` flag: post-cutover SAQ is the
-only dispatch path, so the readiness gate is always active and the hold gate is
-controlled by `SAQ_HARD_GATE` alone.
+only dispatch path, so the readiness gate is always active. The deploy-time
+`SAQ_HOLD` gate (deploy.yml `hold-check` job) was retired 2026-08-05 — no
+deploy hold remains; `SAQ_HARD_GATE` is the only gate.
 
 ---
 
@@ -107,14 +111,22 @@ Telemetry is opt-in. With default settings, Modulo makes **zero** external netwo
 
 ## Rate Limiting
 
+Rate limits are hardcoded in `RateLimitMiddleware` (see [`backend/src/modulo/api/middleware/rate_limiter.py`](../backend/src/modulo/api/middleware/rate_limiter.py)):
+
+| Path | Limit | Window |
+|------|-------|--------|
+| POST `/api/v1/runs` | 60 | 60s |
+| POST `/api/v1/triggers` | 100 | 60s |
+| POST `/api/v1/errors/ingest` | 10 | 60s |
+| `/mcp` (all POST/PUT/PATCH) | 200 | 60s |
+| Auth endpoints (all POST/PUT/PATCH) | 10 attempts | 60s |
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RATE_LIMIT_DEFAULT` | No | `100/minute` | Default rate limit per user/IP |
-| `RATE_LIMIT_AUTH` | No | `20/minute` | Login/register endpoints |
-| `RATE_LIMIT_MCP` | No | `300/minute` | MCP tool invocations |
-| `RATE_LIMIT_WS_CONNECT` | No | `10/minute` | WebSocket connection requests |
+| `MODULO_AUTH_MAX_ATTEMPTS` | No | `10` | Login attempts per sliding window |
+| `MODULO_RATELIMIT_BYPASS_TOKEN` | No | — | Shared secret to bypass rate limiting (for CI/CD) |
 
-Rate limiting uses a Redis token-bucket algorithm. Falls back to in-memory without Redis (single-process only).
+Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op without Redis. Auth rate limiter requires Redis and is disabled without it.
 
 ---
 
@@ -125,7 +137,28 @@ Rate limiting uses a Redis token-bucket algorithm. Falls back to in-memory witho
 | `MODULO_E2B_API_KEY` | For E2B | — | E2B sandbox API key for runtime provider |
 | `MODULO_MAX_LOCAL_CONCURRENCY` | No | `2` | Max concurrent local agents (LocalRuntimeProvider) |
 | `OLLAMA_BASE_URL` | For Ollama | `http://localhost:11434` | Ollama server URL for local model backends |
-| `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate |
+| `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate. **Deprecated** (kept for the legacy fallback path) — the runtime reads `Settings.e2b_sandbox_usd_per_hour` via `get_settings()`; see the multi-component cost-tracking spec. |
+
+---
+
+## Cost Tracking
+
+Anti-abuse knobs for self-reported model cost (see
+`docs/design/multi-component-cost-tracking.md`). A violating value fails at
+Settings load (fail-fast) — a bad env value blocks boot with a recovery message.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_MAX_REPORTABLE_USD_MIN` | No | `0.000001` | The floor: a self-reported `model_cost_usd` below this is NOT a report (closes the spend-evasion hole). `ge=0.000001` — a sub-floor knob is rejected. |
+| `MODULO_MAX_SELF_REPORTED_USD` | No | `10000.0` | The per-node clamp for an absurd single-node report. The write-path effective value is min-capped at `99999999.999999` (the run column cap), so a `1e9` env value cannot silently disable the clamp. `ge=0.000001`. |
+| `MODULO_MAX_REPORTABLE_BAND_USD` | No | `50.0` | The band ceiling — the trust boundary for self-reported model cost at the backend extraction boundary. Any producer is clamped here; a value above the band carries the `model_cost_out_of_band_high` marker. Must be `<= MODULO_MAX_SELF_REPORTED_USD` (else boot-fatal). |
+| `MODULO_MAX_RATE_USD` | No | `100000.0` | Dynamic upper bound for a component's `rate_usd` on writes. The write-path effective value is min-capped at `999999999999.999999` (the rate column cap). Lowering it does NOT affect existing components — the knob moves the write-path boundary only; existing rows are still evaluated at finalization at their stored rate. |
+
+The knobs are Decimal-typed; all comparisons are Decimal (a float/Decimal
+`min()` mismatch is a bug). The ordering invariant
+(`MODULO_MAX_REPORTABLE_USD_MIN < MODULO_MAX_SELF_REPORTED_USD`), the
+floor-vs-band guard, and the knob-below-band guard are enforced at Settings
+LOAD.
 
 ---
 

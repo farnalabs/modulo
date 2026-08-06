@@ -8,14 +8,15 @@ Mock/fake based — no Postgres, no Redis. Covers:
   * fail-fast (webhook) enqueue failure -> deferred, no block
   * claim_token distinct from saq_job_id
   * error enum: 'saq' accepted by the validator, unknown rejected
-  * the call sites route through dispatch_run / dispatch_run_sync
+  * the call sites route through dispatch_run (on-loop via BackgroundTasks)
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Self
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -59,9 +60,10 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_runs_queue": "runs",
         "redis_url": "redis://localhost:6379/0",
         "saq_job_heartbeat": 300,
+        "saq_reenqueue_window": 600,
         "saq_run_retries": 5,
         "saq_retry_delay": 60,
-        "saq_redis_pool_size": 5,
+        "saq_redis_pool_size": 50,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -181,7 +183,13 @@ class TestDispatchRunRouting:
         expire_dedup.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_enqueue_failure_fail_fast_does_not_block(self) -> None:
+    async def test_enqueue_failure_fail_fast_returns_enqueue_failed(self) -> None:
+        """Fail-fast (webhook) enqueue failure -> 'enqueue_failed', no block.
+
+        Distinct from the capacity-deferred 'deferred' outcome so the webhook
+        background task can record an error_event (source='saq',
+        function='webhook_dispatch') without false-positiving on deferrals.
+        """
         with (
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
@@ -194,7 +202,7 @@ class TestDispatchRunRouting:
         ):
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID, fail_fast=True)
 
-        assert outcome == "deferred"
+        assert outcome == "enqueue_failed"
         assert job_id is None
         mark_failed.assert_not_called()
         expire_dedup.assert_not_called()
@@ -303,10 +311,13 @@ class TestEnqueueSaq:
 
 
 class TestCallSiteConversions:
-    def test_webhooks_module_uses_dispatch_run_sync(self) -> None:
+    def test_webhooks_module_uses_dispatch_run(self) -> None:
+        from fastapi import BackgroundTasks
+
         import modulo.api.routes.webhooks as webhooks
 
-        assert webhooks.dispatch_run_sync is dispatch.dispatch_run_sync
+        assert webhooks.dispatch_run is dispatch.dispatch_run
+        assert webhooks.BackgroundTasks is BackgroundTasks
 
     def test_runs_manual_route_uses_dispatch_run(self) -> None:
         import modulo.api.routes.runs as runs
@@ -317,3 +328,229 @@ class TestCallSiteConversions:
         import modulo.api.mcp_server as mcp
 
         assert mcp.dispatch_run is dispatch.dispatch_run
+
+
+# ---------------------------------------------------------------------------
+# dispatcher_reconcile F6a — awaiting_human/claimed gated recovery
+# ---------------------------------------------------------------------------
+# The reconcile integration suite lives in tests/unit/cron_helpers/
+# test_dispatcher_reconcile.py (owned by another tier, NOT in this allowlist),
+# so the F6a predicate + discriminator + row loop are exercised here directly
+# with mocked rows, following that suite's mocking style.
+
+
+class _F6aMockBegin:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+
+class _F6aMockSession:
+    """Minimal session double for the dispatcher_reconcile row loop."""
+
+    def __init__(self, results: list[object]) -> None:
+        self._results = list(results)
+        self.begin_cm = _F6aMockBegin()
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        self._get_bind = MagicMock(return_value=bind)
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> _F6aMockBegin:
+        return self.begin_cm
+
+    def get_bind(self) -> Any:
+        return self._get_bind()
+
+    async def get(self, model: Any, pk: Any) -> SimpleNamespace:
+        return SimpleNamespace(max_concurrent_runs=5)
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        if "set_config" in str(stmt):
+            return MagicMock()
+        if not self._results:
+            return MagicMock()
+        return self._results.pop(0)
+
+
+def _f6a_org_result(org_ids: list[uuid.UUID]) -> MagicMock:
+    r = MagicMock()
+    r.scalars.return_value = org_ids
+    return r
+
+
+def _f6a_rows_result(rows: list[Any]) -> MagicMock:
+    r = MagicMock()
+    r.all.return_value = rows
+    return r
+
+
+def _f6a_row(status: str, *, stale: bool = True) -> SimpleNamespace:
+    heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        status=status,
+        dispatched_at=datetime.now(UTC),
+        heartbeat_at=heartbeat,
+    )
+
+
+class TestReconcileF6aRecovery:
+    @pytest.mark.asyncio
+    async def test_awaiting_human_no_job_stale_redispatches_resume_run(self, monkeypatch) -> None:
+        """F6a: an awaiting_human run with no SAQ job + stale heartbeat is
+        recovered as resume_run (a half-resumed run whose job was lost)."""
+        from modulo.core import cron_helpers as ch
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 40)
+        monkeypatch.setenv("FERNET_KEY", "b" * 44)
+
+        row = _f6a_row("awaiting_human", stale=True)
+        org = uuid.uuid4()
+        session = _F6aMockSession(
+            [
+                _f6a_org_result([org]),
+                _f6a_rows_result([row]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = MagicMock()
+        q.name = "runs"
+        q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
+        q.job = AsyncMock(return_value=None)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_make_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(
+                ch,
+                "_re_enqueue_run",
+                new_callable=AsyncMock,
+                return_value=("enqueued", "new-job-id"),
+            ) as reenqueue,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "resume_run"
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_awaiting_human_with_live_job_skipped(self, monkeypatch) -> None:
+        """F6a gate: an awaiting_human run whose job still exists is NOT
+        re-dispatched — the no-job gate is the discriminator."""
+        from modulo.core import cron_helpers as ch
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 40)
+        monkeypatch.setenv("FERNET_KEY", "b" * 44)
+
+        row = _f6a_row("claimed", stale=True)
+        org = uuid.uuid4()
+        session = _F6aMockSession(
+            [
+                _f6a_org_result([org]),
+                _f6a_rows_result([row]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = MagicMock()
+        q.name = "runs"
+        q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
+        q.job = AsyncMock(return_value=SimpleNamespace(id="saq:job:runs:run:x"))
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_make_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["repaired"] == 0
+        assert summary["skipped"] == 1
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_running_claim_cap_exhausted_terminalized(self, monkeypatch) -> None:
+        """Plan F8: a running SAQ run at its claim cap is FAILED, not re-dispatched."""
+        from modulo.core import cron_helpers as ch
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 40)
+        monkeypatch.setenv("FERNET_KEY", "b" * 44)
+
+        row = _f6a_row("running", stale=True)
+        row.claim_count = 20
+        org = uuid.uuid4()
+        session = _F6aMockSession(
+            [
+                _f6a_org_result([org]),
+                _f6a_rows_result([row]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = MagicMock()
+        q.name = "runs"
+        q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
+        q.job = AsyncMock(return_value=None)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_make_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["claim_cap_terminalized"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+
+    def test_reconcile_job_type_discriminator(self) -> None:
+        """F6a discriminator: awaiting_human/claimed -> resume_run; else execute_run."""
+        from modulo.core import cron_helpers as ch
+
+        assert ch._reconcile_job_type("awaiting_human") == "resume_run"
+        assert ch._reconcile_job_type("claimed") == "resume_run"
+        assert ch._reconcile_job_type("pending") == "execute_run"
+        assert ch._reconcile_job_type("running") == "execute_run"
+
+    def test_reconcile_predicate_contains_f6a_branch(self) -> None:
+        """The reconcile predicate includes an awaiting_human/claimed staleness
+        branch (F6a), alongside the pending/running branches."""
+        from modulo.core import cron_helpers as ch
+
+        pred = ch._build_re_dispatch_predicate(reenqueue_window=600, stale_window=600)
+        rendered = str(pred.compile(compile_kwargs={"literal_binds": True}))
+        assert "awaiting_human" in rendered
+        assert "claimed" in rendered
+        assert "heartbeat_at" in rendered

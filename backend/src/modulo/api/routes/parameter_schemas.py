@@ -66,7 +66,7 @@ class ParameterDef(BaseModel):
 class SchemaCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
-    parameters: list[ParameterDef] = []
+    parameters: list[ParameterDef] = Field(default_factory=list)
 
 
 class SchemaUpdate(BaseModel):
@@ -110,7 +110,7 @@ class SchemaReferencesResponse(BaseModel):
 class SetCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
-    values: dict[str, Any] = {}
+    values: dict[str, Any] = Field(default_factory=dict)
 
 
 class SetUpdate(BaseModel):
@@ -152,7 +152,7 @@ class ValidationErrorItem(BaseModel):
 
 class ValidateResponse(BaseModel):
     valid: bool
-    errors: list[ValidationErrorItem] = []
+    errors: list[ValidationErrorItem] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -551,10 +551,7 @@ async def validate_parameter_values_endpoint(
 
             params = schema.parameters if isinstance(schema.parameters, list) else []
             errors: list[ValidationErrorItem] = []
-            param_map: dict[str, dict[str, Any]] = {}
-            for p in params:
-                if isinstance(p, dict):
-                    param_map[p.get("name", "")] = p
+            param_map = {p.get("name", ""): p for p in params if isinstance(p, dict)}
 
             for p_name, p_def in param_map.items():
                 p_type = p_def.get("type", "string")

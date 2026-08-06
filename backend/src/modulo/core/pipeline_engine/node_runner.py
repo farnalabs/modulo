@@ -59,6 +59,11 @@ from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
+from modulo.core.cost_controller.breakdown.constants import (
+    MAX_REPORTABLE_BAND_USD,
+    MAX_REPORTABLE_USD_MIN,
+)
+from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
 from modulo.core.pipeline_engine.input_truncation import truncate_input
@@ -83,6 +88,128 @@ _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after comm
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 
+# The raw_reported display clamp for the node-output surface: the RAW value
+# rides for audit, the SEPARATE clamped display field is what the UI/money
+# formatter renders.
+_NODE_OUTPUT_DISPLAY_CLAMP = 1e6
+
+
+def _effective_self_reported_cap() -> float:
+    """The per-node clamp ceiling (Settings knob, min-capped at the column cap).
+
+    devtools' ``read_opencode_cost`` uses the CONSTANTS default via this name;
+    the backend node_runner clamp is AUTHORITATIVE — the executor re-applies
+    the Settings-knob clamp (effective value min-capped at the column cap) when
+    it extracts ``model_cost_usd`` from the node output, so a devtools-side
+    default drift can never bypass the knob.
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().effective_max_self_reported_usd)
+    except Exception:
+        _log.debug("sandbox_cost.self_reported_cap_lookup_failed; using default", exc_info=True)
+        from modulo.core.cost_controller.breakdown.constants import MAX_SELF_REPORTED_USD
+
+        return float(MAX_SELF_REPORTED_USD)
+
+
+def _extract_reported_cost(
+    output_json: Any,
+    *,
+    max_reportable_usd_min: float | None = None,
+    max_reportable_band_usd: float | None = None,
+    per_node_cap: float | None = None,
+) -> tuple[float, float, bool, bool] | None:
+    """Tri-state + BAND extraction — the SINGLE extraction authority.
+
+    Returns ``(raw, clamped, was_clamped, out_of_band_high)`` ONLY for a
+    POSITIVE finite numeric ``model_cost_usd`` (> 0). ``None`` for absent key,
+    non-dict, non-numeric, NaN/Inf, negative, zero, or bool (bool rejected
+    explicitly). ``None`` => the key is NOT written.
+
+    The raw input is read from ``model_cost_raw_usd`` WHEN PRESENT (the
+    producer's pre-clamp value — devtools writes it), falling back to
+    ``model_cost_usd`` for legacy producers. The flags derive from the TRUE raw.
+
+    CLAMP ORDER (pinned): the value is clamped at the per-node cap
+    (``_effective_self_reported_cap()``, min-capped at the column cap) AND at
+    the BAND CEILING (``MAX_REPORTABLE_BAND_USD`` = 50.0). Because band <
+    per-node cap (50 < 10000), ``min(min(raw, cap), band) == min(min(raw,
+    band), cap)`` — the final value is IDENTICAL regardless of clamp order.
+    ``was_clamped = clamped != raw`` (ANY clamp — band OR per-node);
+    ``out_of_band_high = raw > band``.
+
+    SCHEMA-DRIFT FLAG READ AT THE TOP: the devtools-emitted ``schema_drift``
+    producer-wire key (the FATAL minimal dict ``{"schema_drift": true}``
+    forwarded by write_output) returns ``None`` (no report) when truthy — a
+    drifted-schema node reports NO cost. The COUNTER INCREMENT does NOT happen
+    here (the provenance gate is evaluated in ``_enrich_union``, PR A2, where
+    the frozen node-type map is in scope).
+    """
+    if not isinstance(output_json, dict):
+        return None
+    if output_json.get("schema_drift"):
+        return None
+    val = output_json.get("model_cost_raw_usd")
+    if val is None:
+        val = output_json.get("model_cost_usd")
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return None
+    try:
+        val_f = float(val)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not (math.isfinite(val_f) and val_f > 0):
+        return None
+    floor = float(max_reportable_usd_min) if max_reportable_usd_min is not None else float(MAX_REPORTABLE_USD_MIN)
+    if val_f < floor:
+        return None
+    raw = val_f
+    cap = per_node_cap if per_node_cap is not None else _effective_self_reported_cap()
+    clamped = min(raw, cap)
+    band = float(max_reportable_band_usd) if max_reportable_band_usd is not None else float(MAX_REPORTABLE_BAND_USD)
+    out_of_band_high = False
+    if clamped > band:
+        clamped = band
+        out_of_band_high = True
+        record_out_of_band("cost_out_of_band_high")
+        _log.warning(
+            "cost_components_out_of_band_high",
+            extra={"direction": "cost_out_of_band_high", "raw": raw, "clamped": clamped},
+        )
+    was_clamped = clamped != raw
+    return raw, clamped, was_clamped, out_of_band_high
+
+
+def _build_model_cost_fields(output_json: Any) -> dict[str, Any]:
+    """Build the node-output model-cost fields (audit + display + flags).
+
+    Returns an EMPTY dict when the node carries no report (the keys are ABSENT
+    — ``0.0`` is NEVER written as a report). When a report exists the fields
+    are: ``model_cost_usd`` (clamped), ``model_cost_raw_usd`` (pre-clamp, for
+    audit), ``model_cost_display_usd`` (clamped-at-1e6 — the UI/money formatter
+    renders THIS field, so the raw value never reaches the money path),
+    ``model_cost_clamped`` and ``model_cost_out_of_band_high`` (BOTH written
+    UNCONDITIONALLY — true/false explicitly, derived from the TRUE raw so a
+    legacy or hostile marker already on the node output can never survive).
+    """
+    extracted = _extract_reported_cost(output_json)
+    if extracted is None:
+        return {}
+    raw, clamped, was_clamped, out_of_band_high = extracted
+    display = min(clamped, _NODE_OUTPUT_DISPLAY_CLAMP)
+    return {
+        "model_cost_usd": clamped,
+        "model_cost_raw_usd": raw,
+        "model_cost_display_usd": display,
+        "model_cost_clamped": was_clamped,
+        "model_cost_out_of_band_high": out_of_band_high,
+    }
+
+
 # Per-run agent runtime cost: E2B sandbox hourly rate (USD) used to estimate
 # sandbox_agent node cost from wall-clock time. E2B bills per-second sandbox
 # uptime, so (elapsed_seconds / 3600) x rate is a faithful cost estimate.
@@ -100,16 +227,35 @@ except Exception:
     _log.debug("sandbox_cost.e2b_rate_lookup_failed; using default", exc_info=True)
 
 
+def _e2b_rate_runtime() -> float:
+    """The E2B hourly rate read at RUNTIME via ``get_settings()`` (§3.3).
+
+    Routing the rate through ``get_settings()`` at RUNTIME (instead of the
+    import-time read) is a REAL code change: an env override of
+    ``E2B_SANDBOX_USD_PER_HOUR`` must move the boundary everywhere — including
+    this legacy fallback path — without a process restart. Falls back to the
+    module default when Settings is unavailable (never raises).
+    """
+    try:
+        from modulo.settings import get_settings
+
+        return float(get_settings().e2b_sandbox_usd_per_hour)
+    except Exception:
+        _log.debug("sandbox_cost.e2b_rate_runtime_lookup_failed; using default", exc_info=True)
+        return _E2B_SANDBOX_USD_PER_HOUR
+
+
 def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     """Estimate the USD cost of a sandbox_agent dispatch.
 
     Combines Modulo's own sandbox uptime estimate (wall-clock seconds at the
-    configured E2B hourly rate) with the agent's self-reported cost estimate
-    (``cost_estimate_usd`` in its structured output contract, written by the
-    agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
+    RUNTIME Settings E2B hourly rate) with the agent's self-reported cost
+    estimate (``cost_estimate_usd`` in its structured output contract, written
+    by the agent to /home/user/output.json). Non-finite estimates (NaN/inf) are
     discarded. Returns a plain JSON-serialisable float.
     """
-    sandbox_cost = round((elapsed_seconds / 3600.0) * _E2B_SANDBOX_USD_PER_HOUR, 6)
+    rate = _e2b_rate_runtime()
+    sandbox_cost = round((elapsed_seconds / 3600.0) * rate, 6)
     agent_reported_cost = 0.0
     if isinstance(output_json, dict):
         try:
@@ -688,11 +834,16 @@ def make_sandbox_agent_fn(
 
     node_id: str = str(node_def["id"])
     agent_prompt_template: str = node_def.get("agent_prompt") or ""
+    if not agent_prompt_template.strip():
+        raise ValueError(
+            f"sandbox_agent node '{node_def.get('id')}' is missing required 'agent_prompt' "
+            "— an empty prompt would dispatch the agent with no instructions"
+        )
     template_id: str = node_def.get("template_id", "opencode")
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
     agent_command_raw: str | None = node_def.get("agent_command")
-    if agent_commands_raw and len(agent_commands_raw) > 0:
+    if agent_commands_raw:
         agent_command = commands_concatenation_string.join(agent_commands_raw)
     elif agent_command_raw:
         agent_command = agent_command_raw
@@ -779,11 +930,96 @@ def make_sandbox_agent_fn(
 
         start_time = time.monotonic()
         sandbox: AsyncSandbox | None = None
+        e2b_claim_token: str | None = None
+        e2b_fenced = False
 
         _stdout_len = 0
         _stderr_len = 0
 
+        async def _read_current_claim_token() -> str | None:
+            """Read the run's current ``runs.claim_token`` via the shared session factory.
+
+            This is the executor's own claim token (the claim wrote it) — a
+            successor claim rotates it, so a superseded original reads a
+            different value and its fence acquire is refused.
+            """
+            if session_factory is None:
+                return None
+            org_id_raw = state.get("_org_id")
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+            except (TypeError, ValueError):
+                org_uuid = None
+            if org_uuid is None:
+                return None
+            try:
+                from sqlalchemy import text as _sql_text
+
+                from modulo.db.rls import set_rls_org
+
+                async with session_factory() as session, session.begin():
+                    await set_rls_org(session, org_uuid)
+                    result = await session.execute(
+                        _sql_text("SELECT claim_token FROM runs WHERE id=:rid"),
+                        {"rid": run_id},
+                    )
+                    row = result.first()
+                    return str(row[0]) if row and row[0] else None
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.claim_token_read_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+                return None
+
         try:
+            # E2B idempotency fence (plan F3a) — SETNX-before-dispatch so exactly
+            # ONE executor creates a sandbox for this run. A superseded claim (run
+            # re-claimed after an event-loop stall) is refused before any sandbox
+            # is created; a transient retry within the same claim is likewise
+            # refused (no second sandbox). If the claim token is unavailable
+            # (no session factory / DB read failed) the fence is skipped
+            # fail-open — the heartbeat claim fence remains the primary guard.
+            from modulo.core.pipeline_execution import (
+                E2BIdempotencyDeniedError,
+                e2b_dispatch_acquire,
+                e2b_dispatch_release_fenced,
+                e2b_idempotency_enabled,
+            )
+
+            if e2b_idempotency_enabled():
+                e2b_claim_token = await _read_current_claim_token()
+                if e2b_claim_token is not None:
+                    try:
+                        await e2b_dispatch_acquire(run_id, e2b_claim_token)
+                        e2b_fenced = True
+                    except E2BIdempotencyDeniedError:
+                        _log.warning(
+                            "sandbox_agent.e2b_dispatch_denied",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
+                        return {
+                            "artifacts": [
+                                {
+                                    "node_id": node_id,
+                                    "status": "superseded",
+                                    "output": {
+                                        "status": "superseded",
+                                        "summary": "E2B dispatch superseded by a newer claim — sandbox not created",
+                                        "exit_code": -1,
+                                        "wall_clock_time_ms": 0,
+                                    },
+                                }
+                            ],
+                            "output": {
+                                "status": "superseded",
+                                "summary": "E2B dispatch superseded by a newer claim — sandbox not created",
+                                "wall_clock_time_ms": 0,
+                            },
+                        }
+
             sandbox = await asyncio.wait_for(
                 AsyncSandbox.create(template=template_id, timeout=sandbox_timeout),
                 timeout=min(sandbox_timeout, 120),
@@ -869,6 +1105,18 @@ def make_sandbox_agent_fn(
             agent_stdout = agent_stdout_raw[:_MAX_ARTIFACT_LOG]
             agent_stderr = agent_stderr_raw[:_MAX_ARTIFACT_LOG]
 
+            # A timed-out command leaves ``cmd_result`` as None: the run timed
+            # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
+            # exit_code -1. Surface a clear explanation instead of silently
+            # returning an empty-summary failure.
+            command_error: str = ""
+            if cmd_result is None:
+                command_error = (
+                    f"Sandbox agent command produced no output within {sandbox_timeout}s. "
+                    "No stdout/stderr was captured — the agent likely hung before "
+                    "writing any result."
+                )
+
             raw_output: str = ""
             output_json: Any = None
             try:
@@ -884,7 +1132,7 @@ def make_sandbox_agent_fn(
             except Exception:
                 _log.info(
                     "sandbox_agent.no_output_json",
-                    extra={"node_id": node_id, "exit_code": exit_code},
+                    extra={"node_id": node_id, "exit_code": exit_code, "command_error": command_error},
                 )
 
             _span = _otel_trace.get_current_span()
@@ -920,6 +1168,7 @@ def make_sandbox_agent_fn(
                                     "exit_code": exit_code,
                                     "wall_clock_time_ms": int(elapsed * 1000),
                                     "cost_estimate_usd": _cost_estimate_usd,
+                                    **_build_model_cost_fields(output_json),
                                     "output_json": output_json,
                                     "agent_stdout": agent_stdout,
                                     "agent_stderr": agent_stderr,
@@ -931,6 +1180,7 @@ def make_sandbox_agent_fn(
                             "summary": "Output failed schema validation",
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "cost_estimate_usd": _cost_estimate_usd,
+                            **_build_model_cost_fields(output_json),
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
                         },
@@ -945,6 +1195,11 @@ def make_sandbox_agent_fn(
                 result_summary = output_json.get("summary", "")
                 changed_files = output_json.get("changed_files", [])
                 pr_url = output_json.get("pr_url", "")
+
+            if status == "failed" and not result_summary:
+                # Never report a silent empty-summary failure — explain WHY the
+                # command produced no usable output.
+                result_summary = command_error or "Sandbox agent command failed"
 
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
 
@@ -961,6 +1216,7 @@ def make_sandbox_agent_fn(
                             "exit_code": exit_code,
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "cost_estimate_usd": _cost_estimate_usd,
+                            **_build_model_cost_fields(output_json),
                             "output_json": output_json,
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
@@ -972,6 +1228,7 @@ def make_sandbox_agent_fn(
                     "summary": result_summary,
                     "wall_clock_time_ms": int(elapsed * 1000),
                     "cost_estimate_usd": _cost_estimate_usd,
+                    **_build_model_cost_fields(output_json),
                     "agent_stdout": agent_stdout,
                     "agent_stderr": agent_stderr,
                 },
@@ -980,6 +1237,16 @@ def make_sandbox_agent_fn(
         except asyncio.CancelledError:
             raise
         except Exception as _exc:
+            # Dispatch FAILURE (the sandbox was never created): fenced release so
+            # a later claim/retry can legitimately re-dispatch (plan F3a).
+            if e2b_fenced and sandbox is None:
+                try:
+                    await e2b_dispatch_release_fenced(run_id, e2b_claim_token or "")
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.e2b_fence_release_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
+                    )
             elapsed = time.monotonic() - start_time
             import traceback as _tb
 
@@ -1023,6 +1290,7 @@ def make_sandbox_agent_fn(
                             "exit_code": -1,
                             "wall_clock_time_ms": int(elapsed * 1000),
                             "cost_estimate_usd": _cost_estimate_usd,
+                            **_build_model_cost_fields(_exc_output_json),
                             "agent_stdout": _exc_stdout,
                             "agent_stderr": _exc_stderr,
                         },
@@ -1033,6 +1301,7 @@ def make_sandbox_agent_fn(
                     "summary": "Sandbox agent execution failed",
                     "wall_clock_time_ms": int(elapsed * 1000),
                     "cost_estimate_usd": _cost_estimate_usd,
+                    **_build_model_cost_fields(_exc_output_json),
                     "agent_stdout": _exc_stdout,
                     "agent_stderr": _exc_stderr,
                 },
@@ -1048,6 +1317,18 @@ def make_sandbox_agent_fn(
                     _log.exception(
                         "sandbox_agent.kill_failed",
                         extra={"node_id": node_id},
+                    )
+            # Sandbox teardown — release the dispatch fence (fenced: only if the
+            # key is still ours). Success path keeps the lock for the sandbox's
+            # lifetime; releasing at teardown lets a later claim re-dispatch a
+            # fresh sandbox (plan F3a).
+            if e2b_fenced and sandbox is not None:
+                try:
+                    await e2b_dispatch_release_fenced(run_id, e2b_claim_token or "")
+                except Exception:
+                    _log.exception(
+                        "sandbox_agent.e2b_fence_release_failed",
+                        extra={"node_id": node_id, "run_id": run_id},
                     )
 
     _sandbox_agent.__name__ = f"sandbox_agent_{node_id}"

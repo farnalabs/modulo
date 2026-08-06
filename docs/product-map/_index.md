@@ -47,6 +47,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-agent-model](core/agent-model.md) => PRD 8.2
 - [feat-core-ai-schema-gen](core/ai-schema-gen.md) => PRD 8.16
 - [feat-core-alpha-exit-verification](core/alpha-exit-verification.md) => PRD 10.3b
+- [feat-core-analytics](core/analytics.md) => PRD 8.32
 - [feat-core-api-versioning](core/api-versioning.md) => PRD 6
 - [feat-core-audit-crypto-chain](core/audit-crypto-chain.md) => PRD 8.12
 - [feat-core-audit-trail](core/audit-trail.md) => PRD 8.12
@@ -57,6 +58,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-contribution-update](core/contribution-update.md) => PRD 8.14
 - [feat-core-core](core/core.md) => PRD 8.16, 8.4
 - [feat-core-cost-breakdown](core/cost-breakdown.md) => PRD 8.10
+- [feat-core-cost-components](core/cost-components.md) => PRD 8.10
 - [feat-core-db-abstraction-core](core/db-abstraction-core.md) => PRD 6.1, 6.2
 - [feat-core-db-abstraction-remaining](core/db-abstraction-remaining.md) => PRD 6.1, 6.2
 - [feat-core-determination](core/determination.md) => PRD 8.16

@@ -77,9 +77,10 @@ def _tool_call(name: str, call_id: str, index: int) -> dict[str, Any]:
 
 
 async def _read_sse(response: object) -> list[tuple[str, dict[str, Any]]]:
-    chunks: list[str] = []
-    async for chunk in response.body_iterator:  # type: ignore[attr-defined]
-        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    chunks: list[str] = [
+        chunk.decode() if isinstance(chunk, bytes) else chunk
+        async for chunk in response.body_iterator  # type: ignore[attr-defined]
+    ]
 
     events: list[tuple[str, dict[str, Any]]] = []
     for block in "".join(chunks).split("\n\n"):

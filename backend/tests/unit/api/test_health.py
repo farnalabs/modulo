@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from typing import Self
 from unittest.mock import AsyncMock, patch
 
@@ -14,9 +15,12 @@ from modulo.api.routes.health import (
     CheckResult,
     _check_checkpointer,
     _check_database,
+    _check_fleet_saq_workers,
+    _check_fleet_system_crons,
     _check_migrations,
     _check_redis,
     _check_saq_workers,
+    _check_system_crons,
     _live_worker_hostnames,
     _per_check_timeout,
 )
@@ -490,3 +494,231 @@ class TestCheckSaqWorkersEndToEnd:
         result = await self._call(stats, blobs)
         assert result.status == "degraded"
         assert "system" in result.detail
+
+
+class TestCheckFleetSaqWorkers:
+    """Fleet-wide SAQ worker gate — used by ``app`` machines (which run no workers)."""
+
+    async def _run(self, live_by_queue: dict[str, set[str]], *, saq_hard_gate: bool = True) -> CheckResult:
+        settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._live_worker_hostnames") as live,
+        ):
+            queues.return_value = ["runs", "system"]
+
+            async def _live_side_effect(qname: str) -> set[str]:
+                return live_by_queue.get(qname, set())
+
+            live.side_effect = _live_side_effect
+            return await _check_fleet_saq_workers()
+
+    async def test_any_live_worker_on_each_queue_ok(self) -> None:
+        # A worker machine elsewhere in the fleet covers app readiness.
+        result = await self._run({"runs": {"machine-b"}, "system": {"machine-b"}})
+        assert result.status == "ok"
+        assert "fleet" in result.detail
+
+    async def test_no_worker_on_one_queue_unavailable(self) -> None:
+        result = await self._run({"runs": set(), "system": {"machine-b"}})
+        assert result.status == "unavailable"
+        assert "runs" in result.detail
+
+    async def test_no_worker_anywhere_unavailable(self) -> None:
+        result = await self._run({"runs": set(), "system": set()})
+        assert result.status == "unavailable"
+
+    async def test_hard_gate_false_alert_only(self) -> None:
+        result = await self._run({"runs": set(), "system": set()}, saq_hard_gate=False)
+        assert result.status == "ok"
+
+    async def test_redis_read_error_fails_open(self) -> None:
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])),
+            patch(
+                "modulo.api.routes.health._live_worker_hostnames",
+                side_effect=RuntimeError("redis down"),
+            ),
+        ):
+            result = await _check_fleet_saq_workers()
+        assert result.status == "ok"
+
+
+class TestCheckSaqWorkersProcessGroup:
+    """Process-group routing: ``app`` -> fleet gate, ``worker``/unset -> machine-scoped gate."""
+
+    async def test_app_machine_uses_fleet_gate(self) -> None:
+        # FLY_PROCESS_GROUP=app + a worker live on ANOTHER machine -> ok, even
+        # though THIS app machine is not live on any queue.
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._live_worker_hostnames") as live,
+            patch.dict("os.environ", {"FLY_MACHINE_ID": "app-1", "FLY_PROCESS_GROUP": "app"}, clear=False),
+        ):
+            queues.return_value = ["runs", "system"]
+
+            async def _live_side_effect(qname: str) -> set[str]:
+                return {"machine-b"} if qname in ("runs", "system") else set()
+
+            live.side_effect = _live_side_effect
+            result = await _check_saq_workers()
+        assert result.status == "ok"
+        assert "fleet" in result.detail
+
+    async def test_app_machine_fleet_outage_unavailable(self) -> None:
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._live_worker_hostnames", return_value=set()),
+            patch.dict("os.environ", {"FLY_MACHINE_ID": "app-1", "FLY_PROCESS_GROUP": "app"}, clear=False),
+        ):
+            queues.return_value = ["runs", "system"]
+            result = await _check_saq_workers()
+        assert result.status == "unavailable"
+
+    async def test_worker_machine_keeps_machine_scoped_gate(self, reset_stale_probes: None) -> None:
+        # FLY_PROCESS_GROUP=worker + THIS machine stale on runs -> degraded,
+        # regardless of a live worker elsewhere on the runs queue.
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health._configured_queues", AsyncMock(return_value=["runs", "system"])) as queues,
+            patch("modulo.api.routes.health._live_worker_hostnames") as live,
+            patch.dict("os.environ", {"FLY_MACHINE_ID": "machine-a", "FLY_PROCESS_GROUP": "worker"}, clear=False),
+        ):
+            queues.return_value = ["runs", "system"]
+
+            async def _live_side_effect(qname: str) -> set[str]:
+                # machine-b is live on runs but machine-a is not.
+                if qname == "runs":
+                    return {"machine-b"}
+                return {"machine-a"}
+
+            live.side_effect = _live_side_effect
+            result = await _check_saq_workers()
+        assert result.status == "degraded"
+        assert "machine-a" in result.detail
+
+
+class _FakeHeartbeatRedis:
+    """Fake redis client for ``saq:cron:heartbeat:fire_due_triggers:*`` reads."""
+
+    def __init__(self, heartbeats: dict[str, str]) -> None:
+        self._heartbeats = heartbeats
+
+    async def keys(self, pattern: str) -> list[bytes]:
+        prefix = pattern.rstrip("*")
+        return [k.encode() for k in self._heartbeats if k.startswith(prefix)]
+
+    async def get(self, key: bytes | str) -> bytes | None:
+        decoded = key.decode() if isinstance(key, bytes) else key
+        value = self._heartbeats.get(decoded)
+        return value.encode() if value is not None else None
+
+    async def aclose(self) -> None:
+        return None
+
+
+class TestCheckFleetSystemCrons:
+    """Fleet-wide fire_due_triggers cron liveness — used by ``app`` machines."""
+
+    NOW = 1_700_000_000.0
+
+    async def _run(
+        self,
+        heartbeats: dict[str, str],
+        *,
+        saq_hard_gate: bool = True,
+        now: float | None = None,
+    ) -> CheckResult:
+        settings = _make_settings().model_copy(update={"saq_hard_gate": saq_hard_gate})
+        fake = _FakeHeartbeatRedis(heartbeats)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("modulo.api.routes.health.time.time", return_value=self.NOW if now is None else now),
+        ):
+            return await _check_fleet_system_crons()
+
+    async def test_fresh_heartbeat_on_any_machine_ok(self) -> None:
+        result = await self._run({"saq:cron:heartbeat:fire_due_triggers:machine-b": str(self.NOW - 30)})
+        assert result.status == "ok"
+
+    async def test_only_stale_heartbeat_unavailable(self) -> None:
+        result = await self._run({"saq:cron:heartbeat:fire_due_triggers:machine-b": str(self.NOW - 121)})
+        assert result.status == "unavailable"
+
+    async def test_no_heartbeat_anywhere_unavailable(self) -> None:
+        result = await self._run({})
+        assert result.status == "unavailable"
+
+    async def test_hard_gate_false_alert_only(self) -> None:
+        result = await self._run(
+            {"saq:cron:heartbeat:fire_due_triggers:machine-b": str(self.NOW - 121)},
+            saq_hard_gate=False,
+        )
+        assert result.status == "ok"
+
+    async def test_redis_read_error_fails_open(self) -> None:
+        settings = _make_settings()
+
+        class _BrokenRedis:
+            async def keys(self, _pattern: str) -> list[bytes]:
+                raise RuntimeError("redis down")
+
+            async def aclose(self) -> None:
+                return None
+
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=_BrokenRedis()),
+        ):
+            result = await _check_fleet_system_crons()
+        assert result.status == "ok"
+
+
+class TestCheckSystemCronsProcessGroup:
+    """Process-group routing for the cron watchdog: ``app`` -> fleet, ``worker`` -> machine-scoped."""
+
+    NOW = 1_700_000_000.0
+
+    async def test_app_machine_uses_fleet_gate(self) -> None:
+        # App machine with no local heartbeat is ok as long as another machine's
+        # scheduler is fresh.
+        heartbeats = {"saq:cron:heartbeat:fire_due_triggers:machine-b": str(self.NOW - 30)}
+        fake = _FakeHeartbeatRedis(heartbeats)
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("modulo.api.routes.health.time.time", return_value=self.NOW),
+            patch.dict("os.environ", {"FLY_MACHINE_ID": "app-1", "FLY_PROCESS_GROUP": "app"}, clear=False),
+        ):
+            result = await _check_system_crons()
+        assert result.status == "ok"
+
+    async def test_worker_machine_keeps_machine_scoped_gate(self) -> None:
+        # Worker machine with NO local heartbeat is unavailable even though
+        # another machine's scheduler is alive.
+        heartbeats = {"saq:cron:heartbeat:fire_due_triggers:machine-b": str(self.NOW - 30)}
+        fake = _FakeHeartbeatRedis(heartbeats)
+        settings = _make_settings()
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=settings),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+            patch("modulo.api.routes.health.time.time", return_value=self.NOW),
+            patch(
+                "modulo.api.routes.health._START_TIME",
+                datetime.now(UTC) - timedelta(hours=1),
+            ),
+            patch.dict("os.environ", {"FLY_MACHINE_ID": "machine-a", "FLY_PROCESS_GROUP": "worker"}, clear=False),
+        ):
+            result = await _check_system_crons()
+        assert result.status == "unavailable"
+        assert "machine-a" in result.detail

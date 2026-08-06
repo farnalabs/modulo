@@ -256,6 +256,7 @@ def _make_verify_result(
     first_tampered_id: str | None = None,
     chain_head_match: bool | None = None,
     chain_count_mismatch: bool | None = None,
+    detail: str | None = None,
 ) -> dict[str, Any]:
     return {
         "valid": valid,
@@ -266,6 +267,7 @@ def _make_verify_result(
         "first_tampered_id": first_tampered_id,
         "chain_head_match": chain_head_match,
         "chain_count_mismatch": chain_count_mismatch,
+        "detail": detail,
     }
 
 
@@ -286,6 +288,8 @@ async def verify_chain(
       - first_tampered_id: str | None
       - chain_head_match: bool | None
       - chain_count_mismatch: bool | None
+      - detail: str | None — human-readable tamper evidence when a break is
+        found (expected vs actual previous_hash at the first gap), None otherwise
     """
     count_result = await session.execute(select(func.count(AuditEvent.id)).where(AuditEvent.organisation_id == org_id))
     total_events = count_result.scalar() or 0
@@ -310,7 +314,10 @@ async def verify_chain(
 
     truncated = len(events) < total_events
 
-    gap_index, tampered_id = _recompute_chain(events)
+    gap_index, tampered_id, expected_hash, stored_hash = _recompute_chain(events)
+    detail = None
+    if gap_index is not None and tampered_id is not None:
+        detail = _describe_chain_break(gap_index, tampered_id, expected_hash, stored_hash)
     if gap_index is not None:
         return _make_verify_result(
             total_events=total_events,
@@ -319,6 +326,7 @@ async def verify_chain(
             valid=False,
             first_gap_index=gap_index,
             first_tampered_id=tampered_id,
+            detail=detail,
         )
 
     expected_prev = _compute_event_hash(
@@ -356,10 +364,14 @@ async def verify_chain(
     )
 
 
-def _recompute_chain(events: list[AuditEvent]) -> tuple[int | None, str | None]:
+def _recompute_chain(events: list[AuditEvent]) -> tuple[int | None, str | None, str | None, str | None]:
     """Walk the event list and verify hash chain integrity.
 
-    Returns (first_gap_index, first_tampered_id) or (None, None) if intact.
+    Returns (first_gap_index, first_tampered_id, expected_hash, stored_hash)
+    or (None, None, None, None) if intact. ``expected_hash`` is the hash the
+    broken event *should* have pointed at (the recomputed hash of the prior
+    event), and ``stored_hash`` is the value actually recorded — together they
+    provide actionable tamper evidence.
     """
     expected_prev: str | None = None
     for idx, event in enumerate(events):
@@ -376,9 +388,30 @@ def _recompute_chain(events: list[AuditEvent]) -> tuple[int | None, str | None]:
             created_at=event.created_at.isoformat() if event.created_at else "",
         )
         if event.previous_hash != expected_prev:
-            return (idx, str(event.id))
+            return (idx, str(event.id), expected_prev, event.previous_hash)
         expected_prev = canonical_hash
-    return (None, None)
+    return (None, None, None, None)
+
+
+def _describe_chain_break(
+    gap_index: int,
+    tampered_id: str,
+    expected_hash: str | None,
+    stored_hash: str | None,
+) -> str:
+    """Build a human-readable tamper-evidence message for a chain break."""
+    if expected_hash is None:
+        return (
+            f"Audit chain break at event {gap_index} (id {tampered_id}): stored previous_hash "
+            f"({stored_hash}) does not match the recomputed hash of the prior event (None). "
+            "This is the first event in the org's chain, so a prior-event hash is not expected; "
+            "the stored previous_hash indicates tampering."
+        )
+    return (
+        f"Audit chain break at event {gap_index} (id {tampered_id}): stored previous_hash "
+        f"({stored_hash}) does not match the recomputed hash of the prior event ({expected_hash}). "
+        "The event or one before it has been tampered with."
+    )
 
 
 async def export_chain(

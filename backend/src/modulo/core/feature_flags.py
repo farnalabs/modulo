@@ -244,6 +244,12 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Runtime configuration overrides",
         tier="team",
     ),
+    # ── In-Dev — analytics page (off by default until the frontend ships) ─
+    FeatureFlag(
+        name="analytics_page",
+        description="Run analytics dashboard (rolling-window run/cost/quality series)",
+        tier="team",
+    ),
 ]
 
 
@@ -433,8 +439,12 @@ class FeatureFlagRegistry:
         self._flags = [FeatureFlag(**asdict(f)) for f in _KNOWN_FLAGS]
         self._refresh()
 
-    async def load_from_db(self, session: Any) -> None:
-        """Replace hardcoded flag data with DB-backed data from tier_catalog / feature_flag_catalog."""
+    async def _load_catalog(self, session: Any) -> None:
+        """Read the tier/feature-flag catalog rows into this registry.
+
+        Callers must guarantee an active transaction (``load_from_db`` wraps
+        this in ``session.begin()`` unless one is already active).
+        """
         from modulo.db.crud.tier_catalog import list_feature_flags, list_tiers
 
         db_tiers = await list_tiers(session)
@@ -453,6 +463,25 @@ class FeatureFlagRegistry:
                 for f in db_flags
                 if f["is_active"]
             ]
+
+    async def load_from_db(self, session: Any) -> None:
+        """Replace hardcoded flag data with DB-backed data from tier_catalog / feature_flag_catalog.
+
+        The catalog reads are wrapped in an explicit transaction so callers
+        using ``autobegin=False`` sessions (the DI default) never hit
+        ``InvalidRequestError`` from a bare ``session.execute``. When the
+        caller already manages an active transaction the reads run inside it
+        (a nested ``session.begin()`` would raise).
+        """
+        in_transaction = session.in_transaction()
+        if asyncio.iscoroutine(in_transaction):
+            # Test doubles may expose an async ``in_transaction``; await it.
+            in_transaction = await in_transaction
+        if in_transaction:
+            await self._load_catalog(session)
+        else:
+            async with session.begin():
+                await self._load_catalog(session)
         self._refresh()
 
     @classmethod

@@ -168,18 +168,16 @@ async def _scan_orphan_secrets(session: AsyncSession, org_id: uuid.UUID) -> list
                 if secret_key:
                     referenced_keys.add(secret_key)
 
-    candidates: list[Candidate] = []
-    for s in secrets:
-        if s.key not in referenced_keys:
-            candidates.append(
-                Candidate(
-                    id=str(s.id),
-                    name=s.key,
-                    detail="Orphan secret — no connector or agent references this key",
-                    created_at=s.created_at.isoformat() if s.created_at else None,
-                )
-            )
-    return candidates
+    return [
+        Candidate(
+            id=str(s.id),
+            name=s.key,
+            detail="Orphan secret — no connector or agent references this key",
+            created_at=s.created_at.isoformat() if s.created_at else None,
+        )
+        for s in secrets
+        if s.key not in referenced_keys
+    ]
 
 
 async def _scan_unbound_connectors(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
@@ -206,18 +204,16 @@ async def _scan_unbound_connectors(session: AsyncSession, org_id: uuid.UUID) -> 
                 with contextlib.suppress(ValueError, TypeError):
                     bound_ids.add(uuid.UUID(cid) if isinstance(cid, str) else cid)
 
-    candidates: list[Candidate] = []
-    for c in connectors:
-        if c.id not in bound_ids:
-            candidates.append(
-                Candidate(
-                    id=str(c.id),
-                    name=c.name,
-                    detail=f"Connector instance (type: {c.connector_type_id}) — not bound to any snapshot",
-                    created_at=c.created_at.isoformat() if c.created_at else None,
-                )
-            )
-    return candidates
+    return [
+        Candidate(
+            id=str(c.id),
+            name=c.name,
+            detail=f"Connector instance (type: {c.connector_type_id}) — not bound to any snapshot",
+            created_at=c.created_at.isoformat() if c.created_at else None,
+        )
+        for c in connectors
+        if c.id not in bound_ids
+    ]
 
 
 async def _scan_untriggered_pipelines(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
@@ -298,18 +294,16 @@ async def _scan_unused_model_backends(session: AsyncSession, org_id: uuid.UUID) 
     backends = (
         (await session.execute(select(ModelBackend).where(ModelBackend.organisation_id == org_id))).scalars().all()
     )
-    candidates: list[Candidate] = []
-    for mb in backends:
-        if mb.id not in used_set:
-            candidates.append(
-                Candidate(
-                    id=str(mb.id),
-                    name=mb.name,
-                    detail=f"Model backend ({mb.provider}/{mb.model_id}) — not assigned to any agent",
-                    created_at=mb.created_at.isoformat() if mb.created_at else None,
-                )
-            )
-    return candidates
+    return [
+        Candidate(
+            id=str(mb.id),
+            name=mb.name,
+            detail=f"Model backend ({mb.provider}/{mb.model_id}) — not assigned to any agent",
+            created_at=mb.created_at.isoformat() if mb.created_at else None,
+        )
+        for mb in backends
+        if mb.id not in used_set
+    ]
 
 
 async def _scan_inactive_triggers(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
@@ -431,20 +425,17 @@ async def _scan_duplicate_triggers(session: AsyncSession, org_id: uuid.UUID) -> 
     for t in duplicate_triggers:
         groups.setdefault((t.pipeline_id, t.trigger_type), []).append(t)
 
-    candidates: list[Candidate] = []
-    for (pid, ttype), triggers in groups.items():
-        # Keep the first one (oldest), suggest removing the rest
-        for t in triggers[1:]:
-            candidates.append(
-                Candidate(
-                    id=str(t.id),
-                    name=f"Trigger {ttype} for pipeline {pid}",
-                    detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. "
-                    f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
-                    created_at=t.created_at.isoformat() if t.created_at else None,
-                )
-            )
-    return candidates
+    return [
+        Candidate(
+            id=str(t.id),
+            name=f"Trigger {ttype} for pipeline {pid}",
+            detail=f"Duplicate {ttype} trigger — {len(triggers)} total on this pipeline. "
+            f"Created: {t.created_at.isoformat() if t.created_at else 'N/A'}",
+            created_at=t.created_at.isoformat() if t.created_at else None,
+        )
+        for (pid, ttype), triggers in groups.items()
+        for t in triggers[1:]
+    ]
 
 
 async def _scan_unused_environment_profiles(session: AsyncSession, org_id: uuid.UUID) -> list[Candidate]:
@@ -557,6 +548,7 @@ async def _scan_empty_teams(session: AsyncSession, org_id: uuid.UUID) -> list[Ca
             await session.execute(
                 select(Team).where(
                     Team.organisation_id == org_id,
+                    Team.deleted_at.is_(None),
                     Team.id.notin_(select(teams_with_members.c.team_id)),
                 )
             )

@@ -84,3 +84,35 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When I query resource "search_issues" with search query "repo:owner/repo is:open"
     Then the result has records
+
+  Scenario: Query recursive tree listing
+    Given a GitHub connector with valid token
+    When I query GitHub tree for repo "owner/repo" with path "src" and recursive
+    Then the result has records
+    And the tree result contains nested entries
+
+  Scenario: Path traversal on file query is blocked
+    Given a GitHub connector with valid token
+    When I query resource "file" with filters repo "owner/repo" and path "../../etc/passwd"
+    Then the result is an error containing "path traversal"
+
+  Scenario: Path traversal on file write is blocked
+    Given a GitHub connector with valid token
+    When I write resource "file" with content "base64content" and path "../escape.md"
+    Then the write is an error containing "path traversal"
+
+  Scenario: Write a batch commit applies file actions
+    Given a GitHub connector with valid token
+    When I write GitHub files batch for repo "owner/repo"
+    Then the write succeeds
+    And the batch write reports a commit sha
+
+  Scenario: Batch commit with empty actions is an error
+    Given a GitHub connector with valid token
+    When I write GitHub files batch for repo "owner/repo" with no actions
+    Then the write is an error containing "non-empty 'actions' list"
+
+  Scenario: Batch commit path traversal is blocked
+    Given a GitHub connector with valid token
+    When I write GitHub files batch for repo "owner/repo" with traversal path "../evil.txt"
+    Then the write is an error containing "path traversal"

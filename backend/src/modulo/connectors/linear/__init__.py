@@ -471,7 +471,7 @@ class LinearConnector(ConnectorBase):
                 return {}
             if not isinstance(raw_data, dict):
                 raise ValueError("Linear API response 'data' must be an object")
-            return cast(dict[str, Any], raw_data)
+            return cast("dict[str, Any]", raw_data)
         raise ValueError("Linear API request failed after retries") from last_exc
 
     async def _team_states(self, team_id: str) -> list[dict[str, Any]]:
@@ -527,14 +527,14 @@ class LinearConnector(ConnectorBase):
                 f"Multiple Linear {entity}s named {name!r} for team {team_id}; pass the {entity}Id directly",
             )
         if exact:
-            return cast(str, exact[0]["id"])
+            return cast("str", exact[0]["id"])
         fuzzy = [e for e in named if _fuzzy_matches(e["name"], name)]
         if len(fuzzy) > 1:
             raise ValueError(
                 f"Multiple Linear {entity}s match {name!r} for team {team_id}; pass the {entity}Id directly",
             )
         if fuzzy:
-            return cast(str, fuzzy[0]["id"])
+            return cast("str", fuzzy[0]["id"])
         raise ValueError(f"Linear {entity} {name!r} not found for team {team_id}")
 
     async def _resolve_state_id(self, team_id: str, state_name: str) -> str:
@@ -568,7 +568,7 @@ class LinearConnector(ConnectorBase):
         for user in users:
             user_id = user.get("id")
             if user_id:
-                return cast(str, user_id)
+                return cast("str", user_id)
         raise ValueError(f"Linear {label} not found")
 
     async def health_check(self) -> HealthResult:
@@ -815,7 +815,7 @@ class LinearConnector(ConnectorBase):
         result = data.get("issueUpdate", {})
         if not result.get("success"):
             raise ValueError(f"Failed to update Linear issue: {issue_id}")
-        return cast(dict[str, Any], result.get("issue", {}))
+        return cast("dict[str, Any]", result.get("issue", {}))
 
     async def _current_label_ids(self, issue_id: str) -> list[str]:
         """Fetch the IDs of the labels currently applied to an issue."""

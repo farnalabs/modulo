@@ -1208,7 +1208,7 @@ export interface paths {
         };
         /**
          * Dashboard Summary
-         * @description Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend.
+         * @description Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend. Optional days query param ({1,7,30,90}) period-scopes the stat numbers with a {current, previous, delta_pct} block per metric.
          */
         get: operations["dashboard_summary_api_v1_dashboard_summary_get"];
         put?: never;
@@ -7681,6 +7681,20 @@ export interface components {
              */
             billing_period: string;
         };
+        /** CostReportAnnotations */
+        CostReportAnnotations: {
+            /** Refused Total Usd */
+            refused_total_usd?: number | null;
+            /** Clamped Total Usd */
+            clamped_total_usd?: number | null;
+        };
+        /** CostReportComponent */
+        CostReportComponent: {
+            /** Name */
+            name: string;
+            /** Amount Usd */
+            amount_usd: string;
+        };
         /** CostReportResponse */
         CostReportResponse: {
             /** Period */
@@ -7689,6 +7703,14 @@ export interface components {
             group_by: string;
             /** Items */
             items: components["schemas"]["CostReportRow"][];
+            /** Org Unassigned Components */
+            org_unassigned_components?: string | null;
+            /** Legacy Total */
+            legacy_total?: string | null;
+            /** Org Total */
+            org_total?: string | null;
+            /** Has More */
+            has_more?: boolean;
         };
         /** CostReportRow */
         CostReportRow: {
@@ -7700,6 +7722,10 @@ export interface components {
             total_spend_usd: number;
             /** Total Runs */
             total_runs: number;
+            /** Components */
+            components: components["schemas"]["CostReportComponent"][];
+            /** Annotations */
+            annotations: components["schemas"]["CostReportAnnotations"];
         };
         /** CreateChangelogEntryRequest */
         CreateChangelogEntryRequest: {
@@ -11199,6 +11225,10 @@ export interface components {
             node_token_usage?: {
                 [key: string]: unknown;
             } | null;
+            /** Cost Breakdown */
+            cost_breakdown?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** RunSummary */
         RunSummary: {
@@ -16372,6 +16402,7 @@ export interface operations {
     dashboard_summary_api_v1_dashboard_summary_get: {
         parameters: {
             query?: {
+                days?: number;
                 _fresh?: boolean;
             };
             header?: never;

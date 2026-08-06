@@ -177,10 +177,14 @@ def test_exempt_allowlist_entries_exist() -> None:
 
 def test_permission_keys_resolve_in_registry() -> None:
     """Every tagged permission key resolves in PERMISSIONS (no typos)."""
+    tagged = 0
     for route in get_mutating_routes(app):
         tag = get_permission_tag(route)
         if tag:
-            get_resolved_min_role(tag["permission"])  # raises if key missing
+            tagged += 1
+            resolved = get_resolved_min_role(tag["permission"])  # raises if key missing
+            assert resolved, f"empty min-role for permission {tag['permission']} on {route.path}"
+    assert tagged > 0, "no tagged mutating routes found — introspection sweep is vacuous"
 
 
 def test_variant_kinds() -> None:

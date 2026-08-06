@@ -464,7 +464,7 @@ async def _async_export_org(
                 bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
                 hashes = _write_jsonl(bundle, output)
                 export_completed = True
-                record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
+                record_count = sum(len(v) for v in bundle.values() if isinstance(v, list))
                 click.echo(f"Exported {record_count} records to {output}")
                 click.echo(f"Export hash: {hashes['__export__']}")
     except asyncio.CancelledError:
@@ -522,10 +522,10 @@ async def _async_import_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    _meta, records = await _read_jsonl(input_path)
+    meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
-    if _meta.get("export_hash") and not _verify_export(_meta, records):
+    if meta.get("export_hash") and not _verify_export(meta, records):
         raise click.ClickException("Import aborted: hash verification failed — file may be corrupted")
 
     try:

@@ -50,3 +50,10 @@ Feature: Audit Event Recording
     When I verify the audit chain
     Then each event has a previous_hash linking to the prior event
     And the chain is valid
+
+  Scenario: Chain verification reports tamper evidence on a broken chain
+    Given 3 audit events exist
+    When I GET /api/v1/admin/audit/verify with a broken chain
+    Then the response status is 200
+    And the verify response detail mentions "evt-3"
+    And the verify response detail mentions "expected-hash"

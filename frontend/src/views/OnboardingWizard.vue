@@ -354,6 +354,9 @@
             Go to Dashboard
           </router-link>
         </div>
+        <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning" data-testid="onboarding-wizard-run-empty-warning">
+          {{ emptyRunWarning }}
+        </div>
         <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success">
           Pipeline started! <router-link :to="{ name: 'dashboard' }" class="underline">{{ $t('views.OnboardingWizard.view_runs_on_dashboard') }}</router-link>.
         </div>
@@ -470,6 +473,8 @@ const pipelineCreateError = ref<string | null>(null)
 const runningPipeline = ref(false)
 const pipelineRunError = ref<string | null>(null)
 const runResult = ref<string | null>(null)
+const confirmEmptyRun = ref(false)
+const emptyRunWarning = ref<string | null>(null)
 
 const canProceed = computed(() => {
   switch (currentStep.value) {
@@ -659,6 +664,13 @@ async function createPipeline() {
 
 async function runPipeline() {
   if (!wizardState.createdPipelineId) return
+  if (!confirmEmptyRun.value) {
+    confirmEmptyRun.value = true
+    emptyRunWarning.value = 'No input provided \u2014 this pipeline will run with an empty input payload. Are you sure?'
+    return
+  }
+  emptyRunWarning.value = null
+  confirmEmptyRun.value = false
   runningPipeline.value = true
   pipelineRunError.value = null
   runResult.value = null
@@ -693,6 +705,13 @@ function prevStep() {
 function skipToEnd() {
   currentStep.value = steps.length - 1
 }
+
+watch(() => wizardState.pipelineDescription, () => {
+  if (confirmEmptyRun.value) {
+    confirmEmptyRun.value = false
+    emptyRunWarning.value = null
+  }
+})
 
 watch(currentStep, (step) => {
   if (step === 1 && connectors.value.length === 0 && !loadingConnectors.value) {

@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.33
-**Date**: 2026-07-10
+**Version**: 0.34
+**Date**: 2026-08-05
 **Status**: Pre-development
 **Changelog**:
+- v0.34 — §8.32 Analytics: rolling-window run/cost/quality series (Last 24h/7d/30d/90d) over a retained `run_daily_facts` table, typed-params query surface (no query language in this delivery), per-org `analytics_page` feature gate. ADR 020.
 - v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (search_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
 - v0.31 — §8.25.1 Frontend Monitor Backend Abstraction: plugable MonitorBackend interface (builtin/sentry/datadog-rum/grafana-faro), dual-layer config (build-time VITE_* + runtime MODULO_MONITOR_CONFIG), ErrorTracker refactor with MonitorBackendRegistry dispatch, CSP superset strategy, per-backend privacy data sheets, unauthenticated error ingest endpoint, i18n missing-key capture, 2 existing pipeline bugfixes. ADR 009.
@@ -1339,6 +1340,35 @@ cost_estimate_usd = (wall_clock_seconds / 3600 × E2B_SANDBOX_USD_PER_HOUR)
 `E2B_SANDBOX_USD_PER_HOUR` (default `0.13` USD/hr) is operator-configurable and reflects the hourly E2B sandbox rate; the default is based on the opencode template = 2 vCPU / 2 GiB at E2B per-second rates (~$0.1332/hr rounded to 0.13), and 0.5 was a conservative placeholder. E2B bills per-second sandbox uptime, so wall-clock time is a faithful cost basis. The agent's own `cost_estimate_usd` field (written to `/home/user/output.json` by dogfood agents) is merged in when present and numeric. The estimate is attached to both the node's artifact output and the run's `output`, and `Run.total_cost_usd` aggregates token cost + sandbox cost across all completed nodes (`execute` and HITL `resume` paths equally).
 
 **Attributability boundary**: GitHub Actions billing is unavailable on the free tier and is not tracked. Fly costs are infrastructure-level (the platform hosting Modulo itself) and are NOT attributed per-run. Only E2B sandbox usage is per-run attributable; sandbox cost is an estimate, not an invoice.
+
+#### Multi-Component Cost Tracking
+
+A run's cost is a sum of named **cost components**, each with a rate/value, a
+formula, a source (`calculated` vs `self_reported`), and a declared set of run
+parameters it may reference. Components are org-scoped and admin-configurable;
+`Run.total_cost_usd` stays the summed total, and the run detail shows a
+**breakdown** of component snapshots rather than a single number. Breakdown
+values are denormalized onto the run at finalization, so deleting a component
+never affects historical runs.
+
+- **Calculated components** use a safe, fixed-grammar formula (four operators:
+  `+ - * /`, no arbitrary code) over a whitelist of run parameters (token
+  counts, wall-clock hours, rates). Formulas are validated at save time; an
+  invalid formula is rejected with a 422.
+- **Self-reported components** capture the model cost an agent writes to its
+  output (`model_cost_usd`). A self-reported value is validated and clamped at
+  the backend extraction boundary before it can affect the run total, and a
+  node's model cost is never counted twice — a reporting sandbox node's
+  constant-rate estimate is replaced, not added.
+- The daily spend ledger is a **report, not a source of truth**: per-key ledger
+  strictness is deliberately not guaranteed and the ledger may drift for the
+  documented classes (refused, deferred, pre-deploy residue). Enforcement keeps
+  today's behaviour; the report keys by run-start day.
+
+The normative reference for this feature is
+`docs/design/multi-component-cost-tracking.md`; the operator guide is at
+`docs/operations/` (see the config reference for the tunable knobs). This
+section states user-facing behaviour only.
 
 ### 8.11 Notifications
 
@@ -3120,7 +3150,7 @@ A user may belong to multiple teams with different roles in each.
 **Team membership management**: `admin` can manage any team. A team `operator` can add or remove members from their own team only, and can only grant roles up to their own team role (a team `operator` cannot grant another member `operator` if the granting user is only a `runner`). This prevents privilege escalation within team scope. V1: team membership requires email-based invitation acceptance before access is granted.
 
 #### Team Deletion Policy
-Team deletion is blocked (`team_has_resources` error) if any resource has `owner_team_id` pointing to the team being deleted. Admin must first reassign or delete all team-owned resources. Reassignment can be done in bulk ("Reassign all to org-wide") before confirming deletion. Team deletion with no owned resources succeeds immediately. `team_deleted` is written to AuditEvent.
+Team deletion is blocked (`team_has_resources` error) if any resource has `owner_team_id` pointing to the team being deleted. Admin must first reassign or delete all team-owned resources. Reassignment can be done in bulk ("Reassign all to org-wide") before confirming deletion. Team deletion with no owned resources succeeds immediately and is a soft delete (`deleted_at` set; the row is retained for history/analytics). A soft-deleted team is hidden from all lists and lookups, and its name can be reused (name uniqueness applies only to non-deleted teams). `team_deleted` is written to AuditEvent.
 
 #### Effective Access Model
 
@@ -4132,6 +4162,64 @@ Metrics surfaced in the map UI:
 | Map diff view (version comparison) | Team |
 
 Lifecycle Maps are a core onboarding and documentation feature. The base feature (create, view, navigate stages) is Community-tier. Advanced features (version history, team scoping, analytics) are Team-tier.
+
+---
+
+### 8.32 Analytics
+
+Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one row per terminal run, written on every finalize path and backfilled by a daily maintenance cron. Facts survive the 90-day run purge, so dimensioned run history outlives the `runs` rows it was derived from.
+
+#### 8.32.1 Rolling-Window Semantics
+
+Dashboards report over **rolling windows**: **Last 24h / 7d / 30d / 90d** — each window is the N×24h period ending now (timezone-agnostic). Every value is shown with a **period arrow** (delta) that is **period-scoped and same-source/same-window**: a "Last 7d" delta compares the current 7d window against the *previous* 7d window, using the same metric from the same source. Rolling windows eliminate the partial-period bias of calendar-month widgets (a month widget shows 3 days of data on the 3rd).
+
+The facts table keeps both the source run's `created_at` instant (rolling precision for the 24h window) and the UTC attributed day `run_date` (the day-level bucket key).
+
+#### 8.32.2 Query Surface — Typed Params Only
+
+**No query language in this delivery — structured typed params are the surface** (`group_by`, optional dimension, filters, date range ≤ 365d, limit). A syntax/expression query mode is **deferred until a pre-rolled dependency slots in** — it is never hand-rolled ad hoc. The backend is the sole bucketing authority: day/ISO-week bucketing and zero-fill happen server-side; the client only renders.
+
+#### 8.32.3 Launch-Forward Coverage
+
+Analytics coverage is **launch-forward**: the feature reports "data since \<date\>" (the date the maintenance cron first backfilled), because facts are only available from when the writer started recording — historical runs before the launch date are not reconstructed.
+
+#### 8.32.4 Run-Count Denominators
+
+Three distinct run-count denominators exist and are never conflated:
+
+| Denominator | Source | Meaning |
+|---|---|---|
+| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed) |
+| **Ledger count** | `org_daily_run_counts` | Terminal runs with `total_cost_usd > 0` that passed the spend ledger |
+| **Summary count** | `runs` | All runs (including pending/running/awaiting_human) |
+
+The analytics dashboard uses the **facts count** for run volume and success rate; the spend ledger's counts are used by cost dashboards; the summary count is used by the live dashboard widgets. "Number of runs" must always state which denominator it uses.
+
+#### 8.32.5 Dimensions and Filters
+
+Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omitted = overall) and filters: `trigger_type`, `status`, `pipeline_id`, `folder_id`, fixed `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). Timezone is fixed UTC.
+
+#### 8.32.6 Flag / Gating
+
+| Component | Tier |
+|---|---|
+| Analytics page + endpoint | Team (`analytics_page` feature flag, default off until the frontend ships) |
+
+#### 8.32.7 Dashboard Rolling-Window Toggle
+
+The live dashboard (`/`) has a top-right rolling-window toggle: **Last 24h / Last 7d / Last 30d / Last 90d** (values 1, 7, 30, 90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
+
+Semantics are **same-source/same-window**: a card's value and its arrow always come from the same metric over the same window — run counts/status/tokens/success/duration from `run_daily_facts`, spend from the `org_daily_run_counts` ledger (org-level row), eval pass rate from `eval_results`. Because facts record only terminal statuses, running / awaiting-human / idle read zero in period mode. The arrow is omitted when there is no baseline (previous window empty/zero) or no current-window data. The `GET /api/v1/dashboard/summary?days=N` endpoint returns the period metrics as an additive `period` block (`{current, previous, delta_pct}` per metric); without `days` the response is the unchanged all-time summary.
+
+#### 8.32.8 Analytics Page UI (frontend)
+
+The `/analytics` page (sidebar group Core, `analytics.query` permission, community tier) is a **structured filter form → typed query params** surface. There is **no query language in this delivery** (see 8.32.2) — the filter form is the surface; syntax/expression mode stays deferred until a pre-rolled dependency slots in.
+
+- **Filter bar**: rolling timespan toggle (Last 24h / 7d / 30d / 90d), granularity (day / ISO week), optional dimension (trigger_type / status / pipeline / folder / team), and combinable filters (trigger_type, status, pipeline_id, folder_id). A measure picker selects the rendered metric (run count / cost / tokens / avg duration / success rate). The backend returns all metrics per bucket, so the measure is a client-side rendering concern — it is never a query param.
+- **Visualisation**: ECharts (via `vue-echarts`, lazy-loaded). Line chart for undimensioned trends by date; bar chart for dimensioned queries (x = dimension key, fallback date). `buildChartOption` is a pure series → ECharts option mapping — the client never buckets. Pre-coverage buckets render as gaps (`null`), never zero-filled as "zero activity".
+- **Trend table**: rows are buckets; columns are date/key + measure value + a period arrow (▲/▼/→) against the previous equal-length window. The previous window is fetched as a second query and compared by key (dimensioned) or by offset (undimensioned). `prev=0` and both-zero show no arrow.
+- **Empty state**: "No analytics data yet — data since \<date\>" where \<date\> is the earliest bucket with data (launch-forward coverage, 8.32.3).
+- **Flag-off state**: the sidebar link is hidden when the feature flag is off (manifest `required_permissions`); if the page is reached anyway and the API returns 402, an "Analytics is not enabled for your workspace" card is shown — never a spinner.
 
 ---
 

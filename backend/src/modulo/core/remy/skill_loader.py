@@ -99,8 +99,7 @@ class SkillLoader:
         if not skills:
             return
         parts.append(heading)
-        for skill in skills:
-            parts.append(f"### {skill.name}\n\n{skill.body}")
+        parts.extend(f"### {skill.name}\n\n{skill.body}" for skill in skills)
 
     async def _build_user_profile(self, org_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
         try:
@@ -120,9 +119,11 @@ class SkillLoader:
             org_result = await self._session.execute(select(Organisation).where(Organisation.id == org_id))
             org = org_result.scalar_one_or_none()
 
-            lines = [f"{_SECTION_USER_PROFILE}\n"]
-            lines.append(f"- **Name:** {account.display_name or '—'}")
-            lines.append(f"- **Email:** {account.email or '—'}")
+            lines = [
+                f"{_SECTION_USER_PROFILE}\n",
+                f"- **Name:** {account.display_name or '—'}",
+                f"- **Email:** {account.email or '—'}",
+            ]
             if membership:
                 lines.append(f"- **Role:** {membership.role}")
             if org:
@@ -272,8 +273,9 @@ class SkillLoader:
                 logger.exception("Failed to build UI tools text")
                 tools_text = None
             if tools_text:
-                parts.append(tools_text)
-                parts.append("- Before navigating, call get_manifest() to learn page structure and elements.")
+                parts.extend(
+                    [tools_text, "- Before navigating, call get_manifest() to learn page structure and elements."]
+                )
 
         return "\n\n".join(parts)
 

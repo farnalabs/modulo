@@ -137,10 +137,10 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
             return_value=make_mock_snapshot(),
         ),
         patch.object(trigger_engine_module.TriggerEngine, "handle_webhook", handle_webhook),
-        # dispatch_run_sync: the route fires it in a background executor thread —
-        # a no-op patch keeps the BDD test hermetic (the old pipeline_executor_task
+        # _dispatch_webhook_run: the route fires it as a background task — a
+        # no-op patch keeps the BDD test hermetic (the old pipeline_executor_task
         # target was removed in the Celery->SAQ cutover).
-        patch("modulo.api.routes.webhooks.dispatch_run_sync", lambda *a, **k: None),
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None),
         # Org-wide pause gate: the mocked org read is a MagicMock that would
         # fail-closed as paused — force the deterministic state instead.
         patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=paused),

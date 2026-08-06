@@ -157,7 +157,7 @@ class AdvisoryLockService:
             else:
                 logger.info("Released lock on resource %s", resource_id)
         except (TimeoutError, SQLAlchemyError) as exc:
-            logger.error("Failed to release lock on resource %s: %s", resource_id, exc, exc_info=True)
+            logger.exception("Failed to release lock on resource %s: %s", resource_id, exc)
             raise ConnectorLockError(resource_id, f"Failed to release lock: {exc}") from None
         finally:
             self._owner_task_id = None

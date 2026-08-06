@@ -6,7 +6,7 @@ import logging
 import uuid
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
@@ -662,20 +662,16 @@ async def list_schema_fields_endpoint(
     properties: dict[str, Any] = definition.get("properties", {})
     required_fields: list[str] = definition.get("required", [])
 
-    fields: list[SchemaFieldResponse] = []
-    for field_name, field_schema in properties.items():
-        if not isinstance(field_schema, dict):
-            continue
-        field_type = field_schema.get("type", "string")
-        field_desc = field_schema.get("description")
-        fields.append(
-            SchemaFieldResponse(
-                name=field_name,
-                type=field_type,
-                description=field_desc,
-                required=field_name in required_fields,
-            )
+    fields = [
+        SchemaFieldResponse(
+            name=field_name,
+            type=field_schema.get("type", "string"),
+            description=field_schema.get("description"),
+            required=field_name in required_fields,
         )
+        for field_name, field_schema in properties.items()
+        if isinstance(field_schema, dict)
+    ]
 
     return SchemaFieldListResponse(fields=fields)
 
@@ -687,7 +683,7 @@ async def list_schema_fields_endpoint(
 
 class SchemaSampleQuery(BaseModel):
     resource: str = Field(min_length=1)
-    filters: ClassVar[dict[str, Any]] = {}
+    filters: dict[str, Any] = Field(default_factory=dict)
     limit: int = Field(default=10, ge=1, le=100)
 
 
@@ -909,7 +905,7 @@ async def infer_schema_endpoint(
 
 class SchemaGenerateRequest(BaseModel):
     description: str = Field(min_length=1)
-    examples: ClassVar[list[dict[str, Any]]] = []
+    examples: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SchemaGenerateResponse(BaseModel):
@@ -1388,20 +1384,16 @@ async def import_schema_endpoint(
     properties = schema.get("properties", {})
     required_fields: list[str] = schema.get("required", [])
 
-    fields: list[SchemaImportField] = []
-    for field_name, field_schema in properties.items():
-        if not isinstance(field_schema, dict):
-            continue
-        field_type = field_schema.get("type", "string")
-        field_desc = field_schema.get("description")
-        fields.append(
-            SchemaImportField(
-                name=field_name,
-                type=field_type,
-                description=field_desc,
-                required=field_name in required_fields,
-            )
+    fields = [
+        SchemaImportField(
+            name=field_name,
+            type=field_schema.get("type", "string"),
+            description=field_schema.get("description"),
+            required=field_name in required_fields,
         )
+        for field_name, field_schema in properties.items()
+        if isinstance(field_schema, dict)
+    ]
 
     return SchemaImportResponse(
         name=name,

@@ -53,6 +53,7 @@ from modulo.api.routes.admin_system_config import router as admin_system_config_
 from modulo.api.routes.admin_tiers import router as admin_tiers_router
 from modulo.api.routes.admin_triggers import router as admin_triggers_router
 from modulo.api.routes.agents import router as agents_router
+from modulo.api.routes.analytics import router as analytics_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
@@ -60,6 +61,7 @@ from modulo.api.routes.changelog import router as changelog_router
 from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
+from modulo.api.routes.cost_components import router as cost_components_router
 from modulo.api.routes.costs import router as costs_router
 from modulo.api.routes.dashboard import router as dashboard_router
 from modulo.api.routes.deployment import router as deployment_router
@@ -196,6 +198,8 @@ async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
     machine/process cannot interleave.
     """
     engine = get_or_create_engine(settings)
+    from modulo.db.migrations.env import set_lock_held_by_caller
+
     async with engine.connect() as conn:
         acquired = False
         for _ in range(_MIGRATION_LOCK_POLL_ATTEMPTS):
@@ -208,9 +212,15 @@ async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
                 break
             await asyncio.sleep(_MIGRATION_LOCK_POLL_INTERVAL)
         try:
+            if acquired:
+                # Tell env.py the lock is already held on a different (sync)
+                # connection so the alembic run does not re-acquire the same
+                # session-scoped key and self-deadlock.
+                set_lock_held_by_caller(True)
             yield acquired
         finally:
             if acquired:
+                set_lock_held_by_caller(False)
                 await conn.execute(
                     text("SELECT pg_advisory_unlock(:k1, :k2)"),
                     {"k1": _MIGRATION_LOCK_KEY[0], "k2": _MIGRATION_LOCK_KEY[1]},
@@ -325,10 +335,9 @@ async def _run_migrations(settings: Settings) -> None:
             if attempt < _MIGRATION_MAX_ATTEMPTS:
                 await asyncio.sleep(_MIGRATION_BACKOFF_SECONDS * attempt)
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "infra_blocked=migration_failed",
                 extra={"attempt": attempt, "error": str(exc)},
-                exc_info=True,
             )
             last_error = exc
             break
@@ -966,9 +975,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Seed the tier catalog and feature flag definitions (idempotent).
     try:
-        await _seed_tier_catalog(settings)
+        await _seed_tier_catalog()
     except Exception:
         logger.warning("startup.tier_catalog_seed_failed", exc_info=True)
+
+    # Seed the default cost components for every org (idempotent; system-
+    # context org enumeration, per-org set_rls_org on the inserts).
+    try:
+        await _seed_cost_components(settings)
+    except Exception:
+        logger.warning("startup.cost_components_seed_failed", exc_info=True)
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     try:
@@ -999,14 +1015,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # are intentionally decoupled -- the entrypoint runs before FastAPI is
     # initialised and can't use DI.  Dispose both so no connections leak.
     try:
-        _di_engine = get_or_create_engine(settings)
+        di_engine = get_or_create_engine(settings)
 
         async def shutdown_otel_async() -> None:
             shutdown_otel()
 
         _shutdown_manager.register("otel", shutdown_otel_async)
         _shutdown_manager.register("db_engine", db_engine.dispose)
-        _shutdown_manager.register("di_engine", _di_engine.dispose)
+        _shutdown_manager.register("di_engine", di_engine.dispose)
         _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
     except Exception:
         logger.warning("startup.shutdown_manager_init_failed", exc_info=True)
@@ -1026,38 +1042,47 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("startup.event_bus_redis_enabled")
 
     # Start the HITL claim expiry background job.
-    _claim_expiry_job = ClaimExpiryJob(db_engine)
-    await _claim_expiry_job.start()
+    claim_expiry_job = ClaimExpiryJob(db_engine)
+    await claim_expiry_job.start()
 
     # Start webhook trigger event cleanup loop (30-day retention).
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    _trigger_event_cleanup_task = asyncio.create_task(
+    trigger_event_cleanup_task = asyncio.create_task(
         cleanup_scheduler_loop(async_sessionmaker(db_engine, expire_on_commit=False))
     )
 
     # Start MCP task group so FastMCP's _handle_stateless_request can use tg.start().
     from modulo.api.mcp_server import mcp
 
-    _mcp_tg = await anyio.create_task_group().__aenter__()
+    mcp_tg = await anyio.create_task_group().__aenter__()
     # FastMCP annotates this private integration slot as None despite assigning a TaskGroup at runtime.
-    session_manager = cast(_TaskGroupSessionManager, mcp.session_manager)
-    session_manager._task_group = _mcp_tg
+    session_manager = cast("_TaskGroupSessionManager", mcp.session_manager)
+    session_manager._task_group = mcp_tg
 
     yield
 
-    await _mcp_tg.__aexit__(None, None, None)
+    await mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
-    _trigger_event_cleanup_task.cancel()
-    await _claim_expiry_job.stop()
+    trigger_event_cleanup_task.cancel()
+    await claim_expiry_job.stop()
     with suppress(asyncio.CancelledError):
         await retention_task
     with suppress(asyncio.CancelledError):
-        await _trigger_event_cleanup_task
+        await trigger_event_cleanup_task
     await _shutdown_manager.shutdown()
 
 
-async def _seed_tier_catalog(settings: Settings) -> None:
+async def _seed_cost_components(settings: Settings) -> None:
+    from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.core.seed_data.cost_components import seed_cost_components
+
+    engine = get_or_create_engine(settings)
+    factory = get_or_create_session_factory(engine)
+    await seed_cost_components(factory)
+
+
+async def _seed_tier_catalog() -> None:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from modulo.db.session import engine as db_engine
@@ -1138,9 +1163,11 @@ app.include_router(admin_housekeeping_router)
 app.include_router(auth_router)
 app.include_router(changelog_router)
 app.include_router(sso_router)
+app.include_router(analytics_router)
 app.include_router(dashboard_router)
 app.include_router(deployment_router)
 app.include_router(costs_router)
+app.include_router(cost_components_router)
 app.include_router(teams_router)
 app.include_router(pipelines_router)
 app.include_router(pipeline_folders_router)

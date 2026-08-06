@@ -54,6 +54,8 @@ from modulo.auth.oauth import (
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.core.cost_controller.breakdown.constants import RAW_REPORTED_DISPLAY_CLAMP
+from modulo.core.cost_controller.finalize import finalize_cancelled_run
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 
 # ContextVars populated by McpAuthMiddleware before each request.
@@ -99,6 +101,109 @@ from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
+
+_MCP_SANITIZE_STRING_MAX = 256
+_MCP_BREAKDOWN_KEYS = frozenset(
+    {
+        "component",
+        "display_name",
+        "source",
+        "formula_applied",
+        "rate_usd",
+        "amount_usd",
+        "basis",
+        "missing_self_report",
+        "error",
+        "total_clamped",
+    }
+)
+
+
+def _sanitize_mcp_string(value: str) -> str:
+    """Truncate an agent-controlled string to 256 chars + strip control chars."""
+    cleaned = "".join(ch for ch in value if ch == "\t" or ord(ch) >= 32)
+    return cleaned[:_MCP_SANITIZE_STRING_MAX]
+
+
+def _clamp_mcp_number(value: float) -> float:
+    """Magnitude-clamp any numeric field that can carry a hostile raw value
+    (e.g. ``basis.raw_reported`` of 1e300) at 1e6 for display — the MCP surface
+    cannot render 1e300. Mirrors the breakdown serializer's display clamp."""
+    try:
+        d = Decimal(str(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return 0.0
+    if not d.is_finite() or abs(d) > RAW_REPORTED_DISPLAY_CLAMP:
+        return float(RAW_REPORTED_DISPLAY_CLAMP)
+    return float(d)
+
+
+def _sanitize_mcp_basis_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _sanitize_mcp_string(value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return _clamp_mcp_number(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_mcp_basis_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_mcp_basis_value(v) for v in value]
+    if value is None:
+        return None
+    return _sanitize_mcp_string(str(value))
+
+
+def _sanitize_cost_breakdown(breakdown: Any) -> list[dict[str, Any]]:
+    """MCP whole-resource sanitize of a run's ``cost_breakdown``.
+
+    Every agent-controlled string — ``component``, ``display_name``,
+    ``formula_applied``, and recursively every string in ``basis`` — is
+    truncated to 256 chars + stripped of control chars; numeric/boolean fields
+    are type-validated; out-of-shape keys are stripped. Numeric fields that can
+    carry a hostile raw magnitude (``basis.raw_reported`` /
+    ``basis.per_node_raw``) are magnitude-clamped at 1e6 for display.
+    """
+    if not isinstance(breakdown, list):
+        return []
+    sanitized: list[dict[str, Any]] = []
+    for entry in breakdown:
+        if not isinstance(entry, dict):
+            continue
+        out: dict[str, Any] = {}
+        for key, value in entry.items():
+            if key not in _MCP_BREAKDOWN_KEYS:
+                continue
+            if key == "basis":
+                out[key] = _sanitize_mcp_basis_value(value)
+            elif isinstance(value, str):
+                out[key] = _sanitize_mcp_string(value)
+            elif isinstance(value, bool) or value is None:
+                out[key] = value
+            elif isinstance(value, (int, float)):
+                out[key] = _clamp_mcp_number(value)
+            else:
+                out[key] = _sanitize_mcp_string(str(value))
+        sanitized.append(out)
+    return sanitized
+
+
+def _format_breakdown_line(entry: dict[str, Any]) -> str:
+    """Compact single-line rendering of a sanitized breakdown entry."""
+    name = entry.get("display_name") or entry.get("component") or "component"
+    amount = entry.get("amount_usd")
+    if amount is None:
+        amount = entry.get("rate_usd")
+    source = entry.get("source", "")
+    parts = [f"- {name} ({entry.get('component', '')}): ${amount or '0.000000'}"]
+    if source:
+        parts.append(source)
+    if entry.get("missing_self_report") is True:
+        parts.append("(not reported)")
+    if entry.get("error"):
+        parts.append(f"({entry['error']})")
+    return " ".join(parts)
+
 
 _RETRY_DB = retry(
     stop=stop_after_attempt(3),
@@ -186,7 +291,6 @@ def _record_api_key_role_cap(
 
 def get_api_key_role_cap_count() -> int:
     """Return the total number of API-key role-cap clamps recorded."""
-    global _api_key_role_cap_count
     with _api_key_role_cap_lock:
         return _api_key_role_cap_count
 
@@ -527,6 +631,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     media_type="application/json",
                 )
+            except (SQLAlchemyError, OperationalError, TimeoutError):
+                _log.exception("mcp.auth.db_unavailable")
+                return Response(
+                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    status_code=503,
+                    media_type="application/json",
+                )
             await _set_authz_enforce(org_id)
             resp3: Response = await call_next(request)
             return resp3
@@ -569,11 +680,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         str(principal.account_id),
                         str(principal.organisation_id),
                     )
-            except SQLAlchemyError:
-                _log.warning("permission.live_role_read_failed", exc_info=True)
+            except (SQLAlchemyError, OperationalError, TimeoutError):
+                _log.exception("mcp.auth.db_unavailable")
                 return Response(
-                    '{"error":"unauthorized","detail":"Role validation failed"}',
-                    status_code=401,
+                    '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                    status_code=503,
                     media_type="application/json",
                 )
             if live_role is None:
@@ -612,6 +723,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                         status_code=401,
                         media_type="application/json",
                     )
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception("mcp.auth.db_unavailable")
+            return Response(
+                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                status_code=503,
+                media_type="application/json",
+            )
         except Exception:
             _log.exception("OAuth token family check failed")
             return Response(
@@ -632,11 +750,11 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                     str(claims.account_id),
                     str(claims.organisation_id),
                 )
-        except SQLAlchemyError:
-            _log.warning("permission.live_role_read_failed", exc_info=True)
+        except (SQLAlchemyError, OperationalError, TimeoutError):
+            _log.exception("mcp.auth.db_unavailable")
             return Response(
-                '{"error":"unauthorized","detail":"Role validation failed"}',
-                status_code=401,
+                '{"error":"temporarily_unavailable","detail":"Auth backend temporarily unavailable"}',
+                status_code=503,
                 media_type="application/json",
             )
         if live_role is None:
@@ -1249,7 +1367,9 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
         if run.error_code:
             result["error_code"] = run.error_code
         if detail:
-            token_usage = run.node_token_usage or {}
+            from modulo.api.routes.runs import _clamp_node_token_usage_union
+
+            token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
             outputs_json = run.outputs_json or {}
             node_ids: set[str] = set()
             node_ids.update(token_usage.keys())
@@ -1257,17 +1377,25 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             nodes: list[dict[str, Any]] = []
             for nid in sorted(node_ids):
                 usage = token_usage.get(nid, {})
-                t_in = usage.get("tokens_in", 0) if usage else 0
-                t_out = usage.get("tokens_out", 0) if usage else 0
-                nodes.append(
-                    {
-                        "node_id": nid,
-                        "status": "completed" if nid in outputs_json else "processed",
-                        "tokens": t_in + t_out,
-                        "has_output": nid in outputs_json,
-                    }
-                )
+                if not isinstance(usage, dict):
+                    usage = {}
+                t_in = usage.get("input_tokens") or 0
+                t_out = usage.get("output_tokens") or 0
+                node: dict[str, Any] = {
+                    "node_id": nid,
+                    "status": "completed" if nid in outputs_json else "processed",
+                    "input_tokens": t_in,
+                    "output_tokens": t_out,
+                    "total_tokens": usage.get("total_tokens") or (t_in + t_out),
+                    "cost_usd": usage.get("cost_usd", 0),
+                    "has_output": nid in outputs_json,
+                }
+                if usage.get("model_cost_display_usd") is not None:
+                    node["model_cost_display_usd"] = usage["model_cost_display_usd"]
+                nodes.append(node)
             result["nodes"] = nodes
+            if run.cost_breakdown is not None:
+                result["cost_breakdown"] = _sanitize_cost_breakdown(run.cost_breakdown)
         return result
     except ProgrammingError:
         _log.exception("get_run_status failed")
@@ -1310,9 +1438,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         # Detect masked fields by scanning for the bullet mask character.
         masked_fields: list[str] = []
         if isinstance(masked, dict):
-            for k, v in masked.items():
-                if isinstance(v, str) and "\u2022" in v:
-                    masked_fields.append(k)
+            masked_fields = [k for k, v in masked.items() if isinstance(v, str) and "\u2022" in v]
 
         return {
             "node_id": node_id,
@@ -1449,11 +1575,19 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            _terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
-            if run.status in _terminal_statuses:
+            terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+            if run.status in terminal_statuses:
                 detail = f"Run is already in terminal status: {run.status}"
                 return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
+            # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
+            # finalize (§4.2). A STREAMED running run cancelled cross-process is
+            # routed through finalize_cost, re-reading the STORED cumulative
+            # sets; a NEVER-PAUSED in-flight run has none and forfeits its
+            # accrued cost (cost_components_partial_spend_lost log).
+            was_paused = run.status in ("awaiting_human", "claimed")
             run = await request_cancellation(s, rid)
+            if not was_paused:
+                await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         return {"run_id": run_id, "cancellation_requested": True}
@@ -1476,25 +1610,26 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import func, select
 
+        from modulo.db.models.run import Run
+
+        terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
+            base_where = (
+                HitlClaim.organisation_id == org_id,
+                HitlClaim.decision.is_(None),
+                Run.status.not_in(terminal_statuses),
+            )
             total_result = await s.execute(
-                select(func.count())
-                .select_from(HitlClaim)
-                .where(
-                    HitlClaim.organisation_id == org_id,
-                    HitlClaim.decision.is_(None),
-                )
+                select(func.count()).select_from(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*base_where)
             )
             total = total_result.scalar_one()
 
             offset = (page - 1) * page_size
             result = await s.execute(
                 select(HitlClaim)
-                .where(
-                    HitlClaim.organisation_id == org_id,
-                    HitlClaim.decision.is_(None),
-                )
+                .join(Run, HitlClaim.run_id == Run.id)
+                .where(*base_where)
                 .offset(offset)
                 .limit(page_size)
             )
@@ -2594,7 +2729,7 @@ _doc_index_ttl: float = 300.0  # 5 minutes
 
 
 def _get_doc_index() -> DocumentationIndex:
-    global _doc_index, _doc_index_ts, _doc_index_ttl
+    global _doc_index, _doc_index_ts
     import time as _time
 
     now = _time.time()
@@ -2770,13 +2905,12 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
         elif section in {"plan", "rate_limits"}:
             key_prefixes = ["feature_flags", "default_plan", "rate_limits"]
 
-        filtered = []
-        for cfg in configs:
-            if key_prefixes is not None and not any(cfg.key.startswith(p) for p in key_prefixes):
-                continue
-            if _is_sensitive_key(cfg.key):
-                continue
-            filtered.append(cfg)
+        filtered = [
+            cfg
+            for cfg in configs
+            if (key_prefixes is None or any(cfg.key.startswith(p) for p in key_prefixes))
+            and not _is_sensitive_key(cfg.key)
+        ]
 
         if not filtered:
             section_label = section or "org"
@@ -3150,12 +3284,18 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
     if not result.items:
         return f"Pipeline '{pipeline.name}' has no runs."
 
-    lines = [
-        f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
-        f"created={r.created_at.isoformat()} | "
-        f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
-        for r in result.items
-    ]
+    lines = []
+    for r in result.items:
+        line = (
+            f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
+            f"created={r.created_at.isoformat()} | "
+            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
+        )
+        if r.cost_breakdown is not None:
+            breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
+            if breakdown:
+                line += " | breakdown={" + ", ".join(_format_breakdown_line(e) for e in breakdown) + "}"
+        lines.append(line)
     return f"Runs for pipeline {pipeline.name} ({result.total} total):\n" + "\n".join(lines)
 
 
@@ -3310,6 +3450,13 @@ async def resource_run(run_id: str) -> str:
     ]
     if run.error_code:
         parts.append(f"Error: {run.error_code}")
+    if run.total_cost_usd is not None:
+        parts.append(f"Total cost: ${run.total_cost_usd}")
+    if run.cost_breakdown is not None:
+        breakdown = _sanitize_cost_breakdown(run.cost_breakdown)
+        if breakdown:
+            parts.append("Cost breakdown:")
+            parts.extend(_format_breakdown_line(entry) for entry in breakdown)
     return "\n".join(parts)
 
 
@@ -3338,7 +3485,9 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         gate = result.scalar_one_or_none()
         required_team_name = None
         if gate is not None and gate.required_team_id is not None:
-            team_result = await s.execute(select(Team).where(Team.id == gate.required_team_id))
+            team_result = await s.execute(
+                select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None))
+            )
             team = team_result.scalar_one_or_none()
             required_team_name = team.name if team else None
     if gate is None:
@@ -3351,8 +3500,12 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         f"Claimed by: {gate.account_id or 'unclaimed'}",
     ]
     if gate.required_team_id:
-        parts.append(f"Required team: {gate.required_team_id}")
-        parts.append(f"Required team name: {required_team_name or 'unknown'}")
+        parts.extend(
+            [
+                f"Required team: {gate.required_team_id}",
+                f"Required team name: {required_team_name or 'unknown'}",
+            ]
+        )
     if gate.expires_at:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")
     return "\n".join(parts)
@@ -3418,23 +3571,23 @@ async def resource_schema_detail(schema_id: str, version: str) -> str:
     fields: list[dict[str, Any]] = []
     if "properties" in defn:
         required_set = set(defn.get("required", []))
-        for name, prop in defn["properties"].items():
-            fields.append(
-                {
-                    "name": name,
-                    "type": prop.get("type", "unknown"),
-                    "required": name in required_set,
-                }
-            )
+        fields = [
+            {
+                "name": name,
+                "type": prop.get("type", "unknown"),
+                "required": name in required_set,
+            }
+            for name, prop in defn["properties"].items()
+        ]
     elif "fields" in defn:
-        for f in defn["fields"]:
-            fields.append(
-                {
-                    "name": f.get("name", "?"),
-                    "type": f.get("type", "unknown"),
-                    "required": f.get("required", False),
-                }
-            )
+        fields = [
+            {
+                "name": f.get("name", "?"),
+                "type": f.get("type", "unknown"),
+                "required": f.get("required", False),
+            }
+            for f in defn["fields"]
+        ]
 
     lines = [
         f"Schema: {schema.name}",

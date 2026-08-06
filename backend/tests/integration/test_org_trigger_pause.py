@@ -296,7 +296,7 @@ async def _reset_pauses(db_engine: AsyncEngine, org_a: uuid.UUID, org_b: uuid.UU
 @pytest.fixture(autouse=True)
 def _no_dispatch() -> Generator[None, None, None]:
     """Never actually dispatch runs during integration webhook tests."""
-    with patch("modulo.api.routes.webhooks.dispatch_run_sync", lambda *a, **k: None):
+    with patch("modulo.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None):
         yield
 
 

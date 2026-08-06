@@ -192,26 +192,20 @@ def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
 def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
         raise RuntimeError("psycopg library is not available")
-    rows: list[dict[str, Any]] = []
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM checkpoints ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id")
-        for row in cur:
-            rows.append(_serialise_export_row(row))
-    return rows
+        return [_serialise_export_row(row) for row in cur]
 
 
 def _export_checkpoint_writes_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
         raise RuntimeError("psycopg library is not available")
-    rows: list[dict[str, Any]] = []
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT * FROM checkpoint_writes "
             "ORDER BY organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx"
         )
-        for row in cur:
-            rows.append(_serialise_export_row(row))
-    return rows
+        return [_serialise_export_row(row) for row in cur]
 
 
 _CREDENTIALS_TABLES: list[str] = ["connector_instances", "model_backends"]

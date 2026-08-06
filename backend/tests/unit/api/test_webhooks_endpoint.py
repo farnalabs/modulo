@@ -138,7 +138,11 @@ def test_receive_webhook_returns_202(client: TestClient) -> None:
     run_mock = _make_mock_run()
     with (
         patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.dispatch_run_sync"),
+        patch(
+            "modulo.api.routes.webhooks.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ),
         patch("modulo.api.routes.webhooks.set_rls_org"),
     ):
         m.return_value = (run_mock, None, {})
@@ -152,6 +156,32 @@ def test_receive_webhook_returns_202(client: TestClient) -> None:
     body = resp.json()
     assert body["status"] == "accepted"
     assert body["run_id"] == str(_RUN_ID)
+
+
+def test_receive_webhook_records_error_event_on_dispatch_failure(client: TestClient) -> None:
+    """A fail-fast enqueue failure is surfaced as an error_event (source='saq'),
+    WITHOUT blocking the 202 response (plan F3d/F1 webhook dispatch bounds)."""
+    run_mock = _make_mock_run()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch(
+            "modulo.api.routes.webhooks.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueue_failed", None),
+        ),
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+        patch("modulo.api.routes.webhooks._ingest_webhook_dispatch_error", new_callable=AsyncMock) as ingest,
+    ):
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": "1700000000", "X-Modulo-Webhook-Secret": "test-hmac"},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "accepted"
+    ingest.assert_awaited_once()
 
 
 def test_receive_webhook_missing_json_body_returns_400(client: TestClient) -> None:
@@ -235,7 +265,7 @@ def test_receive_webhook_paused_org_returns_202_paused(client: TestClient) -> No
     with (
         patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
         patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.dispatch_run_sync") as dispatch,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
         patch("modulo.api.routes.webhooks.set_rls_org"),
     ):
         resp = client.post(
@@ -258,7 +288,7 @@ def test_replay_webhook_paused_org_returns_202_paused(client: TestClient) -> Non
     with (
         patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.dispatch_run_sync") as dispatch,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
         patch("modulo.api.routes.webhooks.set_rls_org"),
     ):
         resp = client.post(
@@ -366,7 +396,11 @@ def test_replay_webhook_returns_202(client: TestClient) -> None:
     run_mock = _make_mock_run()
     with (
         patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
-        patch("modulo.api.routes.webhooks.dispatch_run_sync"),
+        patch(
+            "modulo.api.routes.webhooks.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ),
         patch("modulo.api.routes.webhooks.set_rls_org"),
     ):
         m.return_value = (run_mock, None, {})

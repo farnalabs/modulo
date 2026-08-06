@@ -60,7 +60,7 @@
         pass_filenames: false
       - id: semgrep
         name: semgrep
-        entry: uv run --project backend --no-sync semgrep scan --config=.semgrep/ --error --baseline-commit=HEAD backend/src/
+        entry: uv run --project backend --no-sync python scripts/run_semgrep.py
         language: system
         files: ^backend/src/
         pass_filenames: false
@@ -111,13 +111,13 @@
         stages: [manual]
       - id: eslint
         name: ESLint
-        entry: bash -c 'cd frontend && npm run lint --if-present'
+        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py lint
         language: system
         files: \.(vue|ts|js)$
         pass_filenames: false
       - id: vue-tsc
         name: vue-tsc type check
-        entry: bash -c 'cd frontend && npm run type-check --if-present'
+        entry: uv run --project backend --no-sync python scripts/run_frontend_npm.py type-check
         language: system
         files: \.(vue|ts)$
         pass_filenames: false

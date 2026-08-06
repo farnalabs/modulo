@@ -11,27 +11,29 @@ All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 """
 
 import asyncio
-import functools
 import logging
+import os
 import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
     get_current_tenant_user_optional,
     get_db_session,
+    get_or_create_engine,
     require_permission,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
-from modulo.core.dispatch import dispatch_run_sync
+from modulo.core.dispatch import dispatch_run
+from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import TriggersPausedError
 
 # Deprecated private aliases — kept importable so legacy patch targets and
@@ -59,6 +61,8 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
 from modulo.db.rls import set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
+from modulo.settings import get_settings
+from modulo.version import get_version
 
 _log = logging.getLogger(__name__)
 
@@ -67,11 +71,65 @@ router = APIRouter(prefix="/api/v1/triggers", tags=["webhooks"])
 _trigger_engine = TriggerEngine()
 
 
+async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
+    """Ingest an error_event (source='saq', function='webhook_dispatch').
+
+    Best-effort and never raises — error ingestion must not break the request
+    or the background dispatch task. Runs in its own session/transaction.
+    """
+    try:
+        oid = uuid.UUID(str(org_id))
+        factory = async_sessionmaker(
+            get_or_create_engine(get_settings()),
+            expire_on_commit=False,
+            autobegin=False,
+        )
+        async with factory() as session, session.begin():
+            await set_rls_org(session, oid)
+            await ErrorIngestionService().ingest(
+                session,
+                oid,
+                {
+                    "level": "error",
+                    "message": f"webhook dispatch failed for run {run_id}: {detail}",
+                    "source": "saq",
+                    "context_json": {"function": "webhook_dispatch", "run_id": run_id},
+                    "environment": os.environ.get("MODULO_ENV", "development"),
+                    "version": get_version(),
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("webhooks.ingest_dispatch_error_failed run=%s", run_id)
+
+
+async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
+    """Dispatch a webhook-created run via fail-fast SAQ enqueue (background).
+
+    Records an ``error_event`` (source='saq', function='webhook_dispatch') when
+    the fail-fast enqueue fails or raises, WITHOUT blocking the 202 response.
+    Capacity-deferred runs are NOT errors — ``dispatcher_reconcile`` recovers
+    them — so only the ``enqueue_failed`` outcome (or a raised exception) is
+    reported.
+    """
+    try:
+        outcome, _job_id = await dispatch_run(str(run_id), str(org_id), queue="runs", fail_fast=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await _ingest_webhook_dispatch_error(str(run_id), str(org_id), f"dispatch raised: {exc}")
+        return
+    if outcome == "enqueue_failed":
+        await _ingest_webhook_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
+
+
 @handle_db_errors("webhooks.receive_webhook")
 @router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(
     trigger_id: uuid.UUID,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -244,13 +302,7 @@ async def receive_webhook(
         ) from None
 
     run_id = run.id
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(
-        None,
-        functools.partial(dispatch_run_sync, queue="runs", fail_fast=True),
-        str(run_id),
-        str(org_id),
-    )
+    background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
 
     return {"run_id": str(run_id), "status": "accepted"}
 
@@ -261,6 +313,7 @@ async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal | None = Depends(get_current_tenant_user_optional),
     engine: AsyncEngine = Depends(_get_engine),
@@ -444,13 +497,7 @@ async def replay_webhook(
         ) from None
 
     run_id = run.id
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(
-        None,
-        functools.partial(dispatch_run_sync, queue="runs", fail_fast=True),
-        str(run_id),
-        str(org_id),
-    )
+    background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
 
     return {"run_id": str(run_id), "status": "accepted"}
 

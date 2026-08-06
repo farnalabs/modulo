@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -26,6 +27,12 @@ if TYPE_CHECKING:
     from modulo.db.models.team import Team
 
 
+# Single source of truth for terminal run statuses (ADR 020). Used by the
+# analytics facts writer, the maintenance backfill, and the run purge. Must be
+# a subset of the ``ck_runs_status`` CHECK-constraint values.
+TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
 class Run(OrgScoped):
     __tablename__ = "runs"
     __table_args__ = (
@@ -39,6 +46,12 @@ class Run(OrgScoped):
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
+        # Probe sample query (organisation_id, started_at) — migration 0066.
+        Index("ix_runs_probe", "organisation_id", "started_at"),
+        # Per-trigger daily-spend-limit enforcement readers (cron_helpers /
+        # polling) + billing overview — org_id + created_at. Migration 0066.
+        # The cost-controller refusal SUM reads the ledger, NOT runs (0066).
+        Index("ix_runs_refusal", "organisation_id", "created_at"),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -70,6 +83,12 @@ class Run(OrgScoped):
     claim_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
+    # Cost breakdown — list of component snapshots (amounts as strings).
+    # NULL for pre-migration runs. Migration 0066.
+    cost_breakdown: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    # Ledger guards (migration 0066) — terminal-only spend recording (PR A2).
+    ledger_written: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    ledger_refused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     error_detail: Mapped[str | None] = mapped_column(String(5000))
     error_code: Mapped[str | None] = mapped_column(String(255))

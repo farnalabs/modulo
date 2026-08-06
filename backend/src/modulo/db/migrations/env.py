@@ -1,12 +1,15 @@
 import logging
 import os
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from logging.config import fileConfig
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import sqlalchemy as sa
 from alembic import context
 from alembic.config import Config
-from sqlalchemy import Connection, create_engine
+from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.pool import NullPool
 
 from modulo.db.models import Base
@@ -35,6 +38,67 @@ def _to_sync_url(url: str) -> str:
         del qs["ssl"]
     new_query = urlencode(qs, doseq=True) if qs else ""
     return urlunparse(parsed._replace(query=new_query))
+
+
+# Migration advisory lock — the SAME key the app lifespan runner uses
+# (modulo.api.main._MIGRATION_LOCK_KEY). Every migration path goes through
+# env.py's run_migrations_online(): the entrypoint's raw `alembic upgrade heads`
+# (web AND worker process groups booting concurrently on a fresh deploy) and
+# the app's lifespan run. Holding this lock serialises them so two raw runs can
+# never race a half-migrated schema. Advisory locks are session-scoped: held on
+# a dedicated connection for the whole migration run and released afterwards.
+_MIGRATION_LOCK_KEY = (72001, 1)
+_MIGRATION_LOCK_POLL_ATTEMPTS = 180
+_MIGRATION_LOCK_POLL_INTERVAL = 1.0
+
+# True while the app lifespan (main.py) already holds the migration lock on its
+# own connection. env.py must NOT re-acquire the same key on a different
+# session in that case — advisory locks are per-session, so a second session
+# would block on itself. Standalone `alembic upgrade heads` (entrypoint.sh)
+# never sets the flag and therefore always takes the lock.
+_lock_held_by_caller = False
+
+
+def set_lock_held_by_caller(held: bool) -> None:
+    """Set/clear whether the calling process already holds the migration lock."""
+    global _lock_held_by_caller
+    _lock_held_by_caller = held
+
+
+@contextmanager
+def _migration_advisory_lock(engine: Engine, url: str) -> Iterator[None]:
+    """Hold the migration advisory lock (Postgres only) for the migration run.
+
+    Uses ``pg_try_advisory_lock`` in a polling loop (per AGENTS.md: a bare
+    ``pg_advisory_lock`` under a client timeout races server-side acquisition
+    against the client). The lock is session-scoped and held on a dedicated
+    connection so it survives the migration transaction. Non-Postgres backends
+    (SQLite/MariaDB — dev-only) have no advisory locks and are skipped.
+    """
+    if not url.startswith("postgresql") or _lock_held_by_caller:
+        yield
+        return
+
+    with engine.connect() as lock_conn:
+        acquired = False
+        for _ in range(_MIGRATION_LOCK_POLL_ATTEMPTS):
+            result = lock_conn.execute(
+                sa.text("SELECT pg_try_advisory_lock(:k1, :k2)"),
+                {"k1": _MIGRATION_LOCK_KEY[0], "k2": _MIGRATION_LOCK_KEY[1]},
+            )
+            if bool(result.scalar_one()):
+                acquired = True
+                break
+            time.sleep(_MIGRATION_LOCK_POLL_INTERVAL)
+        if not acquired:
+            raise RuntimeError("Timed out waiting for the migration advisory lock")
+        try:
+            yield
+        finally:
+            lock_conn.execute(
+                sa.text("SELECT pg_advisory_unlock(:k1, :k2)"),
+                {"k1": _MIGRATION_LOCK_KEY[0], "k2": _MIGRATION_LOCK_KEY[1]},
+            )
 
 
 target_metadata = Base.metadata
@@ -99,8 +163,16 @@ def do_run_migrations(connection: Connection) -> None:
         from sqlalchemy import inspect as sa_inspect
 
         if sa_inspect(connection).has_table("alembic_version"):
-            connection.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
-            _log.info("Widened alembic_version.version_num to VARCHAR(255)")
+            # Use a separate connection so a failure here (e.g. non-owner role)
+            # does not abort the outer migration transaction.
+            try:
+                with connection.engine.begin() as alt_conn:
+                    alt_conn.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
+                    _log.info("Widened alembic_version.version_num to VARCHAR(255)")
+            except Exception:
+                _log.warning(
+                    "Could not widen alembic_version (non-owner); bootstrap_db.py already created it with VARCHAR(255)"
+                )
         else:
             connection.execute(sa.text("CREATE TABLE alembic_version (version_num VARCHAR(255) NOT NULL PRIMARY KEY)"))
             _log.info("Pre-created alembic_version.version_num as VARCHAR(255)")
@@ -119,6 +191,10 @@ def run_migrations_online() -> None:
 
     env.py runs in a thread pool (asyncio.to_thread), so a sync engine
     avoids all event-loop conflicts with the main async context.
+
+    Serialises against the app lifespan's migration runner and other raw
+    `alembic upgrade heads` runs via the shared advisory lock, so the web and
+    worker entrypoint migrations that both fire on a fresh deploy cannot race.
     """
     assert config is not None
     url = config.get_main_option("sqlalchemy.url") or ""
@@ -126,7 +202,7 @@ def run_migrations_online() -> None:
 
     engine = create_engine(sync_url, poolclass=NullPool)
     try:
-        with engine.begin() as connection:
+        with _migration_advisory_lock(engine, url), engine.begin() as connection:
             do_run_migrations(connection)
     finally:
         engine.dispose()

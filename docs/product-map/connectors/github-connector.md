@@ -74,10 +74,11 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Include `sha` for updates (required by GitHub Contents API for existing files)
 - [x] Return created/updated resource dict from API
 - [x] `raise_for_status()` on HTTP errors
-- [ ] File content is expected as raw string — no base64 encode/decode in connector; caller must handle encoding
-- [ ] Recursive file listing — not implemented (`/contents` only returns one level)
-- [ ] Batch file operations — not implemented
-- [ ] Path traversal protection — relies on GitHub API server-side; no local validation
+- [x] Recursive file/directory listing via `query("tree")` — resolves `ref` (default `main`) to a commit SHA via `GET /repos/{owner}/{repo}/commits/{ref}`, then lists the tree via `GET /repos/{owner}/{repo}/git/trees/{sha}` (optional `recursive` param, default on); optional `path` filter narrows the returned entries to that directory locally
+- [x] File read decoding — `query("file")` decodes base64 `content` (when `encoding: "base64"`) to UTF-8 text so agents consume the raw file; binary blobs (not UTF-8-decodable) and non-base64 responses are left untouched
+- [x] File write encoding — `write("file")` accepts raw text via `content` and base64-encodes it for the GitHub Contents API (which requires base64); pre-encoded content can be supplied via `content_base64` (passed through unchanged for binary files); exactly one of the two is required — omitting both or supplying both raises a descriptive `ValueError`
+- [x] Batch file operations — `write("commit")` (alias `write("files")`) applies `create`/`update`/`delete`/`move` actions atomically in one commit via the Git Database API (blob → tree → commit → ref fast-forward); every action is validated (type whitelist, `path`/`previous_path` required, path-traversal guard, `content` required for create/update) before any API call; `move` carries the source file's content via the Contents API
+- [x] Path traversal protection — local `_validate_path()` rejects absolute paths and `..` segments on `query("file")`, `query("tree")` (path filter), and `write("file")` before they reach the API
 
 ### Issue Operations — create, read, update, and comment
 
@@ -183,16 +184,45 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
-- [ ] **File content encoding**: caller must base64-encode file content; no encode/decode helper in connector
-- [ ] **Recursive file listing**: `GET /contents` only returns one level; no tree API integration
-- [ ] **Path traversal protection**: relies on GitHub API server-side; no local validation before sending request
+- [ ] **File content encoding** — ~~caller must base64-encode file content; no encode/decode helper in connector~~ — **RESOLVED (2026-08-06)**: `query("file")` decodes base64 content to UTF-8 text; `write("file")` accepts raw text `content` (encoded internally) or `content_base64` (passed through for binary files), requiring exactly one
+- [x] ~~**Recursive file listing**~~ — **RESOLVED (2026-08-06)**: `query("tree")` lists the full repo tree recursively via the Git Trees API (ref resolved to a commit SHA first), with optional `path`/`recursive` filters
+- [x] ~~**Path traversal protection**~~ — **RESOLVED (2026-08-06)**: local `_validate_path()` blocks absolute paths and `..` segments on `query("file")`, `query("tree")`, and `write("file")` before any request is sent
 - [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
 - [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
 - [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
 - [ ] **`test_github_issues.py` (550 lines)** and **`test_github_scopes.py` (89 lines)** now in `unit-tests:` frontmatter — were previously missing
 - [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
+- [x] ~~**Batch file operations**~~ — **RESOLVED (2026-08-06)**: `write("commit")`/`write("files")` applies create/update/delete/move actions in one commit via the Git Database API
 
 ## QA History
+
+### 2026-08-06 — improve-architecture: batch file operations RESOLVED
+
+**RESOLVED the "Batch file operations" known gap** (`connectors/github/__init__.py`). New `write("commit")` (alias `write("files")`) applies multiple file operations atomically in a single commit via the Git Database API — the GitHub equivalent of the GitLab connector's batch `write("files")`/`write("commit")`.
+
+1. **Pipeline** — each action is turned into tree entries and applied as one commit: `POST /git/blobs` per create/update (raw text, `encoding: "utf-8"`) → `POST /git/trees` (`base_tree` = current tip) → `POST /git/commits` (single parent) → `PATCH /git/refs/{ref}` fast-forward (`force: false`). The ref (default `main`) is resolved to a commit SHA first via `GET /repos/{owner}/{repo}/commits/{ref}`; short branch names are expanded to `refs/heads/<ref>` for the refs endpoint (already-qualified `refs/...` passes through).
+2. **Actions** — `create`/`update` (blob with `content`), `delete` (tree entry with `sha: null`), and `move` (reads the source file's content via the Contents API, base64-decodes it, blobs it at the new path and nulls the old path — mirroring the GitLab `move` semantics).
+3. **Validation-before-network** — every action is validated up front (type whitelist `create|update|delete|move`, non-empty `path`, path-traversal guard on `path`/`previous_path`, string `content` for create/update, `previous_path` for move, non-empty `message`, non-empty `actions` list) before any API request is sent, so malformed payloads fail fast with descriptive `ValueError`s. Ref resolution is shared with `query("tree")` via a new `_resolve_commit_sha()` helper (the old duplicated inline resolution was removed).
+
+**Tests:** 18 new unit tests in `test_github.py` (multi-file create flow asserting blob/tree/commit/ref request bodies, update, delete-null-entry, move-reads-old-content, custom `ref`/`message`, full `refs/...` passthrough, `files` alias, missing-repo/actions/empty-actions/invalid-action/missing-path/path-traversal/move-without-previous-path/previous-path-traversal/missing-content/unresolvable-ref, HTTP 422 propagation) + 3 BDD scenarios in `github_connector.feature` (batch commit write succeeds + commit sha, empty-actions error, batch path traversal blocked) with 3 new step definitions and the mock connector extended to mirror commit validation. 97/97 `test_github.py` + 61/61 resilience/scopes/issues unit tests pass, ruff clean, mypy strict clean, 19/19 github BDD scenarios pass. Status: partial (OAuth flow, fine-grained PAT, rate-limit budget, circuit breaker remain).
+
+### 2026-08-06 — improve-architecture: file content base64 encode/decode RESOLVED
+
+**RESOLVED the "File content encoding" known gap** (`connectors/github/__init__.py`). GitHub's Contents API requires base64 content on write and returns base64 content on read, but the connector previously passed content through raw — so agents could not read a file, modify it, and write it back (the write would fail GitHub's base64 validation).
+
+1. **Read decode** — new `_decode_read_content()` helper: `query("file")` decodes the base64 `content` (when `encoding == "base64"`) to UTF-8 text so agents consume the raw file; binary blobs that aren't UTF-8-decodable and non-object responses are left untouched (fuzz-safe).
+2. **Write encode** — new `_encode_write_content()` helper: `write("file")` accepts raw text via `content` and base64-encodes it before sending; pre-encoded content can be supplied via `content_base64` (passed through unchanged, for binary files). Exactly one of the two is required — missing-both and both-present both raise descriptive `ValueError`s. The class docstring's `content` contract was updated.
+
+**Tests:** 7 new unit tests in `test_github.py` (multiline base64 read decode, binary content left encoded on read, plain-text record untouched, `content_base64` write passthrough asserted on the request body, UTF-8 write round-trip via `base64.b64decode(sent)` — including `héllo wörld`, missing-content error, both-content-and-content_base64 error) + `test_query_file` updated to assert the decoded text and `test_write_file` updated to assert the encoded request body + the missing-content parametrised expectation updated to the new message. Updated product map (2 behaviours `[ ]`→`[x]`, Known Gap → RESOLVED, QA History). 79/79 `test_github.py` + all 139 github connector unit tests + 41/41 github BDD scenarios pass (8 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (OAuth flow, fine-grained PAT, rate-limit budget, circuit breaker, batch file ops remain).
+
+### 2026-08-06 — improve-architecture: recursive tree listing + path traversal RESOLVED
+
+**RESOLVED 2 known gaps** in the GitHub connector (`connectors/github/__init__.py`):
+
+1. **Recursive file/directory listing** — new `query("tree")` using GitHub's Git Trees API. Resolves `ref` (default `main`) to a commit SHA via `GET /repos/{owner}/{repo}/commits/{ref}` (works for branches, tags, and SHAs; a response without a `sha` raises a descriptive `ValueError`), then fetches `GET /repos/{owner}/{repo}/git/trees/{sha}` with the `recursive` param (default on, `recursive: false` for a top-level listing only). An optional `path` filter narrows the returned entries to that directory (entries carry full repo-relative `path`, so filtering is done locally). Returns the tree entries (`path`/`mode`/`type`/`sha`/`size`/`url`) as records.
+2. **Path traversal protection** — new `_validate_path()` helper (mirrors the GitLab connector) rejects absolute paths and `..` segments with a clear `ValueError` before any request is sent, wired into `query("file")`, `query("tree")` (path filter, validated before the ref-resolution call), and `write("file")`.
+
+**Tests:** 11 unit tests in `test_github.py` (tree recursive param + entries + ref-resolution, non-recursive omits param, custom ref forwarded to the commits call, path filter narrowing, missing-repo error, unresolvable ref error, query-file path traversal + absolute-path blocked, tree path traversal blocked, write-file path traversal + absolute-path blocked) + 3 BDD scenarios in `github_connector.feature` (recursive tree listing with nested entries, path traversal on file query blocked, path traversal on file write blocked) with 3 new step definitions + the mock connector extended to mirror tree/traversal validation. Updated product map (2 behaviours `[ ]`→`[x]` + 1 new, 2 Known Gaps → RESOLVED, QA History). 72/72 `test_github.py` + 139/139 github connector unit tests pass, 19/19 github BDD scenarios pass, ruff clean, mypy strict clean. Status: partial (OAuth flow, fine-grained PAT, rate-limit budget, circuit breaker, batch file ops, file content encoding remain).
 
 ### 2026-08-02 — improve-architecture: 6 known gaps RESOLVED (PR ops, search, assign)
 

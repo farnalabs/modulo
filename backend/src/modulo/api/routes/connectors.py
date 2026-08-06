@@ -323,8 +323,8 @@ async def update_connector_endpoint(
     credentials_updated = "credentials" in updates
     if credentials_updated:
         new_credentials = updates.pop("credentials")
-        _ct = _encrypt(new_credentials, settings.fernet_key)
-        updates["credentials_ciphertext"] = _ct  # nosemgrep: credential-not-in-state
+        ct = _encrypt(new_credentials, settings.fernet_key)
+        updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

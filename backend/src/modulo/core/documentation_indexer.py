@@ -35,15 +35,12 @@ class DocumentationIndex:
         if not query_words:
             return []
 
-        results: list[DocEntry] = []
-        for entry in self.entries:
-            if section is not None and not entry.heading_path.lower().startswith(section.lower()):
-                continue
-            haystack = (entry.heading + " " + entry.first_paragraph).lower()
-            if all(w in haystack for w in query_words):
-                results.append(entry)
-
-        return results
+        return [
+            entry
+            for entry in self.entries
+            if (section is None or entry.heading_path.lower().startswith(section.lower()))
+            and all(w in (entry.heading + " " + entry.first_paragraph).lower() for w in query_words)
+        ]
 
     @staticmethod
     def format_results(results: list[DocEntry]) -> str:

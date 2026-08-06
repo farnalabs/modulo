@@ -23,6 +23,19 @@ routes:
         deprecated: false
         exact: true
 
+    /analytics:
+        name: analytics
+        breadcrumb: Analytics
+        parent: /
+        product_map:
+        sidebar_group: core
+        sidebar_order: 2
+        type: page
+        required_permissions: [analytics.query]
+        <<: *community
+        deprecated: false
+        exact: true
+
     /oauth/authorize:
         name: oauth-authorize
         breadcrumb: Authorize
@@ -474,6 +487,17 @@ routes:
         product_map:
         sidebar_group: admin
         sidebar_order: 3
+        type: form_page
+        <<: *team
+        deprecated: false
+
+    /admin/costs/components:
+        name: admin-costs-components
+        breadcrumb: Cost Components
+        parent: /admin/costs
+        product_map:
+        sidebar_group: admin
+        sidebar_order: 4
         type: form_page
         <<: *team
         deprecated: false
