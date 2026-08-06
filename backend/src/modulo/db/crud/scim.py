@@ -260,7 +260,7 @@ async def scim_list_groups(
     start_index: int = 1,
     count: int = 20,
 ) -> tuple[list[Team], int]:
-    conditions = [Team.organisation_id == org_id]
+    conditions = [Team.organisation_id == org_id, Team.deleted_at.is_(None)]
     if filter_str:
         like = f"%{filter_str}%"
         conditions.append(Team.name.ilike(like))
