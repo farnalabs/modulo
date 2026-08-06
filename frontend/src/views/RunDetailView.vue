@@ -309,7 +309,10 @@
                   <h4 class="mb-2 text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stderr') }}</code></pre>
                 </div>
-                <div v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr')" class="text-center text-sm text-muted-foreground py-4">
+                <div
+                  v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr') && !liveOutput[node.name]"
+                  class="text-center text-sm text-muted-foreground py-4"
+                >
                   {{ $t('views.RunDetailView.no_agent_logs') }}
                 </div>
               </td>
