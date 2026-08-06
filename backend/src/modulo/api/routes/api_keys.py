@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -23,6 +23,19 @@ from modulo.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/api-keys", tags=["api-keys"])
+
+
+def _normalise_name(name: str) -> str:
+    """Strip surrounding whitespace from an API key name."""
+    return name.strip()
+
+
+def _parse_expires_at(value: str) -> datetime:
+    """Parse an ISO datetime, normalising naive values to UTC."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _require_runner(principal: TenantPrincipal, permission: str) -> None:
@@ -149,6 +162,12 @@ async def create_api_key_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'. admin keys are prohibited.",
         )
+    name = _normalise_name(req.name)
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="API key name must not be blank",
+        )
     team_id: uuid.UUID | None = None
     if req.team_id is not None:
         await _require_team_rbac(settings, session)
@@ -156,7 +175,12 @@ async def create_api_key_endpoint(
         team_id = uuid.UUID(req.team_id)
     expires_at: datetime | None = None
     if req.expires_at:
-        expires_at = datetime.fromisoformat(req.expires_at)
+        expires_at = _parse_expires_at(req.expires_at)
+        if expires_at <= datetime.now(UTC):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="expires_at must be in the future",
+            )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -165,7 +189,7 @@ async def create_api_key_endpoint(
             key, full_key = await create_api_key(
                 session,
                 org_id=principal.organisation_id,
-                name=req.name,
+                name=name,
                 role=req.role,
                 account_id=principal.account_id,
                 team_id=team_id,
@@ -257,6 +281,14 @@ async def update_api_key_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="role must be 'operator' or 'runner'.",
         )
+    name: str | None = None
+    if req.name is not None:
+        name = _normalise_name(req.name)
+        if not name:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="API key name must not be blank",
+            )
     team_id: uuid.UUID | None = None
     if req.team_id is not None:
         await _require_team_rbac(settings, session)
@@ -264,7 +296,12 @@ async def update_api_key_endpoint(
         team_id = uuid.UUID(req.team_id)
     expires_at: datetime | None = None
     if req.expires_at:
-        expires_at = datetime.fromisoformat(req.expires_at)
+        expires_at = _parse_expires_at(req.expires_at)
+        if expires_at <= datetime.now(UTC):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="expires_at must be in the future",
+            )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -275,7 +312,7 @@ async def update_api_key_endpoint(
                 session,
                 key_id,
                 principal.organisation_id,
-                name=req.name,
+                name=name,
                 role=req.role,
                 team_id=team_id,
                 expires_at=expires_at,
