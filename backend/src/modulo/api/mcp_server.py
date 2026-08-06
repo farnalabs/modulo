@@ -3501,8 +3501,12 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         f"Claimed by: {gate.account_id or 'unclaimed'}",
     ]
     if gate.required_team_id:
-        parts.append(f"Required team: {gate.required_team_id}")
-        parts.append(f"Required team name: {required_team_name or 'unknown'}")
+        parts.extend(
+            [
+                f"Required team: {gate.required_team_id}",
+                f"Required team name: {required_team_name or 'unknown'}",
+            ]
+        )
     if gate.expires_at:
         parts.append(f"Claim expires: {gate.expires_at.isoformat()}")
     return "\n".join(parts)

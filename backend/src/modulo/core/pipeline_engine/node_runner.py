@@ -838,7 +838,7 @@ def make_sandbox_agent_fn(
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
     agent_command_raw: str | None = node_def.get("agent_command")
-    if agent_commands_raw and len(agent_commands_raw) > 0:
+    if agent_commands_raw:
         agent_command = commands_concatenation_string.join(agent_commands_raw)
     elif agent_command_raw:
         agent_command = agent_command_raw
