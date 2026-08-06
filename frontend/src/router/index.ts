@@ -53,6 +53,7 @@ function decodeJwtPayload(token: string | null): Record<string, unknown> | null 
   }
 }
 
+const AnalyticsView = () => import('../views/AnalyticsView.vue')
 const DashboardView = () => import('../views/DashboardView.vue')
 const LibraryView = () => import('../views/LibraryView.vue')
 const LibraryPipelineWizard = () => import('../views/LibraryPipelineWizard.vue')
@@ -146,6 +147,11 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: DashboardView,
+    },
+    {
+      path: '/analytics',
+      name: 'analytics',
+      component: AnalyticsView,
     },
     {
       path: '/dashboard',
