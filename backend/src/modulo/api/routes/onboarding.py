@@ -1,6 +1,7 @@
 """First-run onboarding REST API — action-based recommended actions with DB persistence."""
 
 import uuid
+from operator import itemgetter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -195,7 +196,7 @@ def _build_action_list(
     completed_set = set(completed_actions) | auto_completed
     skipped_set = set(skipped_actions)
     result: list[dict[str, Any]] = []
-    for action in sorted(_ONBOARDING_ACTIONS, key=lambda a: a["order"]):
+    for action in sorted(_ONBOARDING_ACTIONS, key=itemgetter("order")):
         aid = action["id"]
         result.append(
             {
