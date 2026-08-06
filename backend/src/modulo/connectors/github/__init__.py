@@ -1,6 +1,7 @@
 """GitHubConnector — async GitHub API connector."""
 
 import asyncio
+import base64
 import json
 import random
 import re
@@ -68,6 +69,48 @@ def _validate_path(path: Any, resource: str) -> str:
     return path
 
 
+def _encode_write_content(data: dict[str, Any], resource: str) -> str:
+    """Encode file content for the GitHub Contents API (which requires base64).
+
+    Accepts either ``content`` (raw text, base64-encoded here) or
+    ``content_base64`` (already base64-encoded, passed through unchanged for
+    binary content). Exactly one of the two is required.
+    """
+    has_raw = "content" in data
+    has_encoded = "content_base64" in data
+    if has_raw and has_encoded:
+        raise ValueError(f"GitHub {resource} write requires exactly one of 'content' or 'content_base64' in data")
+    if has_encoded:
+        value = data["content_base64"]
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"GitHub {resource} write field 'content_base64' must be a non-empty string")
+        return value
+    if has_raw:
+        value = data["content"]
+        if not isinstance(value, str):
+            raise ValueError(f"GitHub {resource} write field 'content' must be a string")
+        return base64.b64encode(value.encode("utf-8")).decode("ascii")
+    raise ValueError(f"GitHub {resource} write requires 'content' (raw text) or 'content_base64' (pre-encoded) in data")
+
+
+def _decode_read_content(info: Any) -> None:
+    """Decode base64 file content from the GitHub Contents API in place.
+
+    Text files are returned with ``encoding == "base64"``; the decoded UTF-8
+    text replaces ``content`` so agents can consume it directly. Content that
+    is not decodable text (binary blobs) is left as the raw base64 value.
+    Non-object responses (e.g. a directory listing array) are left untouched.
+    """
+    if not isinstance(info, dict):
+        return
+    if info.get("encoding") != "base64" or not isinstance(info.get("content"), str):
+        return
+    try:
+        info["content"] = base64.b64decode(info["content"]).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return
+
+
 class GitHubConnector(ConnectorBase):
     """Read/write GitHub via the REST API.
 
@@ -79,6 +122,7 @@ class GitHubConnector(ConnectorBase):
     Supported query resources:
       "repos"           — list repositories accessible to the token
       "file"            — read a file; filters: {"repo": "owner/repo", "path": "...", "ref": "main"}
+                         (base64 content is decoded to UTF-8 text)
       "tree"            — recursive file/directory listing; filters: {"repo": "owner/repo",
                          "ref": "main", "path": "subdir", "recursive": true}
       "pulls"           — list pull requests; filters: {"repo": ..., "state": "open", "sort": ..., "direction": ...}
@@ -97,8 +141,8 @@ class GitHubConnector(ConnectorBase):
                           (returns total_count and Link-header pagination)
 
     Supported write resources:
-      "file"            — create/update a file; data: {"repo": ..., "path": ..., "content": <base64>,
-                           "message": ..., "sha": <required for update>}
+      "file"            — create/update a file; data: {"repo": ..., "path": ..., "content": <raw text, encoded here>
+                           or "content_base64": <pre-encoded>, "message": ..., "sha": <required for update>}
       "issue"           — create an issue; data: {"repo": ..., "title": ..., "body": ...,
                            "labels": [...], "assignees": [...], "milestone": ...}
       "issue_update"    — update an issue; data: {"repo": ..., "issue_number": ..., ...}
@@ -273,7 +317,9 @@ class GitHubConnector(ConnectorBase):
                 path = _validate_path(self._require_filter(q.filters, "path", "file"), "file")
                 ref = q.filters.get("ref", "main")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
-                return ConnectorResult(records=[await self._parse_json(r)])
+                info = await self._parse_json_object(r)
+                _decode_read_content(info)
+                return ConnectorResult(records=[info])
             case "tree":
                 owner_repo = self._require_filter(q.filters, "repo", "tree")
                 path_filter = _validate_path(q.filters["path"], "tree") if "path" in q.filters else None
@@ -450,7 +496,7 @@ class GitHubConnector(ConnectorBase):
                 path = _validate_path(self._require_write_filter(payload.data, "path", "file"), "file")
                 body: dict[str, Any] = {
                     "message": payload.data.get("message", "Update via Modulo"),
-                    "content": self._require_write_filter(payload.data, "content", "file"),
+                    "content": _encode_write_content(payload.data, "file"),
                 }
                 if "sha" in payload.data:
                     body["sha"] = payload.data["sha"]
