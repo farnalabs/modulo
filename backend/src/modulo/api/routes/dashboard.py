@@ -117,7 +117,7 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any], days: int | N
             await redis.aclose()
 
 
-def _period_metric(current: object | None, previous: object | None) -> dict[str, Any]:
+def _period_metric(current: float | None, previous: float | None) -> dict[str, Any]:
     """``{current, previous, delta_pct}`` for one period-scoped metric.
 
     ``delta_pct`` is null when the previous window is zero/absent (no baseline),
