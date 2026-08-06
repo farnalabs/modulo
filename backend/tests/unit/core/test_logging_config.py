@@ -170,9 +170,7 @@ def test_configure_logging_runs_without_error(monkeypatch: pytest.MonkeyPatch) -
         assert added, "configure_logging() must attach handlers to the root logger"
         stream_handler = next(h for h in added if isinstance(h, logging.StreamHandler))
         assert isinstance(stream_handler.formatter, JsonFormatter)
-        assert any(
-            isinstance(f, (CorrelationIdFilter, SensitiveFieldFilter)) for f in stream_handler.filters
-        )
+        assert any(isinstance(f, (CorrelationIdFilter, SensitiveFieldFilter)) for f in stream_handler.filters)
     finally:
         for handler in list(root_logger.handlers):
             if handler not in before_handlers:

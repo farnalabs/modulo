@@ -173,4 +173,10 @@ FLAGS: list[dict[str, str | None]] = [
         "tier_id": "team",
         "depends_on": None,
     },
+    {
+        "name": "analytics_page",
+        "description": "Run analytics dashboard (rolling-window run/cost/quality series)",
+        "tier_id": "community",
+        "depends_on": None,
+    },
 ]

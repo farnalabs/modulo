@@ -9,18 +9,19 @@ Rules:
 
 - filters are allowlisted keys mapped to bound scalars (enum params, uuid
   params) — NO string interpolation anywhere;
-- day-level ``GROUP BY run_date``; ``ORDER BY run_date, run_id``;
+- day/hour-level ``GROUP BY`` (``run_date`` / ``date_trunc('hour', created_at)``);
+  ``ORDER BY run_date, run_id``;
 - NO ``LIMIT`` before bucketing — limit/order are applied post-bucketing in
   Python (``bucket_rows``);
 - week bucketing + zero-fill happen in Python from an explicit day-grid
-  (ISO Monday week boundary).
+  (ISO Monday week boundary); hour zero-fill happens from an explicit hour-grid.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -37,12 +38,14 @@ __all__ = [
     "AnalyticsTriggerType",
     "bucket_rows",
     "build_facts_query",
+    "resolve_group_by",
 ]
 
 _COMPLETE_STATUS = "complete"
 
 
 class AnalyticsGroupBy(StrEnum):
+    HOUR = "hour"
     DAY = "day"
     WEEK = "week"
 
@@ -116,9 +119,16 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     Returns ``(stmt, params)``. ``params`` carries every bound value; the
     statement is fully parameterised (no string interpolation).
     """
-    group_cols = [RunDailyFact.run_date]
-    select_cols = [
-        RunDailyFact.run_date,
+    group_cols: list[Any] = [RunDailyFact.run_date]
+    select_cols: list[Any] = [RunDailyFact.run_date]
+    if query.group_by == AnalyticsGroupBy.HOUR:
+        # Hour buckets truncate the fact's ``created_at`` instant to the hour.
+        # Labelled ``run_date`` so ``bucket_rows`` keeps reading ``row.run_date``
+        # (the raw UTC-attributed day stays the day-level filter key below).
+        time_expr: Any = sa.func.date_trunc("hour", RunDailyFact.created_at).label("run_date")
+        group_cols = [time_expr]
+        select_cols = [time_expr]
+    select_cols += [
         # Complete-run count for success_rate — a FILTER keeps it out of the
         # group key while staying computable at day granularity.
         sa.func.count(RunDailyFact.id).filter(RunDailyFact.status == _COMPLETE_STATUS).label("complete_count"),
@@ -174,6 +184,51 @@ def _week_start(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
 
+def _hour_grid(date_from: date, date_to: date) -> list[datetime]:
+    """Hour-starts from ``date_from`` 00:00 UTC through ``date_to`` 23:59 UTC."""
+    start = datetime.combine(date_from, time.min, tzinfo=UTC)
+    end = datetime.combine(date_to, time(23, 59, 59), tzinfo=UTC)
+    grid: list[datetime] = []
+    cursor = start
+    while cursor <= end:
+        grid.append(cursor)
+        cursor += timedelta(hours=1)
+    return grid
+
+
+def resolve_group_by(
+    group_by: AnalyticsGroupBy | None,
+    date_from: date | datetime | None,
+    date_to: date | datetime | None,
+) -> AnalyticsGroupBy:
+    """Auto-granularity by range span (``auto_granularity=true``).
+
+    Explicit hour/week choices pass through unchanged. DAY (or None) resolves to
+    HOUR for spans <= 3 days, DAY for spans <= 90 days, WEEK otherwise. Without a
+    bounded range it stays DAY (backward-compatible default).
+    """
+    if group_by not in (None, AnalyticsGroupBy.DAY):
+        return group_by or AnalyticsGroupBy.DAY
+    if date_from is None or date_to is None:
+        return AnalyticsGroupBy.DAY
+    frm = (
+        date_from.replace(tzinfo=UTC)
+        if isinstance(date_from, datetime)
+        else datetime.combine(date_from, time.min, tzinfo=UTC)
+    )
+    to = (
+        date_to.replace(tzinfo=UTC)
+        if isinstance(date_to, datetime)
+        else datetime.combine(date_to, time(23, 59, 59), tzinfo=UTC)
+    )
+    span = (to - frm).days
+    if span <= 3:
+        return AnalyticsGroupBy.HOUR
+    if span <= 90:
+        return AnalyticsGroupBy.DAY
+    return AnalyticsGroupBy.WEEK
+
+
 def bucket_rows(
     rows: list[Any],
     *,
@@ -185,10 +240,12 @@ def bucket_rows(
 ) -> list[dict[str, Any]]:
     """Bucket day-level rows into the response series (backend = sole authority).
 
-    Day or ISO-week buckets, zero-filled from an explicit day-grid (zero-fill
-    independent of row presence). For dimensioned queries each time bucket is
-    repeated per observed dimension key. ``limit`` is applied AFTER bucketing
-    (the most recent buckets win).
+    Hour/day/ISO-week buckets, zero-filled from an explicit time grid (zero-fill
+    independent of row presence). Hour buckets run from ``date_from`` 00:00 UTC
+    to ``date_to`` 23:59 UTC and emit ISO datetimes; day/week buckets emit ISO
+    dates. For dimensioned queries each time bucket is repeated per observed
+    dimension key. ``limit`` is applied AFTER bucketing (the most recent buckets
+    win).
     """
     # Aggregate the day-level rows into (time_key, dim_key) buckets.
     agg: dict[tuple[Any, Any | None], dict[str, Any]] = {}
@@ -228,13 +285,19 @@ def bucket_rows(
             bucket["duration_sum"] += float(row.avg_duration_ms) * cnt
             bucket["duration_n"] += cnt
 
-    # Explicit day grid → time grid (week Mondays for week grouping).
-    grid_days: list[date] = []
-    day = date_from
-    while day <= date_to:
-        grid_days.append(day)
-        day += timedelta(days=1)
-    grid_times = sorted({_week_start(d) for d in grid_days} if group_by == AnalyticsGroupBy.WEEK else grid_days)
+    # Explicit time grid: hourly (from date_from 00:00 UTC to date_to 23:59 UTC)
+    # for hour grouping, otherwise the day grid (week Mondays for week grouping).
+    if group_by == AnalyticsGroupBy.HOUR:
+        grid_times = _hour_grid(date_from, date_to)
+    else:
+        day_from = date_from.date() if isinstance(date_from, datetime) else date_from
+        day_to = date_to.date() if isinstance(date_to, datetime) else date_to
+        grid_days: list[date] = []
+        day = day_from
+        while day <= day_to:
+            grid_days.append(day)
+            day += timedelta(days=1)
+        grid_times = sorted({_week_start(d) for d in grid_days} if group_by == AnalyticsGroupBy.WEEK else grid_days)
 
     dim_keys: list[Any] = [None]
     if dimension is not None:
@@ -257,7 +320,7 @@ def bucket_rows(
             success_rate = (complete / count) if count else None
             out.append(
                 {
-                    "date": tkey.isoformat(),
+                    "date": tkey.replace(tzinfo=None).isoformat() if isinstance(tkey, datetime) else tkey.isoformat(),
                     "key": dkey,
                     "count": count,
                     "total_cost_usd": cost,

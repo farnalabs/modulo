@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +24,7 @@ from modulo.core.analytics.builder import (
     AnalyticsTriggerType,
     bucket_rows,
     build_facts_query,
+    resolve_group_by,
 )
 
 _ORG = uuid.UUID("11111111-1111-4111-8111-111111111111")
@@ -389,6 +390,98 @@ class TestBucketing:
         assert [b["date"] for b in out] == ["2026-08-01", "2026-08-02", "2026-08-03"]
         assert all(b["count"] == 0 for b in out)
         assert all(b["key"] is None for b in out)
+
+
+class TestHourGranularity:
+    def test_hour_group_by_truncates_created_at(self) -> None:
+        stmt, _ = build_facts_query(_query(group_by=AnalyticsGroupBy.HOUR))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "date_trunc" in sql, "hour grouping must truncate created_at"
+        assert "created_at" in sql
+        assert "run_date" in sql, "the truncated expression must be labelled run_date"
+
+    def test_hour_group_by_selects_run_date_label(self) -> None:
+        stmt, _ = build_facts_query(_query(group_by=AnalyticsGroupBy.HOUR))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "run_date" in keys, "bucket_rows reads row.run_date — the label must be selected"
+
+    def test_hour_grid_zero_fills_iso_datetimes(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.HOUR,
+            dimension=None,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        assert len(out) == 24, "a single day at hour granularity must zero-fill 24 hourly buckets"
+        assert out[0]["date"] == "2026-08-06T00:00:00"
+        assert out[23]["date"] == "2026-08-06T23:00:00"
+        assert all(b["count"] == 0 for b in out)
+
+    def test_hour_buckets_aggregate_by_truncated_hour(self) -> None:
+        rows = [
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                count=2,
+                complete_count=2,
+                total_cost_usd=10.0,
+                total_tokens=50,
+                avg_duration_ms=500.0,
+            ),
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                count=1,
+                complete_count=0,
+                total_cost_usd=2.0,
+                total_tokens=10,
+                avg_duration_ms=100.0,
+            ),
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 14, 0, tzinfo=UTC),
+                count=1,
+                complete_count=1,
+                total_cost_usd=5.0,
+                total_tokens=25,
+                avg_duration_ms=200.0,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.HOUR,
+            dimension=None,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        by_hour = {b["date"]: b for b in out}
+        assert by_hour["2026-08-06T10:00:00"]["count"] == 3, "rows in the same truncated hour must collapse"
+        assert by_hour["2026-08-06T10:00:00"]["total_cost_usd"] == 12.0
+        assert by_hour["2026-08-06T14:00:00"]["count"] == 1
+        assert len(out) == 24
+
+
+class TestResolveGroupBy:
+    def test_hour_for_span_three_days_or_less(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=3)) == AnalyticsGroupBy.HOUR
+        assert resolve_group_by(None, base, base + timedelta(days=1)) == AnalyticsGroupBy.HOUR
+
+    def test_day_for_span_up_to_ninety_days(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=4)) == AnalyticsGroupBy.DAY
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=90)) == AnalyticsGroupBy.DAY
+
+    def test_week_for_span_over_ninety_days(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=91)) == AnalyticsGroupBy.WEEK
+
+    def test_explicit_group_by_passes_through(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.HOUR, base, base + timedelta(days=100)) == AnalyticsGroupBy.HOUR
+        assert resolve_group_by(AnalyticsGroupBy.WEEK, base, base + timedelta(days=2)) == AnalyticsGroupBy.WEEK
+
+    def test_missing_range_returns_day(self) -> None:
+        assert resolve_group_by(AnalyticsGroupBy.DAY, None, None) == AnalyticsGroupBy.DAY
+        assert resolve_group_by(None, None, None) == AnalyticsGroupBy.DAY
 
 
 class TestReconcileCooldown:

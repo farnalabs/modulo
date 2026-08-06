@@ -97,6 +97,7 @@ async def _insert_fact(
     trigger_type: str = "manual",
     cost: float | None = 1.25,
     tokens: int | None = 100,
+    created_at: datetime | None = None,
 ) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
@@ -110,7 +111,9 @@ async def _insert_fact(
                 "oid": str(org_id),
                 "rid": str(run_id),
                 "day": run_date,
-                "created": datetime.combine(run_date, datetime.min.time(), tzinfo=UTC),
+                "created": created_at
+                if created_at is not None
+                else datetime.combine(run_date, datetime.min.time(), tzinfo=UTC),
                 "tt": trigger_type,
                 "st": status,
                 "cost": cost,
@@ -309,6 +312,76 @@ class TestDimensionedQuery:
         assert any(b["key"] is not None for b in payload["buckets"]), (
             "dimensioned buckets must not all collapse under None"
         )
+
+
+class TestHourGranularity:
+    async def test_group_by_hour_returns_iso_datetime_buckets(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=datetime(today.year, today.month, today.day, 10, 0, tzinfo=UTC),
+        )
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=datetime(today.year, today.month, today.day, 14, 0, tzinfo=UTC),
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?group_by=hour&date_from={today.isoformat()}&date_to={today.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        buckets = resp.json()["buckets"]
+        assert len(buckets) == 24, "a single day at hour granularity must zero-fill 24 hourly buckets"
+        assert all("T" in b["date"] and b["date"].endswith(":00:00") for b in buckets), (
+            "hour buckets must carry ISO datetime dates"
+        )
+        by_hour = {b["date"]: b["count"] for b in buckets}
+        assert by_hour[f"{today.isoformat()}T10:00:00"] >= 1, "the 10:00 fact must land in the 10:00 bucket"
+        assert by_hour[f"{today.isoformat()}T14:00:00"] >= 1, "the 14:00 fact must land in the 14:00 bucket"
+
+    async def test_auto_granularity_resolves_hour_for_short_range(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?auto_granularity=true&date_from=2026-08-01&date_to=2026-08-01",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        assert payload["group_by"] == "hour", "a <=3-day range must resolve to hour granularity"
+        assert len(payload["buckets"]) == 24
+
+    async def test_auto_granularity_resolves_week_for_long_range(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?auto_granularity=true&date_from=2026-01-01&date_to=2026-08-01",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["group_by"] == "week", "a >90-day range must resolve to week granularity"
 
 
 class TestPredicateStrip:

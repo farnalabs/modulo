@@ -16,6 +16,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from datetime import time as dt_time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -34,6 +35,7 @@ from modulo.core.analytics.builder import (
     AnalyticsTriggerType,
     bucket_rows,
     build_facts_query,
+    resolve_group_by,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -129,19 +131,26 @@ def _analytics_session_factory(settings: Settings) -> async_sessionmaker[AsyncSe
 @router.get("/query", response_model=AnalyticsResponse)
 async def analytics_query(
     group_by: AnalyticsGroupBy = Query(AnalyticsGroupBy.DAY),
+    auto_granularity: bool = Query(False),
     dimension: AnalyticsDimension | None = Query(None),
     trigger_type: AnalyticsTriggerType | None = Query(None),
     status: AnalyticsStatus | None = Query(None),
     pipeline_id: uuid.UUID | None = Query(None),
     folder_id: uuid.UUID | None = Query(None),
-    date_from: date | None = Query(None),
-    date_to: date | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
     limit: int = Query(1000, ge=1, le=1000),
     settings: Settings = Depends(get_settings),
     principal: TenantPrincipal = require_permission("analytics.query"),
     _: object = require_feature("analytics_page"),
 ) -> AnalyticsResponse:
-    """Bucketed run-facts series over the requested range, grouped day or ISO-week."""
+    """Bucketed run-facts series over the requested range, grouped hour/day/ISO-week.
+
+    ``date_from``/``date_to`` accept bare dates ("2026-08-06", parsed as midnight
+    UTC) or ISO datetimes ("2026-08-06T14:00:00Z"). ``auto_granularity=true``
+    overrides ``group_by`` from the effective range span (hour ≤3d, day ≤90d,
+    week otherwise).
+    """
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(
@@ -165,9 +174,23 @@ async def analytics_query(
             detail="date range must be 365 days or less",
         )
 
+    # Normalise to aware UTC datetimes: bare dates expand to 00:00 / 23:59:59 so
+    # hourly bucketing covers the whole day.
+    def _utc_dt(value: date | datetime, *, end_of_day: bool) -> datetime:
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+        if end_of_day:
+            return datetime.combine(value, dt_time(23, 59, 59), tzinfo=UTC)
+        return datetime.combine(value, dt_time.min, tzinfo=UTC)
+
+    effective_from = _utc_dt(effective_from, end_of_day=False)
+    effective_to = _utc_dt(effective_to, end_of_day=True)
+
+    effective_group_by = resolve_group_by(group_by, effective_from, effective_to) if auto_granularity else group_by
+
     query = AnalyticsQuery(
         org_id=org_id,
-        group_by=group_by,
+        group_by=effective_group_by,
         dimension=dimension,
         trigger_type=trigger_type,
         status=status,
@@ -239,14 +262,14 @@ async def analytics_query(
 
     buckets = bucket_rows(
         list(rows),
-        group_by=group_by,
+        group_by=effective_group_by,
         dimension=dimension,
         date_from=effective_from,
         date_to=effective_to,
         limit=limit,
     )
     return AnalyticsResponse(
-        group_by=group_by.value,
+        group_by=effective_group_by.value,
         dimension=dimension.value if dimension is not None else None,
         date_from=effective_from.isoformat(),
         date_to=effective_to.isoformat(),
