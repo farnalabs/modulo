@@ -18,7 +18,8 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from modulo.core.analytics.maintenance import backfill_facts, retention_facts
+from modulo.core.analytics import maintenance as maintenance_mod
+from modulo.core.analytics.maintenance import backfill_facts, retention_facts, run_maintenance
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 pytestmark = pytest.mark.integration
@@ -664,6 +665,30 @@ class TestMaintenance:
         assert facts.get(run_a) == org, "fact org must equal the source run's org"
         assert facts.get(run_b) == org_b, "fact org must equal the source run's org"
         assert run_pending not in facts, "non-terminal runs must never be backfilled"
+
+    async def test_run_maintenance_autobegin_false_session_factory(
+        self,
+        bypass_engine: AsyncEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # saq_worker._make_session_factory() builds sessions with
+        # autobegin=False. run_maintenance must begin an explicit transaction
+        # BEFORE probing the dialect via session.connection() — a bare probe on
+        # an autobegin=False session raises InvalidRequestError, which killed
+        # the daily cron before any SQL ran (backfill/reconcile/retention never
+        # executed and the non-Postgres no-op path was equally dead).
+        async def _noop(session: object, *args: object, **kwargs: object) -> dict[str, object]:
+            return {}
+
+        monkeypatch.setattr(maintenance_mod, "backfill_batches", _noop)
+        monkeypatch.setattr(maintenance_mod, "reconcile_facts", _noop)
+        monkeypatch.setattr(maintenance_mod, "retention_facts", _noop)
+
+        factory = async_sessionmaker(bypass_engine, expire_on_commit=False, autobegin=False)
+        result = await run_maintenance(factory)
+
+        assert result["skipped"] is False
+        assert result.get("maintenance_failed") is not True, "run_maintenance must complete the maintenance pass"
 
     async def test_retention_day_slice_boundary(
         self,

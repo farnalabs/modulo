@@ -91,11 +91,24 @@ async def _dialect_name(session: Any) -> str:
 def _reconcile_cooldown_allows(org_id: uuid.UUID, drift_type: str) -> bool:
     key = (str(org_id), drift_type)
     now = time.monotonic()
+    _reconcile_cooldown_prune(now)
     last = _reconcile_cooldown.get(key)
     if last is not None and now - last < _RECONCILE_ALERT_COOLDOWN_SECONDS:
         return False
     _reconcile_cooldown[key] = now
     return True
+
+
+def _reconcile_cooldown_prune(now: float) -> None:
+    """Best-effort eviction of reconcile-alert cooldown entries.
+
+    The dict is bounded by org count but unbounded over time — an entry whose
+    timestamp has fully aged out of the cooldown window can never suppress a
+    future alert, so drop it on every check/set to keep the map bounded.
+    """
+    for key, last in list(_reconcile_cooldown.items()):
+        if now - last >= _RECONCILE_ALERT_COOLDOWN_SECONDS:
+            del _reconcile_cooldown[key]
 
 
 async def backfill_facts(session: Any, day: date) -> int:
@@ -328,26 +341,29 @@ async def run_maintenance(factory: Any) -> dict[str, Any]:
     ``ON CONFLICT`` constructs are Postgres-idiomatic and SQLite/MariaDB get
     nothing.
     """
-    async with factory() as session:
+    # ``factory`` is built the way saq_worker does (``autobegin=False``), so the
+    # dialect probe via ``session.connection()`` MUST run inside an explicit
+    # transaction — a bare probe raises InvalidRequestError before any SQL runs.
+    async with factory() as session, session.begin():
         dialect = await _dialect_name(session)
         if dialect != "postgresql":
             record_facts_skip_non_pg()
             _log.warning("analytics.facts.maintenance_skipped_non_pg", extra={"dialect": dialect})
             return {"skipped": True, "reason": "non_postgres"}
 
-        stats: dict[str, Any] = {}
-        try:
-            stats.update(await backfill_batches(session))
-            async with session.begin():
-                await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
-                stats.update(await reconcile_facts(session))
-            async with session.begin():
-                await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
-                stats.update(await retention_facts(session))
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("analytics.facts.maintenance_failed")
-            stats["maintenance_failed"] = True
-        stats["skipped"] = False
-        return stats
+    stats: dict[str, Any] = {}
+    try:
+        stats.update(await backfill_batches(session))
+        async with session.begin():
+            await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
+            stats.update(await reconcile_facts(session))
+        async with session.begin():
+            await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
+            stats.update(await retention_facts(session))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("analytics.facts.maintenance_failed")
+        stats["maintenance_failed"] = True
+    stats["skipped"] = False
+    return stats

@@ -303,3 +303,48 @@ class TestBucketing:
         assert [b["date"] for b in out] == ["2026-08-01", "2026-08-02", "2026-08-03"]
         assert all(b["count"] == 0 for b in out)
         assert all(b["key"] is None for b in out)
+
+
+class TestReconcileCooldown:
+    """Cooldown-keyed reconcile alerts (maintenance.py, ADR 020).
+
+    The cooldown dict is bounded by org count but unbounded over time — stale
+    entries must be pruned so the map never grows without bound.
+    """
+
+    def _module(self):
+        from modulo.core.analytics import maintenance as maintenance_mod
+
+        return maintenance_mod
+
+    def test_allows_then_suppresses_within_window_then_prunes_stale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        maintenance_mod = self._module()
+        maintenance_mod._reconcile_cooldown.clear()
+        now = [1000.0]
+        monkeypatch.setattr(maintenance_mod.time, "monotonic", lambda: now[0])
+        org = uuid.uuid4()
+        drift_type = "ledger_exceeds_facts"
+
+        assert maintenance_mod._reconcile_cooldown_allows(org, drift_type) is True
+        now[0] += 60
+        assert maintenance_mod._reconcile_cooldown_allows(org, drift_type) is False, "within cooldown → suppressed"
+        now[0] += maintenance_mod._RECONCILE_ALERT_COOLDOWN_SECONDS + 1
+        assert maintenance_mod._reconcile_cooldown_allows(org, drift_type) is True, "after window → allowed again"
+        assert len(maintenance_mod._reconcile_cooldown) == 1, "stale entries pruned; only the fresh re-entry remains"
+        maintenance_mod._reconcile_cooldown.clear()
+
+    def test_prune_removes_only_stale_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        maintenance_mod = self._module()
+        maintenance_mod._reconcile_cooldown.clear()
+        now = [1000.0]
+        monkeypatch.setattr(maintenance_mod.time, "monotonic", lambda: now[0])
+        maintenance_mod._reconcile_cooldown[("org-a", "ledger_exceeds_facts")] = (
+            now[0] - maintenance_mod._RECONCILE_ALERT_COOLDOWN_SECONDS - 10
+        )
+        maintenance_mod._reconcile_cooldown[("org-b", "ledger_exceeds_facts")] = now[0] - 10
+
+        maintenance_mod._reconcile_cooldown_prune(now[0])
+
+        assert ("org-a", "ledger_exceeds_facts") not in maintenance_mod._reconcile_cooldown
+        assert ("org-b", "ledger_exceeds_facts") in maintenance_mod._reconcile_cooldown
+        maintenance_mod._reconcile_cooldown.clear()
