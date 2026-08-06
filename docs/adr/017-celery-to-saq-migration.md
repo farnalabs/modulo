@@ -52,22 +52,43 @@ firefight, then decoupled. Current (post-fix) model:
   50 silently raised worker concurrency 5 → 20 → 50, multiplying in-flight jobs
   (and therefore DB/Redis load) with every pool resize. Decoupling makes the
   two budgets independent and independently tunable.
-- **`SAQ_REDIS_POOL_SIZE`** (default `50`) and **`SAQ_WORKER_DB_POOL_SIZE`**
-  (default `10`) are firefight residues: both were raised during the cutover to
+- **`SAQ_REDIS_POOL_SIZE`** (default `20`) and **`SAQ_WORKER_DB_POOL_SIZE`**
+  (default `10`) were firefight residues: both were raised during the cutover to
   relieve "Too many connections" pressure and were never re-derived from the
-  actual connection budgets. **Budget verification is the OPEN ACTION** (tracked
-  under FAR-88 / the tier ticket): an operator must run
-  `SHOW max_connections;` on the deployed Postgres (via `fly ssh console`) and
-  `CLIENT LIST` / `maxclients` on Upstash, then re-derive both defaults with
-  headroom for the web pools and per-run checkpointer connections. Neither
-  default should be lowered until that verification passes. Accepted design
-  target: concurrency 5 per worker x up to 5 machines = up to 25 concurrent
-  runs.
+  actual connection budgets. **Budget verification CLOSED — 2026-08-06**
+  (FAR-88 / the tier ticket). Verified facts from prod (`fly ssh console`):
+  deployed Postgres (modulo-app-db, Fly Postgres 17.9) reports
+  `max_connections` = **300** with ~**40** connections in use at sample time;
+  Upstash showed ~**15** connected clients at sample time and prod pins the
+  `SAQ_REDIS_POOL_SIZE` secret to **5** (maxclients is hidden on Upstash).
+  Re-derived defaults: `SAQ_WORKER_DB_POOL_SIZE` stays **10** (10 x 2 workers x
+  up to 5 machines = 100 + web pools + checkpointer, comfortably under 300) and
+  `SAQ_REDIS_POOL_SIZE` is lowered 50 → **20** (workers hold pool conns only
+  while running jobs — ~5 jobs x 2 workers = 10 live conns per machine — so 20
+  caps at 200 potential conns across 5 machines; operators on a small Redis
+  tier may lower to 5, matching prod). Accepted design target: concurrency 5
+  per worker x up to 5 machines = up to 25 concurrent runs, verified-safe
+  against the 300-connection cap.
 - **`max_concurrent_ops` reserve clamp** (SAQ RedisQueue semaphore): must stay
   strictly below the pool size so the semaphore can never exhaust every
   connection. Reserve formula: pool ≤ 1 → `pool`; pool 2–5 → `pool − 1`; pool
   > 5 → `pool − 5`. Implemented as `_max_concurrent_ops()` in
   `backend/src/modulo/core/saq_worker.py` and covered by unit tests.
+
+### Concurrency: product vs infra
+
+The connection-pool knobs (`SAQ_REDIS_POOL_SIZE`, `SAQ_WORKER_DB_POOL_SIZE`,
+`SAQ_WORKER_CONCURRENCY`) are **infra-specific server configs**: operators tune
+them to their deployment's Postgres/Redis capacity (the verified budget above).
+They are not product concurrency controls.
+
+The **product-facing** concurrency control is the number of concurrent
+runs/pipelines a customer runs — `Pipeline.max_concurrent_runs` (per pipeline,
+default 5) plus the org-level sandbox cap — which customers set to suit THEIR
+infra. SAQ pool knobs exist to make the chosen product concurrency fit the
+underlying Postgres/Redis; a capacity-blocked run stays `pending` and is
+re-dispatched by `dispatcher_reconcile` when capacity frees. No new product
+feature is implied here — this is a positioning note only.
 
 ### Database as system of record
 
