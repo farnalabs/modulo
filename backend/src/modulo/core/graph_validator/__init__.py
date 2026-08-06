@@ -224,9 +224,7 @@ class GraphValidator:
     def _strip_warnings(self, result: ValidationResult) -> ValidationResult:
         """Return a copy containing only error-severity issues."""
         out = ValidationResult()
-        for issue in result.issues:
-            if issue.severity == "error":
-                out.issues.append(issue)
+        out.issues = [issue for issue in result.issues if issue.severity == "error"]
         return out
 
     # ------------------------------------------------------------------
