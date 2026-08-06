@@ -148,7 +148,7 @@ class TestUpdateTeam:
 
 
 class TestDeleteTeam:
-    async def test_deletes_and_returns_true(self, mock_session: AsyncMock) -> None:
+    async def test_soft_deletes_and_returns_true(self, mock_session: AsyncMock) -> None:
         team = _make_team()
         mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=team)))
 
@@ -156,7 +156,8 @@ class TestDeleteTeam:
 
         result = await delete_team(mock_session, _TEAM_ID)
         assert result is True
-        mock_session.delete.assert_awaited_once_with(team)
+        assert team.deleted_at is not None
+        mock_session.delete.assert_not_called()
         mock_session.flush.assert_awaited_once()
 
     async def test_returns_false_when_not_found(self, mock_session: AsyncMock) -> None:
