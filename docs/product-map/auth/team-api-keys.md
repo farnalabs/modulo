@@ -140,11 +140,11 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 ### Key lifecycle edge cases
 
 - [ ] Create key with `team_id` for a non-existent team → FK violation → 409 (IntegrityError catch)
-- [ ] Create key with `expires_at` in the past → accepted (no validation that `expires_at > now`)
-- [ ] Update key with `expires_at` in the past → accepted (no validation that `expires_at > now`)
-- [ ] Update revoked key → returns 404 (query filters `revoked_at.is_(None)`)
-- [ ] Re-revoke an already-revoked key → 404 (query filters `revoked_at.is_(None)`)
-- [ ] Key name with leading/trailing whitespace → stored as-is (no `.strip()`)
+- [x] Create key with `expires_at` in the past → 422 `expires_at must be in the future` (validation added 2026-08-06)
+- [x] Update key with `expires_at` in the past → 422 `expires_at must be in the future` (validation added 2026-08-06)
+- [x] Update revoked key → returns 404 (query filters `revoked_at.is_(None)`)
+- [x] Re-revoke an already-revoked key → 404 (query filters `revoked_at.is_(None)`)
+- [x] Key name with leading/trailing whitespace → stripped via `_normalise_name` before create/update (2026-08-06); whitespace-only names rejected with 422
 - [ ] `lookup_prefix` of exactly 8 chars in the DB model — any shorter/longer prefix fails to match (DB column is `String(8)`)
 - [ ] MCP middleware validates API key without `org_id` → resolves org from the key's `organisation_id` column, but `_ctx_team_id` is never set
 
@@ -169,6 +169,10 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`.
 
 ## QA History
+
+### 2026-08-06 — improve-architecture (product-map walk)
+- Fixed: `expires_at` in the past no longer accepted on create or update — `_parse_expires_at` normalises naive/`Z`-suffixed datetimes to UTC-aware and the route returns 422 `expires_at must be in the future`.
+- Fixed: API key names are stripped of surrounding whitespace via `_normalise_name` before create/update; whitespace-only names rejected with 422. Added 6 endpoint unit tests covering past-expiry rejection (create + update), whitespace-only name rejection, and name trimming.
 
 ### Index 135 — 2026-07-04
 - Fixed CRITICAL: `test_create_api_key_accepts_expires_at` passed `created_by=user_id` instead of `account_id=user_id` — would raise TypeError
