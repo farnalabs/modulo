@@ -1104,7 +1104,7 @@ unpause). The scheduled-tick audit is counters + summary only (`cron_skipped_pau
 / `polling_skipped_paused` in the `fire_due_triggers` summary), never per-trigger
 `TriggerEvent` rows.
 
-**Deploy order is migration-before-code** (0065 adds `organisations.triggers_paused`
+**Deploy order is migration-before-code** (0069 adds `organisations.triggers_paused`
 + `triggers_paused_at` and widens `ck_trigger_events_validation_result` to the
 full 19-value vocabulary). Until the migration lands, the scheduler's batched
 pause read (a dedicated read in its own session/transaction) degrades on a

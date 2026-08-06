@@ -84,6 +84,44 @@ describe('SettingsTriggersView — org-wide trigger pause', () => {
     expect(wrapper.find('[data-testid="settings-triggers-paused-banner"]').exists()).toBe(true)
   })
 
+  it('A11Y: banner announces status (role=status + aria-live) and toggle exposes aria-pressed', async () => {
+    const wrapper = mountView(fakeJwt('admin'), { ...baseListData, triggers_paused: true, paused_at: '2026-08-04T00:00:00Z' })
+    await flush()
+
+    const banner = wrapper.find('[data-testid="settings-triggers-paused-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.attributes('role')).toBe('status')
+    expect(banner.attributes('aria-live')).toBe('polite')
+
+    const toggle = wrapper.find('[data-testid="settings-triggers-pause-all"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('aria-pressed')).toBe('true')
+  })
+
+  it('STATE-1: failed toggle surfaces an inline pause error without clobbering the loaded list', async () => {
+    putMock.mockRejectedValue(new Error('network down'))
+    const wrapper = mountView(fakeJwt('admin'), {
+      ...baseListData,
+      items: [{ id: 't1', pipeline_id: 'p1', trigger_type: 'webhook', active: true, config_json: {} }],
+      triggers_paused: false,
+      paused_at: null,
+    })
+    await flush()
+
+    expect(wrapper.find('[data-testid="settings-triggers-pause-error"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="settings-triggers-pause-all"]').trigger('click')
+    await flush()
+
+    const inlineError = wrapper.find('[data-testid="settings-triggers-pause-error"]')
+    expect(inlineError.exists()).toBe(true)
+    expect(inlineError.text()).toContain('Failed to update trigger pause state')
+    expect(inlineError.attributes('role')).toBe('alert')
+
+    expect(wrapper.find('[data-testid="settings-triggers-pause-all"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-triggers-paused-banner"]').exists()).toBe(false)
+  })
+
   it('admin: banner shows when already paused and the button resumes (PUT paused: false)', async () => {
     const wrapper = mountView(fakeJwt('admin'), { ...baseListData, triggers_paused: true, paused_at: '2026-08-04T00:00:00Z' })
     await flush()

@@ -17,6 +17,8 @@
     <div
       v-if="orgTriggersPaused"
       data-testid="settings-triggers-paused-banner"
+      role="status"
+      aria-live="polite"
       class="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
     >
       <p class="text-sm font-medium">{{ $t('views.SettingsTriggersView.paused_banner_title') }}</p>
@@ -26,19 +28,30 @@
       </p>
     </div>
 
-    <div v-if="isOrgAdmin" class="mb-4 flex items-center justify-between rounded-lg border bg-card p-4">
-      <div class="pr-4">
-        <p class="text-sm font-medium">{{ $t('views.SettingsTriggersView.pause_all_triggers') }}</p>
-        <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('views.SettingsTriggersView.pause_all_triggers_description') }}</p>
+    <div v-if="isOrgAdmin" class="mb-4 rounded-lg border bg-card p-4">
+      <div class="flex items-center justify-between">
+        <div class="pr-4">
+          <p class="text-sm font-medium">{{ $t('views.SettingsTriggersView.pause_all_triggers') }}</p>
+          <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('views.SettingsTriggersView.pause_all_triggers_description') }}</p>
+        </div>
+        <Button
+          data-testid="settings-triggers-pause-all"
+          :variant="orgTriggersPaused ? 'outline' : 'default'"
+          :disabled="pauseToggling"
+          :aria-pressed="orgTriggersPaused"
+          @click="togglePauseAll"
+        >
+          {{ orgTriggersPaused ? $t('views.SettingsTriggersView.resume_triggers') : $t('views.SettingsTriggersView.pause_all_triggers_action') }}
+        </Button>
       </div>
-      <Button
-        data-testid="settings-triggers-pause-all"
-        :variant="orgTriggersPaused ? 'outline' : 'default'"
-        :disabled="pauseToggling"
-        @click="togglePauseAll"
+      <p
+        v-if="pauseError"
+        data-testid="settings-triggers-pause-error"
+        role="alert"
+        class="mt-2 text-sm font-medium text-destructive"
       >
-        {{ orgTriggersPaused ? $t('views.SettingsTriggersView.resume_triggers') : $t('views.SettingsTriggersView.pause_all_triggers_action') }}
-      </Button>
+        {{ pauseError }}
+      </p>
     </div>
 
     <LoadingSpinner v-if="!loaded" />
@@ -379,10 +392,12 @@ const orgTriggersPaused = computed<boolean>(() => Boolean((triggersData.value as
 const orgPausedAt = computed<string | null>(() => (triggersData.value as { paused_at?: string | null } | null)?.paused_at ?? null)
 
 const pauseToggling = ref(false)
+const pauseError = ref<string | null>(null)
 
 async function togglePauseAll() {
   if (pauseToggling.value || !orgId.value) return
   pauseToggling.value = true
+  pauseError.value = null
   try {
     const { put } = useApi()
     const res = await put<{ paused: boolean; paused_at: string | null }>(
@@ -399,7 +414,7 @@ async function togglePauseAll() {
       await loadTriggers()
     }
   } catch (e: unknown) {
-    error.value = t('views.SettingsTriggersView.failed_to_update_pause', { detail: formatApiError(e) })
+    pauseError.value = t('views.SettingsTriggersView.failed_to_update_pause', { detail: formatApiError(e) })
   } finally {
     pauseToggling.value = false
   }
