@@ -56,27 +56,25 @@ RUN_COMPLETE_STATUS = "complete"
 CAPACITY_TIMEOUT_TTL_MINUTES = 120
 
 # Re-dispatch TTL for stranded capacity-blocked runs. A run demoted to
-# ``pending`` with a capacity marker is normally retried in-process by
-# ``PipelineExecutor._retry_pending``, which refreshes ``heartbeat_at`` on each
-# attempt. If the worker process hosting that loop dies (deploy/crash/restart)
-# the run would otherwise sit ``pending`` until the 120-min capacity_timeout
-# sweep TERMINAL-FAILS a legitimate never-executed run. This window re-dispatches
-# a stranded run long before that — but ONLY when its heartbeat is stale (the
-# in-process loop is provably gone), and never once it is already past the
-# capacity_timeout TTL (those must fail, not be resurrected forever).
-#
-# Sized ABOVE the retry loop's worst-case backoff sleep (600s) plus the 15s
-# poll interval, so a LIVE loop's per-attempt heartbeat refresh never trips the
-# fence (a 10-minute TTL would race the 600s backoff and risk double-retry
-# loops). A genuinely stranded run gets ~10 re-dispatch attempts (120/12) before
-# the capacity_timeout backstop fails it.
+# ``pending`` with a capacity marker stays pending — there is NO in-process
+# retry loop since the Tier 3 removal of ``_retry_pending`` (plan F3b) — and is
+# recovered by the durable sweep paths: ``dispatcher_reconcile`` re-dispatches
+# it when capacity frees; ``stale_run_recovery_sweep`` re-dispatches stranded
+# capacity-blocked runs whose heartbeat is stale (the in-process loop is
+# provably gone); and the ``CAPACITY_TIMEOUT_TTL_MINUTES`` backstop
+# TERMINAL-FAILS a legitimate never-executed run past the 120-min window.
+# This window re-dispatches a stranded run long before that backstop — but
+# ONLY when its heartbeat is stale (the in-process loop is provably gone), and
+# never once it is already past the capacity_timeout TTL (those must fail, not
+# be resurrected forever).
 _STRANDED_REDISPATCH_TTL_MINUTES = 12
 
-_DEFAULT_CLAIM_CAP = 5
-
-# SAQ run claim cap (plan F6a) — distinct per-claim value; SAQ retries reuse the
-# same saq_job_id, so the cap bounds re-claims on an at-most-once boundary.
-SAQ_RUN_CLAIM_CAP = 20
+# Claim caps are a SINGLE source of truth: ``SAQ_RUN_CLAIM_CAP`` in settings
+# (default 20). Execute (plan F4) and resume (plan F6a) claims both resolve the
+# cap from settings via :func:`_resolve_claim_cap` — the old execute-only
+# ``_DEFAULT_CLAIM_CAP=5`` firefight value was retired (retro item 9). SAQ
+# retries reuse the same saq_job_id, so the cap bounds re-claims on an
+# at-most-once boundary.
 
 # E2B idempotency fence (plan F3a): the run-level dispatch lock is kept until
 # the run is terminal, bounded by an ~8h upper TTL (>= execute_run timeout 7200s
@@ -134,6 +132,19 @@ def _resolve_claim_stale_seconds(*, stale_seconds: int | None) -> int:
     return int(get_settings().run_claim_stale_seconds)
 
 
+def _resolve_claim_cap(claim_cap: int | None) -> int:
+    """Resolve the per-claim cap from settings (single source of truth, retro 9).
+
+    Reads ``get_settings().saq_run_claim_cap`` (default 20, alias
+    ``SAQ_RUN_CLAIM_CAP``). An explicit ``claim_cap`` overrides settings (used
+    by tests). Execute and resume claims share this one knob — the old
+    execute-only ``_DEFAULT_CLAIM_CAP=5`` firefight value is retired.
+    """
+    if claim_cap is not None:
+        return claim_cap
+    return int(get_settings().saq_run_claim_cap)
+
+
 _CLAIM_UPDATE_SQL = text(
     "UPDATE runs SET status='running', heartbeat_at=now(), claim_count=claim_count+1 "
     "WHERE id=:rid AND organisation_id=:oid "
@@ -156,7 +167,7 @@ _CLAIM_UPDATE_SQL_WITH_TOKEN = text(
 def build_claim_update(
     *,
     stale_seconds: int,
-    claim_cap: int = _DEFAULT_CLAIM_CAP,
+    claim_cap: int | None = None,
     claim_token: str | None = None,
 ) -> Any:
     """Build the atomic claim UPDATE for a pipeline run.
@@ -169,7 +180,10 @@ def build_claim_update(
       * ``status = 'pending'`` always.
       * ``status = 'running'`` when the heartbeat is older than *stale_seconds*.
 
-    ``claim_cap`` bounds the number of claims (claim_count) per run.
+    ``claim_cap`` bounds the number of claims (claim_count) per run; callers
+    resolve it from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap` — the value is bound at execute time, not baked
+    into this template.
 
     When *claim_token* is given the claim also rotates ``runs.claim_token`` to a
     FRESH per-claim value (plan F3a) — each re-claim gets a distinct token so a
@@ -229,7 +243,7 @@ async def claim_run_async(
     org_id: str,
     stale_seconds: int | None = None,
     *,
-    claim_cap: int = _DEFAULT_CLAIM_CAP,
+    claim_cap: int | None = None,
 ) -> str | None:
     """Claim a pending or stale-running run via an atomic SQL update (async).
 
@@ -237,18 +251,23 @@ async def claim_run_async(
     per-claim value (plan F3a) so a superseded original executor can detect it
     was replaced.
 
+    ``claim_cap`` bounds the number of claims (claim_count) per run; when
+    omitted it resolves from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap`.
+
     Returns the fresh claim token when the row was claimed, or ``None`` when
     the run is not claimable (or the claim failed). The token is threaded into
     ``heartbeat_loop``/``mark_complete`` so a superseded original can neither
     complete the run out from under a successor nor DEL its E2B dispatch key.
     """
     window = _resolve_claim_stale_seconds(stale_seconds=stale_seconds)
+    cap = _resolve_claim_cap(claim_cap)
     claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
             result = await c.execute(
-                build_claim_update(stale_seconds=window, claim_cap=claim_cap, claim_token=claim_token),
-                _claim_params(run_id, org_id, window, claim_cap, claim_token),
+                build_claim_update(stale_seconds=window, claim_cap=cap, claim_token=claim_token),
+                _claim_params(run_id, org_id, window, cap, claim_token),
             )
             claimed = result.fetchone() is not None
         if claimed:
@@ -633,7 +652,7 @@ _RESUME_CLAIM_UPDATE_SQL_WITH_TOKEN = text(
 def build_resume_claim_update(
     *,
     stale_seconds: int,
-    claim_cap: int = SAQ_RUN_CLAIM_CAP,
+    claim_cap: int | None = None,
     claim_token: str | None = None,
 ) -> Any:
     """Build the atomic claim UPDATE for a resumed HITL run.
@@ -648,6 +667,11 @@ def build_resume_claim_update(
     The single ``UPDATE ... WHERE ... RETURNING id`` claims atomically
     (no check-then-act window); a concurrent claimer loses because the row
     transitions out of the claimable state in the same statement.
+
+    ``claim_cap`` bounds the number of claims (claim_count) per run; callers
+    resolve it from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap` — the value is bound at execute time, not baked
+    into this template.
 
     When *claim_token* is given the claim rotates ``runs.claim_token`` to a
     fresh per-claim value (plan F3a).
@@ -675,7 +699,7 @@ async def claim_resume_run_async(
     run_id: str,
     org_id: str,
     *,
-    claim_cap: int = SAQ_RUN_CLAIM_CAP,
+    claim_cap: int | None = None,
 ) -> str | None:
     """Claim an awaiting_human/claimed (or stale-running) run for resume.
 
@@ -684,18 +708,23 @@ async def claim_resume_run_async(
     by the caller (HITL endpoints / recover-node) before dispatch. Rotates
     ``runs.claim_token`` to a fresh per-claim value (plan F3a).
 
+    ``claim_cap`` bounds the number of claims (claim_count) per run; when
+    omitted it resolves from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap`.
+
     Returns the fresh claim token when the row was claimed, or ``None`` when it
     is not claimable (or the claim failed) — threaded into ``heartbeat_loop``/
     ``mark_complete`` so a superseded original cannot complete the run or DEL
     the successor's E2B dispatch key.
     """
     stale_seconds = int(get_settings().run_claim_stale_seconds)
+    cap = _resolve_claim_cap(claim_cap)
     claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
             result = await c.execute(
-                build_resume_claim_update(stale_seconds=stale_seconds, claim_cap=claim_cap, claim_token=claim_token),
-                _resume_claim_params(run_id, org_id, stale_seconds, claim_cap, claim_token),
+                build_resume_claim_update(stale_seconds=stale_seconds, claim_cap=cap, claim_token=claim_token),
+                _resume_claim_params(run_id, org_id, stale_seconds, cap, claim_token),
             )
             claimed = result.fetchone() is not None
         return claim_token if claimed else None
@@ -713,7 +742,7 @@ async def resume_run(
     org_id: str,
     resume_data: dict[str, Any] | None = None,
     job: Any = None,
-    claim_cap: int = SAQ_RUN_CLAIM_CAP,
+    claim_cap: int | None = None,
 ) -> dict[str, Any]:
     """Resume an interrupted HITL run (SAQ ``resume_run`` job).
 
@@ -722,11 +751,16 @@ async def resume_run(
     decision (plan F6a). Mirrors :func:`execute_run`'s cancellation-safe
     heartbeat/complete structure: the heartbeat loop is cancelled in ``finally``
     and completion is written by :func:`mark_complete` (genuine completion only).
+
+    ``claim_cap`` bounds the number of claims (claim_count) per run; when
+    omitted it resolves from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
+    :func:`_resolve_claim_cap`.
     """
     rid = uuid.UUID(run_id)
     oid = uuid.UUID(org_id)
 
-    claim_token = await claim_resume_run_async(async_engine, str(rid), str(oid), claim_cap=claim_cap)
+    cap = _resolve_claim_cap(claim_cap)
+    claim_token = await claim_resume_run_async(async_engine, str(rid), str(oid), claim_cap=cap)
     if not claim_token:
         _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
         return {"status": "not_claimed"}

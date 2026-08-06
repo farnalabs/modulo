@@ -51,9 +51,12 @@ firefight, then decoupled. Current (post-fix) model:
 - **`SAQ_REDIS_POOL_SIZE`** (default `50`) and **`SAQ_WORKER_DB_POOL_SIZE`**
   (default `10`) are firefight residues: both were raised during the cutover to
   relieve "Too many connections" pressure and were never re-derived from the
-  actual connection budgets. They remain pending a connection-budget
-  verification against the deployed Postgres `max_connections` and the Upstash
-  `maxclients` (tracked under FAR-88 / the tier ticket). Accepted design
+  actual connection budgets. **Budget verification is the OPEN ACTION** (tracked
+  under FAR-88 / the tier ticket): an operator must run
+  `SHOW max_connections;` on the deployed Postgres (via `fly ssh console`) and
+  `CLIENT LIST` / `maxclients` on Upstash, then re-derive both defaults with
+  headroom for the web pools and per-run checkpointer connections. Neither
+  default should be lowered until that verification passes. Accepted design
   target: concurrency 5 per worker x up to 5 machines = up to 25 concurrent
   runs.
 - **`max_concurrent_ops` reserve clamp** (SAQ RedisQueue semaphore): must stay
