@@ -1,6 +1,7 @@
 """CRUD for Team records."""
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError
@@ -30,12 +31,18 @@ async def create_team(
 
 
 async def get_team(session: AsyncSession, team_id: uuid.UUID) -> Team | None:
-    result = await session.execute(select(Team).where(Team.id == team_id))
+    result = await session.execute(select(Team).where(Team.id == team_id, Team.deleted_at.is_(None)))
     return result.scalar_one_or_none()
 
 
 async def get_team_by_name(session: AsyncSession, org_id: uuid.UUID, name: str) -> Team | None:
-    result = await session.execute(select(Team).where(Team.organisation_id == org_id, Team.name == name))
+    result = await session.execute(
+        select(Team).where(
+            Team.organisation_id == org_id,
+            Team.name == name,
+            Team.deleted_at.is_(None),
+        )
+    )
     return result.scalar_one_or_none()
 
 
@@ -46,7 +53,7 @@ async def list_teams(
     page: int = 1,
     page_size: int = 20,
 ) -> PageResult[Team]:
-    count_q = select(func.count()).select_from(Team).where(Team.organisation_id == org_id)
+    count_q = select(func.count()).select_from(Team).where(Team.organisation_id == org_id, Team.deleted_at.is_(None))
     try:
         total_result = await session.execute(count_q)
         total = total_result.scalar() or 0
@@ -56,7 +63,7 @@ async def list_teams(
     try:
         query = (
             select(Team)
-            .where(Team.organisation_id == org_id)
+            .where(Team.organisation_id == org_id, Team.deleted_at.is_(None))
             .order_by(Team.created_at)
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -86,6 +93,6 @@ async def delete_team(session: AsyncSession, team_id: uuid.UUID) -> bool:
     team = await get_team(session, team_id)
     if team is None:
         return False
-    await session.delete(team)
+    team.deleted_at = datetime.now(UTC)
     await session.flush()
     return True
