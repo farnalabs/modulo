@@ -120,7 +120,7 @@ def evaluate_condition(
     non-zero number, ``True`` boolean, or a non-null value).
     """
     if not condition_expression:
-        return len(result.records) > 0
+        return bool(result.records)
 
     try:
         compiled = jmespath.compile(condition_expression)
