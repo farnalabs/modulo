@@ -878,11 +878,7 @@ def _mock_commit_flow(repo="owner/repo", base_sha="base123", blob_shas=("blob1",
         return_value=httpx.Response(200, json={"sha": base_sha})
     )
     blob_route = respx.post(f"https://api.github.com/repos/{repo}/git/blobs")
-    blob_route.mock(
-        side_effect=[
-            httpx.Response(201, json={"sha": sha}) for sha in blob_shas
-        ]
-    )
+    blob_route.mock(side_effect=[httpx.Response(201, json={"sha": sha}) for sha in blob_shas])
     tree_route = respx.post(f"https://api.github.com/repos/{repo}/git/trees").mock(
         return_value=httpx.Response(201, json={"sha": "tree123"})
     )
