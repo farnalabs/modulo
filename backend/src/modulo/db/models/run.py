@@ -27,6 +27,12 @@ if TYPE_CHECKING:
     from modulo.db.models.team import Team
 
 
+# Single source of truth for terminal run statuses (ADR 020). Used by the
+# analytics facts writer, the maintenance backfill, and the run purge. Must be
+# a subset of the ``ck_runs_status`` CHECK-constraint values.
+TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
 class Run(OrgScoped):
     __tablename__ = "runs"
     __table_args__ = (

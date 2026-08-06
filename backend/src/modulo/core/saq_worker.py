@@ -421,6 +421,18 @@ async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
     return await run_probe(_make_session_factory())
 
 
+async def analytics_facts_maintenance(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — daily run-facts backfill + reconcile + retention (ADR 020).
+
+    ONE plain modulo_app cron (sessions without set_rls_org — modulo_app is
+    BYPASSRLS, cross-org works, matching every existing system cron).
+    Non-Postgres backends no-op.
+    """
+    from modulo.core.analytics.maintenance import run_maintenance
+
+    return await run_maintenance(_make_session_factory())
+
+
 # ---------------------------------------------------------------------------
 # Worker settings
 # ---------------------------------------------------------------------------
@@ -502,6 +514,7 @@ def _system_functions() -> list[Any]:
         webhook_dedup_cleanup,
         stale_run_recovery,
         cost_probe,
+        analytics_facts_maintenance,
     ]
 
 
@@ -585,6 +598,18 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=30,
             retries=0,
             ttl=300,
+        ),
+        # analytics_facts_maintenance: daily (idempotent — the anti-join +
+        # ON CONFLICT DO NOTHING make overlap harmless), unique=True so a
+        # second instance cannot double-run a maintenance day-slice.
+        CronJob(
+            analytics_facts_maintenance,
+            cron="0 1 * * *",
+            unique=True,
+            timeout=600,
+            heartbeat=60,
+            retries=1,
+            ttl=900,
         ),
     ]
 
