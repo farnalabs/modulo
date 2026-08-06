@@ -322,20 +322,11 @@ def step_set_weak_password(password: str, client, request: pytest.FixtureRequest
 # -- Scenario: Authenticated user can access their org's pipelines ----------
 
 
-@given(
-    parsers.parse('I am authenticated in org "{org}"'),
-    target_fixture="current_org",
-)
-def step_authenticated_org(org: str) -> str:
-    """Record which org the user is authenticated in."""
-    return org
-
-
 @when(
     parsers.parse('the service accesses pipelines as user in org "{org}"'),
     target_fixture="pipeline_response",
 )
-def step_access_pipelines(org: str, client, alt_org_client, mock_session, current_org: str):
+def step_access_pipelines(org: str, client, alt_org_client, mock_session):
     """GET /api/v1/pipelines with the correct TestClient for the org."""
     from types import SimpleNamespace
     from unittest.mock import patch
