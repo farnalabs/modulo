@@ -1100,6 +1100,18 @@ def make_sandbox_agent_fn(
             agent_stdout = agent_stdout_raw[:_MAX_ARTIFACT_LOG]
             agent_stderr = agent_stderr_raw[:_MAX_ARTIFACT_LOG]
 
+            # A timed-out command leaves ``cmd_result`` as None: the run timed
+            # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
+            # exit_code -1. Surface a clear explanation instead of silently
+            # returning an empty-summary failure.
+            command_error: str = ""
+            if cmd_result is None:
+                command_error = (
+                    f"Sandbox agent command produced no output within {sandbox_timeout}s. "
+                    "No stdout/stderr was captured — the agent likely hung before "
+                    "writing any result."
+                )
+
             raw_output: str = ""
             output_json: Any = None
             try:
@@ -1115,7 +1127,7 @@ def make_sandbox_agent_fn(
             except Exception:
                 _log.info(
                     "sandbox_agent.no_output_json",
-                    extra={"node_id": node_id, "exit_code": exit_code},
+                    extra={"node_id": node_id, "exit_code": exit_code, "command_error": command_error},
                 )
 
             _span = _otel_trace.get_current_span()
@@ -1178,6 +1190,11 @@ def make_sandbox_agent_fn(
                 result_summary = output_json.get("summary", "")
                 changed_files = output_json.get("changed_files", [])
                 pr_url = output_json.get("pr_url", "")
+
+            if status == "failed" and not result_summary:
+                # Never report a silent empty-summary failure — explain WHY the
+                # command produced no usable output.
+                result_summary = command_error or "Sandbox agent command failed"
 
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
 

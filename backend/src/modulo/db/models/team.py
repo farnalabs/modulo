@@ -2,15 +2,23 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Numeric, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, ForeignKey, Index, Numeric, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from modulo.db.models.base import OrgScoped
+from modulo.db.models.base import OrgScoped, SoftDeleteMixin
 
 
-class Team(OrgScoped):
+class Team(SoftDeleteMixin, OrgScoped):  # SoftDeleteMixin FIRST (house pattern)
     __tablename__ = "teams"
-    __table_args__ = (UniqueConstraint("organisation_id", "name", name="uq_teams_organisation_name"),)
+    __table_args__ = (
+        Index(
+            "uq_teams_organisation_name",
+            "organisation_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))

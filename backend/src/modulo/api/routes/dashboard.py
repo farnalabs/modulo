@@ -353,7 +353,9 @@ async def dashboard_summary(
             idle_count = sum(status_counts.get(s, 0) for s in _idle_statuses)
             status_counts["idle"] = idle_count
 
-            teams_result = await session.execute(select(Team).where(Team.organisation_id == org_id).order_by(Team.name))
+            teams_result = await session.execute(
+                select(Team).where(Team.organisation_id == org_id, Team.deleted_at.is_(None)).order_by(Team.name)
+            )
             teams = list(teams_result.scalars().all())
 
             team_run_query = (

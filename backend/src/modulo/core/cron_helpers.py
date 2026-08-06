@@ -66,6 +66,16 @@ _REPORT_FAILURE_COUNTER_TTL = 6 * 3600  # 6h — long enough to count 5 x 5min
 # dispatcher_reconcile (system cron) — every 60s.
 RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
 
+# Claimed-but-nodeless zombie repair (2026-08-05). A SAQ run that has been
+# 'running' with a FRESH heartbeat but has NEVER dispatched a node (zero
+# LangGraph checkpoints for its thread) after SAQ_CLAIMED_NODELESS_MINUTES is a
+# zombie: the execute_run watchdog (pipeline_execution.zombie_watchdog) normally
+# fails these at SAQ_SETUP_GRACE_SECONDS, but a wedged worker process that can
+# still refresh the DB heartbeat would otherwise slip through. This branch
+# terminal-fails the run (never re-dispatches — a re-dispatch could
+# double-execute a live-but-stuck execute_run).
+_NODELESS_ZOMBIE_ERROR_CODE = "executor_stalled"
+
 # Exported reconciliation stats for /healthz/ready (PR D — hitl-health-obs).
 _dispatcher_reconcile_stats: dict[str, Any] = {
     "last_run_at": None,
@@ -74,6 +84,7 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "skipped": 0,
     "redis_errors": 0,
     "deduped": 0,
+    "nodeless_failed": 0,
 }
 
 
@@ -85,6 +96,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["skipped"] = stats.get("skipped", 0)
     _dispatcher_reconcile_stats["redis_errors"] = stats.get("redis_errors", 0)
     _dispatcher_reconcile_stats["deduped"] = stats.get("deduped", 0)
+    _dispatcher_reconcile_stats["nodeless_failed"] = stats.get("nodeless_failed", 0)
 
 
 def get_dispatcher_reconcile_stats() -> dict[str, Any]:
@@ -1243,6 +1255,92 @@ def _reconcile_capacity_marker_exclusion() -> Any:
     )
 
 
+def _nodeless_zombie_predicate(age_minutes: int) -> Any:
+    """Match a claimed-but-never-executed SAQ zombie.
+
+    Predicate: ``running`` + ``dispatcher='saq'`` + NO finalised node output
+    (``node_token_usage``/``outputs_json`` both NULL — these are only written at
+    run finalisation) + started more than *age_minutes* ago + ZERO LangGraph
+    checkpoints for the run's thread (checkpoints are written when a node
+    COMPLETES a super-step).
+
+    The age gate MUST exceed the pipeline's max node timeout: a legitimate
+    long-running first node writes its first checkpoint only after it finishes,
+    so a genuinely-executing run is never matched. Only a run stuck in the
+    pre-node setup window (or a wedged worker with a live heartbeat) stays
+    eligible this long.
+
+    Caveat: the age gate counts from ``started_at`` only and does NOT account
+    for graph-compile time, so a legitimately slow run (slow graph compile +
+    max-length first node, zero checkpoints in between) could be false-failed.
+    ``SAQ_CLAIMED_NODELESS_MINUTES`` must be tuned to exceed worst-case
+    compile + first-node duration.
+    """
+    from sqlalchemy import and_
+    from sqlalchemy import exists as sa_exists
+    from sqlalchemy import select as sa_select
+
+    from modulo.db.models.run import Run
+
+    checkpoint_subquery = (
+        sa_select(1)
+        .select_from(text("checkpoints c"))
+        .where(
+            text("c.organisation_id = runs.organisation_id"),
+            text("c.thread_id = runs.langgraph_thread_id"),
+        )
+    )
+    return and_(
+        Run.status == "running",
+        Run.dispatcher == "saq",
+        Run.node_token_usage.is_(None),
+        Run.outputs_json.is_(None),
+        Run.started_at < func_now_minus(age_minutes * 60),
+        ~sa_exists(checkpoint_subquery),
+    )
+
+
+def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
+    """Row-level re-check that a selected row matched the nodeless branch.
+
+    The combined reconcile predicate can match a row via MULTIPLE branches
+    (e.g. stale heartbeat AND nodeless); this discriminates the nodeless repair
+    (terminal-fail) from the stale repair (re-dispatch).
+    """
+    if row.status != "running":
+        return False
+    if row.node_token_usage is not None or row.outputs_json is not None:
+        return False
+    if row.started_at is None:
+        return False
+    return bool((datetime.now(UTC) - row.started_at).total_seconds() > age_minutes * 60)
+
+
+async def _fail_nodeless_run(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Terminal-fail a claimed-but-nodeless zombie in the reconcile transaction.
+
+    Only transitions a run still ``running`` (a run already terminal, or
+    capacity-deferred to ``pending``, is left untouched). Runs inside the
+    per-org RLS context of the caller.
+    """
+    from modulo.db.models.run import Run
+
+    run = await session.get(Run, run_id)
+    if run is None or run.status != "running":
+        return
+    run.status = "failed"
+    run.error_code = _NODELESS_ZOMBIE_ERROR_CODE
+    run.error_detail = (
+        "Claimed by SAQ but dispatched no node within the nodeless window (dispatcher_reconcile zombie repair)"
+    )
+    run.completed_at = datetime.now(UTC)
+    _log.warning(
+        "dispatcher_reconcile.nodeless_zombie_failed run=%s org=%s",
+        run_id,
+        org_id,
+    )
+
+
 def _build_re_dispatch_predicate(*, reenqueue_window: int, stale_window: int) -> Any:
     """Build the dispatcher_reconcile re-dispatch predicate (F3c + F6a).
 
@@ -1250,8 +1348,10 @@ def _build_re_dispatch_predicate(*, reenqueue_window: int, stale_window: int) ->
     ``claimed`` runs are matched ONLY under the F6a gated recovery (stale
     heartbeat by 2*SAQ_JOB_HEARTBEAT; the no-SAQ-job gate is applied per-row
     in the loop) so a half-resumed run whose ``resume_run`` job was lost is
-    recovered. Exposed as a module function so the reconcile tests can
-    exercise it directly with mocked rows.
+    recovered. ``awaiting_human`` rows additionally require a committed HITL
+    gate decision (guard applied per-row in the loop) so a genuinely-waiting
+    run is never auto-resumed with an empty decision. Exposed as a module
+    function so the reconcile tests can exercise it directly with mocked rows.
     """
     from sqlalchemy import and_, or_
 
@@ -1295,18 +1395,56 @@ def _reconcile_job_type(status: str) -> str:
     """Re-dispatch job-type discriminator (F6a).
 
     awaiting_human/claimed -> ``resume_run`` (the gate decision is committed
-    on the checkpoint); pending/running -> ``execute_run``.
+    on the checkpoint); pending/running -> ``execute_run``. The awaiting_human
+    case is guarded per-row: the run is re-dispatched as ``resume_run`` ONLY
+    when a gate decision is actually committed (see
+    :func:`_awaiting_human_has_committed_decision`) — never with an empty
+    decision.
     """
     return "resume_run" if status in ("awaiting_human", "claimed") else "execute_run"
+
+
+async def _awaiting_human_has_committed_decision(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> bool:
+    """True when the run has a committed HITL gate decision.
+
+    F6a auto-approve guard: an ``awaiting_human`` run may only be re-dispatched
+    as ``resume_run`` when a human actually committed a gate decision
+    (``hitl_claims.decision IS NOT NULL``). ``executor.resume`` injects the
+    resume payload as ``_hitl_decision``; the HITL gate node treats any
+    non-None decision as a human verdict (an empty ``{}`` resumes as
+    ``approved``). Re-dispatching a genuinely-waiting run — no human action, no
+    committed decision, whose completed job hash expired and heartbeat froze —
+    with EMPTY resume_data would therefore auto-approve its gates. ``claimed``
+    rows are exempt from the guard (a claim was already made, so the resume is
+    safe mid-crash recovery).
+    """
+    from modulo.db.models.hitl_claim import HitlClaim
+
+    result = await session.execute(
+        select(HitlClaim.id)
+        .where(
+            HitlClaim.organisation_id == org_id,
+            HitlClaim.run_id == run_id,
+            HitlClaim.decision.is_not(None),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
 
 
 def _saq_run_claim_cap() -> int:
     """SAQ run claim cap for the claim-cap terminalizer (plan F8).
 
-    Reads the settings field ``SAQ_RUN_CLAIM_CAP`` (default 20) — the single
-    source of truth shared with ``pipeline_execution.SAQ_RUN_CLAIM_CAP`` so
-    cron_helpers never imports pipeline_execution (import-linter: api must not
-    reach langgraph transitively through pipeline_execution -> executor).
+    Reads the settings field ``SAQ_RUN_CLAIM_CAP`` (``get_settings().saq_run_claim_cap``,
+    default 20) — the single source of truth for the claim cap. The former
+    ``pipeline_execution.SAQ_RUN_CLAIM_CAP`` module constant was removed; claim
+    caps now resolve from settings everywhere. cron_helpers never imports
+    pipeline_execution (import-linter: api must not reach langgraph transitively
+    through pipeline_execution -> executor).
     """
     return int(get_settings().saq_run_claim_cap)
 
@@ -1327,6 +1465,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         but the enqueue returned without a job, leaving the run stuck with no
         dispatcher. NO staleness gate (re-dispatch immediately).
       * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT.
+      * running + ``dispatcher='saq'`` + FRESH heartbeat but zero node
+        progress after SAQ_CLAIMED_NODELESS_MINUTES (node_token_usage/out-
+        puts_json both NULL + no LangGraph checkpoint for the thread):
+        nodeless zombie - terminal-failed with ``executor_stalled``, NEVER
+        re-dispatched (a re-dispatch could double-execute a live-but-stuck
+        execute_run).
       * awaiting_human/claimed: ``dispatcher='saq'``, heartbeat stale by
         2*SAQ_JOB_HEARTBEAT, AND no SAQ job in Redis (F6a gated recovery — the
         no-job gate is applied per-row). A half-resumed run whose ``resume_run``
@@ -1337,6 +1481,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         then expires, and its frozen heartbeat only crosses the stale line once
         nothing has claimed it for 2x the SAQ heartbeat window.
 
+        F6a auto-approve guard: an ``awaiting_human`` row is re-dispatched ONLY
+        when a gate decision is actually committed (``hitl_claims.decision IS
+        NOT NULL`` — checked per-row via
+        :func:`_awaiting_human_has_committed_decision`). A genuinely-waiting
+        run (no decision committed) whose job hash expired + heartbeat froze
+        must NOT be resumed: ``executor.resume`` injects the (empty) payload as
+        ``_hitl_decision``, which the HITL gate node treats as an approval —
+        auto-approving the gate. ``claimed`` rows are exempt (a claim was
+        already made — mid-resume crash recovery).
+
     On match: verify the Redis read, then PARTIAL-EVICTION repair — DEL the
     abort key, ZREM the incomplete zset, LREM queued/active (all keys derived
     from the configured queue name), then a normal ``queue.enqueue()``. The
@@ -1346,6 +1500,8 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     pending/running -> ``execute_run``. Capacity-deferred runs are re-dispatched
     only when their pipeline has free capacity.
     """
+    from sqlalchemy import or_
+
     from modulo.db.models.organisation import Organisation
     from modulo.db.models.run import Run
 
@@ -1353,6 +1509,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     queue_name = settings.saq_runs_queue
     reenqueue_window = int(settings.saq_reenqueue_window)
     stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
+    nodeless_window = int(settings.saq_claimed_nodeless_minutes)
     factory = _open_factory()
     summary: dict[str, Any] = {
         "scanned": 0,
@@ -1360,6 +1517,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "skipped": 0,
         "redis_errors": 0,
         "deduped": 0,
+        "nodeless_failed": 0,
         "claim_cap_terminalized": 0,
     }
 
@@ -1381,9 +1539,18 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     )
     try:
         q = RedisQueue(redis_client, name=queue_name)
-        re_dispatch_predicate = _build_re_dispatch_predicate(
-            reenqueue_window=reenqueue_window,
-            stale_window=stale_window,
+        re_dispatch_predicate = or_(
+            _build_re_dispatch_predicate(
+                reenqueue_window=reenqueue_window,
+                stale_window=stale_window,
+            ),
+            # Claimed-but-nodeless zombie branch: running + saq + FRESH
+            # heartbeat but ZERO node progress after the nodeless window.
+            # The fresh heartbeat excludes it from the stale branch above
+            # (that is the primary hang mechanism - a live heartbeat keeps
+            # the run 'running' forever), so it gets its own predicate.
+            # Repaired by terminal-fail, NOT re-dispatch (see _fail_nodeless_run).
+            _nodeless_zombie_predicate(nodeless_window),
         )
         for org_id in org_ids:
             async with factory() as session, session.begin():
@@ -1397,6 +1564,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 Run.status,
                                 Run.dispatched_at,
                                 Run.heartbeat_at,
+                                Run.node_token_usage,
+                                Run.outputs_json,
+                                Run.started_at,
                                 Run.claim_count,
                             ).where(
                                 Run.organisation_id == org_id,
@@ -1442,6 +1612,17 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 row.id,
                             )
                         continue
+
+                    if _is_nodeless_zombie_row(row, nodeless_window):
+                        # Claimed-but-never-executed zombie: fail it directly,
+                        # BEFORE the Redis job check — even a live SAQ job must
+                        # not keep a nodeless run 'running'. Never re-dispatch
+                        # (a re-dispatch could double-execute a live-but-stuck
+                        # execute_run, and these pipelines create PRs).
+                        summary["nodeless_failed"] += 1
+                        await _fail_nodeless_run(session, row.id, org_id)
+                        continue
+
                     job_key = f"run:{row.id}"
                     job_id = q.job_id(job_key)
                     try:
@@ -1464,6 +1645,28 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     if job is not None:
                         summary["skipped"] += 1
                         continue  # job still exists — nothing to repair
+
+                    # F6a auto-approve guard: an awaiting_human run may only be
+                    # re-dispatched as resume_run when a gate decision is actually
+                    # committed (hitl_claims.decision IS NOT NULL). A
+                    # genuinely-waiting run (no human action, no committed
+                    # decision) whose completed execute_run job hash expired and
+                    # whose heartbeat froze matches the F6a staleness branch, but
+                    # re-dispatching it with EMPTY resume_data would inject
+                    # {"_hitl_decision": {}} into executor.resume — the HITL gate
+                    # node treats any non-None decision as approved. Leave the row
+                    # alone; it is genuinely waiting on a human. claimed rows are
+                    # exempt (a claim was already made — mid-resume crash).
+                    if row.status == "awaiting_human" and not await _awaiting_human_has_committed_decision(
+                        session, org_id, row.id
+                    ):
+                        summary["skipped"] += 1
+                        _log.info(
+                            "dispatcher_reconcile: awaiting_human run %s has no committed HITL "
+                            "decision — not re-dispatched",
+                            row.id,
+                        )
+                        continue
 
                     # Capacity check for capacity-deferred runs (pending + no
                     # dispatched_at). Re-dispatch only when the pipeline has free

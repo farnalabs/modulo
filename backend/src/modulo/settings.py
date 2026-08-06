@@ -115,8 +115,9 @@ class Settings(BaseSettings):
     # Per-claim E2B idempotency key run:{id}:e2b:{claim_token} (F3a).
     saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
-    # Single source of truth: cron_helpers reads this; pipeline_execution's
-    # SAQ_RUN_CLAIM_CAP constant must stay in sync with this default.
+    # Single source of truth (retro item 9): execute and resume claims in
+    # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers
+    # reads it directly.
     saq_run_claim_cap: int = Field(default=20, alias="SAQ_RUN_CLAIM_CAP", ge=1, le=100)
     # TEST-ONLY pause flag — hard default off; refused outside test/staging
     # (debug=false).
@@ -128,9 +129,40 @@ class Settings(BaseSettings):
     saq_reenqueue_window: int = Field(default=600, alias="SAQ_REENQUEUE_WINDOW", ge=1, le=3600)
     saq_never_dispatched_window: int = Field(default=300, alias="SAQ_NEVER_DISPATCHED_WINDOW", ge=1, le=3600)
     saq_worker_lost_window: int = Field(default=600, alias="SAQ_WORKER_LOST_WINDOW", ge=1, le=3600)
+    # Zombie-run protection (2026-08-05). A run claimed by SAQ must dispatch at
+    # least one node within this setup window or the execute_run zombie watchdog
+    # fails it. Covers the pre-node hang window: checkpointer setup, graph
+    # compile, connector/model-backend hub init, and the first astream_events
+    # super-step. MUST exceed any legitimate pre-first-node setup but stay well
+    # below the run_claim_stale_seconds claim fence so the watchdog wins before
+    # a stale-heartbeat re-claim can double-execute the hung run.
+    saq_setup_grace_seconds: int = Field(default=600, alias="SAQ_SETUP_GRACE_SECONDS", ge=60, le=3600)
+    # dispatcher_reconcile secondary net: a SAQ run still 'running' with a FRESH
+    # heartbeat but ZERO LangGraph checkpoints for its thread after this many
+    # minutes is a claimed-but-never-executed zombie (the execute_run watchdog
+    # normally fails it at SAQ_SETUP_GRACE_SECONDS; this branch catches the case
+    # where the worker process itself is wedged and cannot run the watchdog).
+    # MUST exceed the pipeline's max node timeout so a legitimate long first
+    # node (which writes its first checkpoint only after completing) is never
+    # failed. Default 45 min > the 1800s node timeout used by agent pipelines.
+    saq_claimed_nodeless_minutes: int = Field(default=45, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
+    # FIREFIGHT RESIDUE (2026-08): raised to 10 during the cutover to relieve
+    # "Too many connections" and never re-derived from the real budget. Accepted
+    # design target: 25 concurrent runs (concurrency 5 per worker x up to 5
+    # machines). DB budget math: SAQ_WORKER_DB_POOL_SIZE x 2 workers (runs +
+    # system) x up to 5 machines + the web process pools + per-run checkpointer
+    # connections. DO NOT lower before verifying the deployed Postgres budget:
+    #   SHOW max_connections;   # on the deployed Postgres (fly ssh console)
+    # and confirming headroom for the web + checkpointer connections.
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
+    # FIREFIGHT RESIDUE (2026-08): raised to 50 during the cutover to relieve
+    # "Too many connections" and never re-derived from the real budget. DO NOT
+    # lower before verifying the Upstash budget:
+    #   CLIENT LIST        # on Upstash — compare active connections vs maxclients
+    # The reserve clamp in saq_worker._max_concurrent_ops() must stay strictly
+    # below this pool so the semaphore can never exhaust every connection.
     saq_redis_pool_size: int = Field(default=50, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # SAQ worker concurrency (how many jobs run at once per worker).
     # Decoupled from Redis pool size — pool=50 handles bursty Redis ops
