@@ -316,6 +316,7 @@ const spendSparklineData = computed(() => {
 // (locales file is outside this delivery's allowlist).
 const trendWindows = [
   { label: 'Last 24h', value: 1 },
+  { label: '3d', value: 3 },
   { label: 'Last 7d', value: 7 },
   { label: 'Last 30d', value: 30 },
   { label: 'Last 90d', value: 90 },
@@ -388,16 +389,7 @@ const trendsRaw = computed(() => dashboardStore.trends)
 
 const trendData = computed(() => {
   const tr = trendsRaw.value
-  if (!tr) {
-    // Fall back to summary trend when /trends hasn't been fetched yet
-    if (!summary.value?.trend) return []
-    return summary.value.trend.map(d => ({
-      date: d.date,
-      run_count: d.run_count,
-      eval_pass_rate: d.eval_pass_rate,
-      token_spend_usd: d.token_spend_usd,
-    }))
-  }
+  if (!tr) return []
   const items: Array<{ date: string; run_count: number; eval_pass_rate: number | null; token_spend_usd: number }> = []
   const evalMap = new Map(tr.eval_pass_rates.map(r => [r.date, r.pass_rate]))
   const spendMap = new Map(tr.token_spend.map(r => [r.date, r.total_spend_usd]))
