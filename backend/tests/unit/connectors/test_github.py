@@ -1,5 +1,6 @@
 """Unit tests for GitHubConnector — HTTP responses are mocked via httpx."""
 
+import base64
 import json
 
 import httpx
@@ -58,7 +59,7 @@ async def test_query_repos(connector):
 
 @respx.mock
 async def test_query_file(connector):
-    file_data = {"name": "README.md", "content": "SGVsbG8=", "sha": "abc123"}
+    file_data = {"name": "README.md", "content": "SGVsbG8=", "sha": "abc123", "encoding": "base64"}
     respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(
         return_value=httpx.Response(200, json=file_data)
     )
@@ -69,6 +70,7 @@ async def test_query_file(connector):
         )
     )
     assert result.records[0]["name"] == "README.md"
+    assert result.records[0]["content"] == "Hello"
 
 
 @respx.mock
@@ -82,7 +84,7 @@ async def test_query_pulls(connector):
 @respx.mock
 async def test_write_file(connector):
     response_body = {"content": {"sha": "def456"}, "commit": {"sha": "ghi789"}}
-    respx.put("https://api.github.com/repos/owner/repo/contents/path/file.txt").mock(
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/path/file.txt").mock(
         return_value=httpx.Response(200, json=response_body)
     )
     result = await connector.write(
@@ -91,13 +93,118 @@ async def test_write_file(connector):
             data={
                 "repo": "owner/repo",
                 "path": "path/file.txt",
-                "content": "SGVsbG8=",
+                "content": "Hello",
                 "message": "Update file",
                 "sha": "abc123",
             },
         )
     )
     assert result["commit"]["sha"] == "ghi789"
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["content"] == "SGVsbG8="
+
+
+# ---------------------------------------------------------------------------
+# File content encoding — base64 decode on read, encode on write
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_file_decodes_multiline_base64_content(connector) -> None:
+    raw = "line1\nline2\n"
+    file_data = {"name": "notes.txt", "content": base64.b64encode(raw.encode()).decode(), "encoding": "base64"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/notes.txt").mock(
+        return_value=httpx.Response(200, json=file_data)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "notes.txt"})
+    )
+    assert result.records[0]["content"] == raw
+
+
+@respx.mock
+async def test_query_file_leaves_binary_content_encoded(connector) -> None:
+    raw_bytes = b"\x89PNG\r\n\x1a\n"
+    encoded = base64.b64encode(raw_bytes).decode()
+    file_data = {"name": "img.png", "content": encoded, "encoding": "base64"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/img.png").mock(
+        return_value=httpx.Response(200, json=file_data)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "img.png"})
+    )
+    assert result.records[0]["content"] == encoded
+
+
+@respx.mock
+async def test_query_file_plain_text_untouched(connector) -> None:
+    file_data = {"name": "LICENSE", "content": "plain text", "encoding": "none"}
+    respx.get("https://api.github.com/repos/owner/repo/contents/LICENSE").mock(
+        return_value=httpx.Response(200, json=file_data)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"repo": "owner/repo", "path": "LICENSE"})
+    )
+    assert result.records[0]["content"] == "plain text"
+
+
+@respx.mock
+async def test_write_file_content_base64_passthrough(connector) -> None:
+    response_body = {"content": {"sha": "def456"}, "commit": {"sha": "ghi789"}}
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/binary.bin").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "repo": "owner/repo",
+                "path": "binary.bin",
+                "content_base64": "AAECAw==",
+                "message": "Add binary",
+            },
+        )
+    )
+    assert result["commit"]["sha"] == "ghi789"
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["content"] == "AAECAw=="
+
+
+@respx.mock
+async def test_write_file_utf8_content_round_trips(connector) -> None:
+    raw = "héllo wörld\n"
+    route = respx.put("https://api.github.com/repos/owner/repo/contents/utf8.txt").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "abc"}})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={"repo": "owner/repo", "path": "utf8.txt", "content": raw},
+        )
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert base64.b64decode(sent["content"]).decode("utf-8") == raw
+
+
+async def test_write_file_missing_content_raises(connector) -> None:
+    with pytest.raises(ValueError, match=r"requires 'content' \(raw text\) or 'content_base64'"):
+        await connector.write(ConnectorPayload(resource="file", data={"repo": "owner/repo", "path": "x"}))
+
+
+@respx.mock
+async def test_write_file_both_content_and_content_base64_raises(connector) -> None:
+    with pytest.raises(ValueError, match="exactly one of 'content' or 'content_base64'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file",
+                data={
+                    "repo": "owner/repo",
+                    "path": "x",
+                    "content": "raw",
+                    "content_base64": "cmF3",
+                },
+            )
+        )
 
 
 async def test_unsupported_query_resource(connector):
@@ -230,7 +337,7 @@ async def test_query_missing_filters(connector, resource, filters, match_text):
     "resource,data,match_text",
     [
         ("issue", {"repo": "owner/repo"}, "requires 'title' in data"),
-        ("file", {"repo": "owner/repo", "path": "x"}, "requires 'content' in data"),
+        ("file", {"repo": "owner/repo", "path": "x"}, r"requires 'content' \(raw text\) or 'content_base64'"),
         ("pr", {"repo": "owner/repo", "title": "PR", "head": "fix"}, "requires 'base' in data"),
         ("pr", {"repo": "owner/repo", "title": "No head"}, "requires 'head' in data"),
         ("pr_comment", {"repo": "owner/repo", "pull_number": "1"}, "requires 'body' in data"),
