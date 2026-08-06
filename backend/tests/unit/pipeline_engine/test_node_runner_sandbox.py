@@ -7,6 +7,7 @@ there is no default command, and a missing command is a hard error.
 import asyncio
 import logging
 import os
+import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,7 @@ import pytest
 from modulo.core.pipeline_engine.node_runner import (
     _E2B_SANDBOX_USD_PER_HOUR,
     _compute_sandbox_cost,
+    _wait_command_with_idle_watchdog,
     make_sandbox_agent_fn,
     resolve_env_var_refs,
 )
@@ -416,3 +418,102 @@ async def test_background_command_success_still_completes():
     assert result["output"]["status"] == "completed"
     assert result["output"]["summary"] == "done"
     assert result["output"]["agent_stdout"] == "agent stdout"
+
+
+# ---------------------------------------------------------------------------
+# FAR-98: first-class stall detection — stall_timeout_seconds + stall_reason
+# ---------------------------------------------------------------------------
+
+
+async def test_idle_watchdog_normal_completion_returns_none_reason():
+    """_wait_command_with_idle_watchdog returns (cmd_result, None) on normal completion."""
+    handle = MagicMock()
+    cmd_result = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    result, stall_reason = await _wait_command_with_idle_watchdog(
+        handle,
+        total_timeout=30.0,
+        idle_timeout=60.0,
+        last_activity=lambda: time.monotonic(),
+    )
+    assert result is cmd_result
+    assert stall_reason is None
+
+
+async def test_idle_watchdog_stall_returns_reason_not_raise():
+    """A silent agent returns (None, stall_reason) instead of raising — the
+    caller can distinguish a STALL from a TOTAL-TIMEOUT (FAR-98)."""
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+    handle.kill = AsyncMock()
+
+    def _stale_last_activity() -> float:
+        return time.monotonic() - 120.0
+
+    result, stall_reason = await _wait_command_with_idle_watchdog(
+        handle,
+        total_timeout=30.0,
+        idle_timeout=60.0,
+        last_activity=_stale_last_activity,
+    )
+    assert result is None
+    assert stall_reason is not None
+    assert "no output" in stall_reason
+    assert "60s" in stall_reason
+    handle.kill.assert_awaited()
+
+
+async def test_stall_timeout_seconds_config_passed_to_watchdog():
+    """node_def stall_timeout_seconds flows into the idle watchdog as idle_timeout."""
+    node_def = _base_node_def(timeout_seconds=30, stall_timeout_seconds=60)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    cmd_result = sandbox.commands.run.return_value.wait.return_value
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._wait_command_with_idle_watchdog",
+            new=AsyncMock(return_value=(cmd_result, None)),
+        ) as watchdog,
+    ):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    watchdog.assert_awaited_once()
+    assert watchdog.await_args.kwargs["idle_timeout"] == 60
+
+
+async def test_stalled_command_output_includes_stall_reason():
+    """A stalled command surfaces a distinct stall_reason on the node output
+    and still kills the sandbox before output.json can be read (FAR-98)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+    handle.kill = AsyncMock()
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.files.read = AsyncMock(return_value='{"summary": "fabricated"}')
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    artifact = result["artifacts"][0]["output"]
+    assert output["status"] == "failed"
+    assert artifact["exit_code"] == -1
+    assert "no output" in output["stall_reason"]
+    assert output["stall_reason"] == artifact["stall_reason"]
+    assert output["summary"] == output["stall_reason"]
+    handle.kill.assert_awaited()
+    sandbox.kill.assert_awaited()
+    sandbox.files.read.assert_not_called()

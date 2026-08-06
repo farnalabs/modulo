@@ -809,15 +809,17 @@ async def _wait_command_with_idle_watchdog(
     total_timeout: float,
     idle_timeout: float,
     last_activity: Callable[[], float],
-) -> Any:
+) -> tuple[Any, str | None]:
     """Wait for a background command, failing fast if the agent goes silent.
 
     The E2B SDK's commands.run(timeout=...) only enforces a CONNECT timeout;
     the response stream has no read timeout, so a stalled agent blocks the
     node until total_timeout expires. This helper polls handle.wait() in
-    idle_timeout slices and raises TimeoutError as soon as the agent has
-    produced no output for idle_timeout seconds (FAR-97). The caller should
-    track last_activity via on_stdout/on_stderr callbacks.
+    idle_timeout slices and returns ``(None, stall_reason)`` as soon as the
+    agent has produced no output for idle_timeout seconds (FAR-97 / FAR-98).
+    On normal completion it returns ``(cmd_result, None)``; a total-timeout
+    still raises TimeoutError. The caller should track last_activity via
+    on_stdout/on_stderr callbacks.
     """
     deadline = time.monotonic() + total_timeout
     while True:
@@ -825,7 +827,8 @@ async def _wait_command_with_idle_watchdog(
         if remaining <= 0:
             raise TimeoutError(f"command exceeded total timeout of {total_timeout:.0f}s")
         try:
-            return await asyncio.wait_for(handle.wait(), timeout=min(idle_timeout, remaining))
+            cmd_result = await asyncio.wait_for(handle.wait(), timeout=min(idle_timeout, remaining))
+            return cmd_result, None
         except TimeoutError:
             if time.monotonic() - last_activity() >= idle_timeout:
                 # Kill the command so the still-running agent cannot write a
@@ -834,7 +837,7 @@ async def _wait_command_with_idle_watchdog(
                     await asyncio.wait_for(handle.kill(), timeout=10.0)
                 except Exception:
                     _log.exception("sandbox_agent.idle_watchdog_kill_failed")
-                raise TimeoutError(f"command produced no output for {idle_timeout:.0f}s (stalled)") from None
+                return None, f"agent produced no output for {idle_timeout:.0f}s"
 
 
 def make_sandbox_agent_fn(
@@ -853,6 +856,8 @@ def make_sandbox_agent_fn(
         (no default — a sandbox agent cannot run without an explicit command)
       - output_schema_json: dict | None —  optional output schema validation
       - timeout_seconds: int —  max wall-clock time (default 600)
+      - stall_timeout_seconds: float —  max seconds of agent silence before the
+        idle watchdog treats the command as stalled (default 300)
       - context_files: dict[str, str] —  optional files to write into the sandbox
         keyed by path
 
@@ -889,6 +894,7 @@ def make_sandbox_agent_fn(
         )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
+    stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
     context_files: dict[str, str] = node_def.get("context_files") or {}
 
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
@@ -1087,6 +1093,21 @@ def make_sandbox_agent_fn(
                 # watchdog can fail fast on stalls (FAR-97). The callbacks run
                 # from the SDK's event task and may be async or sync.
                 _activity: dict[str, float] = {"last": time.monotonic()}
+                stall_reason: str | None = None
+
+                # FAR-98: stall_timeout_seconds (node config) overrides the idle
+                # watchdog's silence window. Resolve the DEFAULT at runtime so
+                # the constant stays patchable (the FAR-97 tests patch it).
+                try:
+                    stall_timeout: float = (
+                        float(stall_timeout_override) if stall_timeout_override is not None else _SANDBOX_IDLE_TIMEOUT
+                    )
+                except (TypeError, ValueError):
+                    _log.warning(
+                        "sandbox_agent.stall_timeout_invalid_fallback",
+                        extra={"node_id": node_id, "stall_timeout_raw": stall_timeout_override},
+                    )
+                    stall_timeout = _SANDBOX_IDLE_TIMEOUT
 
                 async def _on_stdout(chunk: str) -> None:
                     _activity["last"] = time.monotonic()
@@ -1123,10 +1144,10 @@ def make_sandbox_agent_fn(
                     ),
                     timeout=min(sandbox_timeout, 120),
                 )
-                cmd_result = await _wait_command_with_idle_watchdog(
+                cmd_result, stall_reason = await _wait_command_with_idle_watchdog(
                     cmd_handle,
                     total_timeout=sandbox_timeout,
-                    idle_timeout=_SANDBOX_IDLE_TIMEOUT,
+                    idle_timeout=stall_timeout,
                     last_activity=lambda: _activity["last"],
                 )
             except asyncio.CancelledError:
@@ -1163,14 +1184,19 @@ def make_sandbox_agent_fn(
             # A timed-out command leaves ``cmd_result`` as None: the run timed
             # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
             # exit_code -1. Surface a clear explanation instead of silently
-            # returning an empty-summary failure.
+            # returning an empty-summary failure. A STALLED command (idle
+            # watchdog fired, FAR-98) carries a distinct stall_reason so the
+            # two failure modes are distinguishable.
             command_error: str = ""
             if cmd_result is None:
-                command_error = (
-                    f"Sandbox agent command produced no output within {sandbox_timeout}s. "
-                    "No stdout/stderr was captured — the agent likely hung before "
-                    "writing any result."
-                )
+                if stall_reason:
+                    command_error = stall_reason
+                else:
+                    command_error = (
+                        f"Sandbox agent command produced no output within {sandbox_timeout}s. "
+                        "No stdout/stderr was captured — the agent likely hung before "
+                        "writing any result."
+                    )
                 # The command stalled or timed out. Kill the sandbox BEFORE
                 # reading output.json: the interrupted-but-alive process could
                 # otherwise write a fabricated completion in the grace window
@@ -1273,6 +1299,7 @@ def make_sandbox_agent_fn(
                 result_summary = command_error or "Sandbox agent command failed"
 
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
+            _stall_reason_field: dict[str, str] = {"stall_reason": stall_reason} if stall_reason else {}
 
             return {
                 "artifacts": [
@@ -1291,6 +1318,7 @@ def make_sandbox_agent_fn(
                             "output_json": output_json,
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
+                            **_stall_reason_field,
                         },
                     }
                 ],
@@ -1302,6 +1330,7 @@ def make_sandbox_agent_fn(
                     **_build_model_cost_fields(output_json),
                     "agent_stdout": agent_stdout,
                     "agent_stderr": agent_stderr,
+                    **_stall_reason_field,
                 },
             }
 
