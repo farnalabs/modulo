@@ -258,6 +258,21 @@ def test_create_archive_packs_files(tmp_manifest_dir):
     assert tarfile.is_tarfile(output)
 
 
+def test_create_archive_strips_only_enc_suffix(tmp_manifest_dir):
+    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
+    output = os.path.join(tmp_manifest_dir, "note.enc")
+    result = create_archive(tmp_manifest_dir, output)
+    assert result == os.path.join(tmp_manifest_dir, "note")
+    assert os.path.exists(result)
+
+
+def test_create_archive_keeps_output_without_enc_suffix(tmp_manifest_dir):
+    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
+    output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
+    result = create_archive(tmp_manifest_dir, output)
+    assert result == output
+
+
 def test_create_archive_skips_directories(tmp_manifest_dir):
     Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
     os.makedirs(os.path.join(tmp_manifest_dir, "subdir"))
