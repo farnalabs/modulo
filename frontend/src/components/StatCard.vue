@@ -17,9 +17,18 @@
           <slot name="icon" />
         </svg>
       </div>
-      <div class="min-w-0">
+      <div class="min-w-0 flex-1">
         <p class="text-sm font-medium text-muted-foreground">{{ label }}</p>
-        <p class="text-2xl font-semibold tabular-nums" :class="valueClass">{{ value }}</p>
+        <div class="flex items-baseline gap-2">
+          <p class="text-2xl font-semibold tabular-nums" :class="valueClass">{{ value }}</p>
+          <span
+            v-if="deltaPct != null"
+            class="inline-flex items-center gap-0.5 text-xs font-medium"
+            :class="deltaClass"
+          >
+            <span aria-hidden="true">{{ deltaArrow }}</span>{{ deltaPctText }}
+          </span>
+        </div>
       </div>
     </div>
   </component>
@@ -28,11 +37,18 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+export interface StatDelta {
+  current?: number | null;
+  previous?: number | null;
+  delta_pct?: number | null;
+}
+
 const props = defineProps<{
   label: string;
   value: number | string;
   color?: "primary" | "success" | "warning" | "destructive" | "muted";
   to?: string;
+  delta?: StatDelta | null;
 }>();
 
 const iconBgClass = computed(() => {
@@ -53,6 +69,33 @@ const valueClass = computed(() => {
     destructive: "text-destructive",
   };
   return map[props.color ?? "primary"] ?? "";
+});
+
+const deltaPct = computed(() => {
+  const d = props.delta?.delta_pct;
+  return typeof d === "number" && Number.isFinite(d) ? d : null;
+});
+
+const deltaArrow = computed(() => {
+  const d = deltaPct.value;
+  if (d == null) return "";
+  if (d > 0) return "▲";
+  if (d < 0) return "▼";
+  return "→";
+});
+
+const deltaClass = computed(() => {
+  const d = deltaPct.value;
+  if (d == null) return "";
+  if (d > 0) return "text-success";
+  if (d < 0) return "text-destructive";
+  return "text-muted-foreground";
+});
+
+const deltaPctText = computed(() => {
+  const d = deltaPct.value;
+  if (d == null) return "";
+  return `${Math.abs(d).toFixed(1)}%`;
 });
 </script>
 

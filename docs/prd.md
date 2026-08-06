@@ -4155,7 +4155,13 @@ Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omit
 |---|---|
 | Analytics page + endpoint | Team (`analytics_page` feature flag, default off until the frontend ships) |
 
-#### 8.32.7 Analytics Page UI (frontend)
+#### 8.32.7 Dashboard Rolling-Window Toggle
+
+The live dashboard (`/`) has a top-right rolling-window toggle: **Last 24h / Last 7d / Last 30d / Last 90d** (values 1, 7, 30, 90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
+
+Semantics are **same-source/same-window**: a card's value and its arrow always come from the same metric over the same window — run counts/status/tokens/success/duration from `run_daily_facts`, spend from the `org_daily_run_counts` ledger (org-level row), eval pass rate from `eval_results`. Because facts record only terminal statuses, running / awaiting-human / idle read zero in period mode. The arrow is omitted when there is no baseline (previous window empty/zero) or no current-window data. The `GET /api/v1/dashboard/summary?days=N` endpoint returns the period metrics as an additive `period` block (`{current, previous, delta_pct}` per metric); without `days` the response is the unchanged all-time summary.
+
+#### 8.32.8 Analytics Page UI (frontend)
 
 The `/analytics` page (sidebar group Core, `analytics.query` permission, community tier) is a **structured filter form → typed query params** surface. There is **no query language in this delivery** (see 8.32.2) — the filter form is the surface; syntax/expression mode stays deferred until a pre-rolled dependency slots in.
 
