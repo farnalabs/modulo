@@ -5,6 +5,10 @@
 > **Superseded — tracker retired.** This ADR references task IDs (`task-saq-migration-pr-a/b/c`) from the
 > retired delivery-plan.json tracker. The tracker is retired (source of truth: Linear); task IDs here are
 > historical references only.
+>
+> **Cutover hold retired — 2026-08-05.** The PR C "48–72h hold" was implemented as the deploy.yml
+> `hold-check` job gated on the GitHub `SAQ_HOLD` repo variable. That gate is now **deleted**: the
+> cutover is complete (PRs #725/#726/#734 merged) and deploys are no longer gated by `SAQ_HOLD`.
 
 **Date**: 2026-07-31
 **Status**: Accepted
@@ -75,7 +79,7 @@ firefight, then decoupled. Current (post-fix) model:
 
 - **PR A**: foundation + spike (hard gate) + tests-first. The SPIKE runs a throwaway worker against an identically-configured dev Upstash instance (never production) and settles the remaining empirical unknowns: Upstash maxmemory-policy, ttl semantics, retry timing, E2B transient-retry distribution. Raw spike evidence will be committed with PR A.
 - **PR B**: routing (`dispatch_run` single gating point) + the 3 columns + `saq` error enum + shadow mode + staging smoke. SAQ runs in shadow on production (`SAQ_ENABLED=false`): `execute_run` keeps routing to Celery (`dispatcher=NULL`), `resume_run` routes to SAQ (`dispatcher='saq'`). The staging smoke flips `SAQ_ENABLED=true` on dedicated Upstash + Postgres with queue prefixes `staging-runs`/`staging-system` so the acceptance (`dispatcher='saq'` + `claim_count==1`) is reachable.
-- **PR C**: cutover + Celery removal, with a **48–72h hold**. Sequenced rollout: deploy the image with BOTH Celery+SAQ and `SAQ_ENABLED=true` on all machines first, verify SAQ green, then deploy the Celery-removal image — never a scheduler-less window.
+- **PR C**: cutover + Celery removal, with a **48–72h hold** (retired 2026-08-05 — see header note; the deploy gate it described no longer exists). Sequenced rollout: deploy the image with BOTH Celery+SAQ and `SAQ_ENABLED=true` on all machines first, verify SAQ green, then deploy the Celery-removal image — never a scheduler-less window.
 
 ### At-most-once residual and its mitigations
 

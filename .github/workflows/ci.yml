@@ -4,6 +4,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # labeled: the `needs-review` label re-fires the PR Reviewer after a fix push
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 env:
@@ -359,7 +361,7 @@ jobs:
 
   notify-pr-review:
     name: Trigger PR Reviewer
-    if: github.event_name == 'pull_request' && success()
+    if: github.event_name == 'pull_request' && success() && (github.event.action != 'labeled' || github.event.label.name == 'needs-review')
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
