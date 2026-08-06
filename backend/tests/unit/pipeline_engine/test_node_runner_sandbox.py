@@ -280,3 +280,30 @@ async def test_resolve_env_var_refs_calls_resolver_per_ref():
     resolved = await resolve_env_var_refs({"A": "{{ secrets.A }}", "B": "plain", "C": "{{ secrets.C }}"}, _resolver)
     assert calls == ["A", "C"]
     assert resolved == {"A": "a-secret", "B": "plain", "C": ""}
+
+
+async def test_sandbox_agent_command_timeout_surfaces_clear_summary():
+    """A timed-out command (cmd_result None, exit_code -1, EMPTY stdout/stderr)
+    must surface a clear explanation in the summary — not a silent empty-summary
+    failure (the Branch Fixer empty-agent-output hang of 2026-08-05)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(side_effect=TimeoutError("command timed out"))
+    sandbox.files.read = AsyncMock(side_effect=TimeoutError("no output.json"))
+    sandbox.kill = AsyncMock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    artifact = result["artifacts"][0]["output"]
+    assert output["status"] == "failed"
+    assert artifact["exit_code"] == -1
+    assert output["agent_stdout"] == ""
+    assert output["agent_stderr"] == ""
+    assert "no output" in output["summary"]
+    assert "30s" in output["summary"]
+    assert artifact["summary"] == output["summary"]
