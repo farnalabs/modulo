@@ -2484,7 +2484,8 @@ export default {
     "failed_to_save": "Failed to save",
     "configuration_saved": "Configuration saved",
     "reset": "Reset",
-    "create": "Create"
+    "create": "Create",
+    "deleting": "Deleting..."
   },
   "nav": {
     "analytics": "Analytics",
