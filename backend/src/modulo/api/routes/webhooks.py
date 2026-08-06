@@ -71,6 +71,17 @@ router = APIRouter(prefix="/api/v1/triggers", tags=["webhooks"])
 _trigger_engine = TriggerEngine()
 
 
+async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Whether the org row still exists.
+
+    Orphan-org guard for the ``paused`` TriggerEvent write: a trigger whose org
+    row was HARD-deleted must not attempt the INSERT (it would violate the
+    organisations FK -> 503). Fail-closed with no event row and no crash.
+    """
+    org_exists = await session.execute(select(Organisation.id).where(Organisation.id == org_id))
+    return org_exists.scalar_one_or_none() is not None
+
+
 async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
     """Ingest an error_event (source='saq', function='webhook_dispatch').
 
@@ -231,10 +242,7 @@ async def receive_webhook(
                 # HARD-deleted must not attempt the TriggerEvent INSERT (it
                 # would violate the organisations FK -> 503). Fail-closed with
                 # no event row and no crash.
-                org_exists = (
-                    await session.execute(select(Organisation.id).where(Organisation.id == org_id))
-                ).scalar_one_or_none()
-                if org_exists is None:
+                if not await _org_row_exists(session, org_id):
                     _log.warning(
                         "webhooks.receive_webhook: org %s missing — skipping paused event write for trigger %s",
                         org_id,
@@ -420,10 +428,7 @@ async def replay_webhook(
                 # HARD-deleted must not attempt the TriggerEvent INSERT (it
                 # would violate the organisations FK -> 503). Fail-closed with
                 # no event row and no crash.
-                org_exists = (
-                    await session.execute(select(Organisation.id).where(Organisation.id == org_id))
-                ).scalar_one_or_none()
-                if org_exists is None:
+                if not await _org_row_exists(session, org_id):
                     _log.warning(
                         "webhooks.replay_webhook: org %s missing — skipping paused event write for trigger %s",
                         org_id,

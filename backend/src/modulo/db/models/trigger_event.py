@@ -7,7 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from modulo.db.models.base import OrgScoped
 
 # Full validation_result vocabulary. Generated into the ORM CheckConstraint SQL
-# below and HARDCODED (separately) in migration 0065 — migrations never import
+# below and HARDCODED (separately) in migration 0069 — migrations never import
 # app constants. Keep both in sync when extending the vocabulary.
 VALIDATION_RESULT_VALUES: tuple[str, ...] = (
     "accepted",
