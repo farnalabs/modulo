@@ -29,6 +29,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
+from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     NodeAlreadyCompletedError,
@@ -1044,6 +1045,62 @@ async def get_run_node_output(
 
     masked = _mask_output_value(node_output)
     return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked)
+
+
+# ---------------------------------------------------------------------------
+# Live run events (live stdout/stderr streaming, FAR-98)
+# ---------------------------------------------------------------------------
+
+
+class RunEventItem(BaseModel):
+    seq: int
+    event_type: str
+    payload: dict[str, Any]
+    ts: str
+
+
+class RunEventsResponse(BaseModel):
+    run_id: uuid.UUID
+    events: list[RunEventItem]
+
+
+@handle_db_errors("runs.get_run_events")
+@router.get("/{run_id}/events", response_model=RunEventsResponse)
+async def get_run_events(
+    run_id: uuid.UUID,
+    since_seq: int = Query(0, ge=0),
+    node_id: str | None = Query(None),
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+) -> RunEventsResponse:
+    """Return live chunk events for a run since a sequence number.
+
+    Only ``node.stdout_chunk`` / ``node.stderr_chunk`` events (the live-output
+    surface published by sandbox_agent nodes) are returned. Optionally filter
+    to a single ``node_id``. The     run's org-scoped existence is validated first
+    so callers can never observe another org's run events.
+    """
+    try:
+        run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
+    except RunNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found") from None
+    broker = get_registry().get(run.id)
+    events: list[RunEventItem] = []
+    if broker is not None:
+        for evt in broker.replay_since(since_seq):
+            if evt.event_type not in ("node.stdout_chunk", "node.stderr_chunk"):
+                continue
+            if node_id is not None and evt.payload.get("node_id") != node_id:
+                continue
+            events.append(
+                RunEventItem(
+                    seq=evt.seq,
+                    event_type=evt.event_type,
+                    payload=evt.payload,
+                    ts=evt.timestamp.isoformat(),
+                )
+            )
+    return RunEventsResponse(run_id=run.id, events=events)
 
 
 # ---------------------------------------------------------------------------

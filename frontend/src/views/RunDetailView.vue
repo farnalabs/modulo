@@ -293,6 +293,14 @@
               v-show="expandedLogs.has(node.name)"
             >
               <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
+                <div
+                  v-if="!isTerminal && liveOutput[node.name]"
+                  class="rounded-lg border border-primary/40 bg-muted p-4"
+                  data-testid="run-detail-live-output"
+                >
+                  <h4 class="mb-2 text-xs font-semibold text-primary">{{ $t('views.RunDetailView.live_output') }}</h4>
+                  <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ liveOutput[node.name] }}</code></pre>
+                </div>
                 <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.agent_stdout') }}</h4>
                   <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stdout') }}</code></pre>
@@ -437,6 +445,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { useApi } from '../composables/useApi'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -497,6 +506,13 @@ interface WorkspaceLeaseInfo {
   error_message?: string
 }
 
+interface RunChunkEvent {
+  seq: number
+  event_type: string
+  payload?: { node_id?: string; chunk?: string }
+  ts?: string
+}
+
 const route = useRoute()
 const { t, locale } = useI18n()
 const run = ref<RunResponse | null>(null)
@@ -521,6 +537,8 @@ const claimLoading = ref(false)
 const actioning = ref<string | null>(null)
 const hitlNotes = ref('')
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
+const liveOutput = ref<Record<string, string>>({})
+const liveOutputSeq = ref(0)
 
 const shareSummary = computed(() => {
   const r = run.value
@@ -676,6 +694,8 @@ const statusBadgeClass = computed(() => {
   }
   return map[s] ?? 'badge badge-context-slate'
 })
+
+const isTerminal = computed(() => run.value != null && TERMINAL_STATUSES.includes(run.value.status))
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
   const map: Record<string, string> = {
@@ -1011,6 +1031,32 @@ async function fetchRunData(runId: string) {
   }
 }
 
+async function fetchLiveOutput(runId: string) {
+  if (run.value && TERMINAL_STATUSES.includes(run.value.status)) return
+  try {
+    const data = await useApi().get<{ events?: RunChunkEvent[] }>(
+      `/api/v1/runs/${runId}/events?since_seq=${liveOutputSeq.value}`,
+    )
+    const events = data?.events
+    if (!events || events.length === 0) return
+    const next = { ...liveOutput.value }
+    let maxSeq = liveOutputSeq.value
+    for (const evt of events) {
+      if (!evt || typeof evt.seq !== 'number') continue
+      if (evt.event_type === 'node.stdout_chunk' && evt.payload?.node_id) {
+        const nodeId = evt.payload.node_id
+        next[nodeId] = (next[nodeId] ?? '') + (evt.payload.chunk ?? '')
+      }
+      if (evt.seq > maxSeq) maxSeq = evt.seq
+    }
+    liveOutput.value = next
+    liveOutputSeq.value = maxSeq
+  } catch (e) {
+    // Live output is best-effort — polling must never break the page.
+    console.warn('Failed to fetch live run output', e)
+  }
+}
+
 function startPolling(runId: string) {
   pollInterval.value = setInterval(async () => {
     if (run.value && TERMINAL_STATUSES.includes(run.value.status)) {
@@ -1019,6 +1065,7 @@ function startPolling(runId: string) {
       return
     }
     await fetchRunData(runId)
+    await fetchLiveOutput(runId)
   }, 3000)
 }
 
