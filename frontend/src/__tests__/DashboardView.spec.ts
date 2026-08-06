@@ -211,12 +211,13 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('No runs yet')
   })
 
-  it('shows the rolling-window toggle with 4 values', async () => {
+  it('shows the rolling-window toggle with 5 values', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     const toggles = wrapper.findAll('[data-testid^="trend-toggle-"]')
-    expect(toggles.length).toBe(4)
+    expect(toggles.length).toBe(5)
     expect(wrapper.findAll('[data-testid="trend-toggle-1"]').length).toBe(1)
+    expect(wrapper.findAll('[data-testid="trend-toggle-3"]').length).toBe(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-7"]').length).toBe(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-30"]').length).toBe(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-90"]').length).toBe(1)

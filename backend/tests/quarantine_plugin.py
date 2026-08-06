@@ -11,13 +11,13 @@ via pyproject.toml:
     plugins = ["tests.quarantine_plugin"]
 """
 
-import os
 from datetime import date
+from pathlib import Path
 
 import pytest
 import yaml
 
-QUARANTINE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".quarantine.yml")
+QUARANTINE_PATH = Path(__file__).resolve().parent.parent / ".quarantine.yml"
 
 
 def pytest_addoption(parser):
@@ -29,11 +29,11 @@ def pytest_addoption(parser):
 
 
 def pytest_collection_modifyitems(config, items):
-    qfile = config.getini("quarantine_file")
-    if not os.path.exists(qfile):
+    qfile = Path(config.getini("quarantine_file"))
+    if not qfile.exists():
         return
 
-    with open(qfile) as f:
+    with qfile.open() as f:
         data = yaml.safe_load(f)
 
     if not data or "quarantine" not in data:

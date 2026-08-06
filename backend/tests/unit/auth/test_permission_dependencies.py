@@ -237,6 +237,46 @@ class TestRequireTargetOrgRoleMutations:
             require_target_org_role("org.email.manage", "operator")
 
 
+class TestRequireTargetOrgRolePauseKillSwitch:
+    """``org.triggers.pause.manage`` uses ``kill_switch_eligible=False`` — the
+    authz kill-switch must never lift the pause toggle gate."""
+
+    def test_pause_tags(self) -> None:
+        dep = require_target_org_role("org.triggers.pause.manage", "admin", kill_switch_eligible=False)
+        assert dep.permission == "org.triggers.pause.manage"
+        assert dep.permission_kind == "scoped_hybrid"
+        assert dep.min_role == "admin"
+
+    @pytest.mark.asyncio
+    async def test_pause_route_viewer_denied_when_kill_switch_off(self) -> None:
+        dep = require_target_org_role("org.triggers.pause.manage", "admin", kill_switch_eligible=False)
+        session = _make_session_with_enforce(role="viewer", enforce=False)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await dep.dependency(_request(org_id=_ORG_A), current_user=_auth(), session=session)
+        assert excinfo.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_pause_route_org_admin_allowed(self) -> None:
+        dep = require_target_org_role("org.triggers.pause.manage", "admin", kill_switch_eligible=False)
+        session = _make_session_with_enforce(role="admin", enforce=False)
+
+        outcome = await dep.dependency(_request(org_id=_ORG_A), current_user=_auth(), session=session)
+        assert outcome.account_id == _ACCOUNT
+
+    @pytest.mark.asyncio
+    async def test_pause_route_system_admin_allowed(self) -> None:
+        dep = require_target_org_role("org.triggers.pause.manage", "admin", kill_switch_eligible=False)
+        session = _make_session(role="viewer")
+
+        outcome = await dep.dependency(
+            _request(org_id=_ORG_A),
+            current_user=_auth(is_system_admin=True),
+            session=session,
+        )
+        assert outcome.account_id == _ACCOUNT
+
+
 def _request(org_id: uuid.UUID) -> MagicMock:
     request = MagicMock()
     request.path_params = {"org_id": str(org_id)}
@@ -259,4 +299,27 @@ def _make_session(*, role: str | None) -> AsyncMock:
     result = MagicMock()
     result.scalar_one_or_none.return_value = role
     session.execute.return_value = result
+    return session
+
+
+def _make_session_with_enforce(*, role: str | None, enforce: bool) -> AsyncMock:
+    """Session for scoped-hybrid deps: first execute returns the LIVE role,
+    second returns the authz_enforce read (so kill-switch-off scenarios can be
+    tested with a real role string)."""
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    call_count = 0
+
+    async def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = role if call_count == 1 else enforce
+        return result
+
+    session.execute = _execute
     return session

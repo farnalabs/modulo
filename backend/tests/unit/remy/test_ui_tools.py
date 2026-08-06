@@ -330,7 +330,7 @@ class TestBuildToolDefinitionsForText:
 
     def test_includes_descriptions(self):
         result = build_tool_definitions_for_text()
-        for name, schema in _UI_TOOLS.items():
+        for schema in _UI_TOOLS.values():
             assert schema["description"] in result
 
     def test_includes_navigate_with_path_param(self):

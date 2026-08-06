@@ -66,7 +66,7 @@ class ParameterDef(BaseModel):
 class SchemaCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
-    parameters: list[ParameterDef] = []
+    parameters: list[ParameterDef] = Field(default_factory=list)
 
 
 class SchemaUpdate(BaseModel):
@@ -110,7 +110,7 @@ class SchemaReferencesResponse(BaseModel):
 class SetCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
-    values: dict[str, Any] = {}
+    values: dict[str, Any] = Field(default_factory=dict)
 
 
 class SetUpdate(BaseModel):
@@ -152,7 +152,7 @@ class ValidationErrorItem(BaseModel):
 
 class ValidateResponse(BaseModel):
     valid: bool
-    errors: list[ValidationErrorItem] = []
+    errors: list[ValidationErrorItem] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

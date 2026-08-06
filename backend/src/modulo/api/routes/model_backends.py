@@ -164,8 +164,8 @@ async def list_model_backends_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error listing model backends: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error listing model backends")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing model backends.",
@@ -307,8 +307,8 @@ async def create_model_backend_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error creating model backend: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error creating model backend")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating model backend.",
@@ -355,8 +355,8 @@ async def get_model_backend_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error fetching model backend: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error fetching model backend")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching model backend.",
@@ -406,8 +406,8 @@ async def update_model_backend_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error updating model backend: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error updating model backend")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating model backend.",
@@ -457,8 +457,8 @@ async def delete_model_backend_endpoint(
         ) from None
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("Unexpected error deleting model backend: %s", exc)
+    except Exception:
+        logger.exception("Unexpected error deleting model backend")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting model backend.",

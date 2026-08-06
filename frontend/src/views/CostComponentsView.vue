@@ -232,8 +232,12 @@ import { Input } from '../components/ui/input'
 import { DataTable } from '../components/ui/data-table'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '../components/ui/select'
 import PageTabs from '../components/PageTabs.vue'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const planStore = usePlanStore()
+
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 // REGISTERED_RATE_FALLBACKS (backend modulo.core.cost_controller.breakdown.params)
 const REGISTERED_FALLBACKS = ['e2b_rate']
@@ -291,7 +295,7 @@ const components = computed(() => {
 const tableRows = computed(() =>
   components.value.map((c) => ({
     ...c,
-    rateDisplay: c.rate_usd != null ? `$${c.rate_usd}` : '—',
+    rateDisplay: c.rate_usd != null ? formatMoney(Number(c.rate_usd), currencyCode.value, 6) : '—',
   })),
 )
 
@@ -459,5 +463,6 @@ function rowActions(component: CostComponent) {
 onMounted(() => {
   planStore.fetchPlan()
   loadComponents()
+  loadCurrency()
 })
 </script>

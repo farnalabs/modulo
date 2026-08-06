@@ -42,8 +42,8 @@ class RemyConfig(BaseModel):
     default_provider: str = "anthropic"
     default_model: str = "claude-sonnet-4-20250514"
     default_context_window: int = 200000
-    allowed_providers: list[str] = ["anthropic", "openai", "gemini", "deepseek", "groq"]
-    allowed_models: list[str] = []  # empty = all models for allowed providers
+    allowed_providers: list[str] = Field(default_factory=lambda: ["anthropic", "openai", "gemini", "deepseek", "groq"])
+    allowed_models: list[str] = Field(default_factory=list)  # empty = all models for allowed providers
     tool_permissions: dict[str, str] = Field(default_factory=dict)
     permission_mode: str = "safe"
     auto_execute_threshold: float = 0.8
