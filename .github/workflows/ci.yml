@@ -277,7 +277,14 @@ jobs:
 
   notify-pr-failure:
     name: Trigger Branch Fixer
-    if: github.event_name == 'pull_request' && always() && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
+    # The `manual-delivery` label must only suppress the webhook dispatch step
+    # below, NOT the whole job: a job-level skip surfaces this check as
+    # "skipped" in the check-runs API, which the PR Reviewer flags as a
+    # non-green signal on every such PR. The check itself always reports
+    # success on pull_request events; the label guard lives on the dispatch
+    # step so it keeps its documented meaning ("do not auto-dispatch the
+    # Branch Fixer").
+    if: github.event_name == 'pull_request' && always()
     needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
@@ -286,7 +293,7 @@ jobs:
     steps:
       - name: Check retry limit
         id: retry-check
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -316,7 +323,7 @@ jobs:
           fi
 
       - name: Trigger Modulo Branch Fixer
-        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false'
+        if: (failure() || cancelled()) && steps.retry-check.outputs.exhausted == 'false' && !contains(github.event.pull_request.labels.*.name, 'manual-delivery')
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
