@@ -135,9 +135,9 @@ def evaluate_condition(
     if isinstance(value, (int, float)):
         return value != 0
     if isinstance(value, (list, dict)):
-        return len(value) > 0
+        return bool(value)
     if isinstance(value, str):
-        return len(value) > 0
+        return bool(value)
     return True
 
 

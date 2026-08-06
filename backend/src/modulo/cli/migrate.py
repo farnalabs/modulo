@@ -464,7 +464,7 @@ async def _async_export_org(
                 bundle = await _collect_org_data(session, org_id, pipelines_only=pipelines_only, users_only=users_only)
                 hashes = _write_jsonl(bundle, output)
                 export_completed = True
-                record_count = sum(len(v) for k, v in bundle.items() if isinstance(v, list))
+                record_count = sum(len(v) for v in bundle.values() if isinstance(v, list))
                 click.echo(f"Exported {record_count} records to {output}")
                 click.echo(f"Export hash: {hashes['__export__']}")
     except asyncio.CancelledError:

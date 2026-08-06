@@ -292,7 +292,7 @@ class GitHubConnector(ConnectorBase):
                     params=tree_params,
                 )
                 body = await self._parse_json_object(tree_r)
-                entries: list[dict[str, Any]] = cast(list[dict[str, Any]], body.get("tree", []))
+                entries: list[dict[str, Any]] = cast("list[dict[str, Any]]", body.get("tree", []))
                 if path_filter is not None:
                     path_prefix = path_filter.rstrip("/") + "/"
                     entries = [e for e in entries if e.get("path", "").startswith(path_prefix)]

@@ -18,6 +18,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from operator import itemgetter
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -747,6 +748,6 @@ def list_registry_primitives_ranked(
     else:
         if sort_by != "popularity":
             logger.warning("Unknown sort_by=%r, falling back to popularity", sort_by)
-        enriched.sort(key=lambda x: x["popularity_score"], reverse=True)
+        enriched.sort(key=itemgetter("popularity_score"), reverse=True)
 
     return enriched
