@@ -69,7 +69,7 @@ async def _get_latest_published_version(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.error("Failed to fetch latest published version for schema %s", schema_id)
+        logger.exception("Failed to fetch latest published version for schema %s", schema_id)
         raise
 
 
@@ -89,7 +89,7 @@ async def _get_existing_names(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.error("_get_existing_names: failed to fetch names for %s", model_cls.__name__)
+        logger.exception("_get_existing_names: failed to fetch names for %s", model_cls.__name__)
         raise
 
 
@@ -244,7 +244,7 @@ async def export_pipeline_bundle(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.error("export_pipeline_bundle: failed while building bundle for pipeline %s", pipeline_id)
+        logger.exception("export_pipeline_bundle: failed while building bundle for pipeline %s", pipeline_id)
         raise
 
     buf = io.BytesIO()
@@ -438,7 +438,7 @@ async def export_pipeline_bundle_v2(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.error("export_pipeline_bundle_v2: failed while building bundle for pipeline %s", pipeline_id)
+        logger.exception("export_pipeline_bundle_v2: failed while building bundle for pipeline %s", pipeline_id)
         raise
 
     yaml_str = yaml.safe_dump(bundle, default_flow_style=False, sort_keys=False, allow_unicode=True)
@@ -534,7 +534,7 @@ async def resolve_schema(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.error("resolve_schema: DB query failed for schema '%s'", name)
+        logger.exception("resolve_schema: DB query failed for schema '%s'", name)
         raise
 
     return {
@@ -565,7 +565,7 @@ async def resolve_connector_type(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.error("resolve_connector_type: DB query failed for type '%s'", connector_type_id)
+        logger.exception("resolve_connector_type: DB query failed for type '%s'", connector_type_id)
         raise
 
     if instances:
@@ -632,7 +632,7 @@ async def resolve_model_backend(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.error("resolve_model_backend: DB query failed for '%s' (%s/%s)", name, provider, model_id)
+        logger.exception("resolve_model_backend: DB query failed for '%s' (%s/%s)", name, provider, model_id)
         raise
 
     return {
@@ -851,8 +851,8 @@ async def materialize_import(
                 warnings.append(f"Schema name '{sname}' collided; retrying as '{new_sname}'.")
                 sname = new_sname
                 existing_schema_names.add(sname)
-            except Exception as exc:
-                logger.error("Failed to create schema '%s': %s", sname, exc)
+            except Exception:
+                logger.exception("Failed to create schema '%s'", sname)
                 raise
         if not schema_created:
             raise RuntimeError(f"Failed to create schema '{sname}' after {_MAX_NAME_RETRIES} attempts")
@@ -870,8 +870,8 @@ async def materialize_import(
                 account_id=created_by,
                 published=True,
             )
-        except Exception as exc:
-            logger.error("Failed to create schema version for '%s': %s", sname, exc)
+        except Exception:
+            logger.exception("Failed to create schema version for '%s'", sname)
             raise
 
         schema_version_map[export_schema_id] = new_sv.version
@@ -949,8 +949,8 @@ async def materialize_import(
                 existing_agent_names.add(aname)
                 agent_args["name"] = aname
                 warnings.append(f"Agent name collided; retrying as '{aname}'.")
-            except (ValueError, SQLAlchemyError) as exc:
-                logger.error("Failed to create agent '%s': %s", aname, exc)
+            except (ValueError, SQLAlchemyError):
+                logger.exception("Failed to create agent '%s'", aname)
                 raise
         if not agent_created:
             raise RuntimeError(f"Failed to create agent '{aname}' after {_MAX_NAME_RETRIES} attempts")
@@ -1003,8 +1003,8 @@ async def materialize_import(
             existing_pipeline_names.add(pname)
             pname = suggest_import_name(existing_pipeline_names, name)
             warnings.append(f"Pipeline name '{name}' conflicted; retrying as '{pname}'.")
-        except Exception as exc:
-            logger.error("Failed to create pipeline '%s': %s", pname, exc)
+        except Exception:
+            logger.exception("Failed to create pipeline '%s'", pname)
             raise
     if not pipeline_created:
         raise RuntimeError(f"Failed to create pipeline '{pname}' after {_MAX_NAME_RETRIES} attempts")
@@ -1068,8 +1068,8 @@ async def materialize_import(
             visibility="org",
             account_id=created_by,
         )
-    except Exception as exc:
-        logger.error("Failed to create library primitive for pipeline '%s': %s", pname, exc)
+    except Exception:
+        logger.exception("Failed to create library primitive for pipeline '%s'", pname)
         raise
 
     logger.info(

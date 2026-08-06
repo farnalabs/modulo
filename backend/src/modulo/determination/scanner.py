@@ -205,6 +205,6 @@ async def run_scan(hub: ConnectorHub) -> list[ScanSample]:
             all_samples.extend(samples)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.exception("Connector %s sampling failed: %s", connector_id, exc)
+        except Exception:
+            logger.exception("Connector %s sampling failed", connector_id)
     return all_samples

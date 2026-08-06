@@ -167,13 +167,17 @@ async def _seed_run(
         "error_code": error_code,
         "run_number": _next_run_number(),
     }
-    for col, value in (
-        ("created_at", created_at),
-        ("heartbeat_at", heartbeat_at),
-        ("dispatched_at", dispatched_at),
-    ):
-        if value is not None:
-            values[col] = value
+    values.update(
+        {
+            col: value
+            for col, value in (
+                ("created_at", created_at),
+                ("heartbeat_at", heartbeat_at),
+                ("dispatched_at", dispatched_at),
+            )
+            if value is not None
+        }
+    )
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         await session.execute(insert(Run).values(**values))

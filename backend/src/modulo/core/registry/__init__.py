@@ -149,7 +149,7 @@ def verify_manifest(
     try:
         canonical = _canonical_json(payload)
     except ValueError:
-        logger.error("verify_manifest: non-serializable payload")
+        logger.exception("verify_manifest: non-serializable payload")
         return False
     try:
         public_key.verify(bytes.fromhex(signature_hex), canonical)
