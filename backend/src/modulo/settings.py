@@ -147,26 +147,32 @@ class Settings(BaseSettings):
     # failed. Default 45 min > the 1800s node timeout used by agent pipelines.
     saq_claimed_nodeless_minutes: int = Field(default=45, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
-    # FIREFIGHT RESIDUE (2026-08): raised to 10 during the cutover to relieve
-    # "Too many connections" and never re-derived from the real budget. Accepted
-    # design target: 25 concurrent runs (concurrency 5 per worker x up to 5
-    # machines). DB budget math: SAQ_WORKER_DB_POOL_SIZE x 2 workers (runs +
-    # system) x up to 5 machines + the web process pools + per-run checkpointer
-    # connections. DO NOT lower before verifying the deployed Postgres budget:
-    #   SHOW max_connections;   # on the deployed Postgres (fly ssh console)
-    # and confirming headroom for the web + checkpointer connections.
+    # KEPT at 10 after budget verification (2026-08-06). Verified against the
+    # deployed Postgres (modulo-app-db, Fly Postgres 17.9):
+    #   SHOW max_connections  -> 300; current connections ~40 at sample time.
+    # Budget math: 10 x 2 workers (runs + system) x up to 5 machines = 100 +
+    # the web process pools + per-run checkpointer connections — well under the
+    # 300 cap with only ~40 in use. The firefight-era raise to 10 (to relieve
+    # "Too many connections") is justified by the verified budget, so it stays.
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
-    # FIREFIGHT RESIDUE (2026-08): raised to 50 during the cutover to relieve
-    # "Too many connections" and never re-derived from the real budget. DO NOT
-    # lower before verifying the Upstash budget:
-    #   CLIENT LIST        # on Upstash — compare active connections vs maxclients
+    # LOWERED to 20 after budget verification (2026-08-06). Verified prod facts:
+    # the SAQ_REDIS_POOL_SIZE secret is pinned to 5 and Upstash showed ~15
+    # connected clients at sample time — the firefight default of 50 (raised
+    # during the cutover) was over-provisioned (500 potential conns across 5
+    # machines vs ~15 actual). With worker concurrency 5, workers hold pool
+    # conns only while running jobs (~5 jobs x 2 workers = 10 live conns per
+    # machine), so 20 gives ample headroom (up to 200 across 5 machines).
+    # Operators on a small Redis tier may lower to 5, matching prod.
     # The reserve clamp in saq_worker._max_concurrent_ops() must stay strictly
     # below this pool so the semaphore can never exhaust every connection.
-    saq_redis_pool_size: int = Field(default=50, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
+    saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # SAQ worker concurrency (how many jobs run at once per worker).
-    # Decoupled from Redis pool size — pool=50 handles bursty Redis ops
-    # while concurrency=5 prevents runaway job parallelism.
+    # KEPT at 5 — the accepted design target (5 per worker x up to 5 machines
+    # = up to 25 concurrent runs), verified-safe against the prod Postgres
+    # 300-connection cap (only ~40 in use). Decoupled from Redis pool size —
+    # pool=20 handles bursty Redis ops while concurrency=5 prevents runaway
+    # job parallelism.
     saq_worker_concurrency: int = Field(default=5, alias="SAQ_WORKER_CONCURRENCY", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second
