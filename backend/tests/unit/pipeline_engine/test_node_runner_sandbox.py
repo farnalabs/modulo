@@ -4,6 +4,7 @@ A sandbox_agent node MUST provide agent_command (or agent_commands);
 there is no default command, and a missing command is a hard error.
 """
 
+import asyncio
 import logging
 import os
 import uuid
@@ -28,9 +29,12 @@ def _make_sandbox_mock():
     cmd_result.stdout = "agent stdout"
     cmd_result.stderr = ""
 
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
-    sandbox.commands.run = AsyncMock(return_value=cmd_result)
+    sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
     sandbox.kill = AsyncMock()
     return sandbox
@@ -150,9 +154,12 @@ async def test_sandbox_agent_success_output_includes_cost_estimate_usd():
     cmd_result.stdout = "agent stdout"
     cmd_result.stderr = ""
 
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
-    sandbox.commands.run = AsyncMock(return_value=cmd_result)
+    sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.files.read = AsyncMock(return_value='{"summary": "done", "cost_estimate_usd": 0.001}')
     sandbox.kill = AsyncMock()
 
@@ -328,3 +335,84 @@ async def test_sandbox_agent_command_timeout_surfaces_clear_summary():
     assert "no output" in output["summary"]
     assert "30s" in output["summary"]
     assert artifact["summary"] == output["summary"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-97: E2B idle watchdog + kill-before-output-read
+# ---------------------------------------------------------------------------
+
+
+async def test_idle_watchdog_kills_stalled_command_and_fails():
+    """A command that goes silent for _SANDBOX_IDLE_TIMEOUT is killed and the
+    node fails fast — it does not block for the full sandbox_timeout (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+    handle.kill = AsyncMock()
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.files.read = AsyncMock(return_value='{"summary": "fabricated"}')
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    artifact = result["artifacts"][0]["output"]
+    assert output["status"] == "failed"
+    assert artifact["exit_code"] == -1
+    assert "no output" in output["summary"]
+    # The stalled command itself was killed...
+    handle.kill.assert_awaited()
+    # ...and the still-running sandbox was killed before output.json could be
+    # read — the interrupted process must not fabricate a completion.
+    sandbox.kill.assert_awaited()
+    sandbox.files.read.assert_not_called()
+
+
+async def test_timed_out_command_does_not_read_output_json():
+    """On a timed-out command the sandbox is killed and output.json is NOT read —
+    an interrupted-but-alive agent could otherwise fabricate a completion (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(side_effect=TimeoutError("command timed out"))
+    sandbox.files.read = AsyncMock(return_value='{"summary": "fabricated"}')
+    sandbox.kill = AsyncMock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    artifact = result["artifacts"][0]["output"]
+    assert output["status"] == "failed"
+    assert artifact["exit_code"] == -1
+    assert "no output" in output["summary"]
+    assert "30s" in output["summary"]
+    sandbox.files.read.assert_not_called()
+    sandbox.kill.assert_awaited()
+
+
+async def test_background_command_success_still_completes():
+    """A successful background command (handle path) still completes normally
+    and reads the agent's output.json (FAR-97 regression guard)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert sandbox.commands.run.call_args.kwargs["background"] is True
+    assert result["output"]["status"] == "completed"
+    assert result["output"]["summary"] == "done"
+    assert result["output"]["agent_stdout"] == "agent stdout"
