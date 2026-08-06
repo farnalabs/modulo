@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
-const mockGet = vi.hoisted(() => vi.fn().mockImplementation((path: string) => {
+const mockPut = vi.hoisted(() => vi.fn().mockResolvedValue({ data: null, error: undefined }))
+const defaultGet = vi.hoisted(() => (path: string) => {
   if (path === '/api/v1/admin/costs') {
     return Promise.resolve({
       data: {
@@ -28,7 +29,7 @@ const mockGet = vi.hoisted(() => vi.fn().mockImplementation((path: string) => {
   }
   if (path === '/api/v1/admin/costs/controls') {
     return Promise.resolve({
-      data: { budget: 10000, currency: 'USD', billingPeriod: 'monthly', alertThresholds: [50, 75, 90], circuitBreakerEnabled: false },
+      data: { budget: 10000, currency: 'USD', billing_period: 'monthly', alert_thresholds: [50, 75, 90], circuit_breaker_enabled: false },
       error: undefined,
     })
   }
@@ -39,12 +40,13 @@ const mockGet = vi.hoisted(() => vi.fn().mockImplementation((path: string) => {
     })
   }
   return Promise.resolve({ data: null, error: undefined })
-}))
+})
+const mockGet = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: mockGet,
-    PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    PUT: mockPut,
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
@@ -58,6 +60,7 @@ describe('AdminCostControlsView', () => {
     pinia = createPinia()
     setActivePinia(pinia)
     vi.clearAllMocks()
+    mockGet.mockImplementation(defaultGet)
   })
 
   async function mountView() {
@@ -108,6 +111,54 @@ describe('AdminCostControlsView', () => {
     expect(wrapper.find('[data-testid="cc-billing-period"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="cc-budget-input"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="cc-budget-save"]').exists()).toBe(true)
+  })
+
+  it('loads persisted alert thresholds from settings', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs/controls') {
+        return Promise.resolve({
+          data: { budget: 10000, currency: 'USD', billing_period: 'monthly', alert_thresholds: [50, 100], circuit_breaker_enabled: false },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    pinia = createPinia()
+    setActivePinia(pinia)
+
+    const wrapper = mount(AdminCostControlsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    const checked = (testid: string) => (wrapper.find(`[data-testid="${testid}"] input`).element as HTMLInputElement).checked
+    expect(checked('cc-threshold-50')).toBe(true)
+    expect(checked('cc-threshold-75')).toBe(false)
+    expect(checked('cc-threshold-90')).toBe(false)
+    expect(checked('cc-threshold-100')).toBe(true)
+  })
+
+  it('sends alert_thresholds when toggling a threshold', async () => {
+    const wrapper = await mountView()
+    mockPut.mockClear()
+    const input = wrapper.find('[data-testid="cc-threshold-100"] input')
+    ;(input.element as HTMLInputElement).checked = true
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(mockPut).toHaveBeenCalledWith(
+      '/api/v1/admin/costs/controls',
+      expect.objectContaining({
+        body: expect.objectContaining({ alert_thresholds: [50, 75, 90, 100] }),
+      }),
+    )
   })
 
   it('shows locked state when feature is disabled', async () => {

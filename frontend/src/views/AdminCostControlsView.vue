@@ -401,7 +401,11 @@ async function loadSettings() {
     if (err) {
       return
     } else if (data) {
-      settings.value = { ...settings.value, ...data }
+      settings.value = {
+        ...settings.value,
+        ...data,
+        alertThresholds: Array.isArray(data.alert_thresholds) ? data.alert_thresholds : settings.value.alertThresholds,
+      }
     }
   } catch (e) {
     console.warn('Failed to load cost control settings', e)
@@ -461,7 +465,7 @@ async function toggleThreshold(threshold: number) {
   }
   thresholdSaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alertThresholds: settings.value.alertThresholds } })
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alert_thresholds: settings.value.alertThresholds } })
   } catch {
     settings.value.alertThresholds = prev
     thresholdSaveError.value = 'Failed to save thresholds'
