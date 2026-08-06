@@ -21,9 +21,11 @@ The application refuses to start if any required variable is absent or invalid.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | **Yes** | — | `postgresql+asyncpg://user:pass@host:port/db` |
-| `MODULO_DB` | No | `postgres` | Database backend: `postgres` or `sqlite` |
+| `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
 
-`MODULO_DB=sqlite` switches to SQLite for local development. See [`docs/system-requirements.md`](./system-requirements.md) for SQLite limitations.
+`MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).  
+`MODULO_DB=mariadb` or `mysql` uses the aiomysql driver (MariaDB is deprecated since 2026-07-11).  
+See [`docs/system-requirements.md`](./system-requirements.md) for backend limitations.
 
 ---
 
@@ -109,14 +111,22 @@ Telemetry is opt-in. With default settings, Modulo makes **zero** external netwo
 
 ## Rate Limiting
 
+Rate limits are hardcoded in `RateLimitMiddleware` (see [`backend/src/modulo/api/middleware/rate_limiter.py`](../backend/src/modulo/api/middleware/rate_limiter.py)):
+
+| Path | Limit | Window |
+|------|-------|--------|
+| POST `/api/v1/runs` | 60 | 60s |
+| POST `/api/v1/triggers` | 100 | 60s |
+| POST `/api/v1/errors/ingest` | 10 | 60s |
+| `/mcp` (all POST/PUT/PATCH) | 200 | 60s |
+| Auth endpoints (all POST/PUT/PATCH) | 10 attempts | 60s |
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RATE_LIMIT_DEFAULT` | No | `100/minute` | Default rate limit per user/IP |
-| `RATE_LIMIT_AUTH` | No | `20/minute` | Login/register endpoints |
-| `RATE_LIMIT_MCP` | No | `300/minute` | MCP tool invocations |
-| `RATE_LIMIT_WS_CONNECT` | No | `10/minute` | WebSocket connection requests |
+| `MODULO_AUTH_MAX_ATTEMPTS` | No | `10` | Login attempts per sliding window |
+| `MODULO_RATELIMIT_BYPASS_TOKEN` | No | — | Shared secret to bypass rate limiting (for CI/CD) |
 
-Rate limiting uses a Redis token-bucket algorithm. Falls back to in-memory without Redis (single-process only).
+Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op without Redis. Auth rate limiter requires Redis and is disabled without it.
 
 ---
 
