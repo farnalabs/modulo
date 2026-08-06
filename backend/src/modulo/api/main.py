@@ -197,6 +197,8 @@ async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
     machine/process cannot interleave.
     """
     engine = get_or_create_engine(settings)
+    from modulo.db.migrations.env import set_lock_held_by_caller
+
     async with engine.connect() as conn:
         acquired = False
         for _ in range(_MIGRATION_LOCK_POLL_ATTEMPTS):
@@ -209,9 +211,15 @@ async def _migration_advisory_lock(settings: Settings) -> AsyncIterator[bool]:
                 break
             await asyncio.sleep(_MIGRATION_LOCK_POLL_INTERVAL)
         try:
+            if acquired:
+                # Tell env.py the lock is already held on a different (sync)
+                # connection so the alembic run does not re-acquire the same
+                # session-scoped key and self-deadlock.
+                set_lock_held_by_caller(True)
             yield acquired
         finally:
             if acquired:
+                set_lock_held_by_caller(False)
                 await conn.execute(
                     text("SELECT pg_advisory_unlock(:k1, :k2)"),
                     {"k1": _MIGRATION_LOCK_KEY[0], "k2": _MIGRATION_LOCK_KEY[1]},
