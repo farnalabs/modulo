@@ -32,8 +32,13 @@ def _get_meter() -> Any:
 
 
 def _ensure() -> None:
-    global _facts_write_failed_total, _backfill_last_run_ts, _backfill_rows
-    global _reconcile_alert_total, _retention_lag, _facts_skip_non_pg_total
+    global \
+        _facts_write_failed_total, \
+        _backfill_last_run_ts, \
+        _backfill_rows, \
+        _reconcile_alert_total, \
+        _retention_lag, \
+        _facts_skip_non_pg_total
     if _facts_write_failed_total is not None:
         return
     meter = _get_meter()

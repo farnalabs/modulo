@@ -1575,8 +1575,8 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            _terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
-            if run.status in _terminal_statuses:
+            terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+            if run.status in terminal_statuses:
                 detail = f"Run is already in terminal status: {run.status}"
                 return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
             # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
@@ -1612,13 +1612,13 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
 
         from modulo.db.models.run import Run
 
-        _terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+        terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed"})
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             base_where = (
                 HitlClaim.organisation_id == org_id,
                 HitlClaim.decision.is_(None),
-                Run.status.not_in(_terminal_statuses),
+                Run.status.not_in(terminal_statuses),
             )
             total_result = await s.execute(
                 select(func.count()).select_from(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*base_where)
