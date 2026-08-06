@@ -1016,14 +1016,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # are intentionally decoupled -- the entrypoint runs before FastAPI is
     # initialised and can't use DI.  Dispose both so no connections leak.
     try:
-        _di_engine = get_or_create_engine(settings)
+        di_engine = get_or_create_engine(settings)
 
         async def shutdown_otel_async() -> None:
             shutdown_otel()
 
         _shutdown_manager.register("otel", shutdown_otel_async)
         _shutdown_manager.register("db_engine", db_engine.dispose)
-        _shutdown_manager.register("di_engine", _di_engine.dispose)
+        _shutdown_manager.register("di_engine", di_engine.dispose)
         _shutdown_manager.register("rate_limiter_redis", shutdown_rate_limiters)
     except Exception:
         logger.warning("startup.shutdown_manager_init_failed", exc_info=True)
@@ -1043,34 +1043,34 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("startup.event_bus_redis_enabled")
 
     # Start the HITL claim expiry background job.
-    _claim_expiry_job = ClaimExpiryJob(db_engine)
-    await _claim_expiry_job.start()
+    claim_expiry_job = ClaimExpiryJob(db_engine)
+    await claim_expiry_job.start()
 
     # Start webhook trigger event cleanup loop (30-day retention).
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    _trigger_event_cleanup_task = asyncio.create_task(
+    trigger_event_cleanup_task = asyncio.create_task(
         cleanup_scheduler_loop(async_sessionmaker(db_engine, expire_on_commit=False))
     )
 
     # Start MCP task group so FastMCP's _handle_stateless_request can use tg.start().
     from modulo.api.mcp_server import mcp
 
-    _mcp_tg = await anyio.create_task_group().__aenter__()
+    mcp_tg = await anyio.create_task_group().__aenter__()
     # FastMCP annotates this private integration slot as None despite assigning a TaskGroup at runtime.
     session_manager = cast("_TaskGroupSessionManager", mcp.session_manager)
-    session_manager._task_group = _mcp_tg
+    session_manager._task_group = mcp_tg
 
     yield
 
-    await _mcp_tg.__aexit__(None, None, None)
+    await mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
-    _trigger_event_cleanup_task.cancel()
-    await _claim_expiry_job.stop()
+    trigger_event_cleanup_task.cancel()
+    await claim_expiry_job.stop()
     with suppress(asyncio.CancelledError):
         await retention_task
     with suppress(asyncio.CancelledError):
-        await _trigger_event_cleanup_task
+        await trigger_event_cleanup_task
     await _shutdown_manager.shutdown()
 
 

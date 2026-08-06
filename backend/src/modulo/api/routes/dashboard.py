@@ -147,8 +147,8 @@ async def dashboard_summary(
             for tracked_status in _TRACKED_STATUSES:
                 status_counts.setdefault(tracked_status, 0)
 
-            _idle_statuses = ("pending", "claimed", "waiting_for_lock")
-            idle_count = sum(status_counts.get(s, 0) for s in _idle_statuses)
+            idle_statuses = ("pending", "claimed", "waiting_for_lock")
+            idle_count = sum(status_counts.get(s, 0) for s in idle_statuses)
             status_counts["idle"] = idle_count
 
             teams_result = await session.execute(

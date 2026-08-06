@@ -522,10 +522,10 @@ async def _async_import_org(
     pipelines_only: bool,
     users_only: bool,
 ) -> None:
-    _meta, records = await _read_jsonl(input_path)
+    meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
-    if _meta.get("export_hash") and not _verify_export(_meta, records):
+    if meta.get("export_hash") and not _verify_export(meta, records):
         raise click.ClickException("Import aborted: hash verification failed — file may be corrupted")
 
     try:
