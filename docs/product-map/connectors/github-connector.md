@@ -75,7 +75,8 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Return created/updated resource dict from API
 - [x] `raise_for_status()` on HTTP errors
 - [x] Recursive file/directory listing via `query("tree")` — resolves `ref` (default `main`) to a commit SHA via `GET /repos/{owner}/{repo}/commits/{ref}`, then lists the tree via `GET /repos/{owner}/{repo}/git/trees/{sha}` (optional `recursive` param, default on); optional `path` filter narrows the returned entries to that directory locally
-- [ ] File content is expected as raw string — no base64 encode/decode in connector; caller must handle encoding
+- [x] File read decoding — `query("file")` decodes base64 `content` (when `encoding: "base64"`) to UTF-8 text so agents consume the raw file; binary blobs (not UTF-8-decodable) and non-base64 responses are left untouched
+- [x] File write encoding — `write("file")` accepts raw text via `content` and base64-encodes it for the GitHub Contents API (which requires base64); pre-encoded content can be supplied via `content_base64` (passed through unchanged for binary files); exactly one of the two is required — omitting both or supplying both raises a descriptive `ValueError`
 - [ ] Batch file operations — not implemented
 - [x] Path traversal protection — local `_validate_path()` rejects absolute paths and `..` segments on `query("file")`, `query("tree")` (path filter), and `write("file")` before they reach the API
 
@@ -183,7 +184,7 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
-- [ ] **File content encoding**: caller must base64-encode file content; no encode/decode helper in connector
+- [ ] **File content encoding** — ~~caller must base64-encode file content; no encode/decode helper in connector~~ — **RESOLVED (2026-08-06)**: `query("file")` decodes base64 content to UTF-8 text; `write("file")` accepts raw text `content` (encoded internally) or `content_base64` (passed through for binary files), requiring exactly one
 - [x] ~~**Recursive file listing**~~ — **RESOLVED (2026-08-06)**: `query("tree")` lists the full repo tree recursively via the Git Trees API (ref resolved to a commit SHA first), with optional `path`/`recursive` filters
 - [x] ~~**Path traversal protection**~~ — **RESOLVED (2026-08-06)**: local `_validate_path()` blocks absolute paths and `..` segments on `query("file")`, `query("tree")`, and `write("file")` before any request is sent
 - [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
@@ -193,6 +194,15 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
 
 ## QA History
+
+### 2026-08-06 — improve-architecture: file content base64 encode/decode RESOLVED
+
+**RESOLVED the "File content encoding" known gap** (`connectors/github/__init__.py`). GitHub's Contents API requires base64 content on write and returns base64 content on read, but the connector previously passed content through raw — so agents could not read a file, modify it, and write it back (the write would fail GitHub's base64 validation).
+
+1. **Read decode** — new `_decode_read_content()` helper: `query("file")` decodes the base64 `content` (when `encoding == "base64"`) to UTF-8 text so agents consume the raw file; binary blobs that aren't UTF-8-decodable and non-object responses are left untouched (fuzz-safe).
+2. **Write encode** — new `_encode_write_content()` helper: `write("file")` accepts raw text via `content` and base64-encodes it before sending; pre-encoded content can be supplied via `content_base64` (passed through unchanged, for binary files). Exactly one of the two is required — missing-both and both-present both raise descriptive `ValueError`s. The class docstring's `content` contract was updated.
+
+**Tests:** 7 new unit tests in `test_github.py` (multiline base64 read decode, binary content left encoded on read, plain-text record untouched, `content_base64` write passthrough asserted on the request body, UTF-8 write round-trip via `base64.b64decode(sent)` — including `héllo wörld`, missing-content error, both-content-and-content_base64 error) + `test_query_file` updated to assert the decoded text and `test_write_file` updated to assert the encoded request body + the missing-content parametrised expectation updated to the new message. Updated product map (2 behaviours `[ ]`→`[x]`, Known Gap → RESOLVED, QA History). 79/79 `test_github.py` + all 139 github connector unit tests + 41/41 github BDD scenarios pass (8 pre-existing connector-suite BDD failures unchanged), ruff clean, mypy strict clean. Status: partial (OAuth flow, fine-grained PAT, rate-limit budget, circuit breaker, batch file ops remain).
 
 ### 2026-08-06 — improve-architecture: recursive tree listing + path traversal RESOLVED
 
