@@ -29,6 +29,17 @@ import {
 // Fixed UTC instant for deterministic assertions — the ISO literal is always valid.
 const FIXED_NOW = new Date('2026-08-06T12:00:00Z') // nosemgrep: new-date-without-guard
 
+// UTC day-string helpers mirroring the store's day-window logic. Deriving the
+// expected dates from FIXED_NOW (instead of hardcoded literals) keeps the
+// assertions timezone-robust and correct if FIXED_NOW is ever changed.
+const DAY_MS = 86400000
+function utcDay(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+function daysBefore(d: Date, days: number): string {
+  return utcDay(new Date(d.getTime() - days * DAY_MS)) // nosemgrep: new-date-without-guard
+}
+
 const validResponse = {
   group_by: 'day',
   dimension: null,
@@ -86,8 +97,8 @@ function setupMocks(response: unknown = validResponse) {
 describe('serializeFilters', () => {
   it('maps a 7d timespan to UTC date_from/date_to', () => {
     const params = serializeFilters({ timespan: '7d', groupBy: 'day' }, FIXED_NOW)
-    expect(params.date_to).toBe('2026-08-06')
-    expect(params.date_from).toBe('2026-07-30')
+    expect(params.date_to).toBe(utcDay(FIXED_NOW))
+    expect(params.date_from).toBe(daysBefore(FIXED_NOW, 7))
     expect(params.group_by).toBe('day')
     expect(params.limit).toBe(1000)
   })
@@ -129,20 +140,20 @@ describe('serializeFilters', () => {
 
   it('maps the 24h preset to a 1-day UTC window with day granularity', () => {
     const day = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
-    expect(day.date_to).toBe('2026-08-06')
-    expect(day.date_from).toBe('2026-08-05')
+    expect(day.date_to).toBe(utcDay(FIXED_NOW))
+    expect(day.date_from).toBe(daysBefore(FIXED_NOW, 1))
     expect(day.group_by).toBe('day')
 
     const week = serializeFilters({ timespan: '24h', groupBy: 'week' }, FIXED_NOW)
-    expect(week.date_to).toBe('2026-08-06')
-    expect(week.date_from).toBe('2026-08-05')
+    expect(week.date_to).toBe(utcDay(FIXED_NOW))
+    expect(week.date_from).toBe(daysBefore(FIXED_NOW, 1))
     expect(week.group_by).toBe('week')
   })
 
   it('maps the 3d preset to a 3-day UTC window', () => {
     const params = serializeFilters({ timespan: '3d', groupBy: 'day' }, FIXED_NOW)
-    expect(params.date_to).toBe('2026-08-06')
-    expect(params.date_from).toBe('2026-08-03')
+    expect(params.date_to).toBe(utcDay(FIXED_NOW))
+    expect(params.date_from).toBe(daysBefore(FIXED_NOW, 3))
     expect(params.group_by).toBe('day')
   })
 
@@ -160,16 +171,16 @@ describe('previousWindowParams', () => {
   it('shifts the window back by exactly one window', () => {
     const params = serializeFilters({ timespan: '7d', groupBy: 'day' }, FIXED_NOW)
     const prev = previousWindowParams(params)
-    expect(prev.date_to).toBe('2026-07-29')
-    expect(prev.date_from).toBe('2026-07-22')
+    expect(prev.date_to).toBe(daysBefore(FIXED_NOW, 8))
+    expect(prev.date_from).toBe(daysBefore(FIXED_NOW, 15))
     expect(prev.group_by).toBe(params.group_by)
   })
 
   it('shifts the 24h preset back by one day window', () => {
     const params = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
     const prev = previousWindowParams(params)
-    expect(prev.date_to).toBe('2026-08-04')
-    expect(prev.date_from).toBe('2026-08-03')
+    expect(prev.date_to).toBe(daysBefore(FIXED_NOW, 2))
+    expect(prev.date_from).toBe(daysBefore(FIXED_NOW, 3))
     expect(prev.group_by).toBe(params.group_by)
   })
 })
