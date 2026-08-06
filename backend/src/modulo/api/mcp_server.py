@@ -3488,7 +3488,9 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         gate = result.scalar_one_or_none()
         required_team_name = None
         if gate is not None and gate.required_team_id is not None:
-            team_result = await s.execute(select(Team).where(Team.id == gate.required_team_id))
+            team_result = await s.execute(
+                select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None))
+            )
             team = team_result.scalar_one_or_none()
             required_team_name = team.name if team else None
     if gate is None:
