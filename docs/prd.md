@@ -4155,6 +4155,16 @@ Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omit
 |---|---|
 | Analytics page + endpoint | Team (`analytics_page` feature flag, default off until the frontend ships) |
 
+#### 8.32.7 Analytics Page UI (frontend)
+
+The `/analytics` page (sidebar group Core, `analytics.query` permission, community tier) is a **structured filter form → typed query params** surface. There is **no query language in this delivery** (see 8.32.2) — the filter form is the surface; syntax/expression mode stays deferred until a pre-rolled dependency slots in.
+
+- **Filter bar**: rolling timespan toggle (Last 24h / 7d / 30d / 90d), granularity (day / ISO week), optional dimension (trigger_type / status / pipeline / folder / team), and combinable filters (trigger_type, status, pipeline_id, folder_id). A measure picker selects the rendered metric (run count / cost / tokens / avg duration / success rate). The backend returns all metrics per bucket, so the measure is a client-side rendering concern — it is never a query param.
+- **Visualisation**: ECharts (via `vue-echarts`, lazy-loaded). Line chart for undimensioned trends by date; bar chart for dimensioned queries (x = dimension key, fallback date). `buildChartOption` is a pure series → ECharts option mapping — the client never buckets. Pre-coverage buckets render as gaps (`null`), never zero-filled as "zero activity".
+- **Trend table**: rows are buckets; columns are date/key + measure value + a period arrow (▲/▼/→) against the previous equal-length window. The previous window is fetched as a second query and compared by key (dimensioned) or by offset (undimensioned). `prev=0` and both-zero show no arrow.
+- **Empty state**: "No analytics data yet — data since \<date\>" where \<date\> is the earliest bucket with data (launch-forward coverage, 8.32.3).
+- **Flag-off state**: the sidebar link is hidden when the feature flag is off (manifest `required_permissions`); if the page is reached anyway and the API returns 402, an "Analytics is not enabled for your workspace" card is shown — never a spinner.
+
 ---
 
 ## 15. Resolved Design Decisions
