@@ -47,7 +47,7 @@ primary_region = 'lhr'
   [[http_service.checks]]
     interval = "15s"
     timeout = "5s"
-    grace_period = "120s"
+    grace_period = "240s"
     method = "GET"
     path = "/healthz/ready"
     protocol = "http"
