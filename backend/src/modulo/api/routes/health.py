@@ -554,6 +554,9 @@ async def _check_system_crons() -> CheckResult:
     healthy machine on a transient read). ``SAQ_HARD_GATE=false`` relaxes to
     alert-only, matching the SAQ worker gate.
     """
+    if os.environ.get("FLY_PROCESS_GROUP") == "app":
+        return await _check_fleet_system_crons()
+
     settings = get_settings()
     this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
     r: aioredis.Redis | None = None
