@@ -458,6 +458,37 @@ class TestOrgCapacityDeferred:
         update_status.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_resume_job_never_org_capacity_deferred(self) -> None:
+        """Major 2: a resume_run dispatch bypasses the org-cap gate entirely.
+
+        A resume is the continuation of an ALREADY-ADMITTED run (already
+        ``running`` and already consuming an org slot); the org-cap gate only
+        applies to NEW run admissions. Deferring a resume would 500
+        ``recover_node`` and lose the resume payload when dispatcher_reconcile
+        later re-dispatches it as execute_run with empty resume_data.
+        """
+        session = AsyncMock()
+        run_id = uuid.UUID(RUN_ID)
+        org_id = uuid.UUID(ORG_ID)
+        with (
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                return_value=1,
+            ),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_org",
+                new_callable=AsyncMock,
+                return_value=1,
+            ),
+            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+        ):
+            deferred = await dispatch._org_capacity_deferred(session, run_id, org_id, job_type="resume_run")
+
+        assert deferred is False
+        update_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_admits_when_under_cap(self) -> None:
         with (
             patch(
@@ -569,6 +600,53 @@ class TestDispatchRunOrgCapacity:
         assert job_id is None
         enqueue.assert_not_called()
         dispatched.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resume_run_at_org_cap_is_admitted(self) -> None:
+        """Major 2 regression: a resume_run dispatch at the org cap is ENQUEUED.
+
+        The org-cap internals are set so ``_org_capacity_deferred`` would
+        defer an execute_run — but for ``job_type="resume_run"`` it must
+        short-circuit to admitted, so ``recover_node`` never sees
+        ``("deferred", None)`` (which it treats as an HTTP 500) and the
+        ``resume_data`` survives to the worker.
+        """
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
+            _enqueue_patch(return_value=(JOB_ID, False)),
+            patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                return_value=1,
+            ),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_org",
+                new_callable=AsyncMock,
+                return_value=1,
+            ),
+            patch(
+                "modulo.db.crud.run.get_run",
+                new_callable=AsyncMock,
+                return_value=_run_with_status("running"),
+            ),
+            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+        ):
+            outcome, job_id = await dispatch.dispatch_run(
+                RUN_ID,
+                ORG_ID,
+                job_type="resume_run",
+                resume_data={"action": "approved"},
+            )
+
+        assert outcome == "enqueued"
+        assert job_id == JOB_ID
+        saq_job.assert_awaited_once()
+        update_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_admits_when_both_caps_free(self) -> None:

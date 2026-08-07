@@ -8,7 +8,8 @@ Soft-delete flow:
 
 Run retention:
   - Terminal runs older than 30 days are hard-deleted before org drop.
-  - LangGraph checkpoint rows are batched 500 at a time in a nightly job.
+  - LangGraph checkpoint rows of TERMINAL runs are batched 500 at a time in an
+    hourly job (see ``batch_delete_langgraph_checkpoints``).
 """
 
 import secrets
@@ -233,47 +234,90 @@ async def batch_delete_langgraph_checkpoints(
     *,
     batch_size: int = CHECKPOINT_BATCH_SIZE,
 ) -> int:
-    """Nightly retention: delete old LangGraph checkpoint rows.
+    """Hourly retention: purge old LangGraph checkpoint rows of TERMINAL runs.
 
-    Ages out checkpoint writes, blobs, and checkpoints older than the run
-    retention window (30 days). Operates directly on the unqualified table
-    names the ``ModuloPostgresSaver`` migrations create (``checkpoints``,
+    Ages out checkpoint rows older than the run retention window (30 days),
+    but ONLY for threads whose owning ``runs`` row is terminal — or whose run
+    row is already gone (purged by the runs sweep, an orphaned thread). A live
+    run (``pending``/``running``/``awaiting_human``/``claimed``/
+    ``waiting_for_lock``) ALWAYS has a ``runs`` row (created at run creation),
+    so the orphan branch never matches a live run. This is the load-bearing
+    guard: an ``awaiting_human`` run paused >30 days at a HITL gate keeps its
+    interrupt checkpoint, so ``resume_run`` on later approval resumes the graph
+    instead of re-running side-effectful nodes from scratch.
+
+    Operates directly on the unqualified table names the
+    ``ModuloPostgresSaver`` migrations create (``checkpoints``,
     ``checkpoint_blobs``, ``checkpoint_writes``) — they land in the
     connection's default search_path schema, not a ``langgraph`` schema.
     Blob rows are not FK-cascaded from checkpoints (the saver migrations
     define no foreign keys), so all three tables are purged. Age is measured
-    via the ``created_at`` column added by the saver migrations.
+    via the ``created_at`` column added by the saver migrations. The terminal
+    status set matches ``batch_delete_old_terminal_runs``
+    (``Run.TERMINAL_STATUSES``).
+
+    ``checkpoint_writes`` rows are keyed by their owning checkpoint
+    (``checkpoint_id``) and written together with it, so the thread + age +
+    terminal-owner predicate above only ever targets writes whose checkpoint is
+    being purged. ``checkpoint_blobs`` are keyed by
+    (``thread_id``, ``checkpoint_ns``, ``channel``, ``version``) and shared
+    across checkpoints in a thread; their reference lives inside the
+    Fernet-encrypted ``checkpoint`` JSONB (``channel_versions``), so it cannot
+    be probed in SQL. A blob is therefore only deleted when NO checkpoint
+    remains in its thread — checked AFTER the checkpoints pass of the same
+    batch, so an old idle-channel blob still referenced by a fresh checkpoint
+    is retained until that checkpoint itself ages out.
     """
+    from modulo.db.models.run import TERMINAL_STATUSES
+
     cutoff = datetime.now(UTC) - timedelta(days=RUN_RETENTION_DAYS)
+    terminal_statuses = list(TERMINAL_STATUSES)
     deleted_total = 0
 
     _table_sql = {
         "checkpoint_writes": (
-            "DELETE FROM checkpoint_writes "
+            "DELETE FROM checkpoint_writes w "
             "WHERE ctid IN ("
-            "  SELECT ctid FROM checkpoint_writes "
-            "  WHERE created_at < :cutoff LIMIT :limit"
-            ")"
-        ),
-        "checkpoint_blobs": (
-            "DELETE FROM checkpoint_blobs "
-            "WHERE ctid IN ("
-            "  SELECT ctid FROM checkpoint_blobs "
-            "  WHERE created_at < :cutoff LIMIT :limit"
+            "  SELECT w.ctid FROM checkpoint_writes w "
+            "  LEFT JOIN runs r ON r.langgraph_thread_id = w.thread_id "
+            "  WHERE w.created_at < :cutoff "
+            "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
+            "  LIMIT :limit"
             ")"
         ),
         "checkpoints": (
-            "DELETE FROM checkpoints "
+            "DELETE FROM checkpoints c "
             "WHERE ctid IN ("
-            "  SELECT ctid FROM checkpoints "
-            "  WHERE created_at < :cutoff LIMIT :limit"
+            "  SELECT c.ctid FROM checkpoints c "
+            "  LEFT JOIN runs r ON r.langgraph_thread_id = c.thread_id "
+            "  WHERE c.created_at < :cutoff "
+            "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
+            "  LIMIT :limit"
+            ")"
+        ),
+        "checkpoint_blobs": (
+            "DELETE FROM checkpoint_blobs b "
+            "WHERE ctid IN ("
+            "  SELECT b.ctid FROM checkpoint_blobs b "
+            "  LEFT JOIN runs r ON r.langgraph_thread_id = b.thread_id "
+            "  WHERE b.created_at < :cutoff "
+            "    AND (r.id IS NULL OR r.status = ANY(:terminal_statuses)) "
+            "    AND NOT EXISTS ("
+            "      SELECT 1 FROM checkpoints c "
+            "      WHERE c.thread_id = b.thread_id "
+            "        AND c.checkpoint_ns = b.checkpoint_ns"
+            "    ) "
+            "  LIMIT :limit"
             ")"
         ),
     }
     for stmt_text in _table_sql.values():
         while True:
             stmt = text(stmt_text)
-            result = await session.execute(stmt, {"cutoff": cutoff, "limit": batch_size})
+            result = await session.execute(
+                stmt,
+                {"cutoff": cutoff, "limit": batch_size, "terminal_statuses": terminal_statuses},
+            )
             count = result.rowcount if hasattr(result, "rowcount") else 0
             deleted_total += count
             if count < batch_size:

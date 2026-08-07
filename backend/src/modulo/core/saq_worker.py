@@ -399,17 +399,40 @@ async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     Deletes terminal ``runs`` rows older than the retention window (via
     ``batch_delete_old_terminal_runs``) AND purges LangGraph checkpoint rows
     (``checkpoints``, ``checkpoint_blobs``, ``checkpoint_writes``) older than
-    the retention window (via ``batch_delete_langgraph_checkpoints``). The
-    retention session is intentionally system-scoped (no ``set_rls_org``) —
-    checkpoint retention is cross-org by design and operates on the saver's
-    unqualified tables.
+    the retention window (via ``batch_delete_langgraph_checkpoints``). The two
+    purges run in SEPARATE transactions so a failure in the checkpoint purge
+    can never roll back the already-executed runs purge.
+
+    The checkpoint purge is tolerant of a missing saver schema: the system
+    worker's cron can fire before the app boot creates the checkpoint tables /
+    ``created_at`` columns, in which case ``ProgrammingError`` (the SQLAlchemy
+    wrapper for the DBAPI's missing-table/column errors, e.g. psycopg's
+    ``UndefinedTable``/``UndefinedColumn``) is caught, logged as a warning, and
+    the job still reports the runs purge count (``checkpoints_deleted=0``)
+    without failing — the app boot creates the schema later. The retention
+    session is intentionally system-scoped (no ``set_rls_org``) — checkpoint
+    retention is cross-org by design and operates on the saver's unqualified
+    tables.
     """
+    from sqlalchemy.exc import ProgrammingError
+
     from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
     from modulo.db.crud.run import batch_delete_old_terminal_runs
 
-    async with _make_session_factory()() as session, session.begin():
+    factory = _make_session_factory()
+    async with factory() as session, session.begin():
         deleted = await batch_delete_old_terminal_runs(session)
-        checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
+
+    checkpoints_deleted = 0
+    try:
+        async with factory() as session, session.begin():
+            checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
+    except ProgrammingError:
+        _log.warning(
+            "saq.retention_cleanup.checkpoint_schema_missing",
+            exc_info=True,
+        )
+
     if deleted or checkpoints_deleted:
         _log.info(
             "saq.retention_cleanup.deleted_old_runs",
