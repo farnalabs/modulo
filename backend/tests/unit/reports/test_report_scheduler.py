@@ -158,7 +158,7 @@ class TestComputeNextSend:
         assert result.minute == 0
 
     def test_raises_on_invalid_expression(self) -> None:
-        with pytest.raises((ValueError, KeyError)):
+        with pytest.raises(ValueError):
             compute_next_send("not-a-cron")
 
 
