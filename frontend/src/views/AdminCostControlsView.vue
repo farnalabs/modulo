@@ -401,7 +401,13 @@ async function loadSettings() {
     if (err) {
       return
     } else if (data) {
-      settings.value = { ...settings.value, ...data }
+      settings.value = {
+        ...settings.value,
+        ...data,
+        billingPeriod: (data.billing_period as 'monthly' | 'quarterly' | 'annual') ?? settings.value.billingPeriod,
+        circuitBreakerEnabled: data.circuit_breaker_enabled ?? settings.value.circuitBreakerEnabled,
+        alertThresholds: Array.isArray(data.alert_thresholds) ? data.alert_thresholds : settings.value.alertThresholds,
+      }
     }
   } catch (e) {
     console.warn('Failed to load cost control settings', e)
@@ -461,7 +467,7 @@ async function toggleThreshold(threshold: number) {
   }
   thresholdSaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alertThresholds: settings.value.alertThresholds } })
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alert_thresholds: settings.value.alertThresholds } })
   } catch {
     settings.value.alertThresholds = prev
     thresholdSaveError.value = 'Failed to save thresholds'
@@ -473,7 +479,7 @@ async function toggleCircuitBreaker() {
   settings.value.circuitBreakerEnabled = !prev
   circuitBreakerSaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuitBreakerEnabled: settings.value.circuitBreakerEnabled } })
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuit_breaker_enabled: settings.value.circuitBreakerEnabled } })
   } catch {
     settings.value.circuitBreakerEnabled = prev
     circuitBreakerSaveError.value = 'Failed to save circuit breaker'
@@ -497,7 +503,7 @@ async function onBillingPeriodChange(value: unknown) {
   settings.value.billingPeriod = String(value) as 'monthly' | 'quarterly' | 'annual'
   periodSaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billingPeriod: settings.value.billingPeriod } })
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billing_period: settings.value.billingPeriod } })
   } catch {
     settings.value.billingPeriod = prev
     periodSaveError.value = 'Failed to save billing period'

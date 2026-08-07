@@ -149,7 +149,7 @@ def write_checksums(manifest_dir: str, files: list[str]) -> str:
 
 def create_archive(manifest_dir: str, output_path: str) -> str:
     print("Creating archive...")
-    tar_path = output_path.rstrip(".enc")
+    tar_path = output_path.removesuffix(".enc")
     with tarfile.open(tar_path, "w:gz") as tar:
         for entry in os.listdir(manifest_dir):
             full = os.path.join(manifest_dir, entry)
@@ -194,10 +194,6 @@ def encrypt_archive(tar_path: str, passphrase: str) -> None:
 
 def get_org_id(db_url: str) -> str:
     try:
-        import urllib.parse
-
-        parsed = urllib.parse.urlparse(db_url)
-        parsed.path.lstrip("/")
         result = subprocess.run(
             ["psql", "-d", db_url, "-t", "-A", "-c", "SELECT id FROM organisations ORDER BY created_at LIMIT 1"],
             capture_output=True,

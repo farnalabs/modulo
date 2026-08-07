@@ -2,13 +2,19 @@
 
 import base64
 import json
+import time
 
 import httpx
 import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.github import GitHubConnector
+from modulo.connectors.github import (
+    GitHubConnector,
+    _parse_rate_limit_reset,
+    _rate_limit_detail,
+    _rate_limit_metadata,
+)
 
 TOKEN = "ghp_test_token"
 
@@ -1333,46 +1339,98 @@ async def test_write_file_absolute_path_blocked(connector):
 
 
 # ---------------------------------------------------------------------------
-# Rate-limit budget metadata — X-RateLimit-* headers exposed on every result
+# Rate-limit budget awareness — X-RateLimit-* header inspection + metadata
 # ---------------------------------------------------------------------------
 
-
-_RATE_LIMIT_HEADERS = {
+RATE_LIMIT_HEADERS = {
     "X-RateLimit-Limit": "5000",
     "X-RateLimit-Remaining": "4999",
-    "X-RateLimit-Reset": "1754000000",
     "X-RateLimit-Used": "1",
+    "X-RateLimit-Reset": str(int(time.time()) + 60),
     "X-RateLimit-Resource": "core",
 }
 
 
+def test_parse_rate_limit_reset_future() -> None:
+    response = httpx.Response(200, headers={"X-RateLimit-Reset": str(int(time.time()) + 60)})
+    delay = _parse_rate_limit_reset(response)
+    assert delay is not None
+    assert 0 < delay <= 60
+
+
+def test_parse_rate_limit_reset_past_returns_none() -> None:
+    response = httpx.Response(429, headers={"X-RateLimit-Reset": str(int(time.time()) - 60)})
+    assert _parse_rate_limit_reset(response) is None
+
+
+def test_parse_rate_limit_reset_missing_or_invalid_returns_none() -> None:
+    assert _parse_rate_limit_reset(httpx.Response(429)) is None
+    assert _parse_rate_limit_reset(httpx.Response(429, headers={"X-RateLimit-Reset": "not-a-number"})) is None
+
+
+def test_rate_limit_metadata_present_headers() -> None:
+    response = httpx.Response(200, headers=RATE_LIMIT_HEADERS)
+    meta = _rate_limit_metadata(response)
+    assert meta["X-RateLimit-Limit"] == "5000"
+    assert meta["X-RateLimit-Remaining"] == "4999"
+    assert meta["X-RateLimit-Reset"] == RATE_LIMIT_HEADERS["X-RateLimit-Reset"]
+
+
+def test_rate_limit_metadata_absent_headers() -> None:
+    response = httpx.Response(200)
+    assert _rate_limit_metadata(response) == {}
+
+
+def test_rate_limit_detail_summarises_quota() -> None:
+    response = httpx.Response(429, headers=RATE_LIMIT_HEADERS)
+    detail = _rate_limit_detail(response)
+    assert "X-RateLimit-Limit=5000" in detail
+    assert "X-RateLimit-Remaining=4999" in detail
+    assert "X-RateLimit-Reset" in detail
+
+
+def test_retry_delay_prefers_reset_then_retry_after_then_backoff() -> None:
+    connector = GitHubConnector(token=TOKEN)
+    future_reset = str(int(time.time()) + 90)
+    reset_delay = connector._retry_delay(httpx.Response(429, headers={"X-RateLimit-Reset": future_reset}), 0)
+    assert 0 < reset_delay <= 90
+    assert connector._retry_delay(httpx.Response(429, headers={"Retry-After": "5"}), 2) == 5.0
+    assert connector._retry_delay(httpx.Response(503), 0) == 1.0
+    assert connector._retry_delay(httpx.Response(503), 2) == 4.0
+    assert connector._retry_delay(httpx.Response(503), 5) == 30.0
+
+
+def test_retry_delay_reset_past_falls_back_to_retry_after() -> None:
+    connector = GitHubConnector(token=TOKEN)
+    elapsed = httpx.Response(429, headers={"X-RateLimit-Reset": str(int(time.time()) - 30), "Retry-After": "3"})
+    assert connector._retry_delay(elapsed, 0) == 3.0
+
+
 @respx.mock
-async def test_query_repos_rate_limit_metadata(connector):
-    """List queries expose GitHub X-RateLimit-* budget headers in metadata."""
+async def test_query_result_exposes_rate_limit_metadata(connector):
+    repos = [{"id": 1, "name": "repo-a"}]
     respx.get("https://api.github.com/user/repos").mock(
-        return_value=httpx.Response(200, json=[{"id": 1}], headers=_RATE_LIMIT_HEADERS)
+        return_value=httpx.Response(200, json=repos, headers=RATE_LIMIT_HEADERS)
     )
-    result = await connector.query(ConnectorQuery(resource="repos"))
-    assert result.metadata["rate_limit"]["X-RateLimit-Limit"] == "5000"
-    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
-    assert result.metadata["rate_limit"]["X-RateLimit-Reset"] == "1754000000"
-    assert result.metadata["rate_limit"]["X-RateLimit-Used"] == "1"
-    assert result.metadata["rate_limit"]["X-RateLimit-Resource"] == "core"
+    result = await connector.query(ConnectorQuery(resource="repos", limit=5))
+    assert result.records[0]["name"] == "repo-a"
+    meta = result.metadata.get("rate_limit", {})
+    assert meta["X-RateLimit-Remaining"] == "4999"
+    assert meta["X-RateLimit-Limit"] == "5000"
 
 
 @respx.mock
-async def test_query_no_rate_limit_headers_returns_empty(connector):
-    """No X-RateLimit-* headers (e.g. GHES) yields an empty metadata dict."""
-    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    result = await connector.query(ConnectorQuery(resource="repos"))
-    assert result.metadata["rate_limit"] == {}
+async def test_query_result_rate_limit_metadata_absent_when_no_headers(connector):
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=[]))
+    result = await connector.query(ConnectorQuery(resource="repos", limit=5))
+    assert result.metadata.get("rate_limit", {}) == {}
 
 
 @respx.mock
 async def test_single_resource_rate_limit_metadata(connector):
     """Single-record queries also expose the rate-limit budget."""
     respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(
-        return_value=httpx.Response(200, json={"id": 1}, headers=_RATE_LIMIT_HEADERS)
+        return_value=httpx.Response(200, json={"id": 1}, headers=RATE_LIMIT_HEADERS)
     )
     result = await connector.query(
         ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "1"})
@@ -1387,7 +1445,65 @@ async def test_query_tree_rate_limit_metadata(connector):
         return_value=httpx.Response(200, json={"sha": "abc123"})
     )
     respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(
-        return_value=httpx.Response(200, json={"tree": [{"path": "README.md"}]}, headers=_RATE_LIMIT_HEADERS)
+        return_value=httpx.Response(200, json={"tree": [{"path": "README.md"}]}, headers=RATE_LIMIT_HEADERS)
     )
     result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
     assert result.metadata["rate_limit"]["X-RateLimit-Limit"] == "5000"
+
+
+@respx.mock
+async def test_query_rate_limit_resource(connector):
+    body = {
+        "resources": {
+            "core": {"limit": 5000, "remaining": 4999, "reset": int(time.time()) + 60, "used": 1, "resource": "core"},
+            "search": {"limit": 30, "remaining": 30, "reset": int(time.time()) + 60, "used": 0, "resource": "search"},
+        }
+    }
+    respx.get("https://api.github.com/rate_limit").mock(
+        return_value=httpx.Response(200, json=body, headers=RATE_LIMIT_HEADERS)
+    )
+    result = await connector.query(ConnectorQuery(resource="rate_limit"))
+    assert len(result.records) == 1
+    assert result.records[0]["core"]["remaining"] == 4999
+    assert result.records[0]["search"]["remaining"] == 30
+    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
+
+
+@respx.mock
+async def test_query_rate_limit_resource_missing_resources(connector):
+    respx.get("https://api.github.com/rate_limit").mock(return_value=httpx.Response(200, json={}))
+    result = await connector.query(ConnectorQuery(resource="rate_limit"))
+    assert result.records == [{}]
+
+
+@respx.mock
+async def test_exhausted_429_reports_quota_detail(connector):
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        return_value=httpx.Response(
+            429,
+            text="API rate limit exceeded",
+            headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 600)},
+        )
+    )
+    connector._sleep_delay = lambda response, attempt: 0
+    with pytest.raises(ValueError, match="quota") as exc_info:
+        await connector.query(ConnectorQuery(resource="repos"))
+    assert "X-RateLimit-Remaining=0" in str(exc_info.value)
+    assert route.call_count == 4
+
+
+@respx.mock
+async def test_429_retry_then_success_respects_reset_window(connector):
+    route = respx.get("https://api.github.com/user/repos")
+    route.mock(
+        side_effect=[
+            httpx.Response(429, text="Rate limit", headers={"X-RateLimit-Reset": str(int(time.time()) + 1)}),
+            httpx.Response(200, json=[{"id": 1}], headers=RATE_LIMIT_HEADERS),
+        ]
+    )
+    connector._sleep_delay = lambda response, attempt: 0
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert route.call_count == 2
+    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
