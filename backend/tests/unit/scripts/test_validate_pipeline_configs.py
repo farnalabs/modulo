@@ -77,6 +77,26 @@ def test_check_node_config_non_opencode_template_fails(tmp_path):
     assert "template_id is 'base'" in fail.call_args.args[0]
 
 
+def test_check_node_config_modulo_opencode_template_ok(tmp_path):
+    """The managed cache-warmed 'modulo-opencode' template is a known-good value."""
+    node = _good_node()
+    node["template_id"] = "modulo-opencode"
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    fail.assert_not_called()
+
+
+def test_check_node_config_unknown_template_fails(tmp_path):
+    """A template_id outside the known-good set is flagged."""
+    node = _good_node()
+    node["template_id"] = "bogus-template"
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    assert "template_id is 'bogus-template'" in fail.call_args.args[0]
+    assert "opencode" in fail.call_args.args[0]
+    assert "modulo-opencode" in fail.call_args.args[0]
+
+
 def test_check_node_config_default_timeout_fails(tmp_path):
     node = _good_node()
     node["timeout_seconds"] = 600

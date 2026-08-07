@@ -1023,7 +1023,7 @@ When creating or updating a Modulo pipeline with a `sandbox_agent` node, use the
 
 | Setting | Value | Reason |
 |---|---|---|
-| `template_id` | `"opencode"` | The "base" template lacks opencode CLI. The "opencode" template has it pre-installed. |
+| `template_id` | `"opencode"` (default, has opencode CLI) or `"modulo-opencode"` (managed cache-warmed template) | The "base" template lacks opencode CLI. "opencode" has it pre-installed; "modulo-opencode" adds dependency caches (faster starts). |
 | `agent_command` | `OPENCODE_API_KEY="$APP_MODULO_OPENCODE_API_KEY" GITHUB_TOKEN="$GITHUB_REVIEWBOT_PAT" opencode run --model opencode/deepseek-v4-flash --auto --format json < /home/user/prompt.md` | `opencode run` reads the rendered prompt from stdin. `--auto` skips interactive prompts. `--format json` produces structured output. |
 | `timeout_seconds` | `1200` (20 min) | 600s (10 min) is insufficient for complex tasks like rebase + lint fix + push. |
 | `env_vars` | `{"GITHUB_REVIEWBOT_PAT":"ghp_..."}` | Needed for git push and gh pr create. Stored in vault as `github-reviewbot-pat`. |
@@ -1061,6 +1061,8 @@ The sandbox has Python 3.11 but the project requires Python 3.12+. Tell uv to in
 ```bash
 uv python install 3.12 2>&1 | tail -3
 ```
+
+The `modulo-opencode` template bakes Python 3.12 + dependency caches, so this is a fast no-op on managed sandboxes. It is still needed on the default `opencode` template.
 
 After this, uv run works normally — it uses Python 3.12 instead of downloading CPython 3.14. Pre-commit hooks (which use uv run for ruff, semgrep, etc.) fire correctly on git commit:
 

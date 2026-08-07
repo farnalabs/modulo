@@ -58,6 +58,11 @@ _PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
 
+# Known-good E2B sandbox templates. "opencode" is the product default (has the
+# opencode CLI pre-installed); "modulo-opencode" is the managed cache-warmed
+# image built for Modulo's own pipelines.
+_KNOWN_SANDBOX_TEMPLATES = frozenset({"opencode", "modulo-opencode"})
+
 
 def _is_pre_existing(snapshot: PipelineSnapshot) -> bool:
     """Check if a snapshot was created before the Phase 1 cutover date."""
@@ -1547,12 +1552,19 @@ class GraphValidator:
                     node_id=nid,
                 )
 
-            # 2. template_id must be set.
+            # 2. template_id must be set to a known-good sandbox template.
             template_id = node.get("template_id")
             if not template_id:
                 result.warning(
                     "SANDBOX_MISSING_TEMPLATE",
-                    f"Sandbox agent node '{nid}' has no template_id (expected 'opencode')",
+                    f"Sandbox agent node '{nid}' has no template_id (expected 'opencode' or 'modulo-opencode')",
+                    node_id=nid,
+                )
+            elif template_id not in _KNOWN_SANDBOX_TEMPLATES:
+                result.warning(
+                    "SANDBOX_UNKNOWN_TEMPLATE",
+                    f"Sandbox agent node '{nid}' template_id '{template_id}' is not a known-good sandbox "
+                    "template (expected 'opencode' or 'modulo-opencode')",
                     node_id=nid,
                 )
 
