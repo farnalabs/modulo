@@ -84,6 +84,57 @@ async def _create_pipeline(
     return pid
 
 
+async def _create_snapshot(db_engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> uuid.UUID:
+    snapshot_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)",
+            ),
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+        )
+    return snapshot_id
+
+
+async def _insert_run(
+    db_engine: AsyncEngine,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    thread_id: str,
+    status: str,
+) -> uuid.UUID:
+    run_id = uuid.uuid4()
+    # run_number must be unique per (org, run_number) — derive it from the
+    # unique run_id so parallel/serial tests never collide.
+    run_number = int(run_id.int % 10**9) + 1
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
+                "trigger_type, status, input_hash, langgraph_thread_id, run_number) "
+                "VALUES (:id, :oid, :pid, :sid, 'manual', :st, :ih, :thread, :rn)",
+            ),
+            {
+                "id": str(run_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "sid": str(snapshot_id),
+                "st": status,
+                "ih": uuid.uuid4().hex,
+                "thread": thread_id,
+                "rn": run_number,
+            },
+        )
+    return run_id
+
+
 async def _count_rows(db_engine: AsyncEngine, table: str, org_id: uuid.UUID | None = None) -> int:
     async with db_engine.connect() as conn:
         if org_id:
@@ -413,15 +464,45 @@ class TestBatchDeleteLanggraphCheckpoints:
         The checkpoint tables are created unqualified in the test DB by the
         integration conftest (which runs ``ModuloPostgresSaver`` migrations),
         mirroring production. The retention job must delete only rows whose
-        ``created_at`` predates the 30-day cutoff, across all three saver
-        tables.
+        ``created_at`` predates the 30-day cutoff AND whose owning run is
+        terminal (``thread-old`` maps to a ``complete`` run), across all three
+        saver tables. ``thread-fresh``'s run is still ``running``, so its
+        rows — even though they are also fresh — are untouched.
         """
         from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
 
         old_ts = datetime.now(UTC) - timedelta(days=31)
         fresh_ts = datetime.now(UTC)
-        old_org = uuid.uuid4()
-        fresh_org = uuid.uuid4()
+
+        # Owning runs for the retention guard: thread-old maps to a TERMINAL
+        # run (purged), thread-fresh to a still-running run (kept). The org,
+        # user, pipeline, snapshot, and run must all exist before the
+        # checkpoint rows are inserted (FKs + tenant triggers).
+        old_org = await _create_org(db_engine, "old-owner")
+        user = await _create_user(db_engine, old_org, "old-owner@test.com")
+        pid = await _create_pipeline(db_engine, old_org, "Pipeline old", user)
+        sid = await _create_snapshot(db_engine, old_org, pid)
+        await _insert_run(
+            db_engine,
+            org_id=old_org,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id="thread-old",
+            status="complete",
+        )
+
+        fresh_org = await _create_org(db_engine, "fresh-owner")
+        user = await _create_user(db_engine, fresh_org, "fresh-owner@test.com")
+        pid = await _create_pipeline(db_engine, fresh_org, "Pipeline fresh", user)
+        sid = await _create_snapshot(db_engine, fresh_org, pid)
+        await _insert_run(
+            db_engine,
+            org_id=fresh_org,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id="thread-fresh",
+            status="running",
+        )
 
         async with db_engine.connect() as conn, conn.begin():
             for org, thread, ckp, created_at in (
@@ -472,7 +553,7 @@ class TestBatchDeleteLanggraphCheckpoints:
             count = await batch_delete_langgraph_checkpoints(session)
             await session.commit()
 
-        assert count == 3  # one expired row per saver table
+        assert count == 3  # one expired row per saver table for the terminal thread
 
         async with db_engine.connect() as conn:
             result = await conn.execute(
@@ -544,3 +625,154 @@ class TestBatchDeleteLanggraphCheckpoints:
                 {"oid": str(org)},
             )
             assert result.scalar_one() == 0
+
+    async def test_never_purges_live_run_checkpoints(self, db_engine: AsyncEngine) -> None:
+        """CRITICAL: checkpoints of NON-terminal runs survive the retention pass.
+
+        An ``awaiting_human`` run paused >30 days at a HITL gate must keep its
+        interrupt checkpoint — ``resume_run`` reads it on later approval.
+        Purging it would make LangGraph restart the graph from scratch,
+        re-running side-effectful nodes (duplicate PRs/emails/notifications).
+        """
+        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        org_id = await _create_org(db_engine, "live-ckpt")
+        user_id = await _create_user(db_engine, org_id, "live@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Live Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+        thread = "thread-live"
+        await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id=thread,
+            status="awaiting_human",
+        )
+
+        old_ts = datetime.now(UTC) - timedelta(days=31)
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
+                    "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
+                    "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                ),
+                {"org": str(org_id), "thread": thread, "ckp": "ckp-live", "created_at": old_ts},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, "
+                    "channel, version, type, blob, created_at) "
+                    "VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
+                ),
+                {
+                    "org": str(org_id),
+                    "thread": thread,
+                    "channel": "channel",
+                    "version": "v1",
+                    "blob": b"blob-data",
+                    "created_at": old_ts,
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, "
+                    "checkpoint_id, task_id, idx, channel, type, blob, created_at) "
+                    "VALUES (:org, :thread, '', :ckp, :task, 0, 'channel', 'json', :blob, :created_at)",
+                ),
+                {
+                    "org": str(org_id),
+                    "thread": thread,
+                    "ckp": "ckp-live",
+                    "task": "task-1",
+                    "blob": b"write-data",
+                    "created_at": old_ts,
+                },
+            )
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            count = await batch_delete_langgraph_checkpoints(session)
+            await session.commit()
+
+        assert count == 0
+        async with db_engine.connect() as conn:
+            for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
+                result = await conn.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE organisation_id = :oid"),  # noqa: S608
+                    {"oid": str(org_id)},
+                )
+                assert result.scalar_one() == 1, f"live-run {table} row must survive retention"
+
+    async def test_fresh_checkpoint_referencing_old_blob_survives(self, db_engine: AsyncEngine) -> None:
+        """CRITICAL #2: a fresh checkpoint referencing an old blob keeps the blob.
+
+        An idle channel's blob row can predate the cutoff while its checkpoint
+        is fresh. ``_CHECKPOINT_SELECT_SQL`` reconstructs channel_values by
+        joining ``checkpoint_blobs`` on the checkpoint's ``channel_versions``;
+        deleting the old blob would make the SELECT return NULL channel data
+        for the fresh checkpoint. Blobs are only purged when NO checkpoint
+        remains in their thread.
+        """
+        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        org_id = await _create_org(db_engine, "idle-ckpt")
+        user_id = await _create_user(db_engine, org_id, "idle@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Idle Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+        thread = "thread-idle"
+        await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id=thread,
+            status="complete",
+        )
+
+        old_ts = datetime.now(UTC) - timedelta(days=31)
+        fresh_ts = datetime.now(UTC)
+        async with db_engine.connect() as conn, conn.begin():
+            for ckp, created_at in (("ckp-old", old_ts), ("ckp-fresh", fresh_ts)):
+                await conn.execute(
+                    text(
+                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
+                        "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
+                        "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                    ),
+                    {"org": str(org_id), "thread": thread, "ckp": ckp, "created_at": created_at},
+                )
+            await conn.execute(
+                text(
+                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, "
+                    "channel, version, type, blob, created_at) "
+                    "VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
+                ),
+                {
+                    "org": str(org_id),
+                    "thread": thread,
+                    "channel": "idle",
+                    "version": "v1",
+                    "blob": b"blob-data",
+                    "created_at": old_ts,
+                },
+            )
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            count = await batch_delete_langgraph_checkpoints(session)
+            await session.commit()
+
+        assert count == 1  # only the OLD checkpoint is purged
+        async with db_engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoints WHERE organisation_id = :oid"),
+                {"oid": str(org_id)},
+            )
+            assert result.scalar_one() == 1, "fresh checkpoint must survive"
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoint_blobs WHERE organisation_id = :oid"),
+                {"oid": str(org_id)},
+            )
+            assert result.scalar_one() == 1, "blob referenced by the fresh checkpoint must survive"

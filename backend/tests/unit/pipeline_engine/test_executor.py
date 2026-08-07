@@ -1357,6 +1357,132 @@ async def test_check_capacity_unlimited_pipeline_still_enforces_org_cap():
     assert calls[-1][1]["error_code"] == "org_capacity_limited"
 
 
+async def test_check_capacity_org_run_cap_demotes_at_claim_time():
+    """Major 3: the org run-concurrency cap is re-checked at claim time.
+
+    The dispatch-time admission gate counts active runs in one transaction
+    but enqueues later; newly-enqueued runs stay ``pending`` (invisible to
+    the count) until a worker claims them, so a burst of dispatches can each
+    see ``active < limit`` and exceed the org cap by the batch size. This
+    claim-time backstop (mirroring the sandbox-cap pattern) demotes the run
+    back to ``pending`` with ``org_capacity_limited``.
+    """
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", return_value=2),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=10,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][0] == "pending"
+    assert calls[-1][1]["error_code"] == "org_capacity_limited"
+    assert "cap 2" in calls[-1][1]["error_detail"]
+
+
+async def test_check_capacity_org_run_cap_applies_without_sandbox_graph():
+    """Major 3: the org run cap is a run-level gate — no sandbox node required."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=1),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", return_value=1),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=0,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][1]["error_code"] == "org_capacity_limited"
+
+
+async def test_check_capacity_org_run_cap_admits_when_under_cap():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=5),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", return_value=2),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=10,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
+
+
+async def test_check_capacity_org_run_cap_fail_open_when_count_raises():
+    """Major 3: a count error reads as uncapped (admit), never raises."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+
+    async def _raise_count(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("org run count boom")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", side_effect=_raise_count),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
+
+
 async def test_check_capacity_admission_clears_marker():
     session = _make_capacity_session()
     executor = _make_capacity_executor(session)
