@@ -32,6 +32,18 @@ unit-tests:
   - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/connector_hub/test_advisory_lock.py
   - backend/tests/unit/mcp/test_mcp_connector_tools.py
+  - backend/tests/unit/connector_hub/test_npm_connector.py
+  - backend/tests/unit/connector_hub/test_pypi_connector.py
+  - backend/tests/unit/connector_hub/test_trivy_connector.py
+  - backend/tests/unit/connector_hub/test_codeclimate_connector.py
+  - backend/tests/unit/connector_hub/test_gitea_connector.py
+  - backend/tests/unit/connector_hub/test_onepassword_connector.py
+  - backend/tests/unit/connector_hub/test_opsgenie_connector.py
+  - backend/tests/unit/connector_hub/test_sonarqube_connector.py
+  - backend/tests/unit/connector_hub/test_snyk_connector.py
+  - backend/tests/unit/connector_hub/test_teamcity_connector.py
+  - backend/tests/unit/connector_hub/test_n8n_connector.py
+  - backend/tests/unit/connector_hub/test_azure_pipelines_connector.py
 code:
   - backend/src/modulo/core/connector_hub/
   - backend/src/modulo/connectors/
@@ -76,7 +88,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 #### Git Hosting Platforms
 
-- [x] `type_id = "gitea"` → `GiteaConnector(token=creds.token, base_url=config.base_url)` — defaults to `https://codeberg.org`; BDD feature file exists (5 scenarios: repos, file, pulls, issues, write); ConnectorType.GITEA; ConnectorType enum entry exists; no unit tests
+- [x] `type_id = "gitea"` → `GiteaConnector(token=creds.token, base_url=config.base_url)` — defaults to `https://codeberg.org`; BDD feature file exists (5 scenarios: repos, file, pulls, issues, write); ConnectorType.GITEA; ConnectorType enum entry exists; unit tests exist (test_gitea_connector.py)
 - [x] `type_id = "azure_repos"` → `AzureReposConnector(token=creds.token, organization=config.organization)` — `organization` is required; `ValueError` if missing; no BDD; ConnectorType.AZURE_REPOS; enum entry exists; no unit tests
 - [x] `type_id = "bitbucket"` → `BitbucketConnector(token=creds.token)`; no BDD; ConnectorType.BITBUCKET; enum entry exists; no unit tests
 - [x] `type_id = "github"` → `GitHubConnector(token=creds.token)`; BDD exists (github_connector.feature); ConnectorType.GITHUB; enum entry exists
@@ -90,8 +102,8 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 - [x] `type_id = "buildkite"` → `BuildkiteConnector(token=creds.token)`; no BDD; ConnectorType.BUILDKITE; enum entry exists; no unit tests
 - [x] `type_id = "circleci"` → `CircleCIConnector(token=creds.token)`; no BDD; ConnectorType.CIRCLECI; enum entry exists; no unit tests
 - [x] `type_id = "jenkins"` → `JenkinsConnector(username=creds.username, token=creds.token, base_url=config.base_url)` — `username` + `token` required; base_url defaults to `http://localhost:8080`; no BDD; ConnectorType.JENKINS; enum entry exists; no unit tests
-- [x] `type_id = "teamcity"` → `TeamCityConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:8111`; BDD feature file exists (teamcity_connector.feature: projects, buildTypes, agents); ConnectorType.TEAMCITY; enum entry exists; no unit tests
-- [x] `type_id = "azure_pipelines"` → `AzurePipelinesConnector(token=creds.token, organization=config.organization, project=config.project)` — `organization` required (`ValueError` if missing); project optional; BDD feature file exists (azure_pipelines.feature: projects, pipelines, runs); ConnectorType.AZURE_PIPELINES; enum entry exists; no unit tests
+- [x] `type_id = "teamcity"` → `TeamCityConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:8111`; BDD feature file exists (teamcity_connector.feature: projects, buildTypes, agents); ConnectorType.TEAMCITY; enum entry exists; unit tests exist (test_teamcity_connector.py: query, trigger_run, run status/logs, status mapping)
+- [x] `type_id = "azure_pipelines"` → `AzurePipelinesConnector(token=creds.token, organization=config.organization, project=config.project)` — `organization` required (`ValueError` if missing); project optional; BDD feature file exists (azure_pipelines.feature: projects, pipelines, runs); ConnectorType.AZURE_PIPELINES; enum entry exists; unit tests exist (test_azure_pipelines_connector.py: query, trigger_run, run status/logs, status mapping)
 
 #### Issue Tracking & Project Management
 
@@ -106,8 +118,8 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 #### Package Registries
 
-- [x] `type_id = "npm"` → `NpmConnector(token=creds.get("token", ""))` — token optional (public registry reads don't require auth); BDD feature file exists (npm.feature: health, package, search); ConnectorType.NPM; enum entry exists; no unit tests
-- [x] `type_id = "pypi"` → `PyPIConnector(token=creds.get("token", ""))` — token optional; BDD feature file exists (pypi.feature: health, package); ConnectorType.PYPI; enum entry exists; no unit tests
+- [x] `type_id = "npm"` → `NpmConnector(token=creds.get("token", ""))` — token optional (public registry reads don't require auth); BDD feature file exists (npm.feature: health, package, search); ConnectorType.NPM; enum entry exists; unit tests exist (test_npm_connector.py: package/version/search/files/scope queries, read-only write guard)
+- [x] `type_id = "pypi"` → `PyPIConnector(token=creds.get("token", ""))` — token optional; BDD feature file exists (pypi.feature: health, package); ConnectorType.PYPI; enum entry exists; unit tests exist (test_pypi_connector.py: package/version/search/files/simple_list queries, XML-RPC search, read-only write guard)
 
 #### Knowledge & Documentation
 
@@ -124,18 +136,18 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 #### Security & Secrets
 
 - [x] `type_id = "azure_key_vault"` → `AzureKeyVaultConnector(token=creds.token, vault_url=config.vault_url)` — `vault_url` required (`ValueError` if missing); no BDD; ConnectorType.AZURE_KEY_VAULT; enum entry exists; no unit tests
-- [x] `type_id = "onepassword"` → `OnePasswordConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:8080`; BDD feature file exists (onepassword.feature: health, vaults, vault); ConnectorType.ONEPASSWORD; enum entry exists; no unit tests
+- [x] `type_id = "onepassword"` → `OnePasswordConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:8080`; BDD feature file exists (onepassword.feature: health, vaults, vault); ConnectorType.ONEPASSWORD; enum entry exists; unit tests exist (test_onepassword_connector.py: vaults/items/files queries, item CRUD, archive)
 
 #### Quality & Code Analysis
 
-- [x] `type_id = "sonarqube"` → `SonarQubeConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:9000`; BDD feature file exists (sonarqube.feature: health, projects, measures); ConnectorType.SONARQUBE; enum entry exists; no unit tests
-- [x] `type_id = "codeclimate"` → `CodeClimateConnector(token=creds.token)`; BDD feature file exists (codeclimate.feature: health, repos); ConnectorType.CODECLIMATE; enum entry exists; no unit tests
-- [x] `type_id = "snyk"` → `SnykConnector(token=creds.token)`; BDD feature file exists (snyk.feature: health, projects, issues); ConnectorType.SNYK; enum entry exists; no unit tests
-- [x] `type_id = "trivy"` → `TrivyConnector(token=creds.get("token", ""), base_url=config.base_url)` — token optional; base_url defaults to `http://localhost:8080`; BDD feature file exists (trivy.feature: health, artifact); ConnectorType.TRIVY; enum entry exists; no unit tests
+- [x] `type_id = "sonarqube"` → `SonarQubeConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:9000`; BDD feature file exists (sonarqube.feature: health, projects, measures); ConnectorType.SONARQUBE; enum entry exists; unit tests exist (test_sonarqube_connector.py: projects/analyses/measures/issues/hotspots, quality gates, comments/transitions, rate-limit health)
+- [x] `type_id = "codeclimate"` → `CodeClimateConnector(token=creds.token)`; BDD feature file exists (codeclimate.feature: health, repos); ConnectorType.CODECLIMATE; enum entry exists; unit tests exist (test_codeclimate_connector.py: repos/snapshots/test_reports queries, test report write)
+- [x] `type_id = "snyk"` → `SnykConnector(token=creds.token)`; BDD feature file exists (snyk.feature: health, projects, issues); ConnectorType.SNYK; enum entry exists; unit tests exist (test_snyk_connector.py: projects/orgs/tests/issues/aggregated queries, test + ignore writes, cursor pagination)
+- [x] `type_id = "trivy"` → `TrivyConnector(token=creds.get("token", ""), base_url=config.base_url)` — token optional; base_url defaults to `http://localhost:8080`; BDD feature file exists (trivy.feature: health, artifact); ConnectorType.TRIVY; enum entry exists; unit tests exist (test_trivy_connector.py: artifact image/filesystem/repo scans, reports/status/plugins queries, scan write)
 
 #### Alerting & Incident Management
 
-- [x] `type_id = "opsgenie"` → `OpsgenieConnector(api_key=creds.api_key)`; BDD feature file exists (opsgenie_connector.feature: alerts, teams, schedules); ConnectorType.OPSGENIE; enum entry exists; no unit tests
+- [x] `type_id = "opsgenie"` → `OpsgenieConnector(api_key=creds.api_key)`; BDD feature file exists (opsgenie_connector.feature: alerts, teams, schedules); ConnectorType.OPSGENIE; enum entry exists; unit tests exist (test_opsgenie_connector.py: alerts/notes/logs/on_calls/escalations queries, alert create/ack/close/note/snooze writes)
 - [x] `type_id = "pagerduty"` → listed under Monitoring & Observability (alerts/incidents)
 
 #### Collaboration & Messaging
@@ -146,7 +158,7 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 
 #### Automation & Workflow
 
-- [x] `type_id = "n8n"` → `N8NConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:5678`; BDD feature file exists (n8n.feature: health, workflows, executions); ConnectorType.N8N; enum entry exists; no unit tests
+- [x] `type_id = "n8n"` → `N8NConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:5678`; BDD feature file exists (n8n.feature: health, workflows, executions); ConnectorType.N8N; enum entry exists; unit tests exist (test_n8n_connector.py: workflows/executions/webhooks/credentials/tags/nodes queries, workflow/credential CRUD, activate/deactivate, retry)
 
 #### Local / Shell
 
@@ -349,13 +361,14 @@ All 5 CRUD routes in `connectors.py` have complete error handling chains:
 - [x] ~~**Status was `covered`**~~ — Changed to `partial`. Only 9 connector types were documented; 33+ undocumented types now added.
 - [x] ~~**Missing IntegrityError→409 catches on connector CRUD routes**~~ — Added to create and update endpoints. Both now return 409 on constraint violations instead of misleading 503.
 - [x] ~~**Missing test coverage for ProgrammingError→501 and SQLAlchemyError→503 on connector CRUD routes**~~ — Created `test_connectors_programming_error.py` with 11 tests covering all 5 routes.
+- [x] ~~**No unit tests for 12 connector types that have BDD feature files**~~ — Added 12 respx-mocked unit test files in `tests/unit/connector_hub/`: `test_npm_connector.py`, `test_pypi_connector.py`, `test_trivy_connector.py`, `test_codeclimate_connector.py`, `test_gitea_connector.py`, `test_onepassword_connector.py`, `test_opsgenie_connector.py`, `test_sonarqube_connector.py`, `test_snyk_connector.py`, `test_teamcity_connector.py`, `test_n8n_connector.py`, `test_azure_pipelines_connector.py` (298 tests). Each covers health check (ok/auth-failure/http-error/connect-error), every query resource, every write resource, missing-filter `ValueError`s, unsupported-resource errors, and HTTP error propagation. The two CI/CD connectors additionally cover `CIRunnerBase` methods (`trigger_run`, `get_run_status`, `get_run_logs`, `list_runs`) and status parsing (`_parse_teamcity_status`, `_STATUS_MAP`). BDD feature files remain unwired (production-mocking gap), but the unit layer now locks the HTTP contract for 12 previously untested connector types.
 
 ### Remaining Gaps
 
 - **35+ undocumented connector types in `_build_connector` — only 9 were documented in product map before this QA iteration.** Now all documented but most lack BDD and unit tests.
 - **No BDD for 15+ connector types** that have feature files but are not wired to step definitions (azure_pipelines, codeclimate, confluence, gitea, n8n, notion, npm, onepassword, opsgenie, pypi, snyk, sonarqube, teamcity, trivy, youtrack). Feature files exist but are not testable — production-mocking gap.
 - **No BDD at all** for: azure_repos, bitbucket, sharepoint, buildkite, circleci, jenkins, dropbox_paper, datadog, sentry, pagerduty, grafana, microsoft_teams, discord, azure_key_vault, shell, CI runner connectors (github_actions_ci, gitlab_ci).
-- **No unit tests** for: gitea, azure_repos, bitbucket, sharepoint, npm, pypi, dropbox_paper, buildkite, circleci, jenkins, teamcity, azure_key_vault, azure_pipelines, datadog, sentry, pagerduty, grafana, microsoft_teams, discord, onepassword, opsgenie, sonarqube, codeclimate, snyk, trivy, n8n (26 connector types).
+- **No unit tests** for: azure_repos, bitbucket, sharepoint, dropbox_paper, buildkite, circleci, jenkins, azure_key_vault, datadog, sentry, pagerduty, grafana, microsoft_teams, discord (14 connector types).
 - **Broad `except Exception` in `initialise()`** silently skips misconfigured connectors — logged at WARNING, not propagated. This is intentional (resilience) but means connector initialisation failures are invisible to pipeline authors unless they check logs.
 - **No end-to-end integration test**: `ConnectorHub.initialise()` → connector method → OTel span → credential cleanup.
 - [x] ~~**Multiple `ConnectorHub` instances coexistence still untested (checkbox `[ ]`)**~~ — `ConnectorHub` state is per-instance (`_connectors`, `_acls`, `_initialised`, and the `asyncio.Lock` are all instance attributes, so one hub's lock is invisible to another). Added `test_multiple_hubs_coexist` (two hubs expose exactly their own connector set; clearing one hub leaves the other intact) and `test_multiple_hubs_concurrent_initialise` (three hubs racing `initialise()` in one event loop via `asyncio.gather` each end with exactly their own connector registered).
@@ -364,6 +377,7 @@ All 5 CRUD routes in `connectors.py` have complete error handling chains:
 - **CI Runner connectors** have no BDD coverage — no dedicated feature files for GitHub Actions CI or GitLab CI.
 
 ### QA History
+- 2026-08-07: improve-architecture: **RESOLVED** known gap "No unit tests for 26 connector types". Added 12 respx-mocked unit test files covering gitea, azure_pipelines, teamcity, npm, pypi, onepassword, opsgenie, sonarqube, codeclimate, snyk, trivy, n8n (298 tests total). All pass, ruff lint + format clean. Updated `unit-tests` frontmatter, per-type notes, and Remaining Gaps (26 → 14 connector types without unit tests). Status: partial (14 connector types still lack unit tests; BDD step definitions for 15+ feature files still unwired; shell connector partial-init; no E2E integration test; broad `except Exception` in `initialise()`).
 - 2026-08-06: improve-architecture: **RESOLVED** known gap "Multiple `ConnectorHub` instances coexistence still untested (checkbox `[ ]`)". Verified all hub state is per-instance (connector/acl registries, `_initialised` flag, `asyncio.Lock`) and added `test_multiple_hubs_coexist` + `test_multiple_hubs_concurrent_initialise` (3 hubs racing `initialise()` via `asyncio.gather` — each builds exactly its own connector set; clearing one hub leaves the others intact). Marked behaviour `[ ]`→`[x]`. 313/313 connector_hub unit tests pass, ruff clean. Status: partial (29 connector types still lack unit tests/BDD; shell connector partial-init; no E2E integration test; broad `except Exception` in `initialise()`).
 - 2026-07-07: Cross-cutting QA (index 318). Fixed stale BDD checkbox for Linear connector (`linear_connector.feature` has 8 real scenarios since July 1 QA — no longer a placeholder). Status: partial.
 - 2026-07-08: Cross-cutting QA (index 249). Fixed CRITICAL — added IntegrityError→409 catch to create_connector_endpoint and update_connector_endpoint (FK/constraint violations previously returned misleading 503). Fixed MAJOR — created `test_connectors_programming_error.py` with 11 tests covering ProgrammingError→501, SQLAlchemyError→503, and IntegrityError→409 for all 5 CRUD routes. Added Error Handling and Test Coverage sections to product map.
