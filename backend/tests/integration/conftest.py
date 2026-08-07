@@ -344,6 +344,32 @@ async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, No
     cron_helpers._get_engine = original_get_engine
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_shared_test_org_pause(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+) -> AsyncGenerator[None, None]:
+    """Restore the session-scoped shared ``test_org`` to not-paused after each test.
+
+    ``saq/test_fire_due_triggers.py::test_paused_org_skips_enqueue_but_advances_next_fire``
+    sets ``triggers_paused = TRUE`` on the SHARED session-scoped ``test_org`` and
+    never restores it. Every later test that fires a trigger through the shared
+    org re-reads the pause state via ``settings_resolver.org_is_paused`` (fail-closed),
+    so the leaked pause makes them raise ``TriggersPausedError`` regardless of their
+    own setup. This function-scoped autouse teardown re-establishes the not-paused
+    invariant after every test, so a test that intentionally pauses the shared org
+    during its own body is cleaned up before the next test runs.
+    """
+    yield
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "UPDATE organisations SET triggers_paused = false, triggers_paused_at = NULL WHERE id = :oid",
+            ),
+            {"oid": str(test_org)},
+        )
+
+
 @pytest_asyncio.fixture(scope="session")
 async def app_engine(migrated_db_url: str, non_superuser_role: str) -> AsyncEngine:
     """Engine whose connections run as a non-superuser role (RLS applies).

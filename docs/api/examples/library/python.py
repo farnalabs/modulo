@@ -114,7 +114,7 @@ def main():
             },
             headers=headers,
         )
-        if resp.status_code == 201 or resp.status_code == 200:
+        if resp.status_code in {201, 200}:
             cloned = resp.json()
             print(f"  Cloned! New primitive: {cloned['name']} ({cloned['id']})")
         else:

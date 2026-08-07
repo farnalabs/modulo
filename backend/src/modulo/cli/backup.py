@@ -178,15 +178,11 @@ def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
 def _export_checkpoint_blobs_sync(raw_url: str) -> list[dict[str, Any]]:
     if psycopg is None:
         raise RuntimeError("psycopg library is not available")
-    rows: list[dict[str, Any]] = []
     with psycopg.connect(raw_url, row_factory=dict_row, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT * FROM checkpoint_blobs ORDER BY organisation_id, thread_id, checkpoint_ns, channel, version"
         )
-        for row in cur:
-            serialised = _serialise_export_row(row)
-            rows.append(serialised)
-    return rows
+        return [_serialise_export_row(row) for row in cur]
 
 
 def _export_checkpoints_sync(raw_url: str) -> list[dict[str, Any]]:

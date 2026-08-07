@@ -269,6 +269,25 @@ class TestAuthRateLimitMiddlewareEnabled:
 
         assert resp.status_code == 429
 
+    async def test_dispatch_propagates_cancelled_error(self, mock_redis):
+        """asyncio.CancelledError from check_login must propagate through dispatch."""
+        mock_redis.ttl = AsyncMock(side_effect=asyncio.CancelledError())
+        limiter = AuthRateLimiterCls(redis_client=mock_redis, max_attempts=10, window_s=60)
+        mw = AuthRateLimitMiddleware(
+            app=FastAPI(),
+            settings=make_settings(modulo_auth_rate_limit_enabled=True),
+            rate_limiter=limiter,
+        )
+        request = MagicMock()
+        request.method = "POST"
+        request.url.path = "/api/v1/auth/login"
+        request.headers.get = MagicMock(return_value="")
+        request.client = None
+        call_next = AsyncMock()
+        with pytest.raises(asyncio.CancelledError):
+            await mw.dispatch(request, call_next)
+        call_next.assert_not_awaited()
+
 
 class TestClientKeyEdgeCases:
     def test_x_forwarded_for_is_used_when_present(self):

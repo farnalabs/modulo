@@ -55,7 +55,13 @@ def collect_backups(backup_dir: str) -> list[BackupFile]:
     return sorted(backups, key=lambda b: b.date, reverse=True)
 
 
-def classify_backups(backups: list[BackupFile]) -> set[str]:
+def classify_backups(
+    backups: list[BackupFile],
+    *,
+    keep_daily: int = 7,
+    keep_weekly: int = 4,
+    keep_monthly: int = 12,
+) -> set[str]:
     keep: set[str] = set()
 
     by_org: dict[str, list[BackupFile]] = {}
@@ -78,15 +84,15 @@ def classify_backups(backups: list[BackupFile]) -> set[str]:
             is_first = day == 1
 
             reason = None
-            if monthly_count < 12 and is_first and (year, month) not in seen_months:
+            if monthly_count < keep_monthly and is_first and (year, month) not in seen_months:
                 seen_months.add((year, month))
                 reason = "monthly"
                 monthly_count += 1
-            if reason is None and weekly_count < 4 and is_sunday and (iso_year, iso_week) not in seen_weeks:
+            if reason is None and weekly_count < keep_weekly and is_sunday and (iso_year, iso_week) not in seen_weeks:
                 seen_weeks.add((iso_year, iso_week))
                 reason = "weekly"
                 weekly_count += 1
-            if reason is None and daily_count < 7:
+            if reason is None and daily_count < keep_daily:
                 reason = "daily"
                 daily_count += 1
 
@@ -119,7 +125,12 @@ def main() -> None:
     if not backups:
         return
 
-    keep = classify_backups(backups)
+    keep = classify_backups(
+        backups,
+        keep_daily=args.keep_daily,
+        keep_weekly=args.keep_weekly,
+        keep_monthly=args.keep_monthly,
+    )
 
     kept = sum(1 for b in backups if b.path in keep)
     to_delete = len(backups) - kept
