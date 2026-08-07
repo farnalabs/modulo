@@ -12,5 +12,16 @@ export function currencySymbolFor(currencyCode?: string | null): string {
 export function formatMoney(amount: number, currencyCode?: string | null, digits = 2): string {
   const n = Number(amount)
   const safe = Number.isFinite(n) ? n : 0
-  return `${currencySymbolFor(currencyCode)}${safe.toFixed(digits)}`
+  const code = currencyCode ? currencyCode.trim().toUpperCase() : 'USD'
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: code,
+      currencyDisplay: 'narrowSymbol',
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(safe)
+  } catch {
+    return `${currencySymbolFor(code)}${safe.toFixed(digits)}`
+  }
 }
