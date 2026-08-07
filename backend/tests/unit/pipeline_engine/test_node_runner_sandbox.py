@@ -81,7 +81,7 @@ def test_missing_agent_commands_only_raises_value_error():
         "agent_prompt": "Do the thing",
         "agent_commands": [],
     }
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="missing required 'agent_command'"):
         make_sandbox_agent_fn(node_def)
 
 

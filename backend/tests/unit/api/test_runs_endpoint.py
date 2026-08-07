@@ -142,12 +142,12 @@ async def _noop_engine_ctx():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_session() -> AsyncMock:
     return _make_mock_session()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     mock_engine = MagicMock()
 
@@ -199,7 +199,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     """Client with no authentication override — relies on real auth."""
     app.dependency_overrides[get_settings] = _make_settings

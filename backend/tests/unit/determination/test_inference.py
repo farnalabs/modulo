@@ -292,7 +292,7 @@ def test_finding_model() -> None:
 
 
 def test_finding_invalid_confidence_raises() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="confidence must be one of"):
         Finding(category="stage", finding="Test", evidence="Ev", confidence="very-sure")
 
 

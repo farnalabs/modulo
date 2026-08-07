@@ -15,7 +15,7 @@ EMAIL = "user@example.com"
 API_TOKEN = "jira_api_token"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return JiraConnector(
         instance=_INSTANCE,

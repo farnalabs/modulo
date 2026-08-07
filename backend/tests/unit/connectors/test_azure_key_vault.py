@@ -12,7 +12,7 @@ VAULT_URL = "https://myvault.vault.azure.net"
 _BASE = VAULT_URL
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> AzureKeyVaultConnector:
     return AzureKeyVaultConnector(token=TOKEN, vault_url=VAULT_URL)
 

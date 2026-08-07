@@ -12,7 +12,7 @@ API_BASE = "https://api.snyk.io/rest"
 VERSION = "2024-10-15"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return SnykConnector(token=TOKEN)
 

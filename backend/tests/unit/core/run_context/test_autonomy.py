@@ -37,13 +37,13 @@ class TestAutonomyLevel:
         assert AutonomyLevel("NOTIFY_ON_COMPLETE") == AutonomyLevel.NOTIFY_ON_COMPLETE
 
     def test_missing_unmatched_raises_value_error(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid autonomy level"):
             AutonomyLevel("bogus")
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid autonomy level"):
             AutonomyLevel("notify-complete")
 
     def test_missing_non_string_raises_value_error(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid autonomy level"):
             AutonomyLevel(42)
 
 

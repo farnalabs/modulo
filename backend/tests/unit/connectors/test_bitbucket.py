@@ -11,12 +11,12 @@ TOKEN = "bitbucket_test_token"
 _API = "https://api.bitbucket.org/2.0"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return BitbucketConnector(token=TOKEN)
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector_app_password():
     return BitbucketConnector(username="myuser", app_password="app_pass")
 

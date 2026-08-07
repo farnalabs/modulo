@@ -10,12 +10,12 @@ from modulo.connectors.npm import NpmConnector
 API_BASE = "https://registry.npmjs.org"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return NpmConnector()
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector_with_token():
     return NpmConnector(token="npm_test_token")
 

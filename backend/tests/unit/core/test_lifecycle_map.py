@@ -143,7 +143,8 @@ async def test_get_lifecycle_map_filters_archived_and_deleted(session: AsyncMock
 
     statement = session.execute.await_args.args[0]
     sql = _compiled_sql(statement)
-    assert "lifecycle_maps.id =" in sql and _MAP_ID.hex in sql
+    assert "lifecycle_maps.id =" in sql
+    assert _MAP_ID.hex in sql
     assert "archived_at IS NULL" in sql
     assert "deleted_at IS NULL" in sql
 

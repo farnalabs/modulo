@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from modulo.model_backends.bedrock import BedrockBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend() -> BedrockBackend:
     with patch("modulo.model_backends.bedrock.ChatBedrock"):
         return BedrockBackend(

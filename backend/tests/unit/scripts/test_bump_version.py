@@ -50,9 +50,9 @@ def test_bump_unknown_part_raises():
 
 
 def test_bump_invalid_version_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not enough values to unpack"):
         bv.bump("1.2", "patch")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid literal for int"):
         bv.bump("not-a-version", "patch")
 
 

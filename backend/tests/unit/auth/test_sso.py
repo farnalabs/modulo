@@ -64,7 +64,7 @@ _app = FastAPI()
 _app.include_router(sso_router)
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = AsyncMock(spec=AsyncSession)
 

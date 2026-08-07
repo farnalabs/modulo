@@ -11,7 +11,7 @@ TOKEN = "glc_test_token"
 _BASE = "http://localhost:3000"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> GrafanaConnector:
     return GrafanaConnector(token=TOKEN)
 

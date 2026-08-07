@@ -13,7 +13,7 @@ _BASE = "https://api.datadoghq.com"
 _BASE_EU = "https://api.datadoghq.eu"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> DatadogConnector:
     return DatadogConnector(api_key=API_KEY, app_key=APP_KEY, site="us")
 

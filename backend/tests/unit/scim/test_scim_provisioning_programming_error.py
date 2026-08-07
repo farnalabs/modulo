@@ -86,7 +86,7 @@ async def _override_plan_context() -> _AllFeatures:
     return _AllFeatures()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     from modulo.api.main import app
 

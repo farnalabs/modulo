@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.jan import DEFAULT_JAN_BASE_URL, JanBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return JanBackend(api_key=None, model_id="jan-model")

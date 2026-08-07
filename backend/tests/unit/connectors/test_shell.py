@@ -82,17 +82,17 @@ class _FakeRuntimeProvider:
         return "running"
 
 
-@pytest.fixture()
+@pytest.fixture
 def provider() -> _FakeRuntimeProvider:
     return _FakeRuntimeProvider()
 
 
-@pytest.fixture()
+@pytest.fixture
 def provider_ref() -> str:
     return "ws-test-001"
 
 
-@pytest.fixture()
+@pytest.fixture
 def workspace_lease_id() -> uuid.UUID:
     return uuid.uuid4()
 

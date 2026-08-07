@@ -323,7 +323,7 @@ class TestDetectRegressionsDirect:
 class TestRegressionAlertsEndpoint:
     URL = "/api/v1/admin/evals/regressions"
 
-    @pytest.fixture()
+    @pytest.fixture
     def _regression_rows(self) -> list[MagicMock]:
         return [
             _make_row(
@@ -337,7 +337,7 @@ class TestRegressionAlertsEndpoint:
             ),
         ]
 
-    @pytest.fixture()
+    @pytest.fixture
     def _configure_session(self, _regression_rows):
         """Returns a function to set up a mock session for the endpoint."""
 
@@ -349,7 +349,7 @@ class TestRegressionAlertsEndpoint:
 
         return _setup
 
-    @pytest.fixture()
+    @pytest.fixture
     def client(self, _configure_session) -> Generator[TestClient, None, None]:
         mock_session = _make_mock_session()
         _configure_session(mock_session)
@@ -369,7 +369,7 @@ class TestRegressionAlertsEndpoint:
         yield TestClient(app)
         app.dependency_overrides.clear()
 
-    @pytest.fixture()
+    @pytest.fixture
     def unauth_client(self) -> Generator[TestClient, None, None]:
         app.dependency_overrides[get_settings] = _make_settings
         yield TestClient(app)
@@ -377,7 +377,7 @@ class TestRegressionAlertsEndpoint:
 
     # ── Auth ──────────────────────────────────────────────────────────
 
-    @pytest.fixture()
+    @pytest.fixture
     def operator_client(self) -> Generator[TestClient, None, None]:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
