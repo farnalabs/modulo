@@ -33,11 +33,15 @@ const FIXED_NOW = new Date('2026-08-06T12:00:00Z') // nosemgrep: new-date-withou
 // expected dates from FIXED_NOW (instead of hardcoded literals) keeps the
 // assertions timezone-robust and correct if FIXED_NOW is ever changed.
 const DAY_MS = 86400000
+const HOUR_MS = 3600000
 function utcDay(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 function daysBefore(d: Date, days: number): string {
   return utcDay(new Date(d.getTime() - days * DAY_MS)) // nosemgrep: new-date-without-guard
+}
+function hoursBefore(d: Date, hours: number): string {
+  return new Date(d.getTime() - hours * HOUR_MS).toISOString() // nosemgrep: new-date-without-guard
 }
 
 const validResponse = {
@@ -138,16 +142,26 @@ describe('serializeFilters', () => {
     expect(bare.folder_id).toBeUndefined()
   })
 
-  it('maps the 24h preset to a 1-day UTC window with day granularity', () => {
+  it('maps the 24h preset to a 24-hour UTC datetime window with hour granularity', () => {
     const day = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
-    expect(day.date_to).toBe(utcDay(FIXED_NOW))
-    expect(day.date_from).toBe(daysBefore(FIXED_NOW, 1))
-    expect(day.group_by).toBe('day')
+    expect(day.date_to).toContain('T')
+    expect(day.date_from).toContain('T')
+    expect(day.date_to).toBe(FIXED_NOW.toISOString())
+    expect(day.date_from).toBe(hoursBefore(FIXED_NOW, 24))
+    expect(day.group_by).toBe('hour')
 
     const week = serializeFilters({ timespan: '24h', groupBy: 'week' }, FIXED_NOW)
-    expect(week.date_to).toBe(utcDay(FIXED_NOW))
-    expect(week.date_from).toBe(daysBefore(FIXED_NOW, 1))
-    expect(week.group_by).toBe('week')
+    expect(week.group_by).toBe('hour')
+  })
+
+  it('maps the 1h preset to a ~1-hour UTC datetime window with hour granularity', () => {
+    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
+    expect(params.date_to).toContain('T')
+    expect(params.date_from).toContain('T')
+    expect(params.date_to).toBe(FIXED_NOW.toISOString())
+    expect(params.date_from).toBe(hoursBefore(FIXED_NOW, 1))
+    expect(params.group_by).toBe('hour')
+    expect(params.limit).toBe(1000)
   })
 
   it('maps the 3d preset to a 3-day UTC window', () => {
@@ -157,8 +171,8 @@ describe('serializeFilters', () => {
     expect(params.group_by).toBe('day')
   })
 
-  it('never emits datetime strings or an hour group_by (backend only accepts days)', () => {
-    for (const timespan of ['24h', '3d', '7d', '30d', '90d'] as const) {
+  it('emits ISO day strings for day-granular timespans (3d+)', () => {
+    for (const timespan of ['3d', '7d', '30d', '90d'] as const) {
       const params = serializeFilters({ timespan, groupBy: 'day' }, FIXED_NOW)
       expect(params.date_from).not.toContain('T')
       expect(params.date_to).not.toContain('T')
@@ -176,12 +190,24 @@ describe('previousWindowParams', () => {
     expect(prev.group_by).toBe(params.group_by)
   })
 
-  it('shifts the 24h preset back by one day window', () => {
+  it('shifts the 24h preset back by one 24-hour window, keeping ISO datetimes', () => {
     const params = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
     const prev = previousWindowParams(params)
-    expect(prev.date_to).toBe(daysBefore(FIXED_NOW, 2))
-    expect(prev.date_from).toBe(daysBefore(FIXED_NOW, 3))
-    expect(prev.group_by).toBe(params.group_by)
+    expect(prev.date_to).toContain('T')
+    expect(prev.date_from).toContain('T')
+    expect(prev.date_to).toBe(params.date_from)
+    expect(prev.date_from).toBe(hoursBefore(FIXED_NOW, 48))
+    expect(prev.group_by).toBe('hour')
+  })
+
+  it('shifts the 1h preset back by one hour, keeping ISO datetimes', () => {
+    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
+    const prev = previousWindowParams(params)
+    expect(prev.date_to).toContain('T')
+    expect(prev.date_from).toContain('T')
+    expect(prev.date_to).toBe(params.date_from)
+    expect(prev.date_from).toBe(hoursBefore(FIXED_NOW, 2))
+    expect(prev.group_by).toBe('hour')
   })
 })
 

@@ -827,6 +827,7 @@ export default {
       "analytics": "Analytics",
       "subtitle": "Run volume, cost, token, duration and success trends for your pipelines",
       "timespan": "Timespan",
+      "timespan_1h": "1h",
       "timespan_24h": "Last 24h",
       "timespan_3d": "3d",
       "timespan_7d": "Last 7d",
