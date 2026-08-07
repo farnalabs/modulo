@@ -96,7 +96,9 @@ def _read_circuit_breaker(org: object | None) -> bool:
 
 def _read_alert_thresholds(org: object | None) -> list[float]:
     value = _read_cost_control(org, "alert_thresholds", [])
-    if isinstance(value, list) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+    if not isinstance(value, list) or not value:
+        return []
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
         return [float(v) for v in value]
     return []
 
