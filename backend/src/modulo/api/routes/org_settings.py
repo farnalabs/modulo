@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
-from modulo.api.routes.costs import _COST_CONTROLS_KEY, _DEFAULT_CURRENCY
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.organisation import get_organisation
@@ -25,6 +24,10 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/org", tags=["org"])
+
+# Kept in sync with modulo.api.routes.costs._COST_CONTROLS_KEY / _DEFAULT_CURRENCY.
+_COST_CONTROLS_KEY = "cost_controls"
+_DEFAULT_CURRENCY = "USD"
 
 
 class OrgSettingsResponse(BaseModel):
@@ -54,7 +57,8 @@ async def get_org_settings(
             detail="A database error occurred. Please try again.",
         ) from None
     except HTTPException as exc:
-        raise exc from None
+        _log.debug("org.get_settings HTTPException (org_id=%s) detail=%s", current_user.organisation_id, exc.detail)
+        raise exc
     except asyncio.CancelledError:
         raise
     except Exception:

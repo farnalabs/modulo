@@ -13,11 +13,21 @@ if (-not $changed) {
     exit 0
 }
 
-$testPaths = $changed -join " "
-Write-Host "Running tests for changed files: $testPaths" -ForegroundColor Yellow
+# Run pytest from backend/ (not the repo root) so backend/.env resolves for
+# Settings(). The hook runs from the repo root, where .env is not found and
+# Settings() cannot construct (DATABASE_URL / SECRET_KEY / FERNET_KEY required).
+# Strip the repo-root 'backend/' prefix so the paths resolve from backend/.
+$testPaths = @($changed | ForEach-Object { $_ -replace '^backend/', '' })
+Write-Host "Running tests for changed files: $($testPaths -join ' ')" -ForegroundColor Yellow
 
-$result = & "uv" run --project backend --no-sync pytest --tb=short -q --timeout=120 $testPaths.Split(" ") 2>&1
-$exitCode = $LASTEXITCODE
+$backendDir = Join-Path $PSScriptRoot "..\backend"
+Push-Location $backendDir
+try {
+    $result = & "uv" run --no-sync pytest --tb=short -q --timeout=120 $testPaths 2>&1
+    $exitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
 
 if ($exitCode -ne 0) {
     Write-Host "FAILED: Changed tests did not pass" -ForegroundColor Red
