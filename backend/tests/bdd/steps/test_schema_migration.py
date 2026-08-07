@@ -1,11 +1,15 @@
 """BDD step definitions: Schema Migration (dry-run, plan, apply)."""
 
+import asyncio
 import contextlib
 import json
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
+
+from modulo.core.schema_registry.migration import MigrationRegistry, SchemaMigration
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/schemas/schema_migration.feature")
@@ -35,6 +39,123 @@ def _make_schema_version(schema_id: uuid.UUID, fields: dict[str, str]) -> MagicM
         "properties": {name: {"type": t} for name, t in fields.items()},
     }
     return sv
+
+
+# ---------------------------------------------------------------------------
+# MigrationRegistry best-effort partial chain (direct component scenarios)
+# ---------------------------------------------------------------------------
+
+
+def _visiting_migration(source: str, target: str) -> SchemaMigration:
+    """Build a migration that records its step in ``data["visited"]``."""
+    label = f"{source}->{target}"
+
+    def _migrate(data: dict[str, Any]) -> dict[str, Any]:
+        result = dict(data)
+        result["visited"] = [*result.get("visited", []), label]
+        return result
+
+    return SchemaMigration(source_version=source, target_version=target, func=_migrate)
+
+
+def _registry_ctx(request) -> MigrationRegistry:
+    registry: MigrationRegistry | None = getattr(request.node, "_migration_registry", None)
+    if registry is None:
+        registry = MigrationRegistry()
+        request.node._migration_registry = registry
+    return registry
+
+
+@given("a migration registry with no registered migrations")
+def step_empty_migration_registry(request) -> None:
+    request.node._migration_registry = MigrationRegistry()
+    request.node._migration_partial_result = None
+
+
+@given(parsers.parse('a migration registry with a migration registered from "{source}" to "{target}"'))
+def step_register_migration(source: str, target: str, request) -> None:
+    registry = _registry_ctx(request)
+
+    def _register() -> None:
+        asyncio.run(registry.register(source, target, _visiting_migration(source, target).func))
+
+    _register()
+
+
+@given(parsers.parse('a migration registered from "{source}" to "{target}"'))
+def step_register_additional_migration(source: str, target: str, request) -> None:
+    registry = _registry_ctx(request)
+
+    def _register() -> None:
+        asyncio.run(registry.register(source, target, _visiting_migration(source, target).func))
+
+    _register()
+
+
+@when(parsers.parse('I apply a partial migration from "{source}" to "{target}" on data {data_json}'))
+def step_apply_partial_migration(source: str, target: str, data_json: str, request) -> None:
+    registry = _registry_ctx(request)
+
+    async def _apply() -> tuple[dict[str, Any], list[str]]:
+        return await registry.apply_partial(json.loads(data_json), source, target)
+
+    request.node._migration_partial_result = asyncio.run(_apply())
+
+
+@when(parsers.parse('I dry-run a partial migration from "{source}" to "{target}" on data {data_json}'))
+def step_dry_run_partial_migration(source: str, target: str, data_json: str, request) -> None:
+    registry = _registry_ctx(request)
+    data = json.loads(data_json)
+
+    async def _dry_run() -> tuple[list[dict[str, Any]], list[str]]:
+        return await registry.dry_run_partial(data, source, target)
+
+    steps, gaps = asyncio.run(_dry_run())
+    request.node._migration_dry_run_result = (steps, gaps)
+    request.node._migration_partial_result = (data, gaps)
+
+
+@then(parsers.parse('the partial migration applied the steps "{steps_csv}"'))
+def step_partial_applied_steps(steps_csv: str, request) -> None:
+    expected = [s.strip() for s in steps_csv.split(",")]
+    result = request.node._migration_partial_result
+    assert result is not None, "no partial migration result for this scenario"
+    migrated, _gaps = result
+    visited = migrated.get("visited", [])
+    assert visited == expected, f"expected visited steps {expected}, got {visited}"
+
+
+@then("the partial migration reports a chain gap")
+def step_partial_reports_gap(request) -> None:
+    result = request.node._migration_partial_result
+    assert result is not None, "no partial migration result for this scenario"
+    _migrated, gaps = result
+    assert len(gaps) > 0, f"expected chain gaps, got none: {result}"
+
+
+@then("the partial migration reports no chain gaps")
+def step_partial_reports_no_gap(request) -> None:
+    result = request.node._migration_partial_result
+    assert result is not None, "no partial migration result for this scenario"
+    _migrated, gaps = result
+    assert gaps == [], f"expected no chain gaps, got {gaps}"
+
+
+@then(parsers.parse('the dry-run describes "{count}" steps'))
+def step_dry_run_describes_steps(count: str, request) -> None:
+    result = request.node._migration_dry_run_result
+    assert result is not None, "no dry-run result for this scenario"
+    steps, gaps = result
+    assert len(steps) == int(count), f"expected {count} dry-run steps, got {len(steps)}"
+    assert gaps == [], f"expected no chain gaps, got {gaps}"
+
+
+@then(parsers.parse('the migrated data still contains "{field}"'))
+def step_partial_migrated_data_still_contains(field: str, request) -> None:
+    result = request.node._migration_partial_result
+    assert result is not None, "no partial migration result for this scenario"
+    migrated, _gaps = result
+    assert field in migrated, f"Expected '{field}' preserved: {migrated}"
 
 
 @given(parsers.parse("a source schema version with fields {fields_json}"))

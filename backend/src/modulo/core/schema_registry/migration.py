@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 from collections import deque
 from collections.abc import Callable
@@ -251,6 +252,62 @@ class SchemaMigration:
     description: str = ""
 
 
+def _longest_path(start: str, migrations: dict[tuple[str, str], SchemaMigration]) -> list[str]:
+    """Return the longest simple version path starting at *start*.
+
+    Depth-first enumeration over the migration graph, never revisiting a
+    version within a path (cycles are skipped). Used by ``validate_chain``
+    for gap descriptions and by ``get_partial_chain`` to build the
+    best-effort partial chain when a full chain to the target has a gap.
+    """
+    best: list[str] = [start]
+    stack: list[tuple[str, list[str], int]] = [(start, [start], 0)]
+    while stack:
+        ver, path, idx = stack.pop()
+        items = [tgt for (src, tgt) in migrations if src == ver]
+        if idx < len(items):
+            stack.append((ver, path, idx + 1))
+            tgt = items[idx]
+            if tgt not in path:
+                new_path = [*path, tgt]
+                if len(new_path) > len(best):
+                    best = new_path
+                stack.append((tgt, new_path, 0))
+    return best
+
+
+def _build_step_reports(
+    chain: list[SchemaMigration],
+    data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Simulate a migration chain and return per-step field diffs.
+
+    The original *data* is never modified.
+    """
+    steps: list[dict[str, Any]] = []
+    current = deepcopy(data)
+    for mf in chain:
+        before = deepcopy(current)
+        current = mf.func(current)
+        added = sorted(set(current) - set(before))
+        removed = sorted(set(before) - set(current))
+        changed = {}
+        for key in set(current) & set(before):
+            if current[key] != before[key]:
+                changed[key] = {"old": before[key], "new": current[key]}
+        steps.append(
+            {
+                "source_version": mf.source_version,
+                "target_version": mf.target_version,
+                "description": mf.description or mf.func.__name__,
+                "added_fields": added,
+                "removed_fields": removed,
+                "changed_fields": changed,
+            }
+        )
+    return steps
+
+
 class MissingMigrationError(Exception):
     """Raised when no migration path exists between schema versions."""
 
@@ -341,23 +398,7 @@ class MigrationRegistry:
         if len(reachable) == 1:
             return [f"No outgoing migration from {source_version}"]
 
-        def _longest_path(start: str) -> list[str]:
-            best: list[str] = [start]
-            stack: list[tuple[str, list[str], int]] = [(start, [start], 0)]
-            while stack:
-                ver, path, idx = stack.pop()
-                items = [(s, t) for (s, t) in migrations_copy if s == ver]
-                if idx < len(items):
-                    stack.append((ver, path, idx + 1))
-                    _, tgt = items[idx]
-                    if tgt not in path:
-                        new_path = [*path, tgt]
-                        if len(new_path) > len(best):
-                            best = new_path
-                        stack.append((tgt, new_path, 0))
-            return best
-
-        longest = _longest_path(source_version)
+        longest = _longest_path(source_version, migrations_copy)
         last = longest[-1]
 
         if last == source_version:
@@ -367,6 +408,94 @@ class MigrationRegistry:
             f"Chain reaches {last}",
             f"Missing migration from {last} towards {target_version}",
         ]
+
+    async def get_partial_chain(
+        self,
+        source_version: str,
+        target_version: str,
+    ) -> tuple[list[SchemaMigration], list[str]]:
+        """Return ``(partial_chain, gaps)`` — best-effort migration fallback.
+
+        When a full chain from *source_version* to *target_version* exists,
+        returns ``(full_chain, [])``. When a migration step is missing, the
+        longest reachable prefix of the chain is returned alongside the
+        human-readable gap descriptions from :meth:`validate_chain`, so
+        callers can degrade gracefully instead of failing hard on a partial
+        chain. Never raises :class:`MissingMigrationError`.
+        """
+        try:
+            return await self.get_migration_chain(source_version, target_version), []
+        except MissingMigrationError:
+            pass
+
+        gaps = await self.validate_chain(source_version, target_version)
+
+        async with self._lock:
+            migrations_copy = dict(self._migrations)
+
+        path = _longest_path(source_version, migrations_copy)
+        chain: list[SchemaMigration] = []
+        for src, tgt in itertools.pairwise(path):
+            mf = migrations_copy.get((src, tgt))
+            if mf is None:
+                break
+            chain.append(mf)
+        return chain, gaps
+
+    async def apply_partial(
+        self,
+        data: dict[str, Any],
+        source_version: str,
+        target_version: str,
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Apply the best-effort partial chain without raising.
+
+        Returns ``(migrated_data, gaps)``. ``gaps`` is empty when the chain
+        is complete. When a migration step is missing, the reachable prefix
+        is still applied and the missing steps are reported instead of
+        failing the whole migration; when the source is unreachable the data
+        passes through unchanged.
+        """
+        chain, gaps = await self.get_partial_chain(source_version, target_version)
+        result = deepcopy(data)
+        for mf in chain:
+            result = mf.func(result)
+        return result, gaps
+
+    async def describe_partial_chain(
+        self,
+        source_version: str,
+        target_version: str,
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        """Describe the best-effort partial chain without running it.
+
+        Returns ``(step_descriptions, gaps)`` — the reachable prefix is
+        described and the missing steps reported instead of raising.
+        """
+        chain, gaps = await self.get_partial_chain(source_version, target_version)
+        return [
+            {
+                "source_version": m.source_version,
+                "target_version": m.target_version,
+                "description": m.description or m.func.__name__,
+            }
+            for m in chain
+        ], gaps
+
+    async def dry_run_partial(
+        self,
+        data: dict[str, Any],
+        source_version: str,
+        target_version: str,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Best-effort dry-run: per-step diff of the reachable prefix + gaps.
+
+        Returns ``(steps, gaps)``. ``steps`` contains the per-step field
+        diffs for the applied prefix; the original data is never modified.
+        Missing steps are reported in ``gaps`` instead of raising.
+        """
+        chain, gaps = await self.get_partial_chain(source_version, target_version)
+        return _build_step_reports(chain, data), gaps
 
     async def apply(
         self,
@@ -410,28 +539,7 @@ class MigrationRegistry:
         The original data is never modified.
         """
         chain = await self.get_migration_chain(source_version, target_version)
-        steps: list[dict[str, Any]] = []
-        current = deepcopy(data)
-        for mf in chain:
-            before = deepcopy(current)
-            current = mf.func(current)
-            added = sorted(set(current) - set(before))
-            removed = sorted(set(before) - set(current))
-            changed = {}
-            for key in set(current) & set(before):
-                if current[key] != before[key]:
-                    changed[key] = {"old": before[key], "new": current[key]}
-            steps.append(
-                {
-                    "source_version": mf.source_version,
-                    "target_version": mf.target_version,
-                    "description": mf.description or mf.func.__name__,
-                    "added_fields": added,
-                    "removed_fields": removed,
-                    "changed_fields": changed,
-                }
-            )
-        return steps
+        return _build_step_reports(chain, data)
 
     def clear(self) -> None:
         self._migrations.clear()

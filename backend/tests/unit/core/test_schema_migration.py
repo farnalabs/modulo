@@ -594,6 +594,145 @@ class TestValidateChain:
         assert await registry.validate_chain("1.0.0", "3.0.0") == []
 
 
+class TestPartialChain:
+    """Best-effort / degraded fallback for partial migration chains."""
+
+    async def test_complete_chain_returns_no_gaps(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("2.0.0", "3.0.0", convert_field("count", int))
+
+        data = {"full_name": "Alice", "count": "42"}
+        migrated, gaps = await registry.apply_partial(data, "1.0.0", "3.0.0")
+        assert gaps == []
+        assert migrated == {"display_name": "Alice", "count": 42}
+
+    async def test_same_version_returns_data_and_no_gaps(self) -> None:
+        registry = MigrationRegistry()
+        data = {"name": "Alice"}
+        migrated, gaps = await registry.apply_partial(data, "1.0.0", "1.0.0")
+        assert gaps == []
+        assert migrated == data
+        assert migrated is not data
+
+    async def test_partial_chain_applies_reachable_prefix(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        # Missing 2.0.0 -> 3.0.0
+
+        data = {"full_name": "Alice", "count": 1}
+        migrated, gaps = await registry.apply_partial(data, "1.0.0", "3.0.0")
+        assert migrated == {"display_name": "Alice", "count": 1}
+        assert len(gaps) > 0
+        assert any("Chain reaches" in g for g in gaps)
+        assert any("Missing migration" in g for g in gaps)
+
+    async def test_partial_chain_missing_source_passes_data_through(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("2.0.0", "3.0.0", convert_field("count", int))
+
+        data = {"count": "42", "name": "Alice"}
+        migrated, gaps = await registry.apply_partial(data, "1.0.0", "3.0.0")
+        assert migrated == data
+        assert gaps == ["No outgoing migration from 1.0.0"]
+
+    async def test_apply_partial_does_not_mutate_original(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        # Missing 2.0.0 -> 3.0.0
+
+        data = {"full_name": "Alice"}
+        original = deepcopy(data)
+        _, gaps = await registry.apply_partial(data, "1.0.0", "3.0.0")
+        assert data == original
+        assert len(gaps) > 0
+
+    async def test_apply_partial_missing_target_reports_gap(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+
+        data = {"full_name": "Alice"}
+        migrated, gaps = await registry.apply_partial(data, "1.0.0", "3.0.0")
+        assert migrated == {"display_name": "Alice"}
+        assert len(gaps) > 0
+
+    async def test_apply_partial_never_raises_missing_migration(self) -> None:
+        registry = MigrationRegistry()
+
+        data = {"name": "Alice"}
+        migrated, gaps = await registry.apply_partial(data, "1.0.0", "2.0.0")
+        assert migrated == data
+        assert len(gaps) > 0
+
+    async def test_get_partial_chain_returns_full_chain_when_complete(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
+        await registry.register("2.0.0", "3.0.0", lambda d: d)
+
+        chain, gaps = await registry.get_partial_chain("1.0.0", "3.0.0")
+        assert gaps == []
+        assert [m.target_version for m in chain] == ["2.0.0", "3.0.0"]
+
+    async def test_get_partial_chain_returns_prefix_with_gaps(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", lambda d: d)
+        # Missing 2.0.0 -> 3.0.0
+
+        chain, gaps = await registry.get_partial_chain("1.0.0", "3.0.0")
+        assert [m.target_version for m in chain] == ["2.0.0"]
+        assert len(gaps) > 0
+
+    async def test_describe_partial_chain_complete(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"), "Rename v1")
+
+        descriptions, gaps = await registry.describe_partial_chain("1.0.0", "2.0.0")
+        assert gaps == []
+        assert descriptions == [
+            {"source_version": "1.0.0", "target_version": "2.0.0", "description": "Rename v1"}
+        ]
+
+    async def test_describe_partial_chain_with_gap(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"), "Rename v1")
+
+        descriptions, gaps = await registry.describe_partial_chain("1.0.0", "3.0.0")
+        assert [d["target_version"] for d in descriptions] == ["2.0.0"]
+        assert len(gaps) > 0
+
+    async def test_dry_run_partial_complete(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+
+        data = {"full_name": "Alice"}
+        steps, gaps = await registry.dry_run_partial(data, "1.0.0", "2.0.0")
+        assert gaps == []
+        assert len(steps) == 1
+        assert steps[0]["added_fields"] == ["display_name"]
+        assert steps[0]["removed_fields"] == ["full_name"]
+
+    async def test_dry_run_partial_with_gap_applies_prefix(self) -> None:
+        registry = MigrationRegistry()
+        await registry.register("1.0.0", "2.0.0", rename_field("full_name", "display_name"))
+        await registry.register("2.0.0", "3.0.0", convert_field("count", int))
+        # Missing 3.0.0 -> 4.0.0
+
+        data = {"full_name": "Alice", "count": "42"}
+        steps, gaps = await registry.dry_run_partial(data, "1.0.0", "4.0.0")
+        assert len(steps) == 2
+        assert [s["target_version"] for s in steps] == ["2.0.0", "3.0.0"]
+        assert data == {"full_name": "Alice", "count": "42"}
+        assert len(gaps) > 0
+
+    async def test_dry_run_partial_never_raises(self) -> None:
+        registry = MigrationRegistry()
+
+        data = {"name": "Alice"}
+        steps, gaps = await registry.dry_run_partial(data, "1.0.0", "2.0.0")
+        assert steps == []
+        assert len(gaps) > 0
+
+
 class TestRoundTrip:
     """Round-trip migration — forward then reverse yields original data."""
 
