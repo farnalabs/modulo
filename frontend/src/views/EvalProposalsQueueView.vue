@@ -39,7 +39,7 @@
                   class="inline-block rounded px-2 py-0.5 text-xs font-medium"
                   :class="statusBadgeClass(p.feedback_status)"
                 >
-                  {{ p.feedback_status }}
+                  {{ statusLabel(p.feedback_status) }}
                 </span>
                 <span v-if="p.run_id" class="text-xs text-muted-foreground font-mono">
                   {{ $t('views.EvalProposalsQueueView.run_prefix', { id: shortId(p.run_id) }) }}
@@ -104,9 +104,8 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -143,8 +142,6 @@ interface ProposalsResponse {
   page_size: number
 }
 
-const { patch } = useApi()
-
 const { t } = useI18n()
 
 const { loading, error: pageError, data: proposalsResp, load: loadProposals } = useDataFetch<ProposalsResponse>(
@@ -171,6 +168,12 @@ function statusBadgeClass(status: string): string {
   return classMap[status] ?? 'bg-muted text-muted-foreground'
 }
 
+function statusLabel(status: string): string {
+  const key = `views.EvalProposalsQueueView.status_${status}`
+  const translated = t(key)
+  return translated === key ? status : translated
+}
+
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   return formatDateShortWithTime(d)
@@ -184,7 +187,12 @@ async function publishProposal(p: EvalProposalItem) {
   actioningId.value = p.id
   delete actionMessages.value[p.id]
   try {
-    await patch(`/api/v1/feedback/${p.id}/status`, { status: 'resolved' })
+    await throwOnError(
+      await api.PATCH('/api/v1/feedback/{record_id}/status', {
+        params: { path: { record_id: p.id } },
+        body: { status: 'resolved' },
+      }),
+    )
     actionMessages.value[p.id] = { type: 'success', text: t('views.EvalProposalsQueueView.publish_success') }
     const idx = proposals.value.findIndex(x => x.id === p.id)
     if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'resolved'
@@ -200,7 +208,12 @@ async function dismissProposal(id: string) {
   actioningId.value = id
   delete actionMessages.value[id]
   try {
-    await patch(`/api/v1/feedback/${id}/status`, { status: 'dismissed' })
+    await throwOnError(
+      await api.PATCH('/api/v1/feedback/{record_id}/status', {
+        params: { path: { record_id: id } },
+        body: { status: 'dismissed' },
+      }),
+    )
     actionMessages.value[id] = { type: 'success', text: t('views.EvalProposalsQueueView.dismissed') }
     const idx = proposals.value.findIndex(p => p.id === id)
     if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'dismissed'
