@@ -154,9 +154,9 @@ async function seedEmailSettings(
       body: JSON.stringify({
         smtp_host: 'mail.example.com',
         smtp_port: 587,
-        from_address: 'e2e-test@example.com',
-        encryption: 'tls',
-        enabled: false,
+        smtp_username: '',
+        email_from: 'e2e-test@example.com',
+        clear_password: false,
       }),
       signal: AbortSignal.timeout(15000),
     })
@@ -193,6 +193,41 @@ async function seedCostControls(
   }
 }
 
+/**
+ * Promote the org to the "team" tier via the org-profile update endpoint.
+ * The backend has no "enterprise" tier — team is the highest. Team-gated admin
+ * endpoints (run retention, cost controls, environment profiles, remy admin)
+ * return 402 on a community-tier org, so the seeder must establish the tier.
+ */
+async function establishTeamTier(apiBase: string, token: string): Promise<boolean> {
+  try {
+    const res = await fetch(apiBase + '/api/v1/admin/org', {
+      method: 'PUT',
+      headers: authHeaders(token),
+      body: JSON.stringify({ plan_id: 'team' }),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) {
+      console.error('[seeder] Could not set org plan to team: ' + res.status + ' ' + res.statusText)
+      return false
+    }
+    const flagsRes = await fetch(apiBase + '/api/v1/admin/feature-flags', {
+      headers: authHeaders(token),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (flagsRes.ok) {
+      const data = (await flagsRes.json()) as { license?: { tier?: string } }
+      const tier = data?.license?.tier ?? 'unknown'
+      console.log('[seeder] Org tier after update: "' + tier + '"')
+      return tier === 'team'
+    }
+    return true
+  } catch (err) {
+    console.error('[seeder] Failed to establish team tier:', err instanceof Error ? err.message : String(err))
+    return false
+  }
+}
+
 export async function seedTargetEnvironment(env: TestEnv): Promise<SeedContext> {
   const ctx: SeedContext = { pipelineName: 'E2E Test Pipeline' }
 
@@ -210,6 +245,15 @@ export async function seedTargetEnvironment(env: TestEnv): Promise<SeedContext> 
   } catch (err) {
     console.error('[seeder] Failed to authenticate, cannot seed:', err instanceof Error ? err.message : String(err))
     return ctx
+  }
+
+  const teamTier = await establishTeamTier(apiBase, token)
+  if (!teamTier) {
+    console.error(
+      '[seeder] WARNING: org is NOT team-tier. Team-gated E2E features (run retention, cost controls, ' +
+        'environment profiles, remy admin) will be unavailable. Upgrade the org plan_id to "team" ' +
+        '(PUT /api/v1/admin/org) or set MODULO_LICENSE_KEY on the deployment.',
+    )
   }
 
   const pipeline = await seedPipeline(apiBase, token)

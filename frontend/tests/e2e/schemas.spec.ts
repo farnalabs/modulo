@@ -1,4 +1,4 @@
-﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin, loginAndGotoEnterprise } from './setup/fixtures'
 
 test.describe('Schemas Page', { tag: "@regression" }, () => {
   test('Browse tab is active by default', { tag: "@regression" }, async ({ page, env }) => {
@@ -15,9 +15,7 @@ test.describe('Schemas Page', { tag: "@regression" }, () => {
   })
 
   test('navigates to Infer tab', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
-
-    await page.goto('/schemas/infer')
+    await loginAndGotoEnterprise(page, env, '/schemas/infer')
 
     await expect(page).toHaveURL(/\/schemas\/infer/)
     const activeTab = page.locator('nav[aria-label="Section navigation"] a.active')

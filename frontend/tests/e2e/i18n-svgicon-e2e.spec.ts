@@ -1,9 +1,8 @@
-import { test, expect, loginAsAdmin } from './setup/fixtures'
+import { test, expect, loginAndGotoEnterprise, spaNavigate } from './setup/fixtures'
 
 test.describe('i18n Keys & SvgIcon Regression', () => {
   test('sidebar shows "Environment Profiles" not raw key', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
-    await page.goto('/environment-profiles')
+    await loginAndGotoEnterprise(page, env, '/environment-profiles')
 
     // CONFIGURE group button - click to expand if collapsed
     const configureGroup = page.locator('button.sidebar-group-header', { hasText: 'CONFIGURE' }).first()
@@ -25,10 +24,9 @@ test.describe('i18n Keys & SvgIcon Regression', () => {
       }
     })
 
-    await loginAsAdmin(page, env)
-    await page.goto('/settings/email')
+    await loginAndGotoEnterprise(page, env, '/settings/email')
 
-    await page.goto('/dashboard')
+    await spaNavigate(page, '/')
 
     expect(warnings.filter(w => w.includes('"Mail"') || w.includes('"File"'))).toEqual([])
   })
