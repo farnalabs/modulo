@@ -32,6 +32,7 @@ from modulo.db.models.run_daily_facts import RunDailyFact
 
 __all__ = [
     "HOUR_GROUPBY_MAX_RANGE_DAYS",
+    "STALL_ERROR_CODES",
     "AnalyticsDimension",
     "AnalyticsGroupBy",
     "AnalyticsQuery",
@@ -45,6 +46,18 @@ __all__ = [
 ]
 
 _COMPLETE_STATUS = "complete"
+_FAILED_STATUS = "failed"
+_SANDBOX_AGENT_NODE_TYPE = "sandbox_agent"
+
+# Error codes that mark a failed run as a STALL — the run made no progress
+# (no node dispatched, a node exceeded its wall-clock timeout, or a sandbox
+# agent went silent past the idle watchdog). Mirrors the timeout paths that set
+# ``Run.error_code``: ``executor_stalled`` (pipeline_execution.EXECUTOR_STALLED
+# zombie watchdog), ``node_timeout`` (executor._stream_graph catching
+# ``TimeoutError``), and ``TimeoutError`` itself (the generic ``except
+# Exception`` fallback in executor.py when the sandbox idle watchdog surfaces
+# the class name directly).
+STALL_ERROR_CODES: frozenset[str] = frozenset({"executor_stalled", "node_timeout", "TimeoutError"})
 
 # Hour-granularity range cap: an EXPLICIT ``group_by=hour`` over a wider span
 # would materialise up to 24 buckets/day per dimension key before limit
@@ -65,6 +78,7 @@ class AnalyticsDimension(StrEnum):
     PIPELINE = "pipeline"
     FOLDER = "folder"
     TEAM = "team"
+    ERROR_CODE = "error_code"
 
 
 class AnalyticsTriggerType(StrEnum):
@@ -97,7 +111,8 @@ class AnalyticsQuery:
     dimension: AnalyticsDimension | None = None
     trigger_type: AnalyticsTriggerType | None = None
     status: AnalyticsStatus | None = None
-    pipeline_id: uuid.UUID | None = None
+    pipeline_ids: tuple[uuid.UUID, ...] = ()
+    error_code: str | None = None
     folder_id: uuid.UUID | None = None
     date_from: date | None = None
     date_to: date | None = None
@@ -112,6 +127,7 @@ _DIMENSION_COLUMNS: dict[AnalyticsDimension, Any] = {
     AnalyticsDimension.PIPELINE: RunDailyFact.pipeline_id,
     AnalyticsDimension.FOLDER: RunDailyFact.folder_id,
     AnalyticsDimension.TEAM: RunDailyFact.team_id,
+    AnalyticsDimension.ERROR_CODE: RunDailyFact.error_code,
 }
 
 # Allowlisted dimension → display-label column (snapshot names). Selected via
@@ -145,9 +161,25 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         sa.func.sum(RunDailyFact.total_cost_usd).label("total_cost_usd"),
         sa.func.sum(RunDailyFact.total_tokens).label("total_tokens"),
         sa.func.avg(RunDailyFact.duration_ms).label("avg_duration_ms"),
+        # FAR-102 stall-dimension metrics — all bound, never interpolated.
+        sa.func.count(RunDailyFact.id).filter(RunDailyFact.status == _FAILED_STATUS).label("failure_count"),
+        sa.func.count(RunDailyFact.id)
+        .filter(
+            sa.and_(
+                RunDailyFact.status == _FAILED_STATUS,
+                RunDailyFact.error_code.in_(sa.bindparam("stall_error_codes", type_=sa.String, expanding=True)),
+            )
+        )
+        .label("stall_count"),
+        sa.func.avg(RunDailyFact.queue_wait_ms).label("avg_queue_wait_ms"),
+        sa.func.avg(RunDailyFact.final_idle_ms).label("avg_final_idle_ms"),
+        sa.func.avg(RunDailyFact.output_bytes).label("avg_output_bytes"),
     ]
 
-    params: dict[str, Any] = {"org_id": query.org_id}
+    params: dict[str, Any] = {
+        "org_id": query.org_id,
+        "stall_error_codes": sorted(STALL_ERROR_CODES),
+    }
 
     if query.dimension is not None:
         dim_col = _DIMENSION_COLUMNS[query.dimension]
@@ -177,9 +209,12 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     if query.status is not None:
         params["status"] = query.status.value
         stmt = stmt.where(RunDailyFact.status == sa.bindparam("status", type_=sa.String))
-    if query.pipeline_id is not None:
-        params["pipeline_id"] = query.pipeline_id
-        stmt = stmt.where(RunDailyFact.pipeline_id == sa.bindparam("pipeline_id", type_=sa.Uuid))
+    if query.pipeline_ids:
+        params["pipeline_ids"] = list(query.pipeline_ids)
+        stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+    if query.error_code is not None:
+        params["error_code"] = query.error_code
+        stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
     if query.folder_id is not None:
         params["folder_id"] = query.folder_id
         stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
@@ -305,11 +340,21 @@ def bucket_rows(
                 "tokens": None,
                 "duration_sum": 0.0,
                 "duration_n": 0,
+                "failure": 0,
+                "stall": 0,
+                "queue_wait_sum": 0.0,
+                "queue_wait_n": 0,
+                "final_idle_sum": 0.0,
+                "final_idle_n": 0,
+                "output_bytes_sum": 0.0,
+                "output_bytes_n": 0,
             }
             agg[bkey] = bucket
         cnt = int(row.count or 0)
         bucket["count"] += cnt
         bucket["complete"] += int(getattr(row, "complete_count", None) or 0)
+        bucket["failure"] += int(getattr(row, "failure_count", None) or 0)
+        bucket["stall"] += int(getattr(row, "stall_count", None) or 0)
         if row.total_cost_usd is not None:
             bucket["cost"] = (bucket["cost"] or Decimal(0)) + Decimal(str(row.total_cost_usd))
         if row.total_tokens is not None:
@@ -317,6 +362,18 @@ def bucket_rows(
         if row.avg_duration_ms is not None:
             bucket["duration_sum"] += float(row.avg_duration_ms) * cnt
             bucket["duration_n"] += cnt
+        avg_queue_wait = getattr(row, "avg_queue_wait_ms", None)
+        if avg_queue_wait is not None:
+            bucket["queue_wait_sum"] += float(avg_queue_wait) * cnt
+            bucket["queue_wait_n"] += cnt
+        avg_final_idle = getattr(row, "avg_final_idle_ms", None)
+        if avg_final_idle is not None:
+            bucket["final_idle_sum"] += float(avg_final_idle) * cnt
+            bucket["final_idle_n"] += cnt
+        avg_output = getattr(row, "avg_output_bytes", None)
+        if avg_output is not None:
+            bucket["output_bytes_sum"] += float(avg_output) * cnt
+            bucket["output_bytes_n"] += cnt
 
     # Explicit time grid: hourly (from date_from 00:00 UTC to date_to 23:59 UTC)
     # for hour grouping, otherwise the day grid (week Mondays for week grouping).
@@ -352,6 +409,9 @@ def bucket_rows(
             cost = float(b["cost"]) if b and b["cost"] is not None else None
             tokens = b["tokens"] if b else None
             avg_dur = (b["duration_sum"] / b["duration_n"]) if b and b["duration_n"] else None
+            avg_queue_wait = (b["queue_wait_sum"] / b["queue_wait_n"]) if b and b["queue_wait_n"] else None
+            avg_final_idle = (b["final_idle_sum"] / b["final_idle_n"]) if b and b["final_idle_n"] else None
+            avg_output_bytes = (b["output_bytes_sum"] / b["output_bytes_n"]) if b and b["output_bytes_n"] else None
             success_rate = (complete / count) if count else None
             out.append(
                 {
@@ -362,6 +422,11 @@ def bucket_rows(
                     "total_tokens": tokens,
                     "avg_duration_ms": round(avg_dur, 1) if avg_dur is not None else None,
                     "success_rate": round(success_rate, 4) if success_rate is not None else None,
+                    "failure_count": b["failure"] if b else 0,
+                    "stall_count": b["stall"] if b else 0,
+                    "avg_queue_wait_ms": round(avg_queue_wait, 1) if avg_queue_wait is not None else None,
+                    "avg_final_idle_ms": round(avg_final_idle, 1) if avg_final_idle is not None else None,
+                    "avg_output_bytes": round(avg_output_bytes, 1) if avg_output_bytes is not None else None,
                 }
             )
 
@@ -379,4 +444,5 @@ _DIMENSION_KEY_ATTR: dict[AnalyticsDimension, str] = {
     AnalyticsDimension.PIPELINE: "pipeline_id",
     AnalyticsDimension.FOLDER: "folder_id",
     AnalyticsDimension.TEAM: "team_id",
+    AnalyticsDimension.ERROR_CODE: "error_code",
 }

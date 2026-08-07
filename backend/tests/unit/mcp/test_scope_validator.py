@@ -286,6 +286,7 @@ class TestConstants:
             "delete_secret",
             "list_secrets",
             "list_trigger_events",
+            "query_analytics",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 

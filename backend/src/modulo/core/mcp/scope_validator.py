@@ -76,6 +76,7 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "delete_secret": "secret.manage",
     "list_secrets": "secret.manage",
     "list_trigger_events": "trigger.events.list",
+    "query_analytics": "analytics.query",
 }
 
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)

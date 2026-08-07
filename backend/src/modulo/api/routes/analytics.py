@@ -1,64 +1,61 @@
-"""GET /api/v1/analytics/query — typed-params analytics over run_daily_facts (ADR 020).
+"""GET /api/v1/analytics/query + /export — typed-params analytics over run_daily_facts (ADR 020).
 
-The backend is the SOLE bucketing authority: day/ISO-week bucketing and
-zero-fill happen here (``bucket_rows``), never on the client. Tenant isolation
-relies on the EXPLICIT ``organisation_id = :org`` predicate injected by the
-SQL builder (modulo_app is BYPASSRLS on Postgres and the ORM tenant filter is
-NOT registered there) — RLS via ``set_rls_org`` is defense-in-depth, not the
-control. Every request sets a bounded ``statement_timeout`` so a runaway date
-range degrades to a clean 503 instead of hogging a pooled connection.
+The backend is the SOLE bucketing authority: day/hour/ISO-week bucketing and
+zero-fill happen in the shared service (``modulo.core.analytics.service``),
+never on the client. Tenant isolation relies on the EXPLICIT
+``organisation_id = :org`` predicate injected by the SQL builder (modulo_app is
+BYPASSRLS on Postgres and the ORM tenant filter is NOT registered there) — RLS
+via ``set_rls_org`` is defense-in-depth, not the control. Every request sets a
+bounded ``statement_timeout`` so a runaway date range degrades to a clean 503
+instead of hogging a pooled connection.
+
+The route is a thin adapter over the service: it maps the service's typed
+``AnalyticsError`` exceptions to HTTP status codes and passes the query params
+through unchanged. The ``query_analytics`` MCP tool shares the same service.
 """
 
 from __future__ import annotations
 
-import asyncio
+import csv
+import io
 import logging
-import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette import status as http_status
 
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.analytics.builder import (
-    HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
     AnalyticsGroupBy,
-    AnalyticsQuery,
     AnalyticsStatus,
     AnalyticsTriggerType,
-    bucket_rows,
-    build_facts_query,
-    hour_groupby_span_exceeds,
-    resolve_group_by,
-    to_utc_aware,
 )
-from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.core.analytics.service import (
+    EXPORT_COLUMN_NAMES,
+    AnalyticsDatabaseError,
+    AnalyticsMigrationRequiredError,
+    AnalyticsParams,
+    AnalyticsQueryTimeoutError,
+    AnalyticsRateLimitedError,
+    AnalyticsValidationError,
+    export_facts,
+    run_analytics_query,
+)
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
-# Default statement timeout for analytics queries (ms) — settings-driven via
-# ``analytics_query_statement_timeout_ms`` when configured.
-_DEFAULT_STATEMENT_TIMEOUT_MS = 5000
-
-# Per-org app-level limiter (simple in-memory): 60 requests/minute. Best-effort
-# and bounded: idle orgs are pruned and the number of tracked orgs is capped, so
-# the dict cannot grow without limit across many orgs. It remains process-local
-# and is therefore ineffective across multiple worker processes — a shared
-# limiter (e.g. Redis) is the production-grade replacement for this fallback.
-_RATE_LIMIT_WINDOW_SECONDS = 60
-_RATE_LIMIT_MAX_PER_ORG = 60
-_RATE_LIMIT_MAX_ORGS = 1000
-_rate_hits: dict[str, list[float]] = {}
+# Export pagination bounds (FAR-102, Part D).
+_EXPORT_DEFAULT_LIMIT = 500
+_EXPORT_MAX_LIMIT = 5000
 
 
 class AnalyticsBucket(BaseModel):
@@ -69,6 +66,11 @@ class AnalyticsBucket(BaseModel):
     total_tokens: int | None = None
     avg_duration_ms: float | None = None
     success_rate: float | None = None
+    failure_count: int = 0
+    stall_count: int = 0
+    avg_queue_wait_ms: float | None = None
+    avg_final_idle_ms: float | None = None
+    avg_output_bytes: float | None = None
 
 
 class AnalyticsResponse(BaseModel):
@@ -79,55 +81,118 @@ class AnalyticsResponse(BaseModel):
     buckets: list[AnalyticsBucket]
 
 
-def _rate_limited(org_id: str) -> bool:
-    now = time.monotonic()
-    _prune_rate_hits(now)
-    hits = _rate_hits.setdefault(org_id, [])
-    hits[:] = [t for t in hits if now - t < _RATE_LIMIT_WINDOW_SECONDS]
-    if len(hits) >= _RATE_LIMIT_MAX_PER_ORG:
-        return True
-    hits.append(now)
-    return False
+class AnalyticsExportItem(BaseModel):
+    """One raw fact row — all fact columns, serialised to JSON-safe values."""
+
+    run_id: str
+    run_date: str
+    team_id: str | None = None
+    team_name: str | None = None
+    pipeline_id: str | None = None
+    pipeline_name: str | None = None
+    folder_id: str | None = None
+    trigger_type: str
+    status: str
+    total_cost_usd: float | None = None
+    total_tokens: int | None = None
+    duration_ms: int | None = None
+    error_code: str | None = None
+    claim_count: int | None = None
+    queue_wait_ms: int | None = None
+    final_idle_ms: int | None = None
+    cancellation_requested: bool | None = None
+    dispatcher: str | None = None
+    node_count: int | None = None
+    sandbox_agent_node_count: int | None = None
+    max_node_timeout_seconds: int | None = None
+    parent_run_id: str | None = None
+    snapshot_id: str | None = None
+    run_number: int | None = None
+    output_bytes: int | None = None
+    rate_limited: bool | None = None
+    created_at: str
 
 
-def _prune_rate_hits(now: float) -> None:
-    """Drop idle orgs and cap the number of tracked orgs (best-effort bound).
-
-    An org with no request inside the rate window is forgotten entirely; if that
-    is still not enough, the least-recently-active orgs are evicted until the
-    cap is met.
-    """
-    cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
-    for oid in [oid for oid, hits in _rate_hits.items() if not hits or hits[-1] <= cutoff]:
-        del _rate_hits[oid]
-    while len(_rate_hits) > _RATE_LIMIT_MAX_ORGS:
-        oldest = min(_rate_hits, key=lambda oid: _rate_hits[oid][-1] if _rate_hits[oid] else 0.0)
-        del _rate_hits[oldest]
+class AnalyticsExportResponse(BaseModel):
+    items: list[AnalyticsExportItem]
+    total: int
+    offset: int
+    limit: int
 
 
-def _is_query_canceled(exc: DBAPIError) -> bool:
-    """Detect a Postgres statement-timeout cancellation (SQLSTATE 57014).
-
-    The asyncpg dialect wraps the driver error (``AsyncAdapt_asyncpg_dbapi.Error``),
-    so the type-name check must unwrap ``orig``/``__cause__`` and fall back to
-    the standard ``query_canceled`` SQLSTATE.
-    """
-    names = {"QueryCanceledError", "QueryCanceled"}
-    orig = exc.orig
-    if orig is not None and type(orig).__name__ in names:
-        return True
-    if orig is not None:
-        for candidate in (getattr(orig, "orig", None), getattr(orig, "__cause__", None)):
-            if candidate is not None and type(candidate).__name__ in names:
-                return True
-        if getattr(orig, "sqlstate", None) == "57014":
-            return True
-    return False
-
-
-def _analytics_session_factory(settings: Settings) -> async_sessionmaker[AsyncSession]:
+def _analytics_session_factory(settings: Settings) -> async_sessionmaker[Any]:
     """Dedicated sessionmaker over the EXISTING shared engine (autobegin=False)."""
     return async_sessionmaker(get_or_create_engine(settings), expire_on_commit=False, autobegin=False)
+
+
+def _build_params(
+    *,
+    group_by: AnalyticsGroupBy,
+    auto_granularity: bool,
+    dimension: AnalyticsDimension | None,
+    trigger_type: AnalyticsTriggerType | None,
+    status: AnalyticsStatus | None,
+    pipeline_ids: tuple[uuid.UUID, ...],
+    error_code: str | None,
+    folder_id: uuid.UUID | None,
+    date_from: Any,
+    date_to: Any,
+    limit: int,
+) -> AnalyticsParams:
+    return AnalyticsParams(
+        group_by=group_by,
+        auto_granularity=auto_granularity,
+        dimension=dimension,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=pipeline_ids,
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+
+
+def _require_org(principal: TenantPrincipal) -> uuid.UUID:
+    org_id = principal.organisation_id
+    if org_id is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail="Analytics requires an organisation context",
+        )
+    return org_id
+
+
+def _map_service_error(exc: Exception) -> HTTPException:
+    """Map a typed service error to the REST HTTP response."""
+    if isinstance(exc, AnalyticsRateLimitedError):
+        return HTTPException(
+            status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded",
+        )
+    if isinstance(exc, AnalyticsValidationError):
+        return HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.detail)
+    if isinstance(exc, AnalyticsQueryTimeoutError):
+        return HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    if isinstance(exc, AnalyticsMigrationRequiredError):
+        return HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(exc),
+        )
+    if isinstance(exc, AnalyticsDatabaseError):
+        return HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    _log.exception("analytics.route.unexpected_error")
+    return HTTPException(
+        status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="An unexpected error occurred.",
+    )
 
 
 @router.get("/query", response_model=AnalyticsResponse)
@@ -137,7 +202,8 @@ async def analytics_query(
     dimension: AnalyticsDimension | None = Query(None),
     trigger_type: AnalyticsTriggerType | None = Query(None),
     status: AnalyticsStatus | None = Query(None),
-    pipeline_id: uuid.UUID | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    error_code: str | None = Query(None),
     folder_id: uuid.UUID | None = Query(None),
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
@@ -148,142 +214,118 @@ async def analytics_query(
 ) -> AnalyticsResponse:
     """Bucketed run-facts series over the requested range, grouped hour/day/ISO-week.
 
-    ``date_from``/``date_to`` accept bare dates ("2026-08-06", parsed as midnight
-    UTC) or ISO datetimes ("2026-08-06T14:00:00Z"). ``auto_granularity=true``
-    overrides ``group_by`` from the effective range span (hour ≤3d, day ≤90d,
-    week otherwise).
+    ``pipeline_id`` may be repeated for "A vs B" comparisons in a single
+    request. ``error_code`` filters to a specific failure code and doubles as a
+    group-by dimension (``dimension=error_code``). ``date_from``/``date_to``
+    accept bare dates ("2026-08-06", parsed as midnight UTC) or ISO datetimes
+    ("2026-08-06T14:00:00Z"). ``auto_granularity=true`` overrides ``group_by``
+    from the effective range span (hour ≤3d, day ≤90d, week otherwise).
     """
-    org_id = principal.organisation_id
-    if org_id is None:
-        raise HTTPException(
-            status_code=http_status.HTTP_403_FORBIDDEN,
-            detail="Analytics requires an organisation context",
-        )
-    if _rate_limited(str(org_id)):
-        raise HTTPException(status_code=http_status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
-
-    today = datetime.now(UTC).date()
-    effective_to = date_to or today
-    effective_from = date_from or (effective_to - timedelta(days=364))
-
-    # Normalise BOTH bounds to aware UTC datetimes BEFORE any comparison or
-    # arithmetic: a bare date parses as a NAIVE datetime while an ISO datetime
-    # with a 'Z'/offset parses as AWARE — comparing or subtracting a mixed pair
-    # raises TypeError ("can't compare offset-naive and offset-aware"), which
-    # would escape the try/except below as a 500. Normalising first turns that
-    # into a clean 422. Aware non-UTC offsets are converted (astimezone), so
-    # +05:00 inputs bucket from their UTC-converted instant. Bare dates expand
-    # to 00:00 / 23:59:59 so hourly bucketing covers the whole day.
-    effective_from = to_utc_aware(effective_from)
-    effective_to = to_utc_aware(effective_to, end_of_day=True)
-
-    if effective_from > effective_to:
-        raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="date_from must be <= date_to",
-        )
-    if (effective_to - effective_from).days > 365:
-        raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="date range must be 365 days or less",
-        )
-
-    effective_group_by = resolve_group_by(group_by, effective_from, effective_to) if auto_granularity else group_by
-
-    # Explicit hour grouping over a wide range would explode the hour grid (up
-    # to 24 buckets/day per dimension key) before limit truncation — reject it
-    # cleanly. auto_granularity never selects hour for spans this wide, so this
-    # only fires on an explicit group_by=hour.
-    if effective_group_by == AnalyticsGroupBy.HOUR and hour_groupby_span_exceeds(effective_from, effective_to):
-        raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"hour granularity supports ranges of {HOUR_GROUPBY_MAX_RANGE_DAYS} days or less",
-        )
-
-    query = AnalyticsQuery(
-        org_id=org_id,
-        group_by=effective_group_by,
+    org_id = _require_org(principal)
+    params = _build_params(
+        group_by=group_by,
+        auto_granularity=auto_granularity,
         dimension=dimension,
         trigger_type=trigger_type,
         status=status,
-        pipeline_id=pipeline_id,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=error_code,
         folder_id=folder_id,
-        date_from=effective_from,
-        date_to=effective_to,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
     )
-    stmt, params = build_facts_query(query)
-
-    factory = _analytics_session_factory(settings)
-    async with factory() as session:
-        try:
-            async with session.begin():
-                await set_rls_org(session, org_id)
-                await set_rls_user_context(session, principal.account_id, principal.org_role)
-                dialect = (await session.connection()).dialect.name
-                if dialect == "postgresql":
-                    timeout_ms = getattr(
-                        settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
-                    )
-                    await session.execute(text("SELECT set_config('timezone', 'UTC', true)"))
-                    await session.execute(
-                        text("SELECT set_config('statement_timeout', :ms, true)"),
-                        {"ms": str(int(timeout_ms))},
-                    )
-                result = await session.execute(stmt, params)
-                rows = result.all()
-        except asyncio.CancelledError:
+    try:
+        result = await run_analytics_query(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
             raise
-        except ProgrammingError:
-            # ProgrammingError must be caught BEFORE DBAPIError: it is a
-            # DatabaseError subclass, so the broader branch would swallow it and
-            # return 503. A missing table/column means migrations haven't run —
-            # a 501 is the actionable signal.
-            _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
-            raise HTTPException(
-                status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Feature is not available. Run database migrations to enable it.",
-            ) from None
-        except DBAPIError as exc:
-            if _is_query_canceled(exc):
-                _log.warning(
-                    "analytics.query.timeout",
-                    extra={"org_id": str(org_id), "date_from": str(effective_from), "date_to": str(effective_to)},
-                )
-                raise HTTPException(
-                    status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="query exceeded timeout — reduce the date range",
-                ) from None
-            _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
-            raise HTTPException(
-                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database temporarily unavailable.",
-            ) from None
-        except SQLAlchemyError:
-            _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
-            raise HTTPException(
-                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database temporarily unavailable.",
-            ) from None
-        except Exception:
-            _log.exception("analytics.query.unexpected_error", extra={"org_id": str(org_id)})
-            raise HTTPException(
-                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred.",
-            ) from None
+        raise _map_service_error(exc) from None
+    return AnalyticsResponse(**result)
 
-    buckets = bucket_rows(
-        list(rows),
-        group_by=effective_group_by,
+
+@router.get("/export", response_model=AnalyticsExportResponse)
+async def analytics_export(
+    format: str = Query("json", pattern="^(json|csv)$"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(_EXPORT_DEFAULT_LIMIT, ge=1, le=_EXPORT_MAX_LIMIT),
+    dimension: AnalyticsDimension | None = Query(None),
+    trigger_type: AnalyticsTriggerType | None = Query(None),
+    status: AnalyticsStatus | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    error_code: str | None = Query(None),
+    folder_id: uuid.UUID | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission("analytics.query"),
+    _: object = require_feature("analytics_page"),
+) -> Response:
+    """Raw fact rows (no bucketing) filtered by the same typed params.
+
+    Paginated via ``offset``/``limit`` (default 500, max 5000), ordered by
+    ``run_date``/``created_at``. ``format=json`` (default) returns structured
+    rows; ``format=csv`` returns a Content-Disposition attachment with one row
+    per fact and one column per fact field. ``dimension`` is accepted for
+    surface parity but ignored — export has no bucketing.
+    """
+    org_id = _require_org(principal)
+    params = _build_params(
+        group_by=AnalyticsGroupBy.DAY,
+        auto_granularity=False,
         dimension=dimension,
-        date_from=effective_from,
-        date_to=effective_to,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=error_code,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
     )
-    return AnalyticsResponse(
-        group_by=effective_group_by.value,
-        dimension=dimension.value if dimension is not None else None,
-        date_from=effective_from.isoformat(),
-        date_to=effective_to.isoformat(),
-        buckets=[AnalyticsBucket(**b) for b in buckets],
+    try:
+        result = await export_facts(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+            offset=offset,
+            limit=limit,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+
+    if format == "csv":
+        return _csv_response(result)
+    return Response(
+        content=AnalyticsExportResponse(**result).model_dump_json(),
+        media_type="application/json",
+    )
+
+
+def _csv_response(result: dict[str, Any]) -> Response:
+    """Render an export result as a CSV attachment with a sanitized filename."""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(EXPORT_COLUMN_NAMES), extrasaction="ignore")
+    writer.writeheader()
+    for item in result["items"]:
+        writer.writerow(item)
+    filename = "analytics-export.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )

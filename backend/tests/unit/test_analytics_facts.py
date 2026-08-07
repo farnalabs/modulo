@@ -195,6 +195,20 @@ class TestRecordRunFacts:
                 "run_date",
                 "created_at",
                 "duration_ms",
+                "error_code",
+                "claim_count",
+                "queue_wait_ms",
+                "final_idle_ms",
+                "cancellation_requested",
+                "dispatcher",
+                "node_count",
+                "sandbox_agent_node_count",
+                "max_node_timeout_seconds",
+                "parent_run_id",
+                "snapshot_id",
+                "run_number",
+                "output_bytes",
+                "rate_limited",
             )
 
             def __init__(self, model) -> None:
