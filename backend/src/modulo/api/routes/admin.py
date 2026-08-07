@@ -19,6 +19,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
+from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
 from modulo.db.crud.last_admin_guard import (
@@ -64,6 +65,7 @@ from modulo.db.models.stage import Stage
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -1713,6 +1715,7 @@ class BillingOverviewResponse(BaseModel):
 async def admin_billing_overview(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> BillingOverviewResponse:
     if current_user.org_role != "admin":
         raise HTTPException(
@@ -1764,14 +1767,10 @@ async def admin_billing_overview(
         ) from None
 
     plan_id = org.plan_id or "community"
-    if plan_id and plan_id.startswith("team"):
-        plan_tier = "team"
-    elif plan_id and plan_id != "community":
-        plan_tier = "pro"
-    else:
-        plan_tier = "community"
+    plan_context = await resolve_plan_context(settings, session, org)
+    plan_tier = plan_context.tier()
 
-    settings = org.settings_json or {}
+    org_settings = org.settings_json or {}
     return BillingOverviewResponse(
         plan_id=plan_id,
         plan_tier=plan_tier,
@@ -1780,7 +1779,7 @@ async def admin_billing_overview(
         total_teams=team_count,
         total_pipelines=pipeline_count,
         total_runs_this_month=runs_this_month,
-        license_key=settings.get("license_key"),
+        license_key=org_settings.get("license_key"),
     )
 
 
