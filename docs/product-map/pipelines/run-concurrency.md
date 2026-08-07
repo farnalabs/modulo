@@ -24,7 +24,8 @@ Max concurrent runs per pipeline, lock wait timeout, node timeout, admission con
 
 - [x] §8.7 `max_concurrent_runs` per pipeline — new run requests blocked at limit (default: 5)
 - [x] §8.7 `max_concurrent_runs` per trigger — new trigger fires blocked at limit (default: 1)
-- [x] §8.7 `sandbox_concurrency_limit` per organisation — max concurrently `running` sandbox-agent runs across all pipelines (default: `null` = unlimited); runs beyond the cap demote to `pending` with `error_code='org_capacity_limited'` and are retried in the background
+- [x] §8.7 `sandbox_concurrency_limit` per organisation — max concurrently `running` sandbox-agent runs across all pipelines (default: `null` = unlimited); runs beyond the cap demote to `pending` with `error_code='org_capacity_limited'` and are retried in the background. Managed via `GET`/`PUT /api/v1/admin/org/sandbox-concurrency`
+- [x] §8.7 `run_concurrency_limit` per organisation — max concurrently executing/claimed runs across ALL pipelines (default: `null` = unlimited); runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and are retried in the background. Managed via `GET`/`PUT /api/v1/admin/org/run-concurrency`. Independent of `sandbox_concurrency_limit`; both org caps share the same `org_capacity_limited` marker on deferred runs
 - [ ] §8.7 Write lock per connector instance + target resource — advisory lock via `pg_try_advisory_lock`
 - [ ] §8.7 `waiting_for_lock` sub-state when lock cannot be acquired
 - [x] §8.7 `lock_wait_timeout_seconds` per pipeline (default: 300, min: 30, max: 3600)
@@ -35,6 +36,7 @@ Max concurrent runs per pipeline, lock wait timeout, node timeout, admission con
 
 - [x] Capacity timeout (lock_wait_seconds exceeded) transitions run to failed with error_code lock_timeout
 - [x] Capacity-blocked runs demote to `pending` with a non-terminal reason marker (`pipeline_capacity` / `org_capacity_limited`); terminal-fail with `capacity_timeout` after the TTL
+- [x] A non-`pending` run (recovery / committed HITL resume) deferred at the org run cap keeps its status and resume payload — only currently-`pending` runs are demoted and reason-marked
 - [x] Missing DB table returns 501 Not Implemented on run trigger
 - [x] Auth 401/403 enforced on run trigger endpoints
 - [x] 422 validation for invalid concurrency parameters
@@ -53,6 +55,7 @@ Max concurrent runs per pipeline, lock wait timeout, node timeout, admission con
 - No `waiting_for_lock` sub-state transitions implemented (status value exists in model but is never entered)
 - BDD concurrency tests use extensive mocking and target non-existent module paths — do not exercise real routes
 - No integration test for concurrent run serialisation
+- The two org-wide caps (`sandbox_concurrency_limit`, `run_concurrency_limit`) share the single `org_capacity_limited` reason marker, so `error_code` alone cannot tell which org cap deferred a run
 - Pipeline `node_timeout_seconds` field is stored but never wired to `make_node_fn` as a default per-node timeout — node timeout comes from per-node `timeout_seconds` in graph JSON, not the pipeline-level setting
 - `SELECT FOR UPDATE` on pipeline row in `_wait_for_capacity_or_fail` has no statement-level timeout — can deadlock with concurrent pipeline updates
 
