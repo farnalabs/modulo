@@ -563,9 +563,9 @@ def test_get_run_includes_child_cost_rollup(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs.get_child_runs_cost",
+            "modulo.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
-            return_value={_RUN_ID: Decimal("0.500000")},
+            return_value={_RUN_ID: (Decimal("0.500000"), 3)},
         ),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
@@ -575,6 +575,7 @@ def test_get_run_includes_child_cost_rollup(client: TestClient) -> None:
     # total_cost_usd keeps its own-run semantics — never mutated by the rollup.
     assert body["total_cost_usd"] == "1.000000"
     assert body["child_runs_cost_usd"] == "0.500000"
+    assert body["child_runs_count"] == 3
     assert body["aggregate_cost_usd"] == "1.500000"
 
 
@@ -583,7 +584,7 @@ def test_get_run_child_cost_zero_when_no_children(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs.get_child_runs_cost",
+            "modulo.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
@@ -594,6 +595,7 @@ def test_get_run_child_cost_zero_when_no_children(client: TestClient) -> None:
     body = resp.json()
     assert body["total_cost_usd"] == "2.000000"
     assert body["child_runs_cost_usd"] == "0.000000"
+    assert body["child_runs_count"] == 0
     assert body["aggregate_cost_usd"] == "2.000000"
 
 
@@ -602,7 +604,7 @@ def test_get_run_aggregate_zero_when_no_own_or_child_cost(client: TestClient) ->
     with (
         patch("modulo.api.routes.runs._do_get_run", return_value=run),
         patch(
-            "modulo.api.routes.runs.get_child_runs_cost",
+            "modulo.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
@@ -613,6 +615,7 @@ def test_get_run_aggregate_zero_when_no_own_or_child_cost(client: TestClient) ->
     body = resp.json()
     assert body["total_cost_usd"] is None
     assert body["child_runs_cost_usd"] == "0.000000"
+    assert body["child_runs_count"] == 0
     assert body["aggregate_cost_usd"] == "0.000000"
 
 
@@ -657,9 +660,9 @@ def test_list_runs_includes_child_cost_rollup(client: TestClient) -> None:
             return_value=_make_page([parent, child], 2),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_runs_cost",
+            "modulo.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
-            return_value={parent_id: Decimal("0.500000")},
+            return_value={parent_id: (Decimal("0.500000"), 2)},
         ),
         patch("modulo.api.routes.runs.set_rls_org"),
     ):
@@ -670,13 +673,15 @@ def test_list_runs_includes_child_cost_rollup(client: TestClient) -> None:
     items = body["items"]
     parent_item = next(i for i in items if i["run_id"] == str(parent_id))
     child_item = next(i for i in items if i["run_id"] == str(child_id))
-    # Parent: own cost unchanged, child cost rolled up.
+    # Parent: own cost unchanged, child cost rolled up, count reported.
     assert parent_item["total_cost_usd"] == "1.000000"
     assert parent_item["child_runs_cost_usd"] == "0.500000"
+    assert parent_item["child_runs_count"] == 2
     assert parent_item["aggregate_cost_usd"] == "1.500000"
     # Child (no children of its own): zeros.
     assert child_item["total_cost_usd"] == "0.500000"
     assert child_item["child_runs_cost_usd"] == "0.000000"
+    assert child_item["child_runs_count"] == 0
     assert child_item["aggregate_cost_usd"] == "0.500000"
 
 
@@ -691,7 +696,7 @@ def test_list_runs_child_cost_zero_when_no_children(client: TestClient) -> None:
             return_value=_make_page([run], 1),
         ),
         patch(
-            "modulo.api.routes.runs.get_child_runs_cost",
+            "modulo.api.routes.runs.get_child_run_rollup",
             new_callable=AsyncMock,
             return_value={},
         ),
@@ -703,6 +708,7 @@ def test_list_runs_child_cost_zero_when_no_children(client: TestClient) -> None:
     item = body["items"][0]
     assert item["total_cost_usd"] == "3.000000"
     assert item["child_runs_cost_usd"] == "0.000000"
+    assert item["child_runs_count"] == 0
     assert item["aggregate_cost_usd"] == "3.000000"
 
 
