@@ -109,7 +109,7 @@ def _make_agent_mock() -> MagicMock:
     return a
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     global _mock_session
     _mock_session = _make_mock_session()
@@ -139,7 +139,7 @@ def client() -> Generator[TestClient, None, None]:
     _mock_session = None
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)

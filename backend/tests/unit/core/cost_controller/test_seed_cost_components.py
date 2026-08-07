@@ -32,7 +32,7 @@ _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TABLES = {"organisations", "cost_components"}
 
 
-@pytest.fixture()
+@pytest.fixture
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
@@ -42,11 +42,11 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     await eng.dispose()
 
 
-@pytest.fixture()
-async def factory(engine: AsyncEngine) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+@pytest.fixture
+async def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     # Production shape: expire_on_commit=False + autobegin=False (see
     # modulo.api.dependencies.get_or_create_session_factory).
-    yield async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    return async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
 
 async def test_seed_cost_components_works_with_autobegin_false(

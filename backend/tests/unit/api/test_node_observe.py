@@ -57,12 +57,12 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_session() -> AsyncMock:
     return _make_mock_session()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -85,7 +85,7 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -108,7 +108,7 @@ def operator_client(mock_session: AsyncMock) -> Generator[TestClient, None, None
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def runner_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -131,7 +131,7 @@ def runner_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def viewer_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session

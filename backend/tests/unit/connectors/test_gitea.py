@@ -11,7 +11,7 @@ TOKEN = "gitea_test_token"
 _API = "https://codeberg.org/api/v1"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return GiteaConnector(token=TOKEN)
 

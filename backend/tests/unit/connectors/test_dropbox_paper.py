@@ -13,7 +13,7 @@ TOKEN = "sl.AAAABBBBCCCCDDDD"
 _BASE = "https://api.dropboxapi.com/2"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return DropboxPaperConnector(token=TOKEN)
 

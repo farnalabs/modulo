@@ -29,8 +29,7 @@ _DB_PATH = "./test_multi_backend.db"
 
 @pytest.fixture(scope="module")
 def _engine():
-    engine = create_async_engine(_DB_URL, echo=False)
-    yield engine
+    return create_async_engine(_DB_URL, echo=False)
 
 
 @pytest.fixture(scope="module")
@@ -57,7 +56,6 @@ async def _clear_data(_engine, _tables):
         for table in reversed(Base.metadata.sorted_tables):
             if not any(isinstance(c.type, ARRAY) for c in table.columns):
                 await conn.execute(table.delete())
-    yield
 
 
 class TestSqliteMultiBackend:

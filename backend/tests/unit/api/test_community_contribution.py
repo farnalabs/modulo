@@ -83,7 +83,7 @@ def _make_primitive(
     return p
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

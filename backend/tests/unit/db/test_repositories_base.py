@@ -63,7 +63,7 @@ class TestExtractOrmEntity:
 class TestBaseRepository:
     _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-    @pytest.fixture()
+    @pytest.fixture
     def repo(self) -> _ConcreteRepo:
         return _ConcreteRepo(session_factory=MagicMock())
 

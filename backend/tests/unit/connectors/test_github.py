@@ -19,7 +19,7 @@ from modulo.connectors.github import (
 TOKEN = "ghp_test_token"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return GitHubConnector(token=TOKEN)
 

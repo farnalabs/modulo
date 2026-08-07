@@ -116,7 +116,7 @@ def _patch_snapshot_creator() -> Generator[None, None, None]:
         yield
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

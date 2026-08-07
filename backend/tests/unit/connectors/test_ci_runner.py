@@ -15,22 +15,22 @@ from modulo.connectors.ci_runner.gitlab_ci import _GitLabCITestDouble
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def gh_runner():
     return GitHubActionsCIRunner(token="ghp_test")
 
 
-@pytest.fixture()
+@pytest.fixture
 def gl_runner():
     return GitLabCIRunner(token="glpat_test")
 
 
-@pytest.fixture()
+@pytest.fixture
 def gh_double():
     return _GitHubActionsTestDouble()
 
 
-@pytest.fixture()
+@pytest.fixture
 def gl_double():
     return _GitLabCITestDouble()
 

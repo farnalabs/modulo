@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.perplexity import PERPLEXITY_BASE_URL, PerplexityBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return PerplexityBackend(

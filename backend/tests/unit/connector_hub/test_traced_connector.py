@@ -29,24 +29,24 @@ from modulo.core.connector_hub import ConnectorHub, _TracedConnector
 from modulo.core.secrets_backend import create_secrets_backend
 
 
-@pytest.fixture()
+@pytest.fixture
 def exporter() -> InMemorySpanExporter:
     return InMemorySpanExporter()
 
 
-@pytest.fixture()
+@pytest.fixture
 def tracer(exporter: InMemorySpanExporter):
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     return provider.get_tracer("test")
 
 
-@pytest.fixture()
+@pytest.fixture
 def inner():
     return _FakeConnector()
 
 
-@pytest.fixture()
+@pytest.fixture
 def traced(inner, tracer):
     return _TracedConnector(inner, tracer=tracer)
 

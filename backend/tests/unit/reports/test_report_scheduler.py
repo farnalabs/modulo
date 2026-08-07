@@ -94,7 +94,7 @@ class TestComputeNextSend:
         assert result.minute == 0
 
     def test_raises_on_invalid_expression(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="columns has to be specified"):
             compute_next_send("not-a-cron")
 
     def test_raises_type_error_when_croniter_returns_unexpected_type(self) -> None:

@@ -73,12 +73,16 @@ def test_required_top_level_keys(workflow: dict[str, Any]) -> None:
 
 @pytest.mark.parametrize("workflow", WORKFLOW_CASES, ids=WORKFLOW_IDS)
 def test_metadata_fields(workflow: dict[str, Any]) -> None:
-    assert isinstance(workflow["name"], str) and workflow["name"]
-    assert isinstance(workflow["description"], str) and workflow["description"]
+    assert isinstance(workflow["name"], str)
+    assert workflow["name"]
+    assert isinstance(workflow["description"], str)
+    assert workflow["description"]
     assert workflow["version"] == "1.0.0"
     assert workflow["author"] == "Modulo"
-    assert isinstance(workflow["tags"], list) and "canonical" in workflow["tags"]
-    assert isinstance(workflow["default_config"], dict) and workflow["default_config"]
+    assert isinstance(workflow["tags"], list)
+    assert "canonical" in workflow["tags"]
+    assert isinstance(workflow["default_config"], dict)
+    assert workflow["default_config"]
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_CASES, ids=WORKFLOW_IDS)

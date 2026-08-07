@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.cohere import COHERE_BASE_URL, CohereBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.cohere.ChatCohere"):
         return CohereBackend(api_key="test-key", model_id="command-r")

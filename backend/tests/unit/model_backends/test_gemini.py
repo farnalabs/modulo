@@ -8,7 +8,7 @@ from modulo.model_backends.base import HealthResult
 from modulo.model_backends.gemini import GEMINI_BASE_URL, GeminiBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.gemini.ChatGoogleGenerativeAI"):
         return GeminiBackend(api_key="test-key", model_id="gemini-2.0-flash")

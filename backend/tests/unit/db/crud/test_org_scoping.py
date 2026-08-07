@@ -40,7 +40,7 @@ _ACCOUNT_A = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _ACCOUNT_B = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
 
 
-@pytest.fixture()
+@pytest.fixture
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
@@ -51,7 +51,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     await eng.dispose()
 
 
-@pytest.fixture()
+@pytest.fixture
 async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as s:

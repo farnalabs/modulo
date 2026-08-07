@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.fireworks import FIREWORKS_BASE_URL, FireworksBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return FireworksBackend(

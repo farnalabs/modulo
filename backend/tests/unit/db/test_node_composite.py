@@ -13,7 +13,7 @@ from modulo.db.models.node import Node
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-@pytest.fixture()
+@pytest.fixture
 def session() -> AsyncMock:
     return AsyncMock(spec=AsyncSession)
 

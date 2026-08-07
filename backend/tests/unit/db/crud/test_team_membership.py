@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()

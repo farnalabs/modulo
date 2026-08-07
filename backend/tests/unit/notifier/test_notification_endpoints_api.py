@@ -47,7 +47,7 @@ def _make_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     session = _make_session()
 

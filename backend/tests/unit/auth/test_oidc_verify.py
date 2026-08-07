@@ -173,22 +173,22 @@ def _reset_cache() -> None:
     clear_jwks_cache()
 
 
-@pytest.fixture()
+@pytest.fixture
 def keypair() -> tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]:
     return _RSA_KEYPAIR
 
 
-@pytest.fixture()
+@pytest.fixture
 def jwk_data(keypair: tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]) -> dict:
     return _pubkey_to_jwk(keypair[1])
 
 
-@pytest.fixture()
+@pytest.fixture
 def discovery_resp() -> MagicMock:
     return _make_resp(json_data=_discovery_doc())
 
 
-@pytest.fixture()
+@pytest.fixture
 def jwks_resp(jwk_data: dict) -> MagicMock:
     return _make_resp(json_data={"keys": [jwk_data]})
 

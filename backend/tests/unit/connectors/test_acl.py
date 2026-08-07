@@ -73,5 +73,5 @@ def test_acl_blocks_wrong_visibility():
 
 
 def test_invalid_visibility_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="visibility must be 'org' or 'team'"):
         ConnectorACL(visibility="public")

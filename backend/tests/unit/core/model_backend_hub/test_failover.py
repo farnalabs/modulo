@@ -15,18 +15,18 @@ from modulo.core.model_backend_hub import BackendUnavailableError, ModelBackendH
 from modulo.model_backends.stub import StubModelBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 async def hub() -> AsyncGenerator[ModelBackendHub, None]:
     async with ModelBackendHub() as h:
         yield h
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend_a() -> StubModelBackend:
     return StubModelBackend()
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend_b() -> StubModelBackend:
     return StubModelBackend()
 

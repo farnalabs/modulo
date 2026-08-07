@@ -11,7 +11,7 @@ TOKEN = "cc_test_token"
 _BASE = "https://api.codeclimate.com/v1"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> CodeClimateConnector:
     return CodeClimateConnector(token=TOKEN)
 

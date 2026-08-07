@@ -28,11 +28,10 @@ def _make_settings() -> Settings:
 
 
 @pytest.fixture(autouse=True)
-def _purge_store() -> Generator[None, None, None]:
+def _purge_store() -> None:
     import modulo.core.runtime_config.store as store_mod
 
     store_mod._store = None
-    yield
 
 
 class _MockAsyncSession:
@@ -63,7 +62,7 @@ def _make_session() -> _MockAsyncSession:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin_client() -> Generator[TestClient, None, None]:
     mock_session = _make_session()
 
@@ -84,7 +83,7 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def viewer_client() -> Generator[TestClient, None, None]:
     mock_session = _make_session()
 
@@ -105,7 +104,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)

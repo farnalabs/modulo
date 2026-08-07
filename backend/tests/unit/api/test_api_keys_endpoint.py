@@ -54,7 +54,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -78,7 +78,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()
@@ -88,7 +88,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

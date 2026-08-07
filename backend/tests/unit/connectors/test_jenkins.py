@@ -10,12 +10,12 @@ from modulo.connectors.jenkins import JenkinsConnector, _JenkinsTestDouble
 _JENKINS_BASE = "http://jenkins.example.com"
 
 
-@pytest.fixture()
+@pytest.fixture
 def jenkins():
     return JenkinsConnector(username="admin", token="secret", base_url=_JENKINS_BASE)
 
 
-@pytest.fixture()
+@pytest.fixture
 def jenkins_double():
     return _JenkinsTestDouble()
 
@@ -294,8 +294,8 @@ async def test_write_unsupported_resource(jenkins):
 
 @respx.mock
 async def test_trigger_run_missing_pipeline_id(jenkins):
+    respx.post(f"{_JENKINS_BASE}/job//build").mock(return_value=httpx.Response(404, text="Not found"))
     with pytest.raises(httpx.HTTPError):
-        respx.post(f"{_JENKINS_BASE}/job//build").mock(return_value=httpx.Response(404, text="Not found"))
         await jenkins.trigger_run(pipeline_id="")
 
 
