@@ -644,7 +644,7 @@ class TestCostControlsCurrency:
         assert data["currency"] == "USD"
         assert data["billing_period"] == "monthly"
         assert data["circuit_breaker_enabled"] is False
-        assert data["alert_thresholds"] == []
+        assert data["alert_thresholds"] == [50, 75, 90]
 
     def test_update_persists_currency_and_settings(self, client: TestClient) -> None:
         org = self._org()
@@ -788,7 +788,7 @@ class TestCostControlsAlertThresholds:
             resp = client.get(self.ENDPOINT)
 
         assert resp.status_code == 200
-        assert resp.json()["alert_thresholds"] == []
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
 
     def test_defaults_ignores_corrupted_persisted_value(self, client: TestClient) -> None:
         org = self._org({"cost_controls": {"alert_thresholds": "not-a-list"}})
@@ -801,7 +801,33 @@ class TestCostControlsAlertThresholds:
             resp = client.get(self.ENDPOINT)
 
         assert resp.status_code == 200
-        assert resp.json()["alert_thresholds"] == []
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    def test_defaults_ignores_non_numeric_list_item(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": [50, "high"]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    def test_defaults_ignores_out_of_range_persisted_value(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": [50, 1000]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
 
     def test_update_persists_alert_thresholds(self, client: TestClient) -> None:
         org = self._org()
