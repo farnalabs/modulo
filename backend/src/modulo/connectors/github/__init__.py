@@ -359,7 +359,7 @@ class GitHubConnector(ConnectorBase):
         retry_after = _parse_retry_after(response)
         if retry_after is not None:
             return min(retry_after, _MAX_DELAY)
-        return min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
+        return min(_BASE_DELAY * (2.0**attempt), _MAX_DELAY)
 
     async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Call GitHub API with retry/backoff for retryable statuses.
