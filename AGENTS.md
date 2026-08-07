@@ -581,7 +581,7 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 When delivering a feature as multiple PRs (e.g. PR A -> PR B -> PR C), once PR N is green on CI and APPROVED by the reviewer, MERGE IT MANUALLY (`gh pr merge --squash`) rather than waiting for the merge queue. Then branch PR N+1 off the updated main. Waiting for the merge queue on a fast-moving main means the next PR's branch base goes stale while it waits, forcing repeated rebases. Manual merge after approval is the single biggest accelerator for multi-PR delivery. Only wait for the merge queue when you are NOT chaining PRs (single independent PR).
 
-### Once a PR exists, ALWAYS merge main in with a merge commit - never rebase
+### Once a PR exists, stop chasing main - merge in only when required, never rebase
 
 Once a PR branch exists, do NOT chase main — merge main in with a merge commit (`git merge origin/main --no-edit`) only when actually required (merge-queue conflict, rejected push, or a chained PR that needs latest main). NEVER rebase the branch onto main and NEVER rewrite its history with force-push while the branch is shared or being reviewed. Rationale: (a) rebase re-applies the whole diff and re-conflicts on every main movement; (b) merge composes with concurrent agents (Branch Fixer, other pipelines) instead of force-push-warring with them; (c) git records conflict resolutions in the merge commit so they don't re-conflict. If a push is rejected, fetch + merge + push again - do NOT force-push over a branch another agent may be touching. Before the first push, rebase against main ONCE — the branch is exclusively yours at that point (see the 'Rebase against main ONCE' lesson below).
 
