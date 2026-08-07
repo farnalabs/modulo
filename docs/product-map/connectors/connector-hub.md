@@ -44,6 +44,20 @@ unit-tests:
   - backend/tests/unit/connector_hub/test_teamcity_connector.py
   - backend/tests/unit/connector_hub/test_n8n_connector.py
   - backend/tests/unit/connector_hub/test_azure_pipelines_connector.py
+  - backend/tests/unit/connector_hub/test_azure_repos_connector.py
+  - backend/tests/unit/connector_hub/test_bitbucket_connector.py
+  - backend/tests/unit/connector_hub/test_sharepoint_connector.py
+  - backend/tests/unit/connector_hub/test_dropbox_paper_connector.py
+  - backend/tests/unit/connector_hub/test_buildkite_connector.py
+  - backend/tests/unit/connector_hub/test_circleci_connector.py
+  - backend/tests/unit/connector_hub/test_jenkins_connector.py
+  - backend/tests/unit/connector_hub/test_azure_key_vault_connector.py
+  - backend/tests/unit/connector_hub/test_datadog_connector.py
+  - backend/tests/unit/connector_hub/test_sentry_connector.py
+  - backend/tests/unit/connector_hub/test_pagerduty_connector.py
+  - backend/tests/unit/connector_hub/test_grafana_connector.py
+  - backend/tests/unit/connector_hub/test_microsoft_teams_connector.py
+  - backend/tests/unit/connector_hub/test_discord_connector.py
 code:
   - backend/src/modulo/core/connector_hub/
   - backend/src/modulo/connectors/
@@ -89,19 +103,19 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 #### Git Hosting Platforms
 
 - [x] `type_id = "gitea"` → `GiteaConnector(token=creds.token, base_url=config.base_url)` — defaults to `https://codeberg.org`; BDD feature file exists (5 scenarios: repos, file, pulls, issues, write); ConnectorType.GITEA; ConnectorType enum entry exists; unit tests exist (test_gitea_connector.py)
-- [x] `type_id = "azure_repos"` → `AzureReposConnector(token=creds.token, organization=config.organization)` — `organization` is required; `ValueError` if missing; no BDD; ConnectorType.AZURE_REPOS; enum entry exists; no unit tests
-- [x] `type_id = "bitbucket"` → `BitbucketConnector(token=creds.token)`; no BDD; ConnectorType.BITBUCKET; enum entry exists; no unit tests
+- [x] `type_id = "azure_repos"` → `AzureReposConnector(token=creds.token, organization=config.organization)` — `organization` is required; `ValueError` if missing; no BDD; ConnectorType.AZURE_REPOS; enum entry exists; unit tests exist (test_azure_repos_connector.py)
+- [x] `type_id = "bitbucket"` → `BitbucketConnector(token=creds.token)`; no BDD; ConnectorType.BITBUCKET; enum entry exists; unit tests exist (test_bitbucket_connector.py)
 - [x] `type_id = "github"` → `GitHubConnector(token=creds.token)`; BDD exists (github_connector.feature); ConnectorType.GITHUB; enum entry exists
 - [x] `type_id = "gitlab"` → `GitLabConnector(token=creds.token)`; BDD exists (gitlab_issues.feature); ConnectorType.GITLAB; enum entry exists
-- [x] `type_id = "sharepoint"` → `SharePointConnector(token=creds.token)`; no BDD; ConnectorType.SHAREPOINT; enum entry exists; no unit tests
+- [x] `type_id = "sharepoint"` → `SharePointConnector(token=creds.token)`; no BDD; ConnectorType.SHAREPOINT; enum entry exists; unit tests exist (test_sharepoint_connector.py)
 
 #### CI/CD Systems
 
 - [x] `type_id = "github_actions_ci"` → `GitHubActionsCIRunner(token=creds.token)`; no BDD; ConnectorType.CI_RUNNER; enum entry exists (CI_RUNNER)
 - [x] `type_id = "gitlab_ci"` → `GitLabCIRunner(token=creds.token, base_url=config.base_url)` — defaults to `https://gitlab.com/api/v4`; no BDD; same CI_RUNNER enum
-- [x] `type_id = "buildkite"` → `BuildkiteConnector(token=creds.token)`; no BDD; ConnectorType.BUILDKITE; enum entry exists; no unit tests
-- [x] `type_id = "circleci"` → `CircleCIConnector(token=creds.token)`; no BDD; ConnectorType.CIRCLECI; enum entry exists; no unit tests
-- [x] `type_id = "jenkins"` → `JenkinsConnector(username=creds.username, token=creds.token, base_url=config.base_url)` — `username` + `token` required; base_url defaults to `http://localhost:8080`; no BDD; ConnectorType.JENKINS; enum entry exists; no unit tests
+- [x] `type_id = "buildkite"` → `BuildkiteConnector(token=creds.token)`; no BDD; ConnectorType.BUILDKITE; enum entry exists; unit tests exist (test_buildkite_connector.py)
+- [x] `type_id = "circleci"` → `CircleCIConnector(token=creds.token)`; no BDD; ConnectorType.CIRCLECI; enum entry exists; unit tests exist (test_circleci_connector.py)
+- [x] `type_id = "jenkins"` → `JenkinsConnector(username=creds.username, token=creds.token, base_url=config.base_url)` — `username` + `token` required; base_url defaults to `http://localhost:8080`; no BDD; ConnectorType.JENKINS; enum entry exists; unit tests exist (test_jenkins_connector.py)
 - [x] `type_id = "teamcity"` → `TeamCityConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:8111`; BDD feature file exists (teamcity_connector.feature: projects, buildTypes, agents); ConnectorType.TEAMCITY; enum entry exists; unit tests exist (test_teamcity_connector.py: query, trigger_run, run status/logs, status mapping)
 - [x] `type_id = "azure_pipelines"` → `AzurePipelinesConnector(token=creds.token, organization=config.organization, project=config.project)` — `organization` required (`ValueError` if missing); project optional; BDD feature file exists (azure_pipelines.feature: projects, pipelines, runs); ConnectorType.AZURE_PIPELINES; enum entry exists; unit tests exist (test_azure_pipelines_connector.py: query, trigger_run, run status/logs, status mapping)
 
@@ -124,18 +138,18 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 #### Knowledge & Documentation
 
 - [x] `type_id = "confluence"` → `ConfluenceConnector(instance=config.instance, creds=creds)` — `instance` required (`ValueError` if missing); BDD feature file exists (confluence.feature: pages, spaces); ConnectorType.CONFLUENCE; enum entry exists; unit tests exist (test_confluence_connector.py)
-- [x] `type_id = "dropbox_paper"` → `DropboxPaperConnector(token=creds.token)`; no BDD; ConnectorType.DROPBOX_PAPER; enum entry exists; no unit tests
+- [x] `type_id = "dropbox_paper"` → `DropboxPaperConnector(token=creds.token)`; no BDD; ConnectorType.DROPBOX_PAPER; enum entry exists; unit tests exist (test_dropbox_paper_connector.py)
 
 #### Monitoring & Observability
 
-- [x] `type_id = "datadog"` → `DatadogConnector(api_key=creds.api_key, app_key=creds.app_key, site=config.site)` — `api_key` + `app_key` required; site defaults to `"us"`; no BDD; ConnectorType.DATADOG; enum entry exists; no unit tests
-- [x] `type_id = "sentry"` → `SentryConnector(token=creds.token, organization=config.organization, base_url=config.base_url)` — base_url defaults to `https://sentry.io`; no BDD; ConnectorType.SENTRY; enum entry exists; no unit tests
-- [x] `type_id = "pagerduty"` → `PagerDutyConnector(token=creds.token)`; no BDD; ConnectorType.PAGERDUTY; enum entry exists; no unit tests
-- [x] `type_id = "grafana"` → `GrafanaConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:3000`; no BDD; ConnectorType.GRAFANA; enum entry exists; no unit tests
+- [x] `type_id = "datadog"` → `DatadogConnector(api_key=creds.api_key, app_key=creds.app_key, site=config.site)` — `api_key` + `app_key` required; site defaults to `"us"`; no BDD; ConnectorType.DATADOG; enum entry exists; unit tests exist (test_datadog_connector.py)
+- [x] `type_id = "sentry"` → `SentryConnector(token=creds.token, organization=config.organization, base_url=config.base_url)` — base_url defaults to `https://sentry.io`; no BDD; ConnectorType.SENTRY; enum entry exists; unit tests exist (test_sentry_connector.py)
+- [x] `type_id = "pagerduty"` → `PagerDutyConnector(token=creds.token)`; no BDD; ConnectorType.PAGERDUTY; enum entry exists; unit tests exist (test_pagerduty_connector.py)
+- [x] `type_id = "grafana"` → `GrafanaConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:3000`; no BDD; ConnectorType.GRAFANA; enum entry exists; unit tests exist (test_grafana_connector.py)
 
 #### Security & Secrets
 
-- [x] `type_id = "azure_key_vault"` → `AzureKeyVaultConnector(token=creds.token, vault_url=config.vault_url)` — `vault_url` required (`ValueError` if missing); no BDD; ConnectorType.AZURE_KEY_VAULT; enum entry exists; no unit tests
+- [x] `type_id = "azure_key_vault"` → `AzureKeyVaultConnector(token=creds.token, vault_url=config.vault_url)` — `vault_url` required (`ValueError` if missing); no BDD; ConnectorType.AZURE_KEY_VAULT; enum entry exists; unit tests exist (test_azure_key_vault_connector.py)
 - [x] `type_id = "onepassword"` → `OnePasswordConnector(token=creds.token, base_url=config.base_url)` — base_url defaults to `http://localhost:8080`; BDD feature file exists (onepassword.feature: health, vaults, vault); ConnectorType.ONEPASSWORD; enum entry exists; unit tests exist (test_onepassword_connector.py: vaults/items/files queries, item CRUD, archive)
 
 #### Quality & Code Analysis
@@ -153,8 +167,8 @@ All connectors receive `_TracedConnector` wrapping at construction time. All use
 #### Collaboration & Messaging
 
 - [x] `type_id = "slack"` → `SlackConnector(bot_token=creds.bot_token)`; BDD exists (14 scenarios); ConnectorType.SLACK; enum entry exists
-- [x] `type_id = "microsoft_teams"` → `MicrosoftTeamsConnector(token=creds.token)`; no BDD; ConnectorType.MICROSOFT_TEAMS; enum entry exists; no unit tests
-- [x] `type_id = "discord"` → `DiscordConnector(token=creds.token)`; no BDD; ConnectorType.DISCORD; enum entry exists; no unit tests
+- [x] `type_id = "microsoft_teams"` → `MicrosoftTeamsConnector(token=creds.token)`; no BDD; ConnectorType.MICROSOFT_TEAMS; enum entry exists; unit tests exist (test_microsoft_teams_connector.py)
+- [x] `type_id = "discord"` → `DiscordConnector(token=creds.token)`; no BDD; ConnectorType.DISCORD; enum entry exists; unit tests exist (test_discord_connector.py)
 
 #### Automation & Workflow
 
@@ -362,13 +376,13 @@ All 5 CRUD routes in `connectors.py` have complete error handling chains:
 - [x] ~~**Missing IntegrityError→409 catches on connector CRUD routes**~~ — Added to create and update endpoints. Both now return 409 on constraint violations instead of misleading 503.
 - [x] ~~**Missing test coverage for ProgrammingError→501 and SQLAlchemyError→503 on connector CRUD routes**~~ — Created `test_connectors_programming_error.py` with 11 tests covering all 5 routes.
 - [x] ~~**No unit tests for 12 connector types that have BDD feature files**~~ — Added 12 respx-mocked unit test files in `tests/unit/connector_hub/`: `test_npm_connector.py`, `test_pypi_connector.py`, `test_trivy_connector.py`, `test_codeclimate_connector.py`, `test_gitea_connector.py`, `test_onepassword_connector.py`, `test_opsgenie_connector.py`, `test_sonarqube_connector.py`, `test_snyk_connector.py`, `test_teamcity_connector.py`, `test_n8n_connector.py`, `test_azure_pipelines_connector.py` (298 tests). Each covers health check (ok/auth-failure/http-error/connect-error), every query resource, every write resource, missing-filter `ValueError`s, unsupported-resource errors, and HTTP error propagation. The two CI/CD connectors additionally cover `CIRunnerBase` methods (`trigger_run`, `get_run_status`, `get_run_logs`, `list_runs`) and status parsing (`_parse_teamcity_status`, `_STATUS_MAP`). BDD feature files remain unwired (production-mocking gap), but the unit layer now locks the HTTP contract for 12 previously untested connector types.
+- [x] ~~**No unit tests for 14 connector types without any coverage**~~ — Added 14 respx-mocked unit test files in `tests/unit/connector_hub/`: `test_azure_repos_connector.py`, `test_bitbucket_connector.py`, `test_sharepoint_connector.py`, `test_dropbox_paper_connector.py`, `test_buildkite_connector.py`, `test_circleci_connector.py`, `test_jenkins_connector.py`, `test_azure_key_vault_connector.py`, `test_datadog_connector.py`, `test_sentry_connector.py`, `test_pagerduty_connector.py`, `test_grafana_connector.py`, `test_microsoft_teams_connector.py`, `test_discord_connector.py` (311 tests). Each covers connector_type, health check (ok/auth-failure/http-error/connect-error), every query resource, every write resource, missing-required-filter `ValueError`s, unsupported-resource errors, and HTTP error propagation. The three CI/CD connectors (buildkite, circleci, jenkins) additionally cover `CIRunnerBase`/CI methods (`trigger_run`, `get_run_status`, `get_run_logs`, `list_runs`) and status/duration parsing (`_parse_run`, `_STATUS_MAP`, `_duration_seconds`). **Every built-in connector type in `_build_connector` now has a unit test file.** BDD feature files remain unwired (production-mocking gap).
 
 ### Remaining Gaps
 
-- **35+ undocumented connector types in `_build_connector` — only 9 were documented in product map before this QA iteration.** Now all documented but most lack BDD and unit tests.
+- **35+ undocumented connector types in `_build_connector` — only 9 were documented in product map before this QA iteration.** Now all documented but most lack BDD.
 - **No BDD for 15+ connector types** that have feature files but are not wired to step definitions (azure_pipelines, codeclimate, confluence, gitea, n8n, notion, npm, onepassword, opsgenie, pypi, snyk, sonarqube, teamcity, trivy, youtrack). Feature files exist but are not testable — production-mocking gap.
 - **No BDD at all** for: azure_repos, bitbucket, sharepoint, buildkite, circleci, jenkins, dropbox_paper, datadog, sentry, pagerduty, grafana, microsoft_teams, discord, azure_key_vault, shell, CI runner connectors (github_actions_ci, gitlab_ci).
-- **No unit tests** for: azure_repos, bitbucket, sharepoint, dropbox_paper, buildkite, circleci, jenkins, azure_key_vault, datadog, sentry, pagerduty, grafana, microsoft_teams, discord (14 connector types).
 - **Broad `except Exception` in `initialise()`** silently skips misconfigured connectors — logged at WARNING, not propagated. This is intentional (resilience) but means connector initialisation failures are invisible to pipeline authors unless they check logs.
 - **No end-to-end integration test**: `ConnectorHub.initialise()` → connector method → OTel span → credential cleanup.
 - [x] ~~**Multiple `ConnectorHub` instances coexistence still untested (checkbox `[ ]`)**~~ — `ConnectorHub` state is per-instance (`_connectors`, `_acls`, `_initialised`, and the `asyncio.Lock` are all instance attributes, so one hub's lock is invisible to another). Added `test_multiple_hubs_coexist` (two hubs expose exactly their own connector set; clearing one hub leaves the other intact) and `test_multiple_hubs_concurrent_initialise` (three hubs racing `initialise()` in one event loop via `asyncio.gather` each end with exactly their own connector registered).
@@ -377,7 +391,7 @@ All 5 CRUD routes in `connectors.py` have complete error handling chains:
 - **CI Runner connectors** have no BDD coverage — no dedicated feature files for GitHub Actions CI or GitLab CI.
 
 ### QA History
-- 2026-08-07: improve-architecture: **RESOLVED** known gap "No unit tests for 26 connector types". Added 12 respx-mocked unit test files covering gitea, azure_pipelines, teamcity, npm, pypi, onepassword, opsgenie, sonarqube, codeclimate, snyk, trivy, n8n (298 tests total). All pass, ruff lint + format clean. Updated `unit-tests` frontmatter, per-type notes, and Remaining Gaps (26 → 14 connector types without unit tests). Status: partial (14 connector types still lack unit tests; BDD step definitions for 15+ feature files still unwired; shell connector partial-init; no E2E integration test; broad `except Exception` in `initialise()`).
+- 2026-08-07: improve-architecture: **RESOLVED** known gap "No unit tests for 14 connector types". Added 14 respx-mocked unit test files (azure_repos, bitbucket, sharepoint, dropbox_paper, buildkite, circleci, jenkins, azure_key_vault, datadog, sentry, pagerduty, grafana, microsoft_teams, discord) — 311 tests total covering health checks, every query/write resource, missing-filter and unsupported-resource `ValueError`s, HTTP error propagation, and (for buildkite/circleci/jenkins) the CI runner method contract (`trigger_run`, `get_run_status`, `get_run_logs`, `list_runs`) plus status/duration parsing. Updated `unit-tests` frontmatter and per-type notes. **Every built-in connector type in `_build_connector` now has a unit test file** (14 remaining → 0). 311/311 new tests pass; 926/926 connector_hub unit tests pass; ruff lint + format clean. Status: partial (BDD step definitions for 15+ feature files still unwired; shell connector partial-init; no E2E integration test; broad `except Exception` in `initialise()`).
 - 2026-08-06: improve-architecture: **RESOLVED** known gap "Multiple `ConnectorHub` instances coexistence still untested (checkbox `[ ]`)". Verified all hub state is per-instance (connector/acl registries, `_initialised` flag, `asyncio.Lock`) and added `test_multiple_hubs_coexist` + `test_multiple_hubs_concurrent_initialise` (3 hubs racing `initialise()` via `asyncio.gather` — each builds exactly its own connector set; clearing one hub leaves the others intact). Marked behaviour `[ ]`→`[x]`. 313/313 connector_hub unit tests pass, ruff clean. Status: partial (29 connector types still lack unit tests/BDD; shell connector partial-init; no E2E integration test; broad `except Exception` in `initialise()`).
 - 2026-07-07: Cross-cutting QA (index 318). Fixed stale BDD checkbox for Linear connector (`linear_connector.feature` has 8 real scenarios since July 1 QA — no longer a placeholder). Status: partial.
 - 2026-07-08: Cross-cutting QA (index 249). Fixed CRITICAL — added IntegrityError→409 catch to create_connector_endpoint and update_connector_endpoint (FK/constraint violations previously returned misleading 503). Fixed MAJOR — created `test_connectors_programming_error.py` with 11 tests covering ProgrammingError→501, SQLAlchemyError→503, and IntegrityError→409 for all 5 CRUD routes. Added Error Handling and Test Coverage sections to product map.
