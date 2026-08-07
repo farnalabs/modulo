@@ -341,9 +341,7 @@ def test_restore_config_prints_manifest_metadata(tmp_dir, capsys):
     import json
 
     Path(tmp_dir, "secrets.env").write_text("FERNET_KEY=abc\n")
-    Path(tmp_dir, "manifest.json").write_text(
-        json.dumps({"created_at": "2026-01-01T00:00:00Z", "version": "1"})
-    )
+    Path(tmp_dir, "manifest.json").write_text(json.dumps({"created_at": "2026-01-01T00:00:00Z", "version": "1"}))
     restore_config(tmp_dir)
     out = capsys.readouterr().out
     assert "Backup created at: 2026-01-01T00:00:00Z" in out
