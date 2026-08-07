@@ -141,8 +141,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Base delay starts at 1s and doubles per attempt (1s, 2s, 4s), capped at 30s
 - [x] Retry is applied to all `_call_api` invocations — shared by both `query()` and `write()`
 - [ ] No circuit breaker — retries are unconditional up to max attempts
-- [ ] No `X-RateLimit-Remaining` header inspection before making requests
-- [ ] No rate-limit budget-aware scheduling
+- [x] Every query result exposes `metadata["rate_limit"]` with GitHub's `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `X-RateLimit-Used` / `X-RateLimit-Resource` headers when present (absent → `{}`)
+- [x] On HTTP 429 the retry delay prefers GitHub's `X-RateLimit-Reset` (epoch seconds — the quota reset window), then `Retry-After`, then capped exponential backoff
+- [x] The quota reset window on 429 is not capped by `_MAX_DELAY` — a long window is truly honoured instead of firing an early retry into another 429
+- [x] The final exhausted-429 `ValueError` surfaces the rate-limit quota headers as `(quota: X-RateLimit-Limit=…; X-RateLimit-Remaining=…; …)`
 
 ### Pagination
 
@@ -180,7 +182,7 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **No OAuth flow**: PAT-only auth; no OAuth 2.0 authorization code flow for user-context operations
 - [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
 - [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
-- [ ] **No rate-limit budget awareness**: retry/backoff exists for 429, but `X-RateLimit-Remaining` header is not inspected before making requests; no rate-limit budget-aware scheduling
+- [ ] **No rate-limit budget awareness** — ~~retry/backoff exists for 429, but `X-RateLimit-Remaining` header is not inspected before making requests; no rate-limit budget-aware scheduling~~ — **RESOLVED (2026-08-06)**: every query result now exposes `metadata["rate_limit"]` with GitHub's `X-RateLimit-Limit`/`X-RateLimit-Remaining`/`X-RateLimit-Reset`/`X-RateLimit-Used`/`X-RateLimit-Resource` headers, the 429 retry delay prefers the `X-RateLimit-Reset` quota window (uncapped) over blind backoff, and the exhausted-429 error surfaces the quota headers
 - [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
@@ -195,6 +197,16 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] ~~**Batch file operations**~~ — **RESOLVED (2026-08-06)**: `write("commit")`/`write("files")` applies create/update/delete/move actions in one commit via the Git Database API
 
 ## QA History
+
+### 2026-08-06 — improve-architecture: rate-limit budget awareness RESOLVED
+
+**RESOLVED the "No rate-limit budget awareness" known gap** (`connectors/github/__init__.py`). GitHub reports quota state via `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `X-RateLimit-Used` / `X-RateLimit-Resource` headers on every API response, but the connector previously ignored them.
+
+1. **Budget metadata on every result** — new `_RATE_LIMIT_HEADERS` tuple + `_rate_limit_metadata()` helper; every `query()` result now carries `metadata["rate_limit"]` (absent headers → `{}`). A new `_result()` helper wires the quota headers through all 16 query resources.
+2. **Quota-window retry on 429** — new `_parse_rate_limit_reset()` (epoch seconds → wait delay, mirroring the GitLab/Jira connectors) and a `_retry_delay()` helper: on HTTP 429 the wait prefers `X-RateLimit-Reset` (the quota reset window, left **uncapped** so a long window is truly honoured), then `Retry-After`, then capped exponential backoff. On 502/503/504 the reset header does not replace backoff.
+3. **Quota detail in the exhausted-429 error** — the final `ValueError` appends `(quota: X-RateLimit-Limit=…; X-RateLimit-Remaining=…; …)` via `_rate_limit_detail()`.
+
+**Tests:** 4 new unit tests in `test_github.py` (repos list quota metadata, no-headers → `{}`, single-record quota, Git Trees API quota) + 6 in `test_github_resilience.py` (`X-RateLimit-Reset`-driven 429 retry, exhausted-429 quota detail in error, reset window not capped, Retry-After/backoff still capped, reset ignored on 502/503/504, `_parse_rate_limit_reset` missing/invalid/past/future matrix) + 2 BDD scenarios in `github_connector.feature` (query exposes rate-limit budget, exhausted 429 surfaces quota headers) with 2 new step definitions + the mock connector extended. Updated product map (4 behaviours `[ ]`→`[x]` + 3 new, Known Gap → RESOLVED, BDD count 22→24). 101/101 `test_github.py` + 20/20 `test_github_resilience.py` unit tests + 24/24 github BDD scenarios pass, ruff clean. Status: partial (OAuth flow, fine-grained PAT, scope verification, circuit breaker remain).
 
 ### 2026-08-06 — improve-architecture: batch file operations RESOLVED
 
