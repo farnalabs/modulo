@@ -48,7 +48,7 @@ class TestClientKey:
             scope={"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}},
             headers={"Authorization": "Bearer mk_abcdefgh_test1234567890123456789012"},
         )
-        assert RateLimitMiddleware._client_key(request).startswith("ak:")
+        assert RateLimitMiddleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
 
     def test_no_client_and_no_xff_falls_back_to_unknown(self):
         request = _make_request(headers={}, client=None)
