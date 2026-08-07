@@ -359,29 +359,30 @@ ADRs at `docs/adr/` document key trade-offs:
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| 001 | Agent Execution Environment as a V1 Primitive | Accepted |
+| 001 | Agent Execution Environment as a V1 Primitive | Implemented |
 | 002 | Multi-Backend Database Abstraction Strategy | Draft |
-| 003 | Agent Dispatch Model | Accepted |
+| 003 | Agent Dispatch Model | Supersedes ADR 001 |
 | 003 | Packaging & Distribution Strategy | Draft |
 | 004 | Agent as a Self-Contained Bundle | Accepted |
 | 004 | User Offboarding Uses Deactivation (Not Hard Deletion) | Accepted |
 | 005 | Agent Architecture: Two-Tier Orchestration + Execution | Accepted |
-| 005 | Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary | Accepted |
-| 006 | Dashboard Performance: Application Cache Over Materialized View | Accepted |
-| 007 | Remy UI Commands: Frontend-Mediated Browser Automation | Accepted |
-| 008 | Core Shared Manifest: Single Source of Truth for Page Structure | Accepted |
+| 005 | Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary | Active |
+| 006 | Dashboard Performance: Application Cache Over Materialized View | Active |
+| 007 | Remy UI Commands: Frontend-Mediated Browser Automation | Active |
+| 008 | Core Shared Manifest: Single Source of Truth for Page Structure | Active |
 | 009 | Frontend Monitor Backend Abstraction | Accepted |
 | 010 | Integration Tier Classification (Native / Preview / In-Dev) | Accepted |
-| 011 | Remy Context Sources: Configurable Knowledge Domains with Progressive Disclosure | Accepted |
-| 012 | Migrate to Managed Fly Postgres | Accepted |
+| 011 | Remy Context Sources: Configurable Knowledge Domains with Progressive Disclosure | Active |
+| 012 | Migrate to Managed Fly Postgres | Proposed — implementation deferred until production data warrants backups |
 | 014 | Remy Stream: JWT as MCP API Key | Accepted |
 | 015 | Bundle Format v2 (YAML) | Accepted |
 | 016 | Agent Log Observability | Accepted |
 | 017 | Celery to SAQ Migration | Accepted |
-| 017 | Centralized Authorization: Shared Permission Registry for REST + MCP | Accepted |
-| 018 | Centralized Authorization: Shared Permission Registry for REST + MCP | Accepted |
+| 017/018 | Centralized Authorization: Shared Permission Registry for REST + MCP | v9 — revised after 7 plan-review-iterate cycles |
 | 019 | Cost Formula Engine + E2B Rate/Fallback Decision | Accepted |
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
+
+Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 — Centralized Authorization — exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
 
 ## Import Contracts (enforced by import-linter)
 
