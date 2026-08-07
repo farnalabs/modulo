@@ -8,7 +8,8 @@ SQL — no GraphValidator, hubs, or checkpointer involved.
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -55,9 +56,16 @@ def _next_run_number() -> int:
 # ---------------------------------------------------------------------------
 
 
-async def _seed_org(db_engine: AsyncEngine, name: str, cap: int | None) -> uuid.UUID:
+async def _seed_org(
+    db_engine: AsyncEngine,
+    name: str,
+    cap: int | None,
+    settings: dict | None = None,
+) -> uuid.UUID:
     org_id = uuid.uuid4()
-    settings = {"sandbox_concurrency_limit": cap} if cap is not None else {}
+    org_settings = {"sandbox_concurrency_limit": cap} if cap is not None else {}
+    if settings:
+        org_settings.update(settings)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
@@ -68,7 +76,7 @@ async def _seed_org(db_engine: AsyncEngine, name: str, cap: int | None) -> uuid.
                 "id": str(org_id),
                 "name": name,
                 "slug": f"{name}-{org_id.hex[:8]}",
-                "settings": json.dumps(settings),
+                "settings": json.dumps(org_settings),
             },
         )
     return org_id
@@ -253,8 +261,13 @@ def _make_executor(db_engine: AsyncEngine) -> PipelineExecutor:
     return PipelineExecutor(db_engine)
 
 
-async def _seed_org_account(db_engine: AsyncEngine, name: str, cap: int | None) -> tuple[uuid.UUID, uuid.UUID]:
-    org_id = await _seed_org(db_engine, name, cap)
+async def _seed_org_account(
+    db_engine: AsyncEngine,
+    name: str,
+    cap: int | None,
+    settings: dict | None = None,
+) -> tuple[uuid.UUID, uuid.UUID]:
+    org_id = await _seed_org(db_engine, name, cap, settings=settings)
     account_id = await _seed_account(db_engine, org_id, f"{name}-{org_id.hex[:8]}@test.local")
     return org_id, account_id
 
@@ -733,3 +746,162 @@ async def test_sweep_still_fails_capacity_timeout_eligible_run(
     status, code = await _run_state(db_engine, org_id, old)
     assert status == "failed"
     assert code == "capacity_timeout"
+
+
+# ---------------------------------------------------------------------------
+# Org run-concurrency admission at dispatch time (dispatch_run)
+# ---------------------------------------------------------------------------
+
+
+async def _run_dispatch_state(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Read status/error_code/dispatched_at/dispatcher for a run."""
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        result = await session.execute(
+            text("SELECT status, error_code, dispatched_at, dispatcher FROM runs WHERE id = :rid"),
+            {"rid": str(run_id)},
+        )
+        row = result.first()
+        if row is None:
+            return {}
+        return {
+            "status": row.status,
+            "error_code": row.error_code,
+            "dispatched_at": row.dispatched_at,
+            "dispatcher": row.dispatcher,
+        }
+
+
+async def test_org_run_capacity_defers_excess_at_dispatch(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """run_concurrency_limit=1: an org already executing one run defers the next
+    dispatch — pending, dispatched_at NULL, error_code org_capacity_limited."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    from modulo.core import dispatch as dispatch_mod
+
+    org_id = await _seed_org(
+        db_engine,
+        "DispatchCapOrg",
+        cap=None,
+        settings={"run_concurrency_limit": 1},
+    )
+    account_id = await _seed_account(db_engine, org_id, "dispatch-cap@test.local")
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeDispatchCap", account_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    running = await _seed_run(db_engine, org_id, pipe, snap, status="running")
+    pending = await _seed_run(db_engine, org_id, pipe, snap)
+
+    with patch(
+        "modulo.core.dispatch._enqueue_saq",
+        new_callable=AsyncMock,
+        return_value=("saq:job:runs:dispatch-cap", False),
+    ) as enqueue:
+        outcome, job_id = await dispatch_mod.dispatch_run(str(pending), str(org_id))
+
+    assert outcome == "deferred"
+    assert job_id is None
+    enqueue.assert_not_awaited()
+
+    state = await _run_dispatch_state(db_engine, org_id, pending)
+    assert state["status"] == "pending"
+    assert state["error_code"] == "org_capacity_limited"
+    assert state["dispatched_at"] is None
+    assert state["dispatcher"] is None
+
+    running_state = await _run_dispatch_state(db_engine, org_id, running)
+    assert running_state["status"] == "running"
+    assert running_state["error_code"] is None
+
+
+async def test_org_run_capacity_admits_when_under_cap(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """run_concurrency_limit=5 with one executing run: a new dispatch proceeds
+    (enqueued, dispatched_at set, dispatcher='saq', no capacity marker)."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    from modulo.core import dispatch as dispatch_mod
+
+    org_id = await _seed_org(
+        db_engine,
+        "DispatchFreeOrg",
+        cap=None,
+        settings={"run_concurrency_limit": 5},
+    )
+    account_id = await _seed_account(db_engine, org_id, "dispatch-free@test.local")
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeDispatchFree", account_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    await _seed_run(db_engine, org_id, pipe, snap, status="running")
+    new_run = await _seed_run(db_engine, org_id, pipe, snap)
+
+    with patch(
+        "modulo.core.dispatch._enqueue_saq",
+        new_callable=AsyncMock,
+        return_value=("saq:job:runs:dispatch-free", False),
+    ):
+        outcome, job_id = await dispatch_mod.dispatch_run(str(new_run), str(org_id))
+
+    assert outcome == "enqueued"
+    assert job_id == "saq:job:runs:dispatch-free"
+
+    state = await _run_dispatch_state(db_engine, org_id, new_run)
+    assert state["status"] == "pending"
+    assert state["error_code"] is None
+    assert state["dispatched_at"] is not None
+    assert state["dispatcher"] == "saq"
+
+
+async def test_org_run_capacity_isolation_between_orgs(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Org B saturated at its run cap must not block Org A's dispatch."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    from modulo.core import dispatch as dispatch_mod
+
+    org_a, user_a = await _seed_org_account(
+        db_engine,
+        "DispatchIsolatedA",
+        cap=None,
+        settings={"run_concurrency_limit": 1},
+    )
+    pipe_a = await _seed_pipeline(db_engine, org_a, "PipeDispatchIsolatedA", user_a)
+    snap_a = await _seed_snapshot(db_engine, org_a, pipe_a, _SANDBOX_GRAPH)
+
+    org_b, user_b = await _seed_org_account(
+        db_engine,
+        "DispatchIsolatedB",
+        cap=None,
+        settings={"run_concurrency_limit": 1},
+    )
+    pipe_b = await _seed_pipeline(db_engine, org_b, "PipeDispatchIsolatedB", user_b)
+    snap_b = await _seed_snapshot(db_engine, org_b, pipe_b, _SANDBOX_GRAPH)
+
+    await _seed_run(db_engine, org_b, pipe_b, snap_b, status="running")
+    await _seed_run(db_engine, org_b, pipe_b, snap_b, status="running")
+
+    run_a = await _seed_run(db_engine, org_a, pipe_a, snap_a)
+    with patch(
+        "modulo.core.dispatch._enqueue_saq",
+        new_callable=AsyncMock,
+        return_value=("saq:job:runs:dispatch-isolated-a", False),
+    ):
+        outcome, _job_id = await dispatch_mod.dispatch_run(str(run_a), str(org_a))
+
+    assert outcome == "enqueued"
+    state = await _run_dispatch_state(db_engine, org_a, run_a)
+    assert state["error_code"] is None
+    assert state["dispatched_at"] is not None
+    assert state["dispatcher"] == "saq"

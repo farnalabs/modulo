@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.dialects import postgresql
 
 import modulo.core.dispatch as dispatch
 from modulo.api.models.error import ErrorEventInput
@@ -95,6 +96,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=True),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
             _enqueue_patch() as enqueue,
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
@@ -112,6 +114,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(return_value=(JOB_ID, False)),
@@ -133,6 +136,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(return_value=(JOB_ID, False)),
@@ -152,6 +156,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(return_value=(JOB_ID, True)),
@@ -168,6 +173,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(side_effect=RuntimeError("redis down")),
@@ -194,6 +200,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
             patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(side_effect=RuntimeError("redis down")),
@@ -208,6 +215,337 @@ class TestDispatchRunRouting:
         expire_dedup.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# count_active_runs_for_org — include_pending flag + org scoping
+# ---------------------------------------------------------------------------
+
+
+_COUNTABLE_ORG_STATUSES = {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
+
+
+class TestCountActiveRunsForOrg:
+    def _in_clause_statuses(self, stmt: object) -> set[str]:
+        """Extract the statuses bound into the count query's IN clause."""
+        statuses: set[str] = set()
+        for value in stmt.compile(dialect=postgresql.dialect()).params.values():
+            if isinstance(value, (list, tuple)):
+                statuses.update(v for v in value if v in _COUNTABLE_ORG_STATUSES)
+            elif value in _COUNTABLE_ORG_STATUSES:
+                statuses.add(value)
+        return statuses
+
+    async def test_include_pending_false_excludes_pending(self) -> None:
+        from modulo.db.crud.run import count_active_runs_for_org
+
+        executed: list[tuple[object, object]] = []
+
+        class _Result:
+            def scalar_one_or_none(self) -> int:
+                return 0
+
+        class _FakeAsyncSession:
+            async def execute(self, stmt: object) -> _Result:
+                executed.append((stmt, stmt))
+                return _Result()
+
+        session = _FakeAsyncSession()
+        await count_active_runs_for_org(session, uuid.uuid4(), include_pending=False)
+        statuses = self._in_clause_statuses(executed[0][1])
+        assert statuses == {"running", "awaiting_human", "claimed", "waiting_for_lock"}
+
+    async def test_include_pending_true_includes_pending(self) -> None:
+        from modulo.db.crud.run import count_active_runs_for_org
+
+        executed: list[object] = []
+
+        class _Result:
+            def scalar_one_or_none(self) -> int:
+                return 0
+
+        class _FakeAsyncSession:
+            async def execute(self, stmt: object) -> _Result:
+                executed.append(stmt)
+                return _Result()
+
+        session = _FakeAsyncSession()
+        await count_active_runs_for_org(session, uuid.uuid4(), include_pending=True)
+        statuses = self._in_clause_statuses(executed[0])
+        assert statuses == _COUNTABLE_ORG_STATUSES
+
+    async def test_scoped_to_org_and_excludes_run_id(self) -> None:
+        stmt_sql: list[str] = []
+
+        class _Result:
+            def scalar_one_or_none(self) -> int:
+                return 0
+
+        class _FakeAsyncSession:
+            async def execute(self, stmt: object) -> _Result:
+                stmt_sql.append(str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})))
+                return _Result()
+
+        from modulo.db.crud.run import count_active_runs_for_org
+
+        org_id = uuid.uuid4()
+        rid = uuid.uuid4()
+        session = _FakeAsyncSession()
+        await count_active_runs_for_org(session, org_id, include_pending=False, exclude_run_id=rid)
+        rendered = stmt_sql[0]
+        assert "runs.organisation_id =" in rendered or "organisation_id =" in rendered
+        assert "runs.id !=" in rendered or "id !=" in rendered
+
+    async def test_returns_count(self) -> None:
+        from modulo.db.crud.run import count_active_runs_for_org
+
+        class _Result:
+            def scalar_one_or_none(self) -> int:
+                return 4
+
+        class _FakeAsyncSession:
+            async def execute(self, stmt: object) -> _Result:
+                return _Result()
+
+        session = _FakeAsyncSession()
+        assert await count_active_runs_for_org(session, uuid.uuid4(), include_pending=False) == 4
+
+
+# ---------------------------------------------------------------------------
+# get_org_run_concurrency_limit — fail-open setting reader
+# ---------------------------------------------------------------------------
+
+
+def _org_with_run_settings(settings: Any) -> MagicMock:
+    org = MagicMock()
+    org.settings_json = settings
+    return org
+
+
+class TestGetOrgRunConcurrencyLimit:
+    async def test_unset_returns_none(self) -> None:
+        from modulo.db.crud.run import get_org_run_concurrency_limit
+
+        with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_run_settings({})):
+            assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+
+    async def test_returns_int(self) -> None:
+        from modulo.db.crud.run import get_org_run_concurrency_limit
+
+        org = _org_with_run_settings({"run_concurrency_limit": 5})
+        with patch("modulo.db.crud.run.get_organisation", return_value=org):
+            assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) == 5
+
+    async def test_clamps_out_of_range(self) -> None:
+        from modulo.db.crud.run import get_org_run_concurrency_limit
+
+        org_high = _org_with_run_settings({"run_concurrency_limit": 9999})
+        with patch("modulo.db.crud.run.get_organisation", return_value=org_high):
+            assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) == 100
+        org_low = _org_with_run_settings({"run_concurrency_limit": 0})
+        with patch("modulo.db.crud.run.get_organisation", return_value=org_low):
+            assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) == 1
+
+    @pytest.mark.parametrize(
+        "bad_value",
+        ["3", 3.0, True, False, [3], {"v": 3}],
+    )
+    async def test_fail_open_on_bad_type(self, bad_value: object) -> None:
+        from modulo.db.crud.run import get_org_run_concurrency_limit
+
+        with patch(
+            "modulo.db.crud.run.get_organisation",
+            return_value=_org_with_run_settings({"run_concurrency_limit": bad_value}),
+        ):
+            assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+
+    async def test_fail_open_on_non_dict_settings(self) -> None:
+        from modulo.db.crud.run import get_org_run_concurrency_limit
+
+        with patch("modulo.db.crud.run.get_organisation", return_value=_org_with_run_settings("not-a-dict")):
+            assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+
+    async def test_fail_open_on_missing_org(self) -> None:
+        from modulo.db.crud.run import get_org_run_concurrency_limit
+
+        with patch("modulo.db.crud.run.get_organisation", return_value=None):
+            assert await get_org_run_concurrency_limit(AsyncMock(), uuid.uuid4()) is None
+
+
+# ---------------------------------------------------------------------------
+# _org_capacity_deferred — org run-concurrency admission at dispatch time
+# ---------------------------------------------------------------------------
+
+
+class TestOrgCapacityDeferred:
+    @pytest.mark.asyncio
+    async def test_defers_and_writes_marker_when_at_cap(self) -> None:
+        from modulo.db.crud.run import ERROR_CODE_ORG_CAPACITY_LIMITED
+
+        session = AsyncMock()
+        run_id = uuid.UUID(RUN_ID)
+        org_id = uuid.UUID(ORG_ID)
+        with (
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                return_value=2,
+            ),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_org",
+                new_callable=AsyncMock,
+                return_value=2,
+            ),
+            patch(
+                "modulo.db.crud.run.update_run_status",
+                new_callable=AsyncMock,
+            ) as update_status,
+        ):
+            deferred = await dispatch._org_capacity_deferred(session, run_id, org_id)
+
+        assert deferred is True
+        update_status.assert_awaited_once_with(
+            session,
+            run_id,
+            "pending",
+            error_code=ERROR_CODE_ORG_CAPACITY_LIMITED,
+        )
+
+    @pytest.mark.asyncio
+    async def test_admits_when_under_cap(self) -> None:
+        with (
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                return_value=5,
+            ),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_org",
+                new_callable=AsyncMock,
+                return_value=2,
+            ),
+            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+        ):
+            deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is False
+        update_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_admits_when_no_cap_configured(self) -> None:
+        with (
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+        ):
+            deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is False
+        update_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fail_open_when_limit_read_raises(self) -> None:
+        with (
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("db down"),
+            ),
+            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+        ):
+            deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is False, "fail-open: a reader error must ADMIT the run"
+        update_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fail_open_when_count_raises(self) -> None:
+        with (
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                return_value=2,
+            ),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_org",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("count failed"),
+            ),
+            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+        ):
+            deferred = await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is False, "fail-open: a count error must ADMIT the run"
+        update_status.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# dispatch_run org-cap wiring
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchRunOrgCapacity:
+    @pytest.mark.asyncio
+    async def test_org_cap_deferred_no_enqueue_no_dispatched_at(self) -> None:
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=True),
+            _enqueue_patch() as enqueue,
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+        ):
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "deferred"
+        assert job_id is None
+        enqueue.assert_not_called()
+        dispatched.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_cap_still_defers_regression(self) -> None:
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=True),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            _enqueue_patch() as enqueue,
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+        ):
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "deferred"
+        assert job_id is None
+        enqueue.assert_not_called()
+        dispatched.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admits_when_both_caps_free(self) -> None:
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
+            _enqueue_patch(return_value=(JOB_ID, False)),
+            patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
+        ):
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "enqueued"
+        assert job_id == JOB_ID
+        saq_job.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Error enum
+# ---------------------------------------------------------------------------
+
+
 class TestClaimToken:
     def test_token_distinct_from_saq_job_id(self) -> None:
         token = dispatch._new_claim_token()
@@ -215,11 +553,6 @@ class TestClaimToken:
         assert token
         assert token != job_id
         assert token.isalnum()
-
-
-# ---------------------------------------------------------------------------
-# Error enum
-# ---------------------------------------------------------------------------
 
 
 class TestErrorSourceEnum:

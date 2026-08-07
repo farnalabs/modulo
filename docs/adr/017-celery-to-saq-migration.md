@@ -90,6 +90,15 @@ underlying Postgres/Redis; a capacity-blocked run stays `pending` and is
 re-dispatched by `dispatcher_reconcile` when capacity frees. No new product
 feature is implied here — this is a positioning note only.
 
+**Org-level run admission control (2026-08):** `dispatch_run` additionally
+honours an org-wide `run_concurrency_limit` (read from
+`Organisation.settings_json`, `None` = uncapped). An org that already has that
+many executing/claimed runs across ALL its pipelines is deferred at dispatch
+time (returned to `pending` with the `org_capacity_limited` reason marker),
+so one org cannot flood the shared worker pool. Deferred runs are recovered by
+the stale-run sweep's stranded-capacity re-dispatch (the same mechanism as
+per-pipeline deferrals), never by `never_dispatched`.
+
 ### Database as system of record
 
 - The DB remains the system of record for run state. Three columns are added: `dispatcher`, `saq_job_id`, `claim_token`. `re_enqueue_count` is cut (re-enqueue detection moved to log-line ingestion).

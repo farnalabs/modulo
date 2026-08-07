@@ -48,6 +48,10 @@ _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
 _SANDBOX_CONCURRENCY_MIN = 1
 _SANDBOX_CONCURRENCY_MAX = 100
 
+_RUN_CONCURRENCY_KEY = "run_concurrency_limit"
+_RUN_CONCURRENCY_MIN = 1
+_RUN_CONCURRENCY_MAX = 100
+
 
 def _input_hash(payload: dict[str, Any]) -> str:
     """Stable SHA-256 hex digest of a JSON-serialisable payload."""
@@ -359,6 +363,47 @@ async def count_active_runs_for_pipeline(
     return int(result.scalar_one_or_none() or 0)
 
 
+async def count_active_runs_for_org(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    include_pending: bool,
+    exclude_run_id: uuid.UUID | None = None,
+) -> int:
+    """Count active runs for an organisation (org-level run concurrency gate).
+
+    Mirrors :func:`count_active_runs_for_pipeline` but scopes to the WHOLE org
+    across all pipelines. ``include_pending`` selects the same two behaviours:
+
+    * ``include_pending=False`` (dispatch admission gate): counts only runs
+      that are actually executing or claimed (running/awaiting_human/claimed/
+      waiting_for_lock) — a pending run does not hold capacity.
+    * ``include_pending=True`` (quota semantics): counts all non-terminal runs
+      including ``pending``.
+
+    ``exclude_run_id`` lets a pending run avoid counting itself. The explicit
+    ``organisation_id`` filter makes the query cross-tenant safe on top of RLS
+    (like :func:`count_active_sandbox_runs_for_org`) — a caller must still set
+    RLS org context before invoking.
+    """
+    active_statuses = {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
+    if not include_pending:
+        active_statuses = active_statuses - {"pending"}
+    stmt = (
+        select(func.count())
+        .select_from(Run)
+        .where(
+            Run.organisation_id == org_id,
+            Run.status.in_(active_statuses),
+            Run.cancellation_requested == False,  # noqa: E712
+        )
+    )
+    if exclude_run_id is not None:
+        stmt = stmt.where(Run.id != exclude_run_id)
+    result = await session.execute(stmt)
+    return int(result.scalar_one_or_none() or 0)
+
+
 def _graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
     """Top-level scan for any ``sandbox_agent`` node in a snapshot graph.
 
@@ -437,6 +482,40 @@ async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID
             extra={"org_id": str(org_id), "value": raw},
         )
         return max(_SANDBOX_CONCURRENCY_MIN, min(_SANDBOX_CONCURRENCY_MAX, raw))
+    return raw
+
+
+async def get_org_run_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:
+    """Read the org's run concurrency limit from ``settings_json``.
+
+    ``None`` means no cap. Fail-open: a malformed value (non-dict settings,
+    string, float, bool) or a missing org returns ``None`` with a warning and
+    never raises. An out-of-range ``int`` is clamped to ``[1, 100]`` so a
+    direct-DB edit cannot crash the dispatch-time admission gate.
+    """
+    org = await get_organisation(session, org_id)
+    if org is None:
+        _log.warning("run_concurrency.org_not_found", extra={"org_id": str(org_id)})
+        return None
+    settings = org.settings_json
+    if not isinstance(settings, dict):
+        _log.warning("run_concurrency.settings_not_dict", extra={"org_id": str(org_id)})
+        return None
+    raw = settings.get(_RUN_CONCURRENCY_KEY)
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        _log.warning(
+            "run_concurrency.invalid_type",
+            extra={"org_id": str(org_id), "value": repr(raw)},
+        )
+        return None
+    if raw < _RUN_CONCURRENCY_MIN or raw > _RUN_CONCURRENCY_MAX:
+        _log.warning(
+            "run_concurrency.out_of_range",
+            extra={"org_id": str(org_id), "value": raw},
+        )
+        return max(_RUN_CONCURRENCY_MIN, min(_RUN_CONCURRENCY_MAX, raw))
     return raw
 
 
