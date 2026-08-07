@@ -107,15 +107,32 @@ def test_rate_without_source_rejected() -> None:
 
 
 def test_rate_with_fallback_ok() -> None:
+    # A non-None rate_fallback satisfies the 'rate' reference. Pin that the
+    # fallback used here is genuinely registered so a typo'd/renamed registry
+    # entry cannot silently keep this test passing for the wrong reason.
+    assert "e2b_rate" in REGISTERED_RATE_FALLBACKS
     validate_component_formula(
         kind="calculated", formula="rate * wall_clock_hours", rate_usd=None, rate_fallback="e2b_rate"
     )  # no raise — a registered fallback satisfies the 'rate' reference
 
 
 def test_rate_with_rate_usd_ok() -> None:
+    # The cross-field rule only fires when BOTH sources are absent — an explicit
+    # rate_usd satisfies the 'rate' reference, and zero is still an explicit source.
     validate_component_formula(
         kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback=None
     )  # no raise — an explicit rate_usd satisfies the 'rate' reference
+    validate_component_formula(
+        kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal(0), rate_fallback=None
+    )  # no raise — a zero rate_usd is still a provided source
+
+
+def test_rate_with_both_sources_ok() -> None:
+    # Both an explicit rate_usd AND a rate_fallback are set — the 'rate'
+    # reference is satisfied by either source, so the combination must not raise.
+    validate_component_formula(
+        kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback="e2b_rate"
+    )
 
 
 # --- CRUD guards (mocked session) ---------------------------------------------

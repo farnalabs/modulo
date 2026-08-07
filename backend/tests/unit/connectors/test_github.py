@@ -1427,6 +1427,31 @@ async def test_query_result_rate_limit_metadata_absent_when_no_headers(connector
 
 
 @respx.mock
+async def test_single_resource_rate_limit_metadata(connector):
+    """Single-record queries also expose the rate-limit budget."""
+    respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(
+        return_value=httpx.Response(200, json={"id": 1}, headers=RATE_LIMIT_HEADERS)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "1"})
+    )
+    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
+
+
+@respx.mock
+async def test_query_tree_rate_limit_metadata(connector):
+    """The Git Trees API response's quota headers flow through to the result."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
+        return_value=httpx.Response(200, json={"sha": "abc123"})
+    )
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(
+        return_value=httpx.Response(200, json={"tree": [{"path": "README.md"}]}, headers=RATE_LIMIT_HEADERS)
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+    assert result.metadata["rate_limit"]["X-RateLimit-Limit"] == "5000"
+
+
+@respx.mock
 async def test_query_rate_limit_resource(connector):
     body = {
         "resources": {
@@ -1461,7 +1486,7 @@ async def test_exhausted_429_reports_quota_detail(connector):
             headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 600)},
         )
     )
-    connector._jitter = lambda delay: 0
+    connector._sleep_delay = lambda response, attempt: 0
     with pytest.raises(ValueError, match="quota") as exc_info:
         await connector.query(ConnectorQuery(resource="repos"))
     assert "X-RateLimit-Remaining=0" in str(exc_info.value)
@@ -1477,7 +1502,7 @@ async def test_429_retry_then_success_respects_reset_window(connector):
             httpx.Response(200, json=[{"id": 1}], headers=RATE_LIMIT_HEADERS),
         ]
     )
-    connector._jitter = lambda delay: 0
+    connector._sleep_delay = lambda response, attempt: 0
     result = await connector.query(ConnectorQuery(resource="repos"))
     assert len(result.records) == 1
     assert route.call_count == 2

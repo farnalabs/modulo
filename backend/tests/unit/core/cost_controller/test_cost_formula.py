@@ -66,8 +66,15 @@ def test_decimal_end_to_end() -> None:
 
 
 def test_division_by_zero_raises() -> None:
-    with pytest.raises((CostFormulaError, ArithmeticError)):
+    with pytest.raises(CostFormulaError) as exc_info:
         evaluate_formula("rate / wall_clock_hours", _params(rate=Decimal(1), wall_clock_hours=Decimal(0)), _SANDBOX)
+    assert exc_info.value.code == "eval_error"
+
+
+def test_zero_over_zero_raises() -> None:
+    with pytest.raises(CostFormulaError) as exc_info:
+        evaluate_formula("rate / wall_clock_hours", _params(rate=Decimal(0), wall_clock_hours=Decimal(0)), _SANDBOX)
+    assert exc_info.value.code == "eval_error"
 
 
 def test_unknown_identifier_rejected() -> None:
@@ -178,7 +185,12 @@ def test_calculated_allowed_excludes_reported() -> None:
 
 
 def test_validate_formula_none_is_noop() -> None:
-    validate_formula(None, _SANDBOX)  # no raise, no identifier validation attempted
+    # None is the "no formula configured" sentinel — unlike a real formula it is
+    # skipped entirely: no grammar check and no identifier validation. An empty
+    # allowlist would reject every identifier, so passing here proves None is
+    # never parsed.
+    validate_formula(None, _SANDBOX)
+    validate_formula(None, frozenset())
 
 
 def test_newline_inside_formula_is_unexpected_character() -> None:
