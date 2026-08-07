@@ -17,7 +17,7 @@ code:
   - frontend/src/composables/useSidebar.ts
   - frontend/src/components/SidebarNav.vue
   - frontend/src/components/AppLayout.vue
-  - frontend/src/components/ViewModeToggle.vue
+  - frontend/src/components/ViewToggle.vue
 depends-on:
   - feat-auth-jwt-auth
   - feat-core-feature-flag-ui
