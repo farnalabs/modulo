@@ -7,6 +7,7 @@ blacklisting that occur between SSE events.
 
 import hashlib
 import uuid
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.api.mcp_server import (
@@ -328,6 +329,86 @@ class TestHandlerPerEventAuth:
         result = await resource_run(run_id=str(uuid.uuid4()))
         assert "revoked" in result.lower() or "expired" in result.lower()
         mock_validate_auth.assert_called_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.db.crud.run.get_child_runs_cost")
+    async def test_resource_run_includes_cost_rollup(
+        self,
+        mock_get_child_runs_cost: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run_id = uuid.uuid4()
+        run = MagicMock(
+            id=run_id,
+            pipeline_id=uuid.uuid4(),
+            status="complete",
+            trigger_type="manual",
+            error_code=None,
+            total_cost_usd=Decimal("0.075000"),
+            cost_breakdown=None,
+        )
+        run.created_at = MagicMock()
+        run.created_at.isoformat.return_value = "2026-06-20T14:30:00+00:00"
+        mock_get_run.return_value = run
+        mock_get_child_runs_cost.return_value = {run_id: Decimal("0.125000")}
+
+        mock_sess = AsyncMock()
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_sess)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        result = await resource_run(run_id=str(run_id))
+
+        assert "Total cost: $0.075000" in result
+        assert "Child runs cost: $0.125000" in result
+        assert "Aggregate cost: $0.200000" in result
+        mock_get_child_runs_cost.assert_awaited_once()
+        mock_get_run.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.db.crud.run.get_child_runs_cost")
+    async def test_resource_run_no_children_shows_zero_rollup(
+        self,
+        mock_get_child_runs_cost: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run_id = uuid.uuid4()
+        run = MagicMock(
+            id=run_id,
+            pipeline_id=uuid.uuid4(),
+            status="complete",
+            trigger_type="manual",
+            error_code=None,
+            total_cost_usd=None,
+            cost_breakdown=None,
+        )
+        run.created_at = MagicMock()
+        run.created_at.isoformat.return_value = "2026-06-20T14:30:00+00:00"
+        mock_get_run.return_value = run
+        mock_get_child_runs_cost.return_value = {}
+
+        mock_sess = AsyncMock()
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_sess)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        result = await resource_run(run_id=str(run_id))
+
+        assert "Child runs cost: $0.000000" in result
+        assert "Aggregate cost: $0.000000" in result
+        assert "Total cost:" not in result
+        mock_get_child_runs_cost.assert_awaited_once()
+        mock_get_run.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     @patch("modulo.api.mcp_server._session")

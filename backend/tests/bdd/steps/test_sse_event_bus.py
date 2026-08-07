@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os as _os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,7 +15,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from modulo.api.routes.events import _test_reset_connections
 from modulo.core.events.event_bus import EventBus, get_event_bus
 
-_features_dir = _os.path.normpath(_os.path.join(_os.path.dirname(__file__), "..", "features", "events"))
+_features_dir = str(Path(__file__).resolve().parent.parent / "features" / "events")
 scenarios(_features_dir)
 
 _ORG_ID = "00000000-0000-0000-0000-000000000001"

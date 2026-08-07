@@ -66,6 +66,7 @@ from modulo.core.cost_controller.breakdown.constants import (
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
+from modulo.core.pipeline_engine.event_broker import RunEventBroker
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
@@ -88,6 +89,7 @@ _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after comm
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
+_STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
 
 # The raw_reported display clamp for the node-output surface: the RAW value
 # rides for audit, the SEPARATE clamped display field is what the UI/money
@@ -1086,13 +1088,59 @@ def make_sandbox_agent_fn(
                 # Track the last time the agent emitted output so the idle
                 # watchdog can fail fast on stalls (FAR-97). The callbacks run
                 # from the SDK's event task and may be async or sync.
-                _activity: dict[str, float] = {"last": time.monotonic()}
+                _activity: dict[str, Any] = {"last": time.monotonic()}
+
+                # Live-output streaming (FAR-98): if the run event broker is
+                # seeded in state, buffer stdout/stderr chunks and publish a
+                # throttled node.stdout_chunk / node.stderr_chunk event at most
+                # once per _STREAM_FLUSH_INTERVAL so Run detail can show live
+                # output while the sandbox process runs. No broker -> skip
+                # silently (streaming is best-effort, never fatal).
+                _stream_broker_raw = state.get("_broker")
+                _stream_enabled = isinstance(_stream_broker_raw, RunEventBroker)
+
+                def _stream_chunk(chunk: str, stream: str) -> None:
+                    broker = _stream_broker_raw
+                    if not _stream_enabled or not isinstance(broker, RunEventBroker):
+                        return
+                    now = time.monotonic()
+                    buf_key = f"{stream}_buf"
+                    buf = _activity.setdefault(buf_key, [])
+                    if chunk:
+                        buf.append(chunk)
+                    if not buf:
+                        return
+                    if now - _activity.get("last_stream_ts", 0.0) < _STREAM_FLUSH_INTERVAL:
+                        return
+                    payload: dict[str, Any] = {
+                        "node_id": node_id,
+                        "chunk": "".join(buf),
+                        "ts": int(now * 1000),
+                    }
+                    buf.clear()
+                    _activity["last_stream_ts"] = now
+                    try:
+                        event = broker.publish(
+                            "node.stdout_chunk" if stream == "stdout" else "node.stderr_chunk",
+                            payload,
+                        )
+                        payload["seq"] = event.seq
+                    except RuntimeError:
+                        # Broker already closed (run finalised) — stop streaming.
+                        return
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.stream_publish_failed",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
 
                 async def _on_stdout(chunk: str) -> None:
                     _activity["last"] = time.monotonic()
+                    _stream_chunk(chunk, "stdout")
 
                 async def _on_stderr(chunk: str) -> None:
                     _activity["last"] = time.monotonic()
+                    _stream_chunk(chunk, "stderr")
 
                 cmd_handle = await asyncio.wait_for(
                     sandbox.commands.run(

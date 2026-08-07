@@ -53,3 +53,25 @@ def test_compute_delta_injected_now_unused_signature() -> None:
 def test_compute_delta_never_returns_nan_or_inf() -> None:
     assert compute_delta(0, float("inf")) is None
     assert compute_delta(float("inf"), 100.0) is None
+    assert compute_delta(float("nan"), 100.0) is None
+    assert compute_delta(100.0, float("inf")) is None
+    assert compute_delta(100.0, float("nan")) is None
+
+
+def test_compute_delta_coerces_numeric_strings() -> None:
+    # float(prev)/float(curr) coercion means numeric strings behave like numbers.
+    assert compute_delta("100", "110") == 10.0  # type: ignore[arg-type]
+    assert compute_delta("100.0", None) == -100.0  # type: ignore[arg-type]
+
+
+def test_compute_delta_non_numeric_inputs_return_none() -> None:
+    # Uncoercible values hit the TypeError/ValueError guard rather than crashing.
+    assert compute_delta("abc", 100.0) is None  # type: ignore[arg-type]
+    assert compute_delta(100.0, "abc") is None  # type: ignore[arg-type]
+    assert compute_delta(object(), 100.0) is None  # type: ignore[arg-type]
+
+
+def test_compute_delta_with_negative_baseline() -> None:
+    # A negative prev is a valid baseline: growth is positive, a further drop negative.
+    assert compute_delta(-100.0, -50.0) == 50.0
+    assert compute_delta(-100.0, -200.0) == -100.0
