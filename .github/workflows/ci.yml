@@ -91,7 +91,16 @@ jobs:
         run: npx playwright test wcag-contrast
       - run: npm run lint
       - run: npm run type-check
-      - run: npm run test:unit
+      - name: Run unit tests (vitest)
+        # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
+        # script hardcodes --maxWorkers=4, which saturates both cores with 4
+        # concurrently-loading jsdom environments (Vue SFC + ECharts/reka-ui/
+        # vue-query) and starves setImmediate (flushPromises) by 10+s. Cap the
+        # runner at 2 workers — matches actual CPU capacity, not a race-hiding
+        # hack. Invoke vitest directly so the script's --maxWorkers=4 is never
+        # inherited. 15000ms test/hook timeouts (vite.config.ts, from #817)
+        # remain the safety net for heavy mount+settle specs.
+        run: npx vitest run src --pool=threads --maxWorkers=2
       - run: npm run build
       - run: npm audit --audit-level=critical
 
