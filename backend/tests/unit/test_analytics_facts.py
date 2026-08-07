@@ -471,9 +471,7 @@ class TestReconcileFacts:
     def _ledger_row(org: str, run_date: date, spend) -> tuple:
         return (org, run_date, spend)
 
-    async def test_repairs_when_ledger_exceeds_facts_within_retention(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_repairs_when_ledger_exceeds_facts_within_retention(self, monkeypatch: pytest.MonkeyPatch) -> None:
         maintenance_mod._reconcile_cooldown.clear()
         today = date(2026, 8, 7)
         ledger = [self._ledger_row("org-1", today - timedelta(days=1), Decimal(100))]
