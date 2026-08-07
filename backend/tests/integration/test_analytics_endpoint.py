@@ -97,6 +97,7 @@ async def _insert_fact(
     trigger_type: str = "manual",
     cost: float | None = 1.25,
     tokens: int | None = 100,
+    created_at: datetime | None = None,
 ) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
@@ -110,7 +111,9 @@ async def _insert_fact(
                 "oid": str(org_id),
                 "rid": str(run_id),
                 "day": run_date,
-                "created": datetime.combine(run_date, datetime.min.time(), tzinfo=UTC),
+                "created": created_at
+                if created_at is not None
+                else datetime.combine(run_date, datetime.min.time(), tzinfo=UTC),
                 "tt": trigger_type,
                 "st": status,
                 "cost": cost,
@@ -311,6 +314,76 @@ class TestDimensionedQuery:
         )
 
 
+class TestHourGranularity:
+    async def test_group_by_hour_returns_iso_datetime_buckets(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=datetime(today.year, today.month, today.day, 10, 0, tzinfo=UTC),
+        )
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=datetime(today.year, today.month, today.day, 14, 0, tzinfo=UTC),
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?group_by=hour&date_from={today.isoformat()}&date_to={today.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        buckets = resp.json()["buckets"]
+        assert len(buckets) == 24, "a single day at hour granularity must zero-fill 24 hourly buckets"
+        assert all("T" in b["date"] and b["date"].endswith(":00:00") for b in buckets), (
+            "hour buckets must carry ISO datetime dates"
+        )
+        by_hour = {b["date"]: b["count"] for b in buckets}
+        assert by_hour[f"{today.isoformat()}T10:00:00"] >= 1, "the 10:00 fact must land in the 10:00 bucket"
+        assert by_hour[f"{today.isoformat()}T14:00:00"] >= 1, "the 14:00 fact must land in the 14:00 bucket"
+
+    async def test_auto_granularity_resolves_hour_for_short_range(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?auto_granularity=true&date_from=2026-08-01&date_to=2026-08-01",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        assert payload["group_by"] == "hour", "a <=3-day range must resolve to hour granularity"
+        assert len(payload["buckets"]) == 24
+
+    async def test_auto_granularity_resolves_week_for_long_range(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?auto_granularity=true&date_from=2026-01-01&date_to=2026-08-01",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json()["group_by"] == "week", "a >90-day range must resolve to week granularity"
+
+
 class TestPredicateStrip:
     async def test_no_org_predicate_yields_zero_rows_under_rls(
         self,
@@ -426,6 +499,72 @@ class TestValidation:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 422, f"Expected 422 for limit > 1000, got {resp.status_code}: {resp.text}"
+
+    async def test_mixed_naive_aware_bounds_do_not_500(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """A bare-date date_from mixed with an aware date_to must NOT 500.
+
+        Pre-fix the range checks compared/subtracted a naive date_from against
+        an aware date_to and raised ``TypeError`` (which escaped the handler's
+        try/except as a 500). Both bounds are now normalised to aware UTC before
+        any comparison, so the request must return a clean 200.
+        """
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?date_from=2026-08-01&date_to=2026-08-05T14:00:00Z",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+    async def test_non_utc_offset_bounds_convert_to_utc_before_bucketing(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """A -05:00 date_from crossing a date boundary must bucket from the
+        UTC-converted date.
+
+        2026-07-31T21:00-05:00 is 2026-08-01T02:00Z, so the day grid must start
+        at 2026-08-01 — never the raw local date 2026-07-31 (the pre-fix
+        re-labelling behaviour).
+        """
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?date_from=2026-07-31T21:00:00-05:00&date_to=2026-08-03T00:00:00-05:00",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        buckets = resp.json()["buckets"]
+        assert buckets, "expected zero-filled buckets for the range"
+        assert buckets[0]["date"] == "2026-08-01", (
+            "the -05:00 date_from 2026-07-31T21:00 must convert to 2026-08-01 02:00Z — "
+            f"first bucket is {buckets[0]['date']}"
+        )
+
+    async def test_explicit_hour_over_fourteen_days_returns_422(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """Explicit group_by=hour over a >14-day range must return a clean 422.
+
+        The hour-grid amplification guard (PR #766 review finding 4): without
+        it, the bucket grid would materialise up to 24 buckets/day per dimension
+        key before limit truncation.
+        """
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/query?group_by=hour&date_from=2026-01-01&date_to=2026-01-20",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+        assert "hour" in resp.json()["detail"].lower()
 
 
 class TestStatementTimeout:

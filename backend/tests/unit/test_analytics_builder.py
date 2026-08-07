@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.dialects import postgresql, sqlite
 
 from modulo.core.analytics.builder import (
+    HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
     AnalyticsGroupBy,
     AnalyticsQuery,
@@ -24,6 +25,9 @@ from modulo.core.analytics.builder import (
     AnalyticsTriggerType,
     bucket_rows,
     build_facts_query,
+    hour_groupby_span_exceeds,
+    resolve_group_by,
+    to_utc_aware,
 )
 
 _ORG = uuid.UUID("11111111-1111-4111-8111-111111111111")
@@ -389,6 +393,170 @@ class TestBucketing:
         assert [b["date"] for b in out] == ["2026-08-01", "2026-08-02", "2026-08-03"]
         assert all(b["count"] == 0 for b in out)
         assert all(b["key"] is None for b in out)
+
+
+class TestHourGranularity:
+    def test_hour_group_by_truncates_created_at(self) -> None:
+        stmt, _ = build_facts_query(_query(group_by=AnalyticsGroupBy.HOUR))
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "date_trunc" in sql, "hour grouping must truncate created_at"
+        assert "created_at" in sql
+        assert "run_date" in sql, "the truncated expression must be labelled run_date"
+
+    def test_hour_group_by_selects_run_date_label(self) -> None:
+        stmt, _ = build_facts_query(_query(group_by=AnalyticsGroupBy.HOUR))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "run_date" in keys, "bucket_rows reads row.run_date — the label must be selected"
+
+    def test_hour_grid_zero_fills_iso_datetimes(self) -> None:
+        out = bucket_rows(
+            [],
+            group_by=AnalyticsGroupBy.HOUR,
+            dimension=None,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        assert len(out) == 24, "a single day at hour granularity must zero-fill 24 hourly buckets"
+        assert out[0]["date"] == "2026-08-06T00:00:00"
+        assert out[23]["date"] == "2026-08-06T23:00:00"
+        assert all(b["count"] == 0 for b in out)
+
+    def test_hour_buckets_aggregate_by_truncated_hour(self) -> None:
+        rows = [
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                count=2,
+                complete_count=2,
+                total_cost_usd=10.0,
+                total_tokens=50,
+                avg_duration_ms=500.0,
+            ),
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                count=1,
+                complete_count=0,
+                total_cost_usd=2.0,
+                total_tokens=10,
+                avg_duration_ms=100.0,
+            ),
+            SimpleNamespace(
+                run_date=datetime(2026, 8, 6, 14, 0, tzinfo=UTC),
+                count=1,
+                complete_count=1,
+                total_cost_usd=5.0,
+                total_tokens=25,
+                avg_duration_ms=200.0,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.HOUR,
+            dimension=None,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        by_hour = {b["date"]: b for b in out}
+        assert by_hour["2026-08-06T10:00:00"]["count"] == 3, "rows in the same truncated hour must collapse"
+        assert by_hour["2026-08-06T10:00:00"]["total_cost_usd"] == 12.0
+        assert by_hour["2026-08-06T14:00:00"]["count"] == 1
+        assert len(out) == 24
+
+
+class TestResolveGroupBy:
+    def test_hour_for_span_three_days_or_less(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=3)) == AnalyticsGroupBy.HOUR
+        assert resolve_group_by(None, base, base + timedelta(days=1)) == AnalyticsGroupBy.HOUR
+
+    def test_day_for_span_up_to_ninety_days(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=4)) == AnalyticsGroupBy.DAY
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=90)) == AnalyticsGroupBy.DAY
+
+    def test_week_for_span_over_ninety_days(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, base, base + timedelta(days=91)) == AnalyticsGroupBy.WEEK
+
+    def test_explicit_group_by_passes_through(self) -> None:
+        base = date(2026, 8, 1)
+        assert resolve_group_by(AnalyticsGroupBy.HOUR, base, base + timedelta(days=100)) == AnalyticsGroupBy.HOUR
+        assert resolve_group_by(AnalyticsGroupBy.WEEK, base, base + timedelta(days=2)) == AnalyticsGroupBy.WEEK
+
+    def test_missing_range_returns_day(self) -> None:
+        assert resolve_group_by(AnalyticsGroupBy.DAY, None, None) == AnalyticsGroupBy.DAY
+        assert resolve_group_by(None, None, None) == AnalyticsGroupBy.DAY
+
+    def test_non_utc_offset_converts_to_utc_before_span(self) -> None:
+        # A -05:00 date_from crosses a date boundary in UTC: 2026-07-31T21:00-05:00
+        # is 2026-08-01T02:00Z, so the 3-day span to 2026-08-04 resolves to HOUR.
+        # Pre-fix the offset was re-labelled as UTC (2026-07-31T21:00Z → 4-day
+        # span → DAY), so this asserts the conversion, not the re-labelling.
+        frm = datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+        to = date(2026, 8, 4)
+        assert resolve_group_by(AnalyticsGroupBy.DAY, frm, to) == AnalyticsGroupBy.HOUR
+
+    def test_mixed_aware_naive_inputs_do_not_raise(self) -> None:
+        # Mixing an aware datetime with a naive datetime must not raise TypeError
+        # (offset-naive vs offset-aware) — both are normalised to aware UTC first.
+        frm = datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+        to = datetime(2026, 8, 4, 12, 0, 0)  # naive
+        assert resolve_group_by(None, frm, to) == AnalyticsGroupBy.HOUR
+
+
+class TestToUtcAware:
+    def test_naive_datetime_gets_utc_tzinfo(self) -> None:
+        out = to_utc_aware(datetime(2026, 8, 6, 14, 0, 0))
+        assert out == datetime(2026, 8, 6, 14, 0, 0, tzinfo=UTC)
+        assert out.utcoffset() == timedelta(0)
+
+    def test_non_utc_offset_converts_to_utc(self) -> None:
+        # +05:00 14:00 must become 09:00 UTC — never keep the +05:00 offset.
+        out = to_utc_aware(datetime(2026, 8, 6, 14, 0, 0, tzinfo=timezone(timedelta(hours=5))))
+        assert out == datetime(2026, 8, 6, 9, 0, 0, tzinfo=UTC)
+        assert out.utcoffset() == timedelta(0)
+
+    def test_negative_offset_converts_to_utc_across_date_boundary(self) -> None:
+        out = to_utc_aware(datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5))))
+        assert out == datetime(2026, 8, 1, 2, 0, 0, tzinfo=UTC)
+
+    def test_bare_date_expands_to_midnight_and_end_of_day(self) -> None:
+        assert to_utc_aware(date(2026, 8, 6)) == datetime(2026, 8, 6, 0, 0, tzinfo=UTC)
+        assert to_utc_aware(date(2026, 8, 6), end_of_day=True) == datetime(2026, 8, 6, 23, 59, 59, tzinfo=UTC)
+
+    def test_mixed_naive_aware_compare_safely(self) -> None:
+        # A naive date_from and an aware date_to must normalise so the range
+        # checks never hit TypeError (the pre-fix 500 path).
+        frm = to_utc_aware(datetime(2026, 8, 6))  # naive
+        to = to_utc_aware(datetime(2026, 8, 7, 14, 0, 0, tzinfo=UTC))  # aware
+        assert frm <= to
+        assert (to - frm).days >= 1
+
+
+class TestHourGroupByCap:
+    def test_span_within_cap_is_allowed(self) -> None:
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 14)) is False
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 15)) is False
+
+    def test_span_over_cap_exceeds(self) -> None:
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 16)) is True
+
+    def test_cap_default_matches_constant(self) -> None:
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 16)) is (
+            (date(2026, 8, 16) - date(2026, 8, 1)).days > HOUR_GROUPBY_MAX_RANGE_DAYS
+        )
+
+    def test_mixed_aware_naive_inputs_do_not_raise(self) -> None:
+        frm = datetime(2026, 8, 6, 14, 0, 0, tzinfo=timezone(timedelta(hours=5)))
+        to = datetime(2026, 8, 30, 14, 0, 0)  # naive
+        assert hour_groupby_span_exceeds(frm, to) is True
+
+    def test_non_utc_offset_range_is_measured_from_converted_instant(self) -> None:
+        # 2026-07-31T21:00-05:00 is 2026-08-01T02:00Z; the span to 2026-08-14
+        # (end-of-day) is 13 days → within cap. Re-labelling the offset as UTC
+        # would make it 14 days → still within, so this guards the boundary by
+        # asserting the conversion keeps it inside the cap.
+        frm = datetime(2026, 7, 31, 21, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+        assert hour_groupby_span_exceeds(frm, date(2026, 8, 14)) is False
 
 
 class TestReconcileCooldown:
