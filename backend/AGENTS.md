@@ -324,3 +324,32 @@ snapshot and the live catalog, so a stale snapshot fails loudly. Run the
 rebuild with the app drained / writes quiesced: the pre-checks and the rebuild
 transaction are separate windows, so a concurrent INSERT between them would be
 lost.
+
+### Ops / Fly: `fly ssh console` runs commands WITHOUT a shell (2026-08-07 DB restart)
+
+`fly ssh console --app <app> --machine <id> --command "<cmd>"` does NOT execute
+`<cmd>` through a shell — it splits the string into argv tokens. This means:
+- Pipes, redirects (`2>&1`, `> file`), `||`, `&&`, and command substitution DO NOT work.
+- The classic `su - postgres -c '...'` wrapper pattern gets mangled — the inner
+  command is executed as the connected user anyway (e.g. `pg_ctl` ran as root and
+  failed with `pg_ctl: command not found`), and commands with `|` or `2>&1` are
+  split into separate argv entries (`ls: cannot access '|': No such file or directory`).
+
+Use the `--user` flag to connect as the right user and pass a direct command:
+```
+fly ssh console --app modulo-app-db --machine <id> --user postgres --command "/usr/lib/postgresql/17/bin/pg_ctl restart -D /data/postgresql -m fast"
+```
+Notes: `pg_ctl restart` can take a while and the SSH command may appear to hang —
+that is normal; verify completion via `pg_postmaster_start_time()` afterwards.
+
+### Ops / Fly: Postgres Flex listens on port 5433 internally, not 5432
+
+On Fly Postgres Flex machines the postmaster runs on port **5433** (`postgres -D /data/postgresql -p 5433`), so a default-socket psql check fails with
+`connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory`
+even when the server is healthy. Verify with:
+```
+fly ssh console --app modulo-app-db --machine <id> --user postgres --command "psql -p 5433 -tAc 'select pg_postmaster_start_time();'"
+```
+Reliable restart indicators: `pg_postmaster_start_time()` (new value after a
+restart) and the machine's UPDATED timestamp in `fly status`. Do NOT treat a
+5432-socket psql failure as "postgres is down".
