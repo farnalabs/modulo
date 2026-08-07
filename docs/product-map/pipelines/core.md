@@ -23,8 +23,8 @@ code:
   - frontend/src/components/pipelines/FolderTree.vue
   # frontend/src/views/PipelineTemplateGallery.vue — removed, merged into PipelineListView
   - frontend/src/views/pipeline/CompositeEditorView.vue
-  - frontend/src/components/pipeline/composite/CompositeConfigPanel.vue
-  - frontend/src/components/pipeline/composite/CompositeLibraryPicker.vue
+  # frontend/src/components/pipeline/composite/CompositeConfigPanel.vue — removed, dead code
+  # frontend/src/components/pipeline/composite/CompositeLibraryPicker.vue — removed, dead code
   - frontend/src/components/pipeline/composite/FieldMappingPair.vue
   - frontend/src/components/pipeline/composite/OutputValidationTab.vue
   - frontend/src/components/pipeline/composite/ParameterPortForm.vue
