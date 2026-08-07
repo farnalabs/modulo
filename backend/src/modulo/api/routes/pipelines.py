@@ -1602,7 +1602,12 @@ async def get_snapshot_detail_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            snapshot = await get_snapshot_detail(session, snapshot_id)
+            snapshot = await get_snapshot_detail(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
     except ProgrammingError:
         logger.exception("routes.pipelines")
 
@@ -1970,7 +1975,12 @@ async def revert_node_to_manual_endpoint(
                     detail="Only agent nodes can be reverted to manual",
                 )
 
-            snapshot = await get_snapshot_detail(session, snapshot_id)
+            snapshot = await get_snapshot_detail(
+                session,
+                snapshot_id,
+                organisation_id=principal.organisation_id,
+                pipeline_id=pipeline_id,
+            )
             if snapshot is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
 
