@@ -197,6 +197,7 @@ const aggregateCosts = computed<Record<string, number>>(() => {
   return byRunId
 })
 
+
 const childCounts = computed<Record<string, number>>(() => {
   const byRunId: Record<string, number> = {}
   for (const run of runs.value) {

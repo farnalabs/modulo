@@ -375,14 +375,19 @@ class TestDashboardSummaryPeriod:
             assert response.status_code == 200
             assert response.json()["period"]["days"] == int(days)
 
-    def test_days_2_rejected(self, client: TestClient) -> None:
-        # 2 is within [1, 90] but not one of {1, 3, 7, 30, 90} → 422.
-        response = client.get("/api/v1/dashboard/summary?days=2")
-        assert response.status_code == 422
+    def test_arbitrary_days_in_range_accepted(self, period_client: Callable[..., TestClient]) -> None:
+        # Any 1..90 is valid now (matching /trends), not just {1, 7, 30, 90}.
+        for days in ("2", "3", "5", "45"):
+            # Fresh client per request: the mock session's current/previous
+            # window counters are consumed once per request.
+            response = period_client().get(f"/api/v1/dashboard/summary?days={days}")
+            assert response.status_code == 200
+            assert response.json()["period"]["days"] == int(days)
 
-    def test_days_5_rejected(self, client: TestClient) -> None:
-        response = client.get("/api/v1/dashboard/summary?days=5")
-        assert response.status_code == 422
+    def test_out_of_range_days_rejected(self, client: TestClient) -> None:
+        for days in ("0", "91", "-1"):
+            response = client.get(f"/api/v1/dashboard/summary?days={days}")
+            assert response.status_code == 422
 
     def test_period_absent_without_days(self, client: TestClient) -> None:
         response = client.get("/api/v1/dashboard/summary")

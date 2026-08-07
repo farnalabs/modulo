@@ -1067,6 +1067,56 @@ Operators can view the TriggerEvent log and **replay** any logged event (re-fire
 
 **`retain_payload` storage**: when `retain_payload: true`, the raw webhook payload is stored in a `webhook_payloads` table (`id`, `trigger_event_id`, `payload_ciphertext`, `created_at`, `expires_at`). The payload is encrypted with Fernet (same mechanism as connector credentials, §6.2). `expires_at` is set to `created_at + 7 days` by default (configurable per trigger, max 90 days). A background cleanup job deletes expired rows nightly. Access to stored payloads is restricted to `operator` and `admin` roles — `runner` role cannot retrieve them. Payloads may contain sensitive data from the calling system (API tokens embedded in GitHub webhooks, repository metadata); operators must acknowledge this when enabling `retain_payload`.
 
+#### Org-wide "Pause All Pipeline Triggers" (Kill-Switch)
+
+An org admin can pause **new trigger-initiated runs** org-wide via
+`PUT /api/v1/admin/orgs/{org_id}/triggers/pause` with body `{paused: bool}`
+(dependency `org.triggers.pause.manage`, admin minimum, `kill_switch_eligible=False`
+so the org authz kill-switch can never lift this gate). The toggle is idempotent
+(re-PUTing the current state writes no audit event) and is audited as
+`triggers_paused` with payload `{paused: bool}`; the audit write is
+**fail-open-with-alert** — the toggle ALWAYS commits, a failed audit write is
+loudly logged and never rolls back the toggle.
+
+**What is paused:** any path that creates a NEW trigger-initiated run — webhook,
+replay, cron, polling, and agent_signal — is blocked at the single `create_run`
+gate (the authority). Cron/polling fire jobs return `{"status":"skipped",
+"reason":"triggers_paused"}`. Webhook/replay deliveries to a paused org return
+**HTTP 202 `{"status":"paused"}`** with **no `run_id`**, and exactly one
+`TriggerEvent` with `validation_result='paused'` is committed (written
+in-transaction by the route). If the org row has been HARD-deleted (orphan
+trigger), the paused delivery still returns 202 `{"status":"paused"}` but the
+`TriggerEvent` write is skipped (an insert would violate the organisations FK →
+503). Agent signals log a single `paused` TriggerEvent and skip.
+
+**What is NOT paused (documented escape hatches):** running pipelines continue
+against their snapshot to completion; manual runs (`POST /runs`),
+`test_trigger`, MCP `trigger_pipeline`, feedback correction, variant runs, and
+**scheduled reports** are never paused. `dispatcher_reconcile` re-dispatches
+only runs that were enqueued before the pause — any path that would create a NEW
+run passes through the `create_run` gate.
+
+**Semantics are SKIP-not-defer:** cron/polling fires that land during a pause
+are dropped, not replayed (the scheduler still advances `next_fire_at` so
+unpausing never triggers a catch-up storm). Webhook events delivered during a
+pause are dropped; recovery is the sender's responsibility (redelivery after
+unpause). The scheduled-tick audit is counters + summary only (`cron_skipped_paused`
+/ `polling_skipped_paused` in the `fire_due_triggers` summary), never per-trigger
+`TriggerEvent` rows.
+
+**Deploy order is migration-before-code** (0069 adds `organisations.triggers_paused`
++ `triggers_paused_at` and widens `ck_trigger_events_validation_result` to the
+full 19-value vocabulary). Until the migration lands, the scheduler's batched
+pause read (a dedicated read in its own session/transaction) degrades on a
+`ProgrammingError` (missing `triggers_paused` column) to treat all orgs as
+not-paused (`pause_read='degraded'` — the transient pre-migration window). Any
+OTHER read failure (DB down / connection error) RE-RAISES so the tick fails and
+the SAQ system cron retries — a pause-read failure is never fabricated into
+"paused" for every org. Per-item cron/polling fire jobs mirror this: a
+`ProgrammingError` on their org-pause read degrades to not-paused inside a
+savepoint (the per-item transaction is never poisoned); any other
+`SQLAlchemyError` propagates so the job fails and SAQ retries.
+
 #### TLS for Webhook Triggers in Alpha
 Alpha webhook trigger is tested with generic HTTP payloads, not GitHub specifically. GitHub requires HTTPS. Local development uses ngrok or similar tunnel — documented in the developer setup guide. The docker-compose ships a commented-out Caddy config for HTTPS termination. GitHub webhooks are a v1 use case deployed behind real TLS.
 
@@ -4121,13 +4171,13 @@ Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one 
 
 #### 8.32.1 Rolling-Window Semantics
 
-Dashboards report over **rolling windows**: **Last 24h / 7d / 30d / 90d** — each window is the N×24h period ending now (timezone-agnostic). Every value is shown with a **period arrow** (delta) that is **period-scoped and same-source/same-window**: a "Last 7d" delta compares the current 7d window against the *previous* 7d window, using the same metric from the same source. Rolling windows eliminate the partial-period bias of calendar-month widgets (a month widget shows 3 days of data on the 3rd).
+Dashboards report over **rolling windows**: **Last 1h / 24h / 3d / 7d / 30d / 90d** — each window is the trailing period ending now (timezone-agnostic). Every value is shown with a **period arrow** (delta) that is **period-scoped and same-source/same-window**: a "Last 7d" delta compares the current 7d window against the *previous* 7d window, using the same metric from the same source. Rolling windows eliminate the partial-period bias of calendar-month widgets (a month widget shows 3 days of data on the 3rd).
 
 The facts table keeps both the source run's `created_at` instant (rolling precision for the 24h window) and the UTC attributed day `run_date` (the day-level bucket key).
 
 #### 8.32.2 Query Surface — Typed Params Only
 
-**No query language in this delivery — structured typed params are the surface** (`group_by`, optional dimension, filters, date range ≤ 365d, limit). A syntax/expression query mode is **deferred until a pre-rolled dependency slots in** — it is never hand-rolled ad hoc. The backend is the sole bucketing authority: day/ISO-week bucketing and zero-fill happen server-side; the client only renders.
+**No query language in this delivery — structured typed params are the surface** (`group_by`, optional dimension, filters, date range ≤ 365d, limit). A syntax/expression query mode is **deferred until a pre-rolled dependency slots in** — it is never hand-rolled ad hoc. The backend is the sole bucketing authority: hour/day/ISO-week bucketing and zero-fill happen server-side; the client only renders. Auto-granularity resolves the bucket by window span (hour for spans ≤ 3 days, day for spans ≤ 90 days, week beyond); an explicit `group_by` passes through unchanged.
 
 #### 8.32.3 Launch-Forward Coverage
 
@@ -4153,11 +4203,11 @@ Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omit
 
 | Component | Tier |
 |---|---|
-| Analytics page + endpoint | Team (`analytics_page` feature flag, default off until the frontend ships) |
+| Analytics page + endpoint | Community (`analytics_page` feature flag, live) |
 
 #### 8.32.7 Dashboard Rolling-Window Toggle
 
-The live dashboard (`/`) has a top-right rolling-window toggle: **Last 24h / 3d / Last 7d / Last 30d / Last 90d** (values 1, 3, 7, 30, 90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
+The live dashboard (`/`) has a top-right rolling-window toggle: **Last 1h / Last 24h / Last 3d / Last 7d / Last 30d / Last 90d** (the `days` query param accepts any integer 1–90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
 
 Semantics are **same-source/same-window**: a card's value and its arrow always come from the same metric over the same window — run counts/status/tokens/success/duration from `run_daily_facts`, spend from the `org_daily_run_counts` ledger (org-level row), eval pass rate from `eval_results`. Because facts record only terminal statuses, running / awaiting-human / idle read zero in period mode. The arrow is omitted when there is no baseline (previous window empty/zero) or no current-window data. The `GET /api/v1/dashboard/summary?days=N` endpoint returns the period metrics as an additive `period` block (`{current, previous, delta_pct}` per metric); without `days` the response is the unchanged all-time summary.
 
@@ -4165,7 +4215,7 @@ Semantics are **same-source/same-window**: a card's value and its arrow always c
 
 The `/analytics` page (sidebar group Core, `analytics.query` permission, community tier) is a **structured filter form → typed query params** surface. There is **no query language in this delivery** (see 8.32.2) — the filter form is the surface; syntax/expression mode stays deferred until a pre-rolled dependency slots in.
 
-- **Filter bar**: rolling timespan toggle (Last 24h / 7d / 30d / 90d), granularity (day / ISO week), optional dimension (trigger_type / status / pipeline / folder / team), and combinable filters (trigger_type, status, pipeline_id, folder_id). A measure picker selects the rendered metric (run count / cost / tokens / avg duration / success rate). The backend returns all metrics per bucket, so the measure is a client-side rendering concern — it is never a query param.
+- **Filter bar**: rolling timespan toggle (1h / 24h / 3d / 7d / 30d / 90d), granularity (hour / day / ISO week; auto resolves by span), optional dimension (trigger_type / status / pipeline / folder / team), and combinable filters (trigger_type, status, pipeline_id, folder_id). A measure picker selects the rendered metric (run count / cost / tokens / avg duration / success rate). The backend returns all metrics per bucket, so the measure is a client-side rendering concern — it is never a query param.
 - **Visualisation**: ECharts (via `vue-echarts`, lazy-loaded). Line chart for undimensioned trends by date; bar chart for dimensioned queries (x = dimension key, fallback date). `buildChartOption` is a pure series → ECharts option mapping — the client never buckets. Pre-coverage buckets render as gaps (`null`), never zero-filled as "zero activity".
 - **Trend table**: rows are buckets; columns are date/key + measure value + a period arrow (▲/▼/→) against the previous equal-length window. The previous window is fetched as a second query and compared by key (dimensioned) or by offset (undimensioned). `prev=0` and both-zero show no arrow.
 - **Empty state**: "No analytics data yet — data since \<date\>" where \<date\> is the earliest bucket with data (launch-forward coverage, 8.32.3).

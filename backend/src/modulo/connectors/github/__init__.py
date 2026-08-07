@@ -6,6 +6,7 @@ import binascii
 import json
 import random
 import re
+import time
 from typing import Any, cast
 
 import httpx
@@ -36,6 +37,15 @@ _MAX_DELAY = 30.0
 # Link header regex for pagination
 _LINK_HEADER_RE = re.compile(r'<([^>]+)>\s*;\s*rel="(\w+)"')
 
+# GitHub X-RateLimit-* headers reported on API responses
+_RATE_LIMIT_HEADERS = (
+    "X-RateLimit-Limit",
+    "X-RateLimit-Remaining",
+    "X-RateLimit-Reset",
+    "X-RateLimit-Used",
+    "X-RateLimit-Resource",
+)
+
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitHub API response."""
@@ -46,6 +56,40 @@ def _parse_retry_after(response: httpx.Response) -> float | None:
         except (ValueError, TypeError):
             pass
     return None
+
+
+def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
+    """Parse GitHub's rate-limit reset header (epoch seconds) into a retry delay.
+
+    GitHub reports quota state via ``X-RateLimit-Reset`` (epoch seconds) on
+    every response. When a 429 includes it, the client can wait until the quota
+    window resets instead of guessing with backoff.
+    """
+    value = response.headers.get("X-RateLimit-Reset")
+    if not value:
+        return None
+    try:
+        reset_epoch = float(value)
+    except (ValueError, TypeError):
+        return None
+    delay = reset_epoch - time.time()
+    return delay if delay > 0 else None
+
+
+def _rate_limit_detail(response: httpx.Response) -> str:
+    """Summarise GitHub rate-limit quota headers for error/health detail strings."""
+    parts = [f"{header}={value}" for header in _RATE_LIMIT_HEADERS if (value := response.headers.get(header))]
+    return "; ".join(parts)
+
+
+def _rate_limit_metadata(response: httpx.Response) -> dict[str, Any]:
+    """Extract GitHub ``X-RateLimit-*`` headers into a metadata dict.
+
+    GitHub reports quota state via ``X-RateLimit-Limit`` / ``X-RateLimit-Reset``
+    etc. on every API response. Only headers present on the response are
+    included, so an empty dict simply means no rate-limit reporting.
+    """
+    return {name: response.headers.get(name) for name in _RATE_LIMIT_HEADERS if name in response.headers}
 
 
 def _parse_link_header(response: httpx.Response) -> dict[str, str]:
@@ -143,6 +187,12 @@ class GitHubConnector(ConnectorBase):
       "pr_diff"         — get raw diff of a PR; filters: {"repo": ..., "pull_number": ...}
       "search_issues"   — search issues via the Search API; filters: {"q": ..., optional sort/order/state/labels}
                           (returns total_count and Link-header pagination)
+      "rate_limit"      — current rate-limit budget via GET /rate_limit; records[0] is the full
+                          {"core": ..., "search": ..., ...} resources map
+
+    Every query result exposes ``metadata["rate_limit"]`` — the ``X-RateLimit-*`` headers
+    reported by GitHub on the response (limit/remaining/used/reset/resource) so agents can
+    schedule work within the remaining quota window.
 
     Supported write resources:
       "commit"          — batch file operations in one commit via the Git Database API
@@ -285,15 +335,66 @@ class GitHubConnector(ConnectorBase):
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
 
     @staticmethod
-    def _jitter(delay: float) -> float:
-        """Add random jitter: [0, delay) to avoid thundering herd."""
+    def _jitter(delay: float, *, tight: bool = False) -> float:
+        """Add jitter to a retry delay.
+
+        Full jitter (``[0, delay)``) is used for exponential backoff to avoid
+        the thundering herd. Server-derived waits (quota reset / Retry-After)
+        use tight jitter around the requested value so the window is honoured
+        instead of being collapsed to near-immediate retries.
+        """
+        if tight:
+            return random.uniform(delay * 0.9, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
         return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+
+    @staticmethod
+    def _has_server_delay(response: httpx.Response) -> bool:
+        """Whether the response carries an explicit server-provided retry delay.
+
+        ``Retry-After`` is honoured on any retryable status. GitHub reports the
+        ``X-RateLimit-Reset`` header on *every* response while rate limiting is
+        active, so it only counts as a server delay on HTTP 429 (the quota
+        window); on other retryable statuses it would otherwise switch the
+        backoff to tight jitter and undermine thundering-herd protection.
+        """
+        if _parse_retry_after(response) is not None:
+            return True
+        return response.status_code == 429 and _parse_rate_limit_reset(response) is not None
+
+    def _sleep_delay(self, response: httpx.Response, attempt: int) -> float:
+        """Compute the sleep before a retry, honouring server-provided wait times."""
+        delay = self._retry_delay(response, attempt)
+        if self._has_server_delay(response):
+            return self._jitter(delay, tight=True)
+        return self._jitter(delay)
+
+    @staticmethod
+    def _retry_delay(response: httpx.Response, attempt: int) -> float:
+        """Compute the delay before the next retry attempt.
+
+        On HTTP 429 prefers GitHub's ``X-RateLimit-Reset`` (epoch seconds — the
+        quota reset window), then ``Retry-After``, then exponential backoff.
+
+        The quota reset window is left uncapped so a quota window longer than
+        ``_MAX_DELAY`` is truly honoured (capping it would fire the retry early
+        and hit another 429). ``Retry-After`` and backoff remain capped at
+        ``_MAX_DELAY``.
+        """
+        if response.status_code == 429:
+            reset_delay = _parse_rate_limit_reset(response)
+            if reset_delay is not None:
+                return reset_delay
+        retry_after = _parse_retry_after(response)
+        if retry_after is not None:
+            return min(retry_after, _MAX_DELAY)
+        return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
 
     async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Call GitHub API with retry/backoff for retryable statuses.
 
         Retries on 429, 502, 503, 504 with exponential backoff + jitter.
-        Adds random jitter to retry delays to avoid thundering herd.
+        On 429 responses, prefers ``X-RateLimit-Reset`` (the quota window) then
+        ``Retry-After`` to compute the wait instead of blind backoff.
         Wraps HTTP/network/parse errors as ValueError.
         """
         last_exc: Exception | None = None
@@ -304,22 +405,21 @@ class GitHubConnector(ConnectorBase):
                     if r.status_code == 304:
                         raise ValueError("GitHub API returned 304 Not Modified — resource unchanged")
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                        retry_after = _parse_retry_after(r)
-                        delay = (
-                            min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                        )
-                        await asyncio.sleep(self._jitter(delay))
+                        await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
-                    retry_after = _parse_retry_after(exc.response)
-                    delay = min(retry_after, _MAX_DELAY) if retry_after else min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
-                    await asyncio.sleep(self._jitter(delay))
+                    await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
-                raise ValueError(f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+                detail = f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                if exc.response.status_code == 429:
+                    quota = _rate_limit_detail(exc.response)
+                    if quota:
+                        detail = f"{detail} (quota: {quota})"
+                raise ValueError(detail) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
@@ -404,13 +504,29 @@ class GitHubConnector(ConnectorBase):
             raise ValueError(f"GitHub {resource} query filter '{key}' must be a string")
         return value
 
+    def _result(
+        self,
+        records: list[dict[str, Any]],
+        response: httpx.Response,
+        *,
+        total: int | None = None,
+        next_cursor: str | None = None,
+    ) -> ConnectorResult:
+        """Build a ConnectorResult, wiring GitHub rate-limit budget metadata."""
+        return ConnectorResult(
+            records=records,
+            total=total,
+            next_cursor=next_cursor,
+            metadata={"rate_limit": _rate_limit_metadata(response)},
+        )
+
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:
             case "repos":
                 r = await self._call_api("GET", "/user/repos", params={"per_page": q.limit})
                 data: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=data, total=len(data), next_cursor=links.get("next"))
+                return self._result(data, r, total=len(data), next_cursor=links.get("next"))
             case "file":
                 owner_repo = self._require_filter(q.filters, "repo", "file")
                 path = _validate_path(self._require_filter(q.filters, "path", "file"), "file")
@@ -418,7 +534,7 @@ class GitHubConnector(ConnectorBase):
                 r = await self._call_api("GET", f"/repos/{owner_repo}/contents/{path}", params={"ref": ref})
                 info = await self._parse_json_object(r)
                 _decode_read_content(info)
-                return ConnectorResult(records=[info])
+                return self._result([info], r)
             case "tree":
                 owner_repo = self._require_filter(q.filters, "repo", "tree")
                 path_filter = _validate_path(q.filters["path"], "tree") if "path" in q.filters else None
@@ -437,7 +553,7 @@ class GitHubConnector(ConnectorBase):
                 if path_filter is not None:
                     path_prefix = path_filter.rstrip("/") + "/"
                     entries = [e for e in entries if e.get("path", "").startswith(path_prefix)]
-                return ConnectorResult(records=entries, total=len(entries))
+                return self._result(entries, tree_r, total=len(entries))
             case "pulls":
                 owner_repo = self._require_filter(q.filters, "repo", "pulls")
                 state = q.filters.get("state", "open")
@@ -449,7 +565,7 @@ class GitHubConnector(ConnectorBase):
                 r = await self._call_api("GET", f"/repos/{owner_repo}/pulls", params=params)
                 prs: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=prs, total=len(prs), next_cursor=links.get("next"))
+                return self._result(prs, r, total=len(prs), next_cursor=links.get("next"))
             case "pr_commits":
                 owner_repo = self._require_filter(q.filters, "repo", "pr_commits")
                 pull_number = self._require_filter(q.filters, "pull_number", "pr_commits")
@@ -459,7 +575,7 @@ class GitHubConnector(ConnectorBase):
                     params={"per_page": q.limit},
                 )
                 commits: list[dict[str, Any]] = await self._parse_json(r)
-                return ConnectorResult(records=commits, total=len(commits))
+                return self._result(commits, r, total=len(commits))
             case "pr_files":
                 owner_repo = self._require_filter(q.filters, "repo", "pr_files")
                 pull_number = self._require_filter(q.filters, "pull_number", "pr_files")
@@ -469,7 +585,7 @@ class GitHubConnector(ConnectorBase):
                     params={"per_page": q.limit},
                 )
                 files: list[dict[str, Any]] = await self._parse_json(r)
-                return ConnectorResult(records=files, total=len(files))
+                return self._result(files, r, total=len(files))
             case "issues":
                 owner_repo = self._require_filter(q.filters, "repo", "issues")
                 params = {"per_page": q.limit}
@@ -479,18 +595,18 @@ class GitHubConnector(ConnectorBase):
                 r = await self._call_api("GET", f"/repos/{owner_repo}/issues", params=params)
                 issues: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=issues, total=len(issues), next_cursor=links.get("next"))
+                return self._result(issues, r, total=len(issues), next_cursor=links.get("next"))
             case "issue":
                 owner_repo = self._require_filter(q.filters, "repo", "issue")
                 issue_number = self._require_filter(q.filters, "issue_number", "issue")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/issues/{issue_number}")
-                return ConnectorResult(records=[await self._parse_json(r)])
+                return self._result([await self._parse_json(r)], r)
             case "labels":
                 owner_repo = self._require_filter(q.filters, "repo", "labels")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/labels", params={"per_page": q.limit})
                 labels: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=labels, total=len(labels), next_cursor=links.get("next"))
+                return self._result(labels, r, total=len(labels), next_cursor=links.get("next"))
             case "milestones":
                 owner_repo = self._require_filter(q.filters, "repo", "milestones")
                 params = {"per_page": q.limit}
@@ -503,7 +619,7 @@ class GitHubConnector(ConnectorBase):
                 r = await self._call_api("GET", f"/repos/{owner_repo}/milestones", params=params)
                 milestones: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=milestones, total=len(milestones), next_cursor=links.get("next"))
+                return self._result(milestones, r, total=len(milestones), next_cursor=links.get("next"))
             case "issue_comments":
                 owner_repo = self._require_filter(q.filters, "repo", "issue_comments")
                 issue_number = self._require_filter(q.filters, "issue_number", "issue_comments")
@@ -514,7 +630,7 @@ class GitHubConnector(ConnectorBase):
                 )
                 comments: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=comments, total=len(comments), next_cursor=links.get("next"))
+                return self._result(comments, r, total=len(comments), next_cursor=links.get("next"))
             case "issue_events":
                 owner_repo = self._require_filter(q.filters, "repo", "issue_events")
                 issue_number = self._require_filter(q.filters, "issue_number", "issue_events")
@@ -525,13 +641,13 @@ class GitHubConnector(ConnectorBase):
                 )
                 events: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=events, total=len(events), next_cursor=links.get("next"))
+                return self._result(events, r, total=len(events), next_cursor=links.get("next"))
             case "assignees":
                 owner_repo = self._require_filter(q.filters, "repo", "assignees")
                 r = await self._call_api("GET", f"/repos/{owner_repo}/assignees", params={"per_page": q.limit})
                 assignees: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=assignees, total=len(assignees), next_cursor=links.get("next"))
+                return self._result(assignees, r, total=len(assignees), next_cursor=links.get("next"))
             case "timeline":
                 owner_repo = self._require_filter(q.filters, "repo", "timeline")
                 issue_number = self._require_filter(q.filters, "issue_number", "timeline")
@@ -542,7 +658,7 @@ class GitHubConnector(ConnectorBase):
                 )
                 timeline: list[dict[str, Any]] = await self._parse_json(r)
                 links = _parse_link_header(r)
-                return ConnectorResult(records=timeline, total=len(timeline), next_cursor=links.get("next"))
+                return self._result(timeline, r, total=len(timeline), next_cursor=links.get("next"))
             case "pr_diff":
                 owner_repo = self._require_filter(q.filters, "repo", "pr_diff")
                 pull_number = self._require_filter(q.filters, "pull_number", "pr_diff")
@@ -551,7 +667,7 @@ class GitHubConnector(ConnectorBase):
                     f"/repos/{owner_repo}/pulls/{pull_number}",
                     headers={"Accept": "application/vnd.github.v3.diff"},
                 )
-                return ConnectorResult(records=[{"diff": r.text}], total=1)
+                return self._result([{"diff": r.text}], r, total=1)
             case "search_issues":
                 search_query = self._require_filter(q.filters, "q", "search_issues")
                 params = {"q": search_query, "per_page": q.limit}
@@ -562,7 +678,12 @@ class GitHubConnector(ConnectorBase):
                 body = await self._parse_json_object(r)
                 items = cast("list[dict[str, Any]]", body.get("items", []))
                 links = _parse_link_header(r)
-                return ConnectorResult(records=items, total=body.get("total_count"), next_cursor=links.get("next"))
+                return self._result(items, r, total=body.get("total_count"), next_cursor=links.get("next"))
+            case "rate_limit":
+                r = await self._call_api("GET", "/rate_limit")
+                body = await self._parse_json_object(r)
+                resources = cast("dict[str, Any]", body.get("resources", {}))
+                return self._result([resources], r, total=1)
             case _:
                 raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
 
@@ -629,7 +750,7 @@ class GitHubConnector(ConnectorBase):
                                 "more than once by the batch",
                             )
                         targeted_paths.add(targeted)
-                    if action_type != "move" and action_type != "delete" and not isinstance(action.get("content"), str):
+                    if action_type not in {"move", "delete"} and not isinstance(action.get("content"), str):
                         raise ValueError(
                             f"GitHub resource {payload.resource!r}: action {action_type!r} requires string 'content'",
                         )

@@ -138,6 +138,7 @@ describe('RunsListView', () => {
     expect(wrapper.text()).not.toContain('(+child)')
   })
 
+
   it('shows own cost when aggregate equals own cost (no children)', async () => {
     mockResponses['/api/v1/runs'] = listWith([
       { ...baseRun, child_runs_cost_usd: '0.000000', aggregate_cost_usd: '0.5' },

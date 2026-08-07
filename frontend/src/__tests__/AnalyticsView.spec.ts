@@ -14,6 +14,7 @@ vi.mock('vue-echarts', () => ({
 vi.mock('echarts', () => ({ default: {} }))
 
 import AnalyticsView from '../views/AnalyticsView.vue'
+import { formatDateShortWithTime } from '../lib/formatDate'
 import {
   useAnalyticsStore,
   serializeFilters,
@@ -22,12 +23,28 @@ import {
   formatDeltaPercent,
   formatMeasureValue,
   aggregateByKey,
+  formatBucketDate,
   previousWindowParams,
   type AnalyticsBucket,
 } from '../stores/analytics'
 
 // Fixed UTC instant for deterministic assertions — the ISO literal is always valid.
 const FIXED_NOW = new Date('2026-08-06T12:00:00Z') // nosemgrep: new-date-without-guard
+
+// UTC day-string helpers mirroring the store's day-window logic. Deriving the
+// expected dates from FIXED_NOW (instead of hardcoded literals) keeps the
+// assertions timezone-robust and correct if FIXED_NOW is ever changed.
+const DAY_MS = 86400000
+const HOUR_MS = 3600000
+function utcDay(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+function daysBefore(d: Date, days: number): string {
+  return utcDay(new Date(d.getTime() - days * DAY_MS)) // nosemgrep: new-date-without-guard
+}
+function hoursBefore(d: Date, hours: number): string {
+  return new Date(d.getTime() - hours * HOUR_MS).toISOString() // nosemgrep: new-date-without-guard
+}
 
 const validResponse = {
   group_by: 'day',
@@ -86,8 +103,8 @@ function setupMocks(response: unknown = validResponse) {
 describe('serializeFilters', () => {
   it('maps a 7d timespan to UTC date_from/date_to', () => {
     const params = serializeFilters({ timespan: '7d', groupBy: 'day' }, FIXED_NOW)
-    expect(params.date_to).toBe('2026-08-06')
-    expect(params.date_from).toBe('2026-07-30')
+    expect(params.date_to).toBe(utcDay(FIXED_NOW))
+    expect(params.date_from).toBe(daysBefore(FIXED_NOW, 7))
     expect(params.group_by).toBe('day')
     expect(params.limit).toBe(1000)
   })
@@ -127,27 +144,37 @@ describe('serializeFilters', () => {
     expect(bare.folder_id).toBeUndefined()
   })
 
-  it('maps the 24h preset to a 1-day UTC window with day granularity', () => {
+  it('maps the 24h preset to a 24-hour UTC datetime window with hour granularity', () => {
     const day = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
-    expect(day.date_to).toBe('2026-08-06')
-    expect(day.date_from).toBe('2026-08-05')
-    expect(day.group_by).toBe('day')
+    expect(day.date_to).toContain('T')
+    expect(day.date_from).toContain('T')
+    expect(day.date_to).toBe(FIXED_NOW.toISOString())
+    expect(day.date_from).toBe(hoursBefore(FIXED_NOW, 24))
+    expect(day.group_by).toBe('hour')
 
     const week = serializeFilters({ timespan: '24h', groupBy: 'week' }, FIXED_NOW)
-    expect(week.date_to).toBe('2026-08-06')
-    expect(week.date_from).toBe('2026-08-05')
-    expect(week.group_by).toBe('week')
+    expect(week.group_by).toBe('hour')
+  })
+
+  it('maps the 1h preset to a ~1-hour UTC datetime window with hour granularity', () => {
+    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
+    expect(params.date_to).toContain('T')
+    expect(params.date_from).toContain('T')
+    expect(params.date_to).toBe(FIXED_NOW.toISOString())
+    expect(params.date_from).toBe(hoursBefore(FIXED_NOW, 1))
+    expect(params.group_by).toBe('hour')
+    expect(params.limit).toBe(1000)
   })
 
   it('maps the 3d preset to a 3-day UTC window', () => {
     const params = serializeFilters({ timespan: '3d', groupBy: 'day' }, FIXED_NOW)
-    expect(params.date_to).toBe('2026-08-06')
-    expect(params.date_from).toBe('2026-08-03')
+    expect(params.date_to).toBe(utcDay(FIXED_NOW))
+    expect(params.date_from).toBe(daysBefore(FIXED_NOW, 3))
     expect(params.group_by).toBe('day')
   })
 
-  it('never emits datetime strings or an hour group_by (backend only accepts days)', () => {
-    for (const timespan of ['24h', '3d', '7d', '30d', '90d'] as const) {
+  it('emits ISO day strings for day-granular timespans (3d+)', () => {
+    for (const timespan of ['3d', '7d', '30d', '90d'] as const) {
       const params = serializeFilters({ timespan, groupBy: 'day' }, FIXED_NOW)
       expect(params.date_from).not.toContain('T')
       expect(params.date_to).not.toContain('T')
@@ -156,21 +183,49 @@ describe('serializeFilters', () => {
   })
 })
 
+describe('formatBucketDate', () => {
+  it('formats hour-granular bucket timestamps as UTC in the viewer timezone', () => {
+    // Backend hour buckets are naive-UTC ("2026-08-06T14:00:00"); formatBucketDate
+    // must treat them as UTC (append Z) so formatDateShortWithTime renders the
+    // correct local clock time regardless of the viewer timezone.
+    const formatted = formatBucketDate('2026-08-06T14:00:00')
+    expect(formatted).toBe(formatDateShortWithTime('2026-08-06T14:00:00Z'))
+    expect(formatted).not.toContain('2026-08-06T14:00:00')
+  })
+
+  it('leaves day-granular bucket dates unchanged', () => {
+    expect(formatBucketDate('2026-08-01')).toBe('2026-08-01')
+    expect(formatBucketDate(null)).toBe('')
+  })
+})
+
 describe('previousWindowParams', () => {
   it('shifts the window back by exactly one window', () => {
     const params = serializeFilters({ timespan: '7d', groupBy: 'day' }, FIXED_NOW)
     const prev = previousWindowParams(params)
-    expect(prev.date_to).toBe('2026-07-29')
-    expect(prev.date_from).toBe('2026-07-22')
+    expect(prev.date_to).toBe(daysBefore(FIXED_NOW, 8))
+    expect(prev.date_from).toBe(daysBefore(FIXED_NOW, 15))
     expect(prev.group_by).toBe(params.group_by)
   })
 
-  it('shifts the 24h preset back by one day window', () => {
+  it('shifts the 24h preset back by one 24-hour window, keeping ISO datetimes', () => {
     const params = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
     const prev = previousWindowParams(params)
-    expect(prev.date_to).toBe('2026-08-04')
-    expect(prev.date_from).toBe('2026-08-03')
-    expect(prev.group_by).toBe(params.group_by)
+    expect(prev.date_to).toContain('T')
+    expect(prev.date_from).toContain('T')
+    expect(prev.date_to).toBe(params.date_from)
+    expect(prev.date_from).toBe(hoursBefore(FIXED_NOW, 48))
+    expect(prev.group_by).toBe('hour')
+  })
+
+  it('shifts the 1h preset back by one hour, keeping ISO datetimes', () => {
+    const params = serializeFilters({ timespan: '1h', groupBy: 'day' }, FIXED_NOW)
+    const prev = previousWindowParams(params)
+    expect(prev.date_to).toContain('T')
+    expect(prev.date_from).toContain('T')
+    expect(prev.date_to).toBe(params.date_from)
+    expect(prev.date_from).toBe(hoursBefore(FIXED_NOW, 2))
+    expect(prev.group_by).toBe('hour')
   })
 })
 
@@ -229,6 +284,20 @@ describe('buildChartOption', () => {
       series: Array<{ data: Array<number | null> }>
     }
     expect(option.series[0].data).toEqual([null, 2.5])
+  })
+
+  it('humanizes hour-bucket dates on the chart axis', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-06T14:00:00', count: 3 },
+      { date: '2026-08-06T15:00:00', count: 5 },
+    ]
+    const option = buildChartOption(series, 'count', 'hour') as {
+      xAxis: { data: string[] }
+    }
+    expect(option.xAxis.data).toEqual([
+      formatDateShortWithTime('2026-08-06T14:00:00Z'),
+      formatDateShortWithTime('2026-08-06T15:00:00Z'),
+    ])
   })
 })
 
@@ -324,6 +393,17 @@ describe('analytics store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  it('exposes the effective granularity: hour for 1h/24h, otherwise the selected day/week', () => {
+    const store = useAnalyticsStore()
+    expect(store.groupBy).toBe('day')
+    store.setFilters({ timespan: '24h' })
+    expect(store.groupBy).toBe('hour')
+    store.setFilters({ timespan: '1h' })
+    expect(store.groupBy).toBe('hour')
+    store.setFilters({ timespan: '7d', groupBy: 'week' })
+    expect(store.groupBy).toBe('week')
   })
 
   it('fetches and validates the query response', async () => {
@@ -457,6 +537,19 @@ describe('AnalyticsView', () => {
     expect(wrapper.text()).toContain('2026-08-01')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('3')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('5')
+  })
+
+  it('hides the day/week group-by control and shows a disabled Hour pill for hour-granular timespans', async () => {
+    setupMocks()
+    const store = useAnalyticsStore()
+    store.setFilters({ timespan: '24h' })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="analytics-group-by-day"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="analytics-group-by-week"]').exists()).toBe(false)
+    const hour = wrapper.find('[data-testid="analytics-group-by-hour"]')
+    expect(hour.exists()).toBe(true)
+    expect(hour.attributes('disabled')).toBeDefined()
   })
 
   it('renders the empty state with data-since when there is no data', async () => {

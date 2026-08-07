@@ -18,16 +18,13 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.cost_settings import COST_CONTROLS_KEY, DEFAULT_CURRENCY, SUPPORTED_CURRENCIES
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/org", tags=["org"])
-
-# Kept in sync with modulo.api.routes.costs._COST_CONTROLS_KEY / _DEFAULT_CURRENCY.
-_COST_CONTROLS_KEY = "cost_controls"
-_DEFAULT_CURRENCY = "USD"
 
 
 class OrgSettingsResponse(BaseModel):
@@ -56,8 +53,9 @@ async def get_org_settings(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="A database error occurred. Please try again.",
         ) from None
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        _log.debug("org.get_settings HTTPException (org_id=%s) detail=%s", current_user.organisation_id, exc.detail)
+        raise exc
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -67,11 +65,11 @@ async def get_org_settings(
             detail="Internal server error",
         ) from None
 
-    currency = _DEFAULT_CURRENCY
+    currency = DEFAULT_CURRENCY
     if org is not None and isinstance(org.settings_json, dict):
-        cc = org.settings_json.get(_COST_CONTROLS_KEY)
+        cc = org.settings_json.get(COST_CONTROLS_KEY)
         if isinstance(cc, dict):
             value = cc.get("currency")
-            if isinstance(value, str) and value:
+            if isinstance(value, str) and value in SUPPORTED_CURRENCIES:
                 currency = value
     return OrgSettingsResponse(currency=currency)

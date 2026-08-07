@@ -2,14 +2,14 @@
   <FeatureGate feature-name="eval_system" required-tier="community" show-disabled>
 
     <PageTabs :tabs="[
-      { label: 'Evals', to: '/evals/editor' },
-      { label: 'Proposals', to: '/evals/proposals' },
-      { label: 'Variants', to: '/variants/compare' },
-      { label: 'AB Test', to: '/variants/ab-test' },
+      { label: $t('views.EvalEditorView.tab_evals'), to: '/evals/editor' },
+      { label: $t('views.EvalEditorView.tab_proposals'), to: '/evals/proposals' },
+      { label: $t('views.EvalEditorView.tab_variants'), to: '/variants/compare' },
+      { label: $t('views.EvalEditorView.tab_ab_test'), to: '/variants/ab-test' },
     ]" />
 
     <div class="page-narrow">
-    <PageHeader title="Eval Proposals Queue" subtitle="Eval gaps detected by the feedback system — review and publish as eval definitions" />
+    <PageHeader :title="$t('views.EvalProposalsQueueView.title')" :subtitle="$t('views.EvalProposalsQueueView.subtitle')" />
 
     <LoadingSpinner v-if="loading" />
 
@@ -18,8 +18,8 @@
     <template v-else>
       <EmptyState
         v-if="proposals.length === 0"
-        title="Eval Gap Proposals"
-        description="No eval gap proposals found. All checked gates have adequate eval coverage."
+        :title="$t('views.EvalProposalsQueueView.empty_title')"
+        :description="$t('views.EvalProposalsQueueView.empty_description')"
       />
 
       <div v-else class="space-y-4">
@@ -33,38 +33,38 @@
             <div class="min-w-0 flex-1 space-y-3">
               <div class="flex flex-wrap items-center gap-2">
                 <span class="inline-block rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                  {{ p.pipeline_name || 'Unnamed Pipeline' }}
+                  {{ p.pipeline_name || $t('views.EvalProposalsQueueView.unnamed_pipeline') }}
                 </span>
                 <span
                   class="inline-block rounded px-2 py-0.5 text-xs font-medium"
                   :class="statusBadgeClass(p.feedback_status)"
                 >
-                  {{ p.feedback_status }}
+                  {{ statusLabel(p.feedback_status) }}
                 </span>
                 <span v-if="p.run_id" class="text-xs text-muted-foreground font-mono">
-                  Run: {{ shortId(p.run_id) }}
+                  {{ $t('views.EvalProposalsQueueView.run_prefix', { id: shortId(p.run_id) }) }}
                 </span>
               </div>
 
               <div>
-                <p class="text-sm font-medium text-foreground">Gap Description</p>
+                <p class="text-sm font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.gap_description') }}</p>
                 <p class="mt-0.5 text-sm text-muted-foreground">{{ p.rejection_reason }}</p>
               </div>
 
               <div class="grid grid-cols-2 gap-4 text-xs text-muted-foreground">
                 <div>
-                  <span class="font-medium text-foreground">Gate:</span> <span class="font-mono text-xs">{{ shortId(p.gate_id) }}</span>
+                  <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.gate') }}</span> <span class="font-mono text-xs">{{ shortId(p.gate_id) }}</span>
                 </div>
                 <div>
-                  <span class="font-medium text-foreground">Node:</span>
+                  <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.node') }}</span>
                   <span v-if="p.producing_node_name" class="text-muted-foreground">{{ p.producing_node_name }}</span>
                   <span v-else class="font-mono text-xs text-muted-foreground">{{ shortId(p.producing_node_id) }}</span>
                 </div>
                 <div v-if="p.created_at">
-                  <span class="font-medium text-foreground">Detected:</span> {{ formatDate(p.created_at) }}
+                  <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.detected') }}</span> {{ formatDate(p.created_at) }}
                 </div>
                 <div v-if="p.needs_human_review">
-                  <span class="font-medium text-amber-500">Needs human review</span>
+                  <span class="font-medium text-amber-500">{{ $t('views.EvalProposalsQueueView.needs_human_review') }}</span>
                 </div>
               </div>
             </div>
@@ -76,7 +76,7 @@
               variant="default"
               @click="publishProposal(p)"
             >
-              {{ actioningId === p.id ? 'Publishing...' : 'Publish' }}
+              {{ actioningId === p.id ? $t('views.EvalProposalsQueueView.publishing') : $t('views.EvalProposalsQueueView.publish') }}
             </Button>
               <button
                 :disabled="actioningId === p.id"
@@ -84,7 +84,7 @@
                 class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
                 @click="dismissProposal(p.id)"
               >
-                Dismiss
+                {{ actioningId === p.id ? $t('views.EvalProposalsQueueView.dismissing') : $t('views.EvalProposalsQueueView.dismiss') }}
               </button>
             </div>
           </div>
@@ -101,11 +101,11 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import { useApi } from '../composables/useApi'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -142,7 +142,7 @@ interface ProposalsResponse {
   page_size: number
 }
 
-const { patch } = useApi()
+const { t } = useI18n()
 
 const { loading, error: pageError, data: proposalsResp, load: loadProposals } = useDataFetch<ProposalsResponse>(
   async () => {
@@ -168,6 +168,12 @@ function statusBadgeClass(status: string): string {
   return classMap[status] ?? 'bg-muted text-muted-foreground'
 }
 
+function statusLabel(status: string): string {
+  const key = `views.EvalProposalsQueueView.status_${status}`
+  const translated = t(key)
+  return translated === key ? status : translated
+}
+
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr)
   return formatDateShortWithTime(d)
@@ -181,13 +187,18 @@ async function publishProposal(p: EvalProposalItem) {
   actioningId.value = p.id
   delete actionMessages.value[p.id]
   try {
-    await patch(`/api/v1/feedback/${p.id}/status`, { status: 'resolved' })
-    actionMessages.value[p.id] = { type: 'success', text: 'Proposal marked as published. Eval definition creation not yet implemented.' }
+    await throwOnError(
+      await api.PATCH('/api/v1/feedback/{record_id}/status', {
+        params: { path: { record_id: p.id } },
+        body: { status: 'resolved' },
+      }),
+    )
+    actionMessages.value[p.id] = { type: 'success', text: t('views.EvalProposalsQueueView.publish_success') }
     const idx = proposals.value.findIndex(x => x.id === p.id)
     if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'resolved'
     setTimeout(() => { delete actionMessages.value[p.id] }, 3000)
   } catch (e: unknown) {
-    actionMessages.value[p.id] = { type: 'error', text: `Publish failed: ${formatApiError(e)}` }
+    actionMessages.value[p.id] = { type: 'error', text: `${t('views.EvalProposalsQueueView.publish_failed')} ${formatApiError(e)}` }
   } finally {
     actioningId.value = null
   }
@@ -197,13 +208,18 @@ async function dismissProposal(id: string) {
   actioningId.value = id
   delete actionMessages.value[id]
   try {
-    await patch(`/api/v1/feedback/${id}/status`, { status: 'dismissed' })
-    actionMessages.value[id] = { type: 'success', text: 'Proposal dismissed.' }
+    await throwOnError(
+      await api.PATCH('/api/v1/feedback/{record_id}/status', {
+        params: { path: { record_id: id } },
+        body: { status: 'dismissed' },
+      }),
+    )
+    actionMessages.value[id] = { type: 'success', text: t('views.EvalProposalsQueueView.dismissed') }
     const idx = proposals.value.findIndex(p => p.id === id)
     if (idx !== -1 && proposalsResp.value) proposalsResp.value.items[idx].feedback_status = 'dismissed'
     setTimeout(() => { delete actionMessages.value[id] }, 3000)
   } catch (e: unknown) {
-    actionMessages.value[id] = { type: 'error', text: `Dismiss failed: ${formatApiError(e)}` }
+    actionMessages.value[id] = { type: 'error', text: `${t('views.EvalProposalsQueueView.dismiss_failed')} ${formatApiError(e)}` }
   } finally {
     actioningId.value = null
   }

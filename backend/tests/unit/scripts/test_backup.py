@@ -164,7 +164,7 @@ def test_collect_secrets_creates_env_file(tmp_manifest_dir, monkeypatch):
 
     secrets_path = os.path.join(tmp_manifest_dir, "secrets.env")
     assert secrets_path in files
-    assert os.path.exists(secrets_path)
+    assert Path(secrets_path).exists()
 
     with Path(secrets_path).open() as f:
         content = f.read()
@@ -176,7 +176,7 @@ def test_collect_secrets_writes_all_keys_with_empty_defaults(tmp_manifest_dir, m
     for key in ("FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"):
         monkeypatch.delenv(key, raising=False)
     files = collect_secrets(tmp_manifest_dir)
-    content = Path(os.path.join(tmp_manifest_dir, "secrets.env")).read_text()
+    content = Path(tmp_manifest_dir, "secrets.env").read_text()
     lines = dict(line.split("=", 1) for line in content.strip().splitlines())
     assert set(lines) == {"FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"}
     assert all(value == "" for value in lines.values())
@@ -187,7 +187,7 @@ def test_collect_secrets_creates_manifest(tmp_manifest_dir):
     files = collect_secrets(tmp_manifest_dir)
     manifest_path = os.path.join(tmp_manifest_dir, "manifest.json")
     assert manifest_path in files
-    assert os.path.exists(manifest_path)
+    assert Path(manifest_path).exists()
 
     with Path(manifest_path).open() as f:
         manifest = json.load(f)
@@ -221,7 +221,7 @@ def test_write_checksums(tmp_manifest_dir):
     Path(a).write_text("aaa")
     Path(b).write_text("bbb")
     cs_path = write_checksums(tmp_manifest_dir, [a, b])
-    assert os.path.exists(cs_path)
+    assert Path(cs_path).exists()
 
     with Path(cs_path).open() as f:
         lines = f.read().strip().split("\n")
@@ -239,7 +239,7 @@ def test_write_checksums_sorted_by_name(tmp_manifest_dir):
     Path(a).write_text("aaa")
     Path(b).write_text("bbb")
     write_checksums(tmp_manifest_dir, [b, a])
-    lines = Path(os.path.join(tmp_manifest_dir, "checksums.sha256")).read_text().strip().splitlines()
+    lines = Path(tmp_manifest_dir, "checksums.sha256").read_text().strip().splitlines()
     assert [line.split("  ", 1)[1] for line in lines] == ["a.dat", "b.dat"]
 
 
@@ -249,19 +249,34 @@ def test_write_checksums_sorted_by_name(tmp_manifest_dir):
 
 
 def test_create_archive_packs_files(tmp_manifest_dir):
-    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
-    Path(os.path.join(tmp_manifest_dir, "b.txt")).write_text("bbb")
+    Path(tmp_manifest_dir, "a.txt").write_text("aaa")
+    Path(tmp_manifest_dir, "b.txt").write_text("bbb")
     output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
     result = create_archive(tmp_manifest_dir, output)
     assert result == output
-    assert os.path.exists(output)
+    assert Path(output).exists()
     assert tarfile.is_tarfile(output)
 
 
-def test_create_archive_skips_directories(tmp_manifest_dir):
+def test_create_archive_strips_only_enc_suffix(tmp_manifest_dir):
     Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
-    os.makedirs(os.path.join(tmp_manifest_dir, "subdir"))
-    Path(os.path.join(tmp_manifest_dir, "subdir", "b.txt")).write_text("bbb")
+    output = os.path.join(tmp_manifest_dir, "note.enc")
+    result = create_archive(tmp_manifest_dir, output)
+    assert result == os.path.join(tmp_manifest_dir, "note")
+    assert os.path.exists(result)
+
+
+def test_create_archive_keeps_output_without_enc_suffix(tmp_manifest_dir):
+    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
+    output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
+    result = create_archive(tmp_manifest_dir, output)
+    assert result == output
+
+
+def test_create_archive_skips_directories(tmp_manifest_dir):
+    Path(tmp_manifest_dir, "a.txt").write_text("aaa")
+    Path(tmp_manifest_dir, "subdir").mkdir(parents=True)
+    Path(tmp_manifest_dir, "subdir", "b.txt").write_text("bbb")
     output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
     result = create_archive(tmp_manifest_dir, output)
     assert result == output
@@ -282,8 +297,8 @@ def test_encrypt_archive_round_trip(tmp_manifest_dir):
     enc = plain + ".enc"
 
     encrypt_archive(plain, "test-pass")
-    assert os.path.exists(enc)
-    assert not os.path.exists(plain)
+    assert Path(enc).exists()
+    assert not Path(plain).exists()
 
     dec = os.path.join(tmp_manifest_dir, "decrypted.tar.gz")
     result = subprocess.run(  # noqa: S603 — test fixture
@@ -345,7 +360,7 @@ def test_encrypt_archive_deletes_plaintext_on_success(tmp_manifest_dir):
         patch("scripts.backup.subprocess.run", return_value=proc) as mock_run,
     ):
         encrypt_archive(plain, "pass")
-    assert not os.path.exists(plain)
+    assert not Path(plain).exists()
     args = mock_run.call_args.args[0]
     assert args[0] == "openssl"
     assert plain in args
@@ -473,3 +488,64 @@ def test_main_exits_on_empty_passphrase(monkeypatch, capsys):
     ):
         asyncio.run(main())
     assert "passphrase cannot be empty" in capsys.readouterr().out
+
+
+def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsys):
+    raw_output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz")
+    enc_output = raw_output + ".enc"
+    Path(enc_output).write_text("enc")  # exists so the final os.path.getsize() works
+    ns = MagicMock()
+    ns.output = raw_output
+    ns.passphrase = "pass"
+    ns.db_url = None
+    ns.pg_dump = "pg_dump"
+    ns.min_disk_gb = 1
+
+    with (
+        patch("scripts.backup.parse_args", return_value=ns),
+        patch("scripts.backup.get_db_url", return_value="postgresql://u:p@h/db"),
+        patch("scripts.backup.check_disk_space"),
+        patch("scripts.backup.get_org_id", return_value="org123"),
+        patch("scripts.backup.run_pg_dump", new=AsyncMock()),
+        patch("scripts.backup.collect_secrets", return_value=["secrets.env"]),
+        patch("scripts.backup.write_checksums", return_value="checksums.sha256"),
+        patch("scripts.backup.create_archive", return_value=raw_output) as mock_arc,
+        patch("scripts.backup.encrypt_archive") as mock_enc,
+    ):
+        asyncio.run(main())
+
+    # The encrypted archive must land exactly at the user-requested path, so
+    # create_archive receives the .enc-normalised output and getsize reads the
+    # encrypted file that encrypt_archive actually produces.
+    assert mock_arc.call_args.args[1] == enc_output
+    mock_enc.assert_called_once_with(raw_output, "pass")
+    assert "Backup complete:" in capsys.readouterr().out
+
+
+def test_main_keeps_enc_suffix_output_unchanged(tmp_manifest_dir, capsys):
+    output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz.enc")
+    Path(output).write_text("enc")  # exists so the final os.path.getsize() works
+    ns = MagicMock()
+    ns.output = output
+    ns.passphrase = "pass"
+    ns.db_url = None
+    ns.pg_dump = "pg_dump"
+    ns.min_disk_gb = 1
+    tar_path = os.path.join(tmp_manifest_dir, "x.tar.gz")
+
+    with (
+        patch("scripts.backup.parse_args", return_value=ns),
+        patch("scripts.backup.get_db_url", return_value="postgresql://u:p@h/db"),
+        patch("scripts.backup.check_disk_space"),
+        patch("scripts.backup.get_org_id", return_value="org123"),
+        patch("scripts.backup.run_pg_dump", new=AsyncMock()),
+        patch("scripts.backup.collect_secrets", return_value=["secrets.env"]),
+        patch("scripts.backup.write_checksums", return_value="checksums.sha256"),
+        patch("scripts.backup.create_archive", return_value=tar_path) as mock_arc,
+        patch("scripts.backup.encrypt_archive") as mock_enc,
+    ):
+        asyncio.run(main())
+
+    assert mock_arc.call_args.args[1] == output
+    mock_enc.assert_called_once_with(tar_path, "pass")
+    assert "Backup complete:" in capsys.readouterr().out

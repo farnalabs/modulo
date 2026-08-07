@@ -28,7 +28,7 @@ function Write-Err($msg) {
     }
 }
 
-# Load manifest via Python (PyYAML) — the self-hosted runner has Python with deps
+# Load manifest via Python (PyYAML) - the hosted runner has Python with deps
 # Use a minimal cached environment instead of depending on whichever Python is
 # first on PATH in the caller or pre-commit environment.
 $jsonRaw = uv run --quiet --no-project --with pyyaml python -c "

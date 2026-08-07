@@ -111,7 +111,7 @@ async def seed_cost_components(factory: async_sessionmaker[AsyncSession]) -> int
     ``organisations`` so a plain query sees all rows. ``set_rls_org`` applies
     ONLY to the per-org seed inserts.
     """
-    async with factory() as session:
+    async with factory() as session, session.begin():
         org_result = await session.execute(select(Organisation.id).order_by(Organisation.created_at))
         org_ids = [row[0] for row in org_result.all()]
 
