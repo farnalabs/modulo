@@ -75,9 +75,14 @@ def _fact_duration_ms(run: Run) -> int | None:
 
 
 def _fact_queue_wait_ms(run: Run) -> int | None:
-    """Run.dispatched_at - Run.started_at when both present, else NULL."""
-    if run.dispatched_at is not None and run.started_at is not None:
-        return int((run.dispatched_at - run.started_at).total_seconds() * 1000)
+    """Run.dispatched_at - Run.started_at when both present, else NULL.
+
+    ``dispatched_at`` is read via ``getattr`` so any run-shaped object (legacy
+    fakes without the attribute) degrades to NULL instead of raising.
+    """
+    dispatched_at = getattr(run, "dispatched_at", None)
+    if dispatched_at is not None and run.started_at is not None:
+        return int((dispatched_at - run.started_at).total_seconds() * 1000)
     return None
 
 
@@ -86,18 +91,26 @@ def _fact_final_idle_ms(run: Run) -> int | None:
 
     NULL when either side is absent. A NULL heartbeat_at with a completed run
     leaves the window unknowable, so the fact is NULL (never a negative value).
+    ``heartbeat_at`` is read via ``getattr`` so any run-shaped object without
+    the attribute degrades to NULL instead of raising.
     """
-    if run.completed_at is not None and run.heartbeat_at is not None:
-        return int((run.completed_at - run.heartbeat_at).total_seconds() * 1000)
+    heartbeat_at = getattr(run, "heartbeat_at", None)
+    if run.completed_at is not None and heartbeat_at is not None:
+        return int((run.completed_at - heartbeat_at).total_seconds() * 1000)
     return None
 
 
 def _fact_output_bytes(run: Run) -> int | None:
-    """Serialised size of Run.outputs_json (``json.dumps`` length) when present."""
-    if run.outputs_json is None:
+    """Serialised size of Run.outputs_json (``json.dumps`` length) when present.
+
+    ``outputs_json`` is read via ``getattr`` so any run-shaped object without
+    the attribute degrades to NULL instead of raising.
+    """
+    outputs_json = getattr(run, "outputs_json", None)
+    if outputs_json is None:
         return None
     try:
-        return len(json.dumps(run.outputs_json))
+        return len(json.dumps(outputs_json))
     except (TypeError, ValueError):
         return None
 
@@ -161,12 +174,15 @@ async def _snapshot_graph_dimensions(
 
     Reads ``graph_json`` from the ``pipeline_snapshots`` table by id (mirroring
     ``_snapshot_dimensions``), then derives the node stats NULL-safely. A
-    missing/malformed snapshot degrades to ``(0, 0, None)``.
+    missing/malformed snapshot degrades to ``(0, 0, None)``. ``snapshot_id`` is
+    read via ``getattr`` so any run-shaped object without the attribute
+    degrades to ``(0, 0, None)`` instead of raising.
     """
-    if run.snapshot_id is None:
+    snapshot_id = getattr(run, "snapshot_id", None)
+    if snapshot_id is None:
         return _derive_graph_dimensions(None)
     graph_json = (
-        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == run.snapshot_id))
+        await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
     ).scalar_one_or_none()
     return _derive_graph_dimensions(graph_json)
 
@@ -197,20 +213,20 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "total_cost_usd": run.total_cost_usd,
             "total_tokens": run.total_tokens,
             "duration_ms": _fact_duration_ms(run),
-            "error_code": run.error_code,
-            "claim_count": run.claim_count,
+            "error_code": getattr(run, "error_code", None),
+            "claim_count": getattr(run, "claim_count", None),
             "queue_wait_ms": _fact_queue_wait_ms(run),
             "final_idle_ms": _fact_final_idle_ms(run),
-            "cancellation_requested": run.cancellation_requested,
-            "dispatcher": run.dispatcher,
+            "cancellation_requested": getattr(run, "cancellation_requested", None),
+            "dispatcher": getattr(run, "dispatcher", None),
             "node_count": node_count,
             "sandbox_agent_node_count": sandbox_agent_node_count,
             "max_node_timeout_seconds": max_node_timeout_seconds,
-            "parent_run_id": run.parent_run_id,
-            "snapshot_id": run.snapshot_id,
-            "run_number": run.run_number,
+            "parent_run_id": getattr(run, "parent_run_id", None),
+            "snapshot_id": getattr(run, "snapshot_id", None),
+            "run_number": getattr(run, "run_number", None),
             "output_bytes": _fact_output_bytes(run),
-            "rate_limited": run.rate_limit_key is not None,
+            "rate_limited": getattr(run, "rate_limit_key", None) is not None,
         }
         async with session.begin_nested():
             stmt = pg_insert(RunDailyFact).values(**values)
