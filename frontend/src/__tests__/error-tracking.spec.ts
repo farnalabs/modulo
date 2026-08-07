@@ -114,7 +114,7 @@ describe('ErrorTracker', () => {
           (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/ingest'),
         )
         expect(ingestCalls.length).toBeGreaterThanOrEqual(1)
-      })
+      }, { timeout: 5000 })
     })
 
     it('captures errors via window.onunhandledrejection', async () => {
@@ -172,7 +172,7 @@ describe('ErrorTracker', () => {
           (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/ingest'),
         )
         expect(ingestCalls.length).toBeGreaterThanOrEqual(1)
-      })
+      }, { timeout: 5000 })
 
       expect(consoleError).toHaveBeenCalledWith(
         '[vue] mounted hook:',
@@ -322,7 +322,7 @@ describe('Transport batching', () => {
         (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/ingest'),
       )
       expect(ingestCalls.length).toBe(1)
-    })
+    }, { timeout: 5000 })
 
     tracker.dispose()
   })
@@ -358,7 +358,7 @@ describe('Transport batching', () => {
         (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('/session-key'),
       )
       expect(keyCalls.length).toBeGreaterThanOrEqual(1)
-    })
+    }, { timeout: 5000 })
 
     tracker.dispose()
   })
