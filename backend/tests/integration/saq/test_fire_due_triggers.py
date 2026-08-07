@@ -132,19 +132,30 @@ async def test_paused_org_skips_enqueue_but_advances_next_fire(
             text("UPDATE organisations SET triggers_paused = TRUE, triggers_paused_at = now() WHERE id = :oid"),
             {"oid": str(test_org)},
         )
+    try:
+        summary = await ch.fire_due_triggers()
 
-    summary = await ch.fire_due_triggers()
+        assert summary["cron_enqueued"] == 0
+        assert summary["cron_skipped_paused"] >= 1
+        assert await _count_trigger_jobs(saq_settings_env, trigger_id) == 0
 
-    assert summary["cron_enqueued"] == 0
-    assert summary["cron_skipped_paused"] >= 1
-    assert await _count_trigger_jobs(saq_settings_env, trigger_id) == 0
-
-    # SKIP-not-defer: the epoch was consumed — next_fire_at advanced past now.
-    async with db_engine.connect() as conn:
-        row = await conn.execute(
-            text("SELECT next_fire_at FROM triggers WHERE id = :tid"),
-            {"tid": str(trigger_id)},
-        )
-        next_fire_at = row.scalar_one()
-        assert next_fire_at is not None
-        assert next_fire_at > datetime.now(UTC)
+        # SKIP-not-defer: the epoch was consumed — next_fire_at advanced past now.
+        async with db_engine.connect() as conn:
+            row = await conn.execute(
+                text("SELECT next_fire_at FROM triggers WHERE id = :tid"),
+                {"tid": str(trigger_id)},
+            )
+            next_fire_at = row.scalar_one()
+            assert next_fire_at is not None
+            assert next_fire_at > datetime.now(UTC)
+    finally:
+        # test_org is session-scoped and shared by every integration test; leave
+        # it unpaused or downstream handle_webhook tests hit TriggersPausedError.
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "UPDATE organisations SET triggers_paused = FALSE, "
+                    "triggers_paused_at = NULL WHERE id = :oid"
+                ),
+                {"oid": str(test_org)},
+            )
