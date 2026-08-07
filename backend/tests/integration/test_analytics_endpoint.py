@@ -1156,5 +1156,6 @@ class TestBackfillEnrichment:
         assert row[8] == 600, "max_node_timeout_seconds from the snapshot graph_json"
         assert row[10] == uuid.UUID(str(snapshot_id))
         assert row[11] == 7
-        assert row[12] is not None and row[12] > 0, "output_bytes from outputs_json"
+        assert row[12] is not None, "output_bytes from outputs_json"
+        assert row[12] > 0, "output_bytes from outputs_json"
         assert row[13] is True, "rate_limited from rate_limit_key"
