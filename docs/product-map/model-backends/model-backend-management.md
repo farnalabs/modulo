@@ -19,21 +19,15 @@ unit-tests:
   - backend/tests/unit/model_backends/test_gemini.py
   - backend/tests/unit/model_backends/test_grok.py
   - backend/tests/unit/model_backends/test_groq.py
-  - backend/tests/unit/model_backends/test_jan.py
-  - backend/tests/unit/model_backends/test_llamacpp.py
-  - backend/tests/unit/model_backends/test_lm_studio.py
-  - backend/tests/unit/model_backends/test_localai.py
+  - backend/tests/unit/model_backends/test_local_openai_backends.py
   - backend/tests/unit/model_backends/test_mistral.py
-  - backend/tests/unit/model_backends/test_ollama.py
   - backend/tests/unit/model_backends/test_openai.py
   - backend/tests/unit/model_backends/test_openrouter.py
   - backend/tests/unit/model_backends/test_perplexity.py
   - backend/tests/unit/model_backends/test_qwen.py
   - backend/tests/unit/model_backends/test_stub.py
-  - backend/tests/unit/model_backends/test_tgi.py
   - backend/tests/unit/model_backends/test_togetherai.py
   - backend/tests/unit/model_backends/test_vertexai.py
-  - backend/tests/unit/model_backends/test_vllm.py
   - backend/tests/unit/model_backends/test_watsonx.py
   - backend/tests/unit/mcp/test_mcp_schema_tools.py
 code:
