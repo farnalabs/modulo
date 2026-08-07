@@ -546,7 +546,7 @@ async def test_validation_result_constraint_rejects_bogus(
                     "hash": "0" * 64,
                 },
             )
-            await conn.commit()
+        await conn.commit()
 
 
 # ===================================================================

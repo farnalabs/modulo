@@ -114,7 +114,8 @@ def raw_query_without_set(request):
 
 @then(parsers.parse("the query returns only {expected}"))
 def query_returns_only(expected: str, request):
-    assert hasattr(request.node, "_rls_ok") and request.node._rls_ok
+    assert hasattr(request.node, "_rls_ok")
+    assert request.node._rls_ok
 
 
 @then("the query returns no rows")

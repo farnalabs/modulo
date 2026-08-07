@@ -21,7 +21,7 @@ def mock_redis():
 
 
 class TestRedisSlidingWindowRateLimiter:
-    @pytest.mark.parametrize("zcard_value,expected", [(0, True), (1, True), (5, True), (6, False)])
+    @pytest.mark.parametrize(("zcard_value", "expected"), [(0, True), (1, True), (5, True), (6, False)])
     async def test_check_limit(self, mock_redis, zcard_value, expected):
         mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
@@ -131,7 +131,7 @@ class TestRateLimitRule:
 
 class TestRateLimiterRegistry:
     @pytest.mark.parametrize(
-        "redis_result,expected",
+        ("redis_result", "expected"),
         [
             ((None, None, 1, True), True),
             ((None, None, 6, True), False),

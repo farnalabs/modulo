@@ -246,7 +246,7 @@ BACKENDS = [
 
 class TestSharedBackendContracts:
     @pytest.mark.parametrize(
-        "module_path,class_name,patch_target,kwargs,expected_id",
+        ("module_path", "class_name", "patch_target", "kwargs", "expected_id"),
         BACKENDS,
     )
     def test_is_model_backend_base(self, module_path, class_name, patch_target, kwargs, expected_id):
@@ -254,7 +254,7 @@ class TestSharedBackendContracts:
         assert isinstance(backend, ModelBackendBase)
 
     @pytest.mark.parametrize(
-        "module_path,class_name,patch_target,kwargs,expected_id",
+        ("module_path", "class_name", "patch_target", "kwargs", "expected_id"),
         BACKENDS,
     )
     def test_backend_id(self, module_path, class_name, patch_target, kwargs, expected_id):
@@ -262,7 +262,7 @@ class TestSharedBackendContracts:
         assert backend.backend_id == expected_id
 
     @pytest.mark.parametrize(
-        "module_path,class_name,patch_target,kwargs,expected_id",
+        ("module_path", "class_name", "patch_target", "kwargs", "expected_id"),
         BACKENDS,
     )
     async def test_invoke_delegates_to_langchain(
@@ -282,7 +282,7 @@ class TestSharedBackendContracts:
         backend._model.ainvoke.assert_called_once_with(messages)
 
     @pytest.mark.parametrize(
-        "module_path,class_name,patch_target,kwargs,expected_id",
+        ("module_path", "class_name", "patch_target", "kwargs", "expected_id"),
         BACKENDS,
     )
     async def test_stream_yields_chunks(
@@ -306,7 +306,7 @@ class TestSharedBackendContracts:
         assert [c.content for c in chunks] == ["chunk1", "chunk2"]
 
     @pytest.mark.parametrize(
-        "module_path,class_name,patch_target,kwargs,expected_id",
+        ("module_path", "class_name", "patch_target", "kwargs", "expected_id"),
         BACKENDS,
     )
     def test_repr_content(self, module_path, class_name, patch_target, kwargs, expected_id):
@@ -319,7 +319,7 @@ class TestSharedBackendContracts:
         assert expected_id in r
 
     @pytest.mark.parametrize(
-        "module_path,class_name,patch_target,kwargs,expected_id",
+        ("module_path", "class_name", "patch_target", "kwargs", "expected_id"),
         BACKENDS,
     )
     def test_repr_does_not_leak_api_key(
@@ -334,7 +334,7 @@ class TestSharedBackendContracts:
         assert "sk-" not in repr(backend)
 
     @pytest.mark.parametrize(
-        "module_path,class_name,patch_target,kwargs,expected_id",
+        ("module_path", "class_name", "patch_target", "kwargs", "expected_id"),
         BACKENDS,
     )
     async def test_invoke_passes_kwargs(

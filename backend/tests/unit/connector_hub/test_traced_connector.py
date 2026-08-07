@@ -198,7 +198,7 @@ def _encrypt_with(key: str, d: dict[str, Any]) -> bytes:
 
 
 @pytest.fixture(scope="module")
-def _hub_global_exporter() -> InMemorySpanExporter:
+def hub_global_exporter() -> InMemorySpanExporter:
     """Module-scoped InMemorySpanExporter for ConnectorHub integration tests.
 
     Calls setup_otel to ensure a fresh TracerProvider, then adds an
@@ -294,7 +294,7 @@ async def test_query_span_sets_result_total_only_when_not_none(tracer, exporter:
     assert "connector.result_total" not in (spans[0].attributes or {})
 
 
-async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMemorySpanExporter) -> None:
+async def test_hub_integration_health_check(tmp_path, hub_global_exporter: InMemorySpanExporter) -> None:
     """ConnectorHub wiring produces spans in health_check."""
     key = Fernet.generate_key().decode()
     ci = _FakeCI(
@@ -313,7 +313,7 @@ async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMe
             result = await connector.health_check()
             assert result.ok is True
 
-    spans = _hub_global_exporter.get_finished_spans()
+    spans = hub_global_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes is not None
@@ -323,9 +323,9 @@ async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMe
     assert span.attributes.get("connector.healthy") is True
 
 
-async def test_hub_integration_query_and_write(tmp_path, _hub_global_exporter: InMemorySpanExporter) -> None:
+async def test_hub_integration_query_and_write(tmp_path, hub_global_exporter: InMemorySpanExporter) -> None:
     """org_id flows through hub to query and write spans."""
-    _hub_global_exporter.clear()
+    hub_global_exporter.clear()
 
     key = Fernet.generate_key().decode()
     ci = _FakeCI(
@@ -346,7 +346,7 @@ async def test_hub_integration_query_and_write(tmp_path, _hub_global_exporter: I
             out_path = tmp_path / "out.txt"
             await connector.write(ConnectorPayload(resource="file", data={"content": "hello", "path": str(out_path)}))
 
-    spans = _hub_global_exporter.get_finished_spans()
+    spans = hub_global_exporter.get_finished_spans()
     assert len(spans) == 2
     for span in spans:
         assert span.attributes is not None

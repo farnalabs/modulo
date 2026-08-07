@@ -466,7 +466,7 @@ class TestAuthRateLimiterCore:
             AuthRateLimiterCls(redis_client=None)
 
     @pytest.mark.parametrize(
-        "count,expected",
+        ("count", "expected"),
         [
             (10, 60),
             (20, 120),

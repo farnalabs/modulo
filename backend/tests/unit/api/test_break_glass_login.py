@@ -161,7 +161,7 @@ async def test_enforce_break_glass_live_returns_true() -> None:
 
 
 @pytest.mark.parametrize(
-    "expires_at,deactivated_at,active",
+    ("expires_at", "deactivated_at", "active"),
     [
         (_PAST, None, True),  # expired
         (None, None, True),  # NULL-expiry (CHECK-unrepresentable for live, deny defensively)

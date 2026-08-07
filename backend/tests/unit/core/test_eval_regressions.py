@@ -451,7 +451,7 @@ class TestRegressionAlertsEndpoint:
 
     # ── Query parameters ──────────────────────────────────────────────
 
-    def test_custom_days_and_threshold(self, _configure_session) -> None:
+    def test_custom_days_and_threshold(self) -> None:
         mock_session = _make_mock_session()
 
         row = _make_row(
@@ -529,7 +529,7 @@ class TestRegressionAlertsEndpoint:
 
     # ── Empty ─────────────────────────────────────────────────────────
 
-    def test_empty_no_alerts(self, _configure_session) -> None:
+    def test_empty_no_alerts(self) -> None:
         mock_session = _make_mock_session()
         mock_session.execute.side_effect = [
             _make_result(scalar_value=None),  # set_rls_org

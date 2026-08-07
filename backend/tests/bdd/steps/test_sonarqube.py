@@ -16,12 +16,12 @@ with contextlib.suppress(FileNotFoundError, OSError):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def sonarqube_connector():
     return SonarQubeConnector(token="sqp_test_token", base_url="https://sonarqube.company.com")
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(sonarqube_connector):
     return sonarqube_connector
 

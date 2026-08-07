@@ -148,7 +148,7 @@ def test_env_var_backend_name_normalized(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.parametrize(
-    "backend_name,env_vars,module_patch,lib_patch",
+    ("backend_name", "env_vars", "module_patch", "lib_patch"),
     [
         pytest.param(
             "vault",
