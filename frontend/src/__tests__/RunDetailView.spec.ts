@@ -226,4 +226,69 @@ describe('RunDetailView', () => {
     expect(banner.text()).toContain('Org sandbox concurrency limit reached: 3 active, cap 2')
     wrapper.unmount()
   })
+
+  async function mockRunDetail(data: Record<string, unknown>) {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+  }
+
+  function baseDetail() {
+    return {
+      run_id: 'test-run-id',
+      pipeline_id: 'test-pipeline',
+      status: 'complete',
+      total_cost_usd: 1.23,
+      token_consumption: null,
+      node_token_usage: null,
+      trace_id: null,
+    }
+  }
+
+  async function mountWithDetail(data: Record<string, unknown>) {
+    await mockRunDetail(data)
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  it('shows aggregate cost line when child runs exist', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      child_runs_cost_usd: '0.25',
+      aggregate_cost_usd: '1.48',
+    })
+    const aggregate = wrapper.find('[data-testid="run-detail-aggregate-cost"]')
+    expect(aggregate.exists()).toBe(true)
+    expect(aggregate.text()).toContain('1.480000')
+    expect(aggregate.text()).toContain('0.250000')
+    wrapper.unmount()
+  })
+
+  it('shows no aggregate line when there are no child runs', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      child_runs_cost_usd: '0.000000',
+      aggregate_cost_usd: '1.230000',
+    })
+    expect(wrapper.find('[data-testid="run-detail-aggregate-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows no aggregate line when rollup fields are absent', async () => {
+    const wrapper = await mountWithDetail(baseDetail())
+    expect(wrapper.find('[data-testid="run-detail-aggregate-cost"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })

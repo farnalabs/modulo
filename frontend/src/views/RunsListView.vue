@@ -86,8 +86,14 @@
           <template #cell-duration="{ row }">
             <span class="whitespace-nowrap tabular-nums text-muted-foreground">{{ formatDuration(row.started_at as string, row.completed_at as string) }}</span>
           </template>
-          <template #cell-total_cost_usd="{ value }">
-            <span class="tabular-nums">{{ value != null ? formatMoney(Number(value), currencyCode, 4) : '—' }}</span>
+          <template #cell-total_cost_usd="{ value, row }">
+            <span class="tabular-nums">
+              <template v-if="aggregateCosts[row.run_id as string] != null">
+                <span data-testid="runs-list-aggregate-cost">{{ formatMoney(aggregateCosts[row.run_id as string] as number, currencyCode, 4) }}</span>
+                <span class="ml-1 text-xs text-muted-foreground">{{ $t('views.RunsListView.cost_includes_child_runs') }}</span>
+              </template>
+              <span v-else>{{ value != null ? formatMoney(Number(value), currencyCode, 4) : '—' }}</span>
+            </span>
           </template>
         </DataTable>
       </div>
@@ -170,6 +176,25 @@ const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items:
 
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)
+
+function aggregateCostValue(run: RunListItem): number | null {
+  if (run.aggregate_cost_usd == null || run.aggregate_cost_usd === '') return null
+  const aggregate = Number(run.aggregate_cost_usd)
+  if (!Number.isFinite(aggregate)) return null
+  const own = run.total_cost_usd == null ? 0 : Number(run.total_cost_usd)
+  const ownSafe = Number.isFinite(own) ? own : 0
+  if (Math.abs(aggregate - ownSafe) < 1e-9) return null
+  return aggregate
+}
+
+const aggregateCosts = computed<Record<string, number>>(() => {
+  const byRunId: Record<string, number> = {}
+  for (const run of runs.value) {
+    const value = aggregateCostValue(run)
+    if (value != null) byRunId[run.run_id] = value
+  }
+  return byRunId
+})
 
 watch([filterStatus, filterTriggerType, filterSearch], ([status, triggerType, search]) => {
   localStorage.setItem(`${FILTER_STORAGE_KEY}.status`, status)

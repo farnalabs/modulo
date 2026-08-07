@@ -7,7 +7,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
@@ -19,6 +19,14 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report
+from modulo.core.cost_settings import (
+    COST_CONTROLS_KEY,
+    DEFAULT_BILLING_PERIOD,
+    DEFAULT_CIRCUIT_BREAKER_ENABLED,
+    DEFAULT_CURRENCY,
+    SUPPORTED_BILLING_PERIODS,
+    SUPPORTED_CURRENCIES,
+)
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.scheduled_report import (
     create_scheduled_report,
@@ -50,13 +58,6 @@ def _coerce_spend_limit_usd(value: Decimal | None) -> float | None:
         return None
 
 
-_COST_CONTROLS_KEY = "cost_controls"
-_DEFAULT_CURRENCY = "USD"
-_DEFAULT_BILLING_PERIOD = "monthly"
-_DEFAULT_CIRCUIT_BREAKER_ENABLED = False
-_DEFAULT_ALERT_THRESHOLDS: list[int] = [50, 75, 90]
-
-
 def _cost_controls(org: object) -> dict[str, Any]:
     """Return the org's persisted ``cost_controls`` settings dict (may be empty).
 
@@ -66,7 +67,7 @@ def _cost_controls(org: object) -> dict[str, Any]:
     settings = getattr(org, "settings_json", None)
     if not isinstance(settings, dict):
         return {}
-    cc = settings.get(_COST_CONTROLS_KEY)
+    cc = settings.get(COST_CONTROLS_KEY)
     return cc if isinstance(cc, dict) else {}
 
 
@@ -79,45 +80,28 @@ def _read_cost_control(org: object | None, key: str, default: Any) -> Any:
 
 
 def _read_currency(org: object | None) -> str:
-    value = _read_cost_control(org, "currency", _DEFAULT_CURRENCY)
-    return value if isinstance(value, str) and value else _DEFAULT_CURRENCY
+    value = _read_cost_control(org, "currency", DEFAULT_CURRENCY)
+    return value if isinstance(value, str) and value in SUPPORTED_CURRENCIES else DEFAULT_CURRENCY
 
 
 def _read_billing_period(org: object | None) -> str:
-    value = _read_cost_control(org, "billing_period", _DEFAULT_BILLING_PERIOD)
-    return value if isinstance(value, str) and value else _DEFAULT_BILLING_PERIOD
+    value = _read_cost_control(org, "billing_period", DEFAULT_BILLING_PERIOD)
+    return value if isinstance(value, str) and value in SUPPORTED_BILLING_PERIODS else DEFAULT_BILLING_PERIOD
 
 
 def _read_circuit_breaker(org: object | None) -> bool:
-    value = _read_cost_control(org, "circuit_breaker_enabled", _DEFAULT_CIRCUIT_BREAKER_ENABLED)
-    return value if isinstance(value, bool) else _DEFAULT_CIRCUIT_BREAKER_ENABLED
+    value = _read_cost_control(org, "circuit_breaker_enabled", DEFAULT_CIRCUIT_BREAKER_ENABLED)
+    return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
 
 
-def _coerce_alert_thresholds(value: Any) -> list[int] | None:
-    """Return alert-threshold values as a non-empty list of ints in 1..100, else None.
-
-    ``value`` may be a JSON-decoded ``list`` of arbitrary items; anything that is
-    not a non-empty list of whole numbers within 1..100 is rejected so a corrupted
-    ``settings_json`` degrades to the default instead of 500-ing the endpoint.
-    """
-    if not isinstance(value, list) or not value:
-        return None
-    coerced: list[int] = []
-    for item in value:
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            return None
-        as_int = int(item)
-        if as_int != item or not 1 <= as_int <= 100:
-            return None
-        coerced.append(as_int)
-    return coerced
-
-
-def _read_alert_thresholds(org: object | None) -> list[int]:
-    if org is None:
-        return list(_DEFAULT_ALERT_THRESHOLDS)
-    coerced = _coerce_alert_thresholds(_cost_controls(org).get("alert_thresholds"))
-    return coerced if coerced is not None else list(_DEFAULT_ALERT_THRESHOLDS)
+def _read_alert_thresholds(org: object | None) -> list[float]:
+    value = _read_cost_control(org, "alert_thresholds", [])
+    if not isinstance(value, list):
+        return []
+    if not value:
+        return []
+    coerced = [float(v) for v in value]
+    return coerced if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value) else []
 
 
 class CostReportComponent(BaseModel):
@@ -396,7 +380,7 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alert_thresholds: list[int] = Field(default_factory=lambda: list(_DEFAULT_ALERT_THRESHOLDS))
+    alert_thresholds: list[float] = Field(default_factory=list)
     circuit_breaker_enabled: bool = False
     currency: str = "USD"
     billing_period: str = "monthly"
@@ -406,8 +390,8 @@ class UpdateCostControlsRequest(BaseModel):
     budget: float | None = None
     alert_thresholds: list[float] | None = None
     circuit_breaker_enabled: bool | None = None
-    currency: str | None = None
-    billing_period: str | None = None
+    currency: Literal["USD", "EUR", "GBP"] | None = None
+    billing_period: Literal["monthly", "quarterly", "annual"] | None = None
 
     @field_validator("alert_thresholds")
     @classmethod
@@ -512,8 +496,8 @@ async def update_cost_controls(
                 if req.circuit_breaker_enabled is not None:
                     cc["circuit_breaker_enabled"] = req.circuit_breaker_enabled
                 if req.alert_thresholds is not None:
-                    cc["alert_thresholds"] = [int(t) for t in req.alert_thresholds]
-                settings_dict[_COST_CONTROLS_KEY] = cc
+                    cc["alert_thresholds"] = [float(t) for t in req.alert_thresholds]
+                settings_dict[COST_CONTROLS_KEY] = cc
                 org.settings_json = settings_dict
 
             await session.flush()
