@@ -353,7 +353,7 @@ uv run pytest tests/unit/ -m 'not integration' -q
 
 ## CI/CD
 
-All CI runs on a self-hosted Windows runner with Docker. Workflows are defined
+All CI runs on hosted Ubicloud runners (ubicloud-standard-2). Workflows are defined
 in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
