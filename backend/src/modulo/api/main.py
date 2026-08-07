@@ -89,6 +89,7 @@ from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
 from modulo.api.routes.observability import router as observability_router
 from modulo.api.routes.onboarding import router as onboarding_router
+from modulo.api.routes.org_settings import router as org_settings_router
 from modulo.api.routes.parameter_schemas import router as parameter_schemas_router
 from modulo.api.routes.pipeline_folders import router as pipeline_folders_router
 from modulo.api.routes.pipelines import router as pipelines_router
@@ -1194,6 +1195,7 @@ app.include_router(lifecycle_maps_router)
 app.include_router(mcp_oauth_router)
 app.include_router(mcp_setup_router)
 app.include_router(me_router)
+app.include_router(org_settings_router)
 app.include_router(registry_router)
 app.include_router(determination_router)
 app.include_router(evals_router)

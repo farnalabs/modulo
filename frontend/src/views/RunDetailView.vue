@@ -31,7 +31,7 @@
         </div>
         <div class="text-right text-xs text-muted-foreground">
           <div v-if="run.total_cost_usd != null" class="text-base font-semibold tabular-nums text-foreground">
-            Total: ${{ formattedCost }}
+            Total: {{ formatMoney(Number(formattedCost), currencyCode, 6) }}
           </div>
           <button
             data-testid="run-detail-share-summary"
@@ -219,7 +219,7 @@
               <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.outputTokens ?? '—' }}</td>
-              <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? '$' + node.cost.toFixed(6) : '—' }}</td>
+              <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? formatMoney(node.cost, currencyCode, 6) : '—' }}</td>
               <td class="py-3 pr-4">
                 <button
                   v-if="node.traceId"
@@ -362,7 +362,7 @@
       <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
           <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
-          <span class="text-2xl font-semibold tabular-nums">${{ formattedCost }}</span>
+          <span class="text-2xl font-semibold tabular-nums">{{ formatMoney(Number(formattedCost), currencyCode, 6) }}</span>
         </div>
         <p v-if="totalTokens != null" class="mt-1 text-xs text-muted-foreground">
           {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}
@@ -389,7 +389,7 @@
                     <span v-if="entry.missing_self_report" class="ml-1 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
                     <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
                   </td>
-                  <td class="py-2 pr-4 tabular-nums">${{ entry.amountUsd }}</td>
+                  <td class="py-2 pr-4 tabular-nums">{{ formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
                   <td class="py-2 pr-4">
                     <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
                       {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
@@ -401,7 +401,7 @@
               <tfoot>
                 <tr class="border-t font-medium">
                   <td class="py-2 pr-4">{{ $t('views.RunDetailView.sum_of_components') }}</td>
-                  <td class="py-2 pr-4 tabular-nums">${{ breakdownTotal }}</td>
+                  <td class="py-2 pr-4 tabular-nums">{{ formatMoney(Number(breakdownTotal), currencyCode, 6) }}</td>
                   <td colspan="2" class="py-2 text-xs text-muted-foreground">{{ $t('views.RunDetailView.breakdown_sum_not_total') }}</td>
                 </tr>
               </tfoot>
@@ -469,6 +469,8 @@ import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
 import Button from '../components/ui/button/Button.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId, formatRun } from '../utils/format'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null
@@ -527,6 +529,7 @@ interface RunChunkEvent {
 
 const route = useRoute()
 const { t, locale } = useI18n()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 const run = ref<RunResponse | null>(null)
 const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
@@ -558,7 +561,7 @@ const shareSummary = computed(() => {
   const completed = nodeEntries.value.filter(n => n.status === 'complete').length
   const total = nodeEntries.value.length
   const tokens = totalTokens.value?.toLocaleString() ?? '—'
-  const cost = r.total_cost_usd != null ? `$${Number(r.total_cost_usd).toFixed(6)}` : '—'
+  const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
   return [
     `Run: ${r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)}`,
     `Pipeline: ${r.pipeline_name || shortId(r.pipeline_id)}`,
@@ -1138,4 +1141,6 @@ onUnmounted(() => {
     clearInterval(pollInterval.value)
   }
 })
+
+loadCurrency()
 </script>

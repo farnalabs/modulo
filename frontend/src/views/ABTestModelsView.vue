@@ -229,7 +229,7 @@
                     :key="`cost-${s.name}`"
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
-                    <span v-if="s.totalCost !== null">${{ Number(s.totalCost).toFixed(6) }}</span>
+                    <span v-if="s.totalCost !== null">{{ formatMoney(Number(s.totalCost), currencyCode, 6) }}</span>
                     <span v-else class="text-muted-foreground">�</span>
                   </td>
                 </tr>
@@ -297,6 +297,10 @@ import {
   SelectItem,
   SelectValue,
 } from '@/components/ui/select'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
+
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 type PipelineItem = components['schemas']['PipelineResponse']
 type VariantGroup = components['schemas']['VariantGroupResponse']
@@ -808,4 +812,6 @@ async function fetchSnapshotForPipeline(pipelineId: string) {
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+
+loadCurrency()
 </script>
