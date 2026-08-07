@@ -4197,7 +4197,7 @@ The analytics dashboard uses the **facts count** for run volume and success rate
 
 #### 8.32.5 Dimensions and Filters
 
-Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omitted = overall) and filters: `trigger_type`, `status`, `pipeline_id`, `folder_id`, fixed `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). Timezone is fixed UTC.
+Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`, `error_code`; omitted = overall) and filters: `trigger_type`, `status`, `pipeline_id` (repeated — a multi-value "A vs B" filter in a single request), `error_code`, `folder_id`, fixed `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). Timezone is fixed UTC.
 
 #### 8.32.6 Flag / Gating
 
@@ -4220,6 +4220,15 @@ The `/analytics` page (sidebar group Core, `analytics.query` permission, communi
 - **Trend table**: rows are buckets; columns are date/key + measure value + a period arrow (▲/▼/→) against the previous equal-length window. The previous window is fetched as a second query and compared by key (dimensioned) or by offset (undimensioned). `prev=0` and both-zero show no arrow.
 - **Empty state**: "No analytics data yet — data since \<date\>" where \<date\> is the earliest bucket with data (launch-forward coverage, 8.32.3).
 - **Flag-off state**: the sidebar link is hidden when the feature flag is off (manifest `required_permissions`); if the page is reached anyway and the API returns 402, an "Analytics is not enabled for your workspace" card is shown — never a spinner.
+
+#### 8.32.9 Queryable-Data Layer (FAR-102)
+
+The facts table is enriched with stall-dimension and run-lifecycle columns so the analytics surface can answer "why did runs fail / stall" without reading live `runs`: `error_code` (the stall dimension), `claim_count`, `queue_wait_ms` (dispatched − started), `final_idle_ms` (completed − heartbeat — the stuck-with-no-heartbeat window), `cancellation_requested`, `dispatcher`, `node_count` / `sandbox_agent_node_count` / `max_node_timeout_seconds` (derived from the snapshot `graph_json`, NULL-safe), `parent_run_id`, `snapshot_id` (both NO FKs — facts survive purge), `run_number`, `output_bytes` (serialised `outputs_json` size), and `rate_limited`. All are nullable where the source run may not carry the value. The live writer and the daily backfill both populate them — a backfilled fact never carries NULL where the source provides a value.
+
+- **Per-bucket metrics**: the query surface adds `failure_count`, `stall_count`, `avg_queue_wait_ms`, `avg_final_idle_ms`, and `avg_output_bytes` to every bucket. A **stall** is a run whose `status == "failed"` and `error_code` is in a fixed `STALL_ERROR_CODES` set (`executor_stalled`, `node_timeout`, `TimeoutError` — the no-progress error codes the executor actually emits).
+- **Comparison**: a repeated `pipeline_id` query param returns an "A vs B" series in a single request (the builder bounds it via an allowlisted, parameterised `IN` — never string interpolation).
+- **Export**: `GET /api/v1/analytics/export` returns raw fact rows (no bucketing, all fact columns) filtered by the same typed params, ordered by `run_date`/`created_at`, paginated (`offset`/`limit`, default 500, max 5000), org-scoped, rate-limited, permission + feature gated. `format=json` (default) or `format=csv` (Content-Disposition attachment).
+- **MCP**: the `query_analytics` MCP tool mirrors the REST surface (typed params incl. repeated `pipeline_id`, `error_code`, date range, limit), enforcing the `analytics.query` permission and the `analytics_page` feature gate. Both REST and MCP funnel through the same shared service, so org predicate, rate limit, statement timeout, bucketing, and error semantics stay identical.
 
 ---
 

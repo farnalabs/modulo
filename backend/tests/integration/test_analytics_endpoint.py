@@ -16,7 +16,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.auth.jwt import create_access_token
 from modulo.auth.permissions import PERMISSIONS, resolve_required
@@ -98,13 +98,34 @@ async def _insert_fact(
     cost: float | None = 1.25,
     tokens: int | None = 100,
     created_at: datetime | None = None,
+    error_code: str | None = None,
+    claim_count: int | None = None,
+    queue_wait_ms: int | None = None,
+    final_idle_ms: int | None = None,
+    cancellation_requested: bool | None = None,
+    dispatcher: str | None = None,
+    node_count: int | None = None,
+    sandbox_agent_node_count: int | None = None,
+    max_node_timeout_seconds: int | None = None,
+    parent_run_id: uuid.UUID | None = None,
+    snapshot_id: uuid.UUID | None = None,
+    run_number: int | None = None,
+    output_bytes: int | None = None,
+    rate_limited: bool | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    team_name: str | None = None,
 ) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
                 "INSERT INTO run_daily_facts (id, organisation_id, run_id, run_date, created_at, "
-                "trigger_type, status, total_cost_usd, total_tokens) "
-                "VALUES (:id, :oid, :rid, :day, :created, :tt, :st, :cost, :tok)",
+                "trigger_type, status, total_cost_usd, total_tokens, error_code, claim_count, "
+                "queue_wait_ms, final_idle_ms, cancellation_requested, dispatcher, node_count, "
+                "sandbox_agent_node_count, max_node_timeout_seconds, parent_run_id, snapshot_id, "
+                "run_number, output_bytes, rate_limited, pipeline_id, team_name) "
+                "VALUES (:id, :oid, :rid, :day, :created, :tt, :st, :cost, :tok, :err, :claims, "
+                ":qwait, :fidle, :cancel, :disp, :ncount, :sa_count, :max_to, :parent, :snap, "
+                ":rnum, :obytes, :rlim, :pid, :tname)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -118,8 +139,49 @@ async def _insert_fact(
                 "st": status,
                 "cost": cost,
                 "tok": tokens,
+                "err": error_code,
+                "claims": claim_count,
+                "qwait": queue_wait_ms,
+                "fidle": final_idle_ms,
+                "cancel": cancellation_requested,
+                "disp": dispatcher,
+                "ncount": node_count,
+                "sa_count": sandbox_agent_node_count,
+                "max_to": max_node_timeout_seconds,
+                "parent": str(parent_run_id) if parent_run_id else None,
+                "snap": str(snapshot_id) if snapshot_id else None,
+                "rnum": run_number,
+                "obytes": output_bytes,
+                "rlim": rate_limited,
+                "pid": str(pipeline_id) if pipeline_id else None,
+                "tname": team_name,
             },
         )
+
+
+async def _seed_pipeline_for_fact(
+    db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID, name: str
+) -> uuid.UUID:
+    """Create a real pipeline row so a fact's pipeline_id FK resolves."""
+    pipeline_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, description, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+                "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
+                "'{}'::json, '[]'::json, 'manual_approval', 'org')"
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_id),
+                "name": name,
+                "desc": f"Pipeline for {name}",
+                "uid": str(user_id),
+            },
+        )
+    return pipeline_id
 
 
 def _token(org_id: uuid.UUID | None, user_id: uuid.UUID, role: str, is_system_admin: bool = False) -> str:
@@ -410,13 +472,15 @@ class TestPredicateStrip:
             # Strip the org predicate: take the builder's statement, drop its
             # WHERE clause, and execute WITHOUT any app.organisation_id context.
             base = AnalyticsQuery(org_id=org_a, date_from=today - timedelta(days=30), date_to=today)
-            stmt, _ = build_facts_query(base)
+            stmt, params = build_facts_query(base)
             stripped = (
                 select(*stmt.selected_columns)
                 .where(RunDailyFact.run_date >= (today - timedelta(days=30)))
                 .group_by(RunDailyFact.run_date)
             )
-            result = await session.execute(stripped)
+            # The aggregate FILTERs (complete/stall counts) carry bound params —
+            # the query still needs them even with the org predicate stripped.
+            result = await session.execute(stripped, params)
             rows = result.all()
         assert rows == [], "RLS must confine a predicate-stripped query to zero rows"
 
@@ -577,13 +641,13 @@ class TestStatementTimeout:
     ) -> None:
         from sqlalchemy import func, select
 
-        import modulo.api.routes.analytics as analytics_route
+        import modulo.core.analytics.service as analytics_service
 
         # PG-only: the endpoint SET LOCALs a tiny statement_timeout and the
         # patched builder emits pg_sleep(5) → QueryCanceled → 503.
-        monkeypatch.setattr(analytics_route, "_DEFAULT_STATEMENT_TIMEOUT_MS", 50)
+        monkeypatch.setattr(analytics_service, "_DEFAULT_STATEMENT_TIMEOUT_MS", 50)
         monkeypatch.setattr(
-            analytics_route,
+            analytics_service,
             "build_facts_query",
             lambda _query: (select(func.pg_sleep(5)), {}),
         )
@@ -604,13 +668,13 @@ class TestProgrammingError:
         org_a: uuid.UUID,
         user_a: uuid.UUID,
     ) -> None:
-        import modulo.api.routes.analytics as analytics_route
+        import modulo.core.analytics.service as analytics_service
 
         # A missing table (migrations not applied) raises ProgrammingError. It
         # must map to 501 "run migrations" — NOT be swallowed by the broader
         # DBAPIError branch (which would return 503).
         monkeypatch.setattr(
-            analytics_route,
+            analytics_service,
             "build_facts_query",
             lambda _query: (text("SELECT * FROM analytics_no_such_table"), {}),
         )
@@ -621,3 +685,382 @@ class TestProgrammingError:
         )
         assert resp.status_code == 501, f"Expected 501 on missing table, got {resp.status_code}: {resp.text}"
         assert "migration" in resp.json()["detail"].lower()
+
+
+class TestEnrichedColumns:
+    """The FAR-102 enrichment columns must flow through the query buckets."""
+
+    async def test_query_returns_enriched_bucket_fields(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            status="failed",
+            error_code="executor_stalled",
+            queue_wait_ms=5000,
+            final_idle_ms=120000,
+            output_bytes=4096,
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}&status=failed",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        bucket = resp.json()["buckets"][0]
+        assert bucket["failure_count"] >= 1
+        assert bucket["stall_count"] >= 1, "executor_stalled is a stall error code"
+        assert bucket["avg_queue_wait_ms"] == 5000.0
+        assert bucket["avg_final_idle_ms"] == 120000.0
+        assert bucket["avg_output_bytes"] == 4096.0
+
+    async def test_query_multi_pipeline_filter(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        pid_a = await _seed_pipeline_for_fact(db_engine, org_a, user_a, "Multi-A")
+        pid_b = await _seed_pipeline_for_fact(db_engine, org_a, user_a, "Multi-B")
+        pid_c = await _seed_pipeline_for_fact(db_engine, org_a, user_a, "Multi-C")
+        await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=today, pipeline_id=pid_a)
+        await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=today, pipeline_id=pid_b)
+        await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=today, pipeline_id=pid_c)
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}"
+            f"&pipeline_id={pid_a}&pipeline_id={pid_b}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        total = sum(b["count"] for b in resp.json()["buckets"])
+        assert total == 2, f"multi-value pipeline filter must return only A and B runs, got {total}"
+
+    async def test_query_error_code_filter(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        # A distinct past date avoids colliding with other tests' `today` facts
+        # in the shared session-scoped org (org_a) — the exact-count assertion
+        # requires an uncontaminated run_date.
+        day = date(2026, 6, 15)
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=day,
+            status="failed",
+            error_code="executor_stalled",
+        )
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=day,
+            status="failed",
+            error_code="some_other_error",
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={day.isoformat()}&date_to={day.isoformat()}"
+            "&error_code=executor_stalled",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        total = sum(b["count"] for b in resp.json()["buckets"])
+        assert total == 1, f"error_code filter must narrow to the matching fact, got {total}"
+
+    async def test_error_code_dimension_returns_keyed_buckets(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            status="failed",
+            error_code="executor_stalled",
+        )
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            status="failed",
+            error_code="node_timeout",
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}&dimension=error_code",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        keys = {b["key"] for b in resp.json()["buckets"]}
+        assert {"executor_stalled", "node_timeout"} <= keys, f"expected error_code keys, got {keys}"
+
+
+class TestExportEndpoint:
+    async def test_export_returns_raw_fact_rows(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        rid = uuid.uuid4()
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=rid,
+            run_date=today,
+            status="failed",
+            error_code="executor_stalled",
+            claim_count=2,
+            queue_wait_ms=5000,
+            output_bytes=4096,
+            rate_limited=True,
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/export?date_from={today.isoformat()}&date_to={today.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        assert payload["total"] >= 1
+        item = next(i for i in payload["items"] if i["run_id"] == str(rid))
+        assert item["error_code"] == "executor_stalled"
+        assert item["claim_count"] == 2
+        assert item["queue_wait_ms"] == 5000
+        assert item["output_bytes"] == 4096
+        assert item["rate_limited"] is True
+        assert item["status"] == "failed"
+
+    async def test_export_csv_attachment(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            error_code="executor_stalled",
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/export?format=csv&date_from={today.isoformat()}&date_to={today.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "attachment" in resp.headers.get("content-disposition", "")
+        body = resp.text
+        assert "run_id" in body, "the CSV must carry the fact column headers"
+        assert "executor_stalled" in body, "the CSV must carry the fact row values"
+
+    async def test_export_paginates(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        for _ in range(3):
+            await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=today)
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/export?date_from={today.isoformat()}&date_to={today.isoformat()}&limit=2&offset=0",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        assert len(payload["items"]) == 2
+        assert payload["total"] >= 3
+
+    async def test_export_limit_over_max_returns_422(
+        self,
+        integration_client: AsyncClient,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            "/api/v1/analytics/export?limit=5001",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422, f"Expected 422 for export limit > 5000, got {resp.status_code}: {resp.text}"
+
+
+class TestBackfillEnrichment:
+    """Backfilled facts must carry the enriched columns (NULL facts are a bug)."""
+
+    async def test_backfill_populates_enriched_columns(
+        self,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        from sqlalchemy import event as _sa_event
+        from sqlalchemy.pool import NullPool
+
+        # A terminal run WITHOUT a fact — the backfill must pick it up with the
+        # enriched columns populated from the source run + snapshot.
+        run_id = uuid.uuid4()
+        pipeline_id = uuid.uuid4()
+        snapshot_id = uuid.uuid4()
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO pipelines (id, organisation_id, name, description, account_id, "
+                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                    "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
+                    "VALUES (:id, :oid, :name, :desc, :uid, 5, 30, 300, "
+                    "'{}'::json, '[]'::json, 'manual_approval', 'org')"
+                ),
+                {"id": str(pipeline_id), "oid": str(org_a), "name": "Backfill-Enrich", "desc": "x", "uid": str(user_a)},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                    "snapshot_version, graph_json, connector_bindings_json, schema_pins_json, "
+                    "prompt_pins_json, model_backend_pins_json, run_context_defaults, config_json) "
+                    "VALUES (:id, :pid, :oid, 1, :gjson, '[]'::json, "
+                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
+                ),
+                {
+                    "id": str(snapshot_id),
+                    "pid": str(pipeline_id),
+                    "oid": str(org_a),
+                    "gjson": (
+                        '{"nodes": [{"id": "n1", "node_type": "agent", "timeout_seconds": 120}, '
+                        '{"id": "n2", "node_type": "sandbox_agent", "timeout_seconds": 600}]}'
+                    ),
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                    "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at, "
+                    "dispatched_at, heartbeat_at, claim_count, cancellation_requested, error_code, "
+                    "outputs_json, rate_limit_key) "
+                    "VALUES (:id, :oid, :pid, :sid, 'manual', 'failed', :hash, :thread, 7, "
+                    ":started, :completed, :dispatched, :heartbeat, 3, true, 'executor_stalled', "
+                    ":outjson, 'rate:limit:key')"
+                ),
+                {
+                    "id": str(run_id),
+                    "oid": str(org_a),
+                    "pid": str(pipeline_id),
+                    "sid": str(snapshot_id),
+                    "hash": uuid.uuid4().hex,
+                    "thread": f"thread-backfill-enrich-{run_id.hex[:8]}",
+                    "started": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+                    "dispatched": datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
+                    "completed": datetime(2026, 8, 7, 9, 30, 0, tzinfo=UTC),
+                    "heartbeat": datetime(2026, 8, 7, 9, 29, 0, tzinfo=UTC),
+                    "outjson": '{"node_a": {"result": "ok"}}',
+                },
+            )
+
+        # Backfill via a BYPASSRLS role (the maintenance cron runs as one): the
+        # conftest FORCE-enables RLS on runs/pipeline_snapshots even for
+        # superusers, so a cross-org INSERT...SELECT needs BYPASSRLS.
+        bypass_role = "analytics_endpoint_bypass"
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(f'DROP ROLE IF EXISTS "{bypass_role}"'))
+            await conn.execute(text(f'CREATE ROLE "{bypass_role}" NOSUPERUSER BYPASSRLS NOLOGIN'))
+            await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{bypass_role}"'))
+            await conn.execute(
+                text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{bypass_role}"')
+            )
+            await conn.execute(text(f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{bypass_role}"'))
+
+        from modulo.core.analytics.maintenance import backfill_facts
+
+        engine = create_async_engine(
+            db_engine.url.render_as_string(hide_password=False),
+            poolclass=NullPool,
+        )
+
+        @_sa_event.listens_for(engine.sync_engine, "checkout")
+        def _set_role_on_checkout(
+            dbapi_connection: object,
+            _connection_record: object,
+            _connection_proxy: object,
+        ) -> None:
+            cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+            try:
+                cursor.execute(f'SET ROLE "{bypass_role}"')
+            finally:
+                cursor.close()
+
+        try:
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session, session.begin():
+                await session.execute(text("SELECT set_config('timezone', 'UTC', true)"))
+                await backfill_facts(session, date(2026, 8, 7))
+        finally:
+            await engine.dispose()
+            async with db_engine.connect() as conn:
+                await conn.execute(text(f'DROP OWNED BY "{bypass_role}"'))
+                await conn.execute(text(f'DROP ROLE IF EXISTS "{bypass_role}"'))
+                await conn.commit()
+
+        async with db_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT error_code, claim_count, queue_wait_ms, final_idle_ms, "
+                        "cancellation_requested, dispatcher, node_count, sandbox_agent_node_count, "
+                        "max_node_timeout_seconds, parent_run_id, snapshot_id, run_number, "
+                        "output_bytes, rate_limited "
+                        "FROM run_daily_facts WHERE run_id = :rid"
+                    ),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+        assert row is not None, "the backfill must produce a fact for the terminal run"
+        assert row[0] == "executor_stalled"
+        assert row[1] == 3
+        assert row[2] == 5000, "queue_wait_ms = dispatched - started"
+        assert row[3] == 60000, "final_idle_ms = completed - heartbeat"
+        assert row[4] is True, "cancellation_requested"
+        assert row[6] == 2, "node_count must come from the snapshot graph_json"
+        assert row[7] == 1, "sandbox_agent_node_count from the snapshot graph_json"
+        assert row[8] == 600, "max_node_timeout_seconds from the snapshot graph_json"
+        assert row[10] == uuid.UUID(str(snapshot_id))
+        assert row[11] == 7
+        assert row[12] is not None and row[12] > 0, "output_bytes from outputs_json"
+        assert row[13] is True, "rate_limited from rate_limit_key"

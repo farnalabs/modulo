@@ -23,6 +23,7 @@ import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
@@ -54,6 +55,21 @@ from modulo.auth.oauth import (
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.core.analytics.builder import (
+    AnalyticsDimension,
+    AnalyticsGroupBy,
+    AnalyticsStatus,
+    AnalyticsTriggerType,
+)
+from modulo.core.analytics.service import (
+    AnalyticsDatabaseError,
+    AnalyticsMigrationRequiredError,
+    AnalyticsParams,
+    AnalyticsQueryTimeoutError,
+    AnalyticsRateLimitedError,
+    AnalyticsValidationError,
+    run_analytics_query,
+)
 from modulo.core.cost_controller.breakdown.constants import RAW_REPORTED_DISPLAY_CLAMP
 from modulo.core.cost_controller.finalize import finalize_cancelled_run
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
@@ -979,6 +995,134 @@ async def list_runs(
     except Exception:
         _log.exception("list_runs failed")
         return _tool_error("Failed to list runs")
+
+
+def _parse_mcp_datetime(value: str, name: str) -> datetime:
+    """Parse an MCP date/datetime param (bare date or ISO datetime) into a datetime.
+
+    Matches the REST surface: "2026-08-06" is accepted as midnight, ISO
+    datetimes accept a trailing 'Z' (Python 3.11+ fromisoformat handles it).
+    """
+    from datetime import date as _date
+
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        pass
+    try:
+        return datetime.combine(_date.fromisoformat(value), datetime.min.time())
+    except ValueError:
+        raise AnalyticsValidationError(f"{name}: invalid date value {value!r}") from None
+
+
+@mcp.tool(
+    name="query_analytics",
+    description=(
+        "Query run analytics over the daily facts table. Returns a bucketed series "
+        "(hour/day/week) with per-bucket count, cost, tokens, duration, success rate, "
+        "failure and stall counts, queue wait, final idle, and output size. "
+        "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
+        "and error_code for filtering/grouping by failure code. Requires the "
+        "analytics.query permission and the analytics_page plan feature."
+    ),
+)
+@_RETRY_DB
+async def query_analytics(
+    dimension: str | None = None,
+    group_by: str = "day",
+    auto_granularity: bool = False,
+    trigger_type: str | None = None,
+    status: str | None = None,
+    pipeline_id: list[str] | None = None,
+    error_code: str | None = None,
+    folder_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "query_analytics")
+
+        org_id = _ctx_org_id_val()
+        settings = get_settings()
+
+        # analytics_page feature gate — mirror the REST route's require_feature.
+        from modulo.core.feature_flags import resolve_plan_context
+        from modulo.db.crud.organisation import get_organisation
+
+        async with _session(org_id) as s:
+            org = await get_organisation(s, org_id)
+        async with _session(org_id) as s:
+            plan_ctx = await resolve_plan_context(settings, s, org)
+        if not plan_ctx.feature_enabled("analytics_page"):
+            return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
+
+        try:
+            dim = AnalyticsDimension(dimension) if dimension is not None else None
+            grp = AnalyticsGroupBy(group_by)
+            tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
+            st = AnalyticsStatus(status) if status is not None else None
+        except ValueError:
+            return {
+                "error": "invalid_params",
+                "detail": f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
+            }
+
+        pids: tuple[uuid.UUID, ...] = ()
+        if pipeline_id:
+            try:
+                pids = tuple(uuid.UUID(p) for p in pipeline_id)
+            except ValueError:
+                return {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
+
+        fid: uuid.UUID | None = None
+        if folder_id is not None:
+            try:
+                fid = uuid.UUID(folder_id)
+            except ValueError:
+                return {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
+
+        params = AnalyticsParams(
+            group_by=grp,
+            auto_granularity=auto_granularity,
+            dimension=dim,
+            trigger_type=tt,
+            status=st,
+            pipeline_ids=pids,
+            error_code=error_code,
+            folder_id=fid,
+            date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
+            date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
+            limit=max(1, min(limit, 1000)),
+        )
+        return await run_analytics_query(
+            org_id=org_id,
+            params=params,
+            factory=_get_session_factory(),
+            settings=settings,
+            account_id=_ctx_user_id_val(),
+            org_role=_ctx_role_val() or "",
+        )
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except AnalyticsRateLimitedError:
+        return {"error": "rate_limited", "detail": "Rate limit exceeded"}
+    except AnalyticsValidationError as exc:
+        return {"error": "invalid_params", "detail": exc.detail}
+    except AnalyticsQueryTimeoutError as exc:
+        return {"error": "query_timeout", "detail": str(exc)}
+    except AnalyticsMigrationRequiredError as exc:
+        return {"error": "migration_required", "detail": str(exc)}
+    except AnalyticsDatabaseError as exc:
+        return {"error": "database_error", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("query_analytics failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except Exception:
+        _log.exception("query_analytics failed")
+        return _tool_error("Failed to query analytics")
 
 
 @mcp.tool(

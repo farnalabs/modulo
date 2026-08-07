@@ -744,6 +744,187 @@ class TestMaintenance:
 
 
 # ---------------------------------------------------------------------------
+# FAR-102: live-writer enrichment
+# ---------------------------------------------------------------------------
+
+
+class TestLiveWriterEnrichment:
+    """record_run_facts must snapshot the FAR-102 enrichment columns."""
+
+    async def _seed_snapshot_with_graph(
+        self,
+        db_engine: AsyncEngine,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+    ) -> uuid.UUID:
+        # The shared ``pipeline`` fixture already holds a version-1 snapshot, so
+        # use version 2 (unique per pipeline_id) for the graph-bearing snapshot.
+        snapshot_id = uuid.uuid4()
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text(
+                    "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                    "snapshot_version, graph_json, connector_bindings_json, schema_pins_json, "
+                    "prompt_pins_json, model_backend_pins_json, run_context_defaults, config_json) "
+                    "VALUES (:id, :pid, :oid, 2, :gjson, '[]'::json, "
+                    "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
+                ),
+                {
+                    "id": str(snapshot_id),
+                    "pid": str(pipeline_id),
+                    "oid": str(org_id),
+                    "gjson": (
+                        '{"nodes": [{"id": "n1", "node_type": "agent", "timeout_seconds": 120}, '
+                        '{"id": "n2", "node_type": "sandbox_agent", "timeout_seconds": 600}]}'
+                    ),
+                },
+            )
+        return snapshot_id
+
+    async def test_record_run_facts_snapshots_enriched_columns(
+        self,
+        db_session: AsyncSession,
+        db_engine: AsyncEngine,
+        org: uuid.UUID,
+        pipeline: uuid.UUID,
+        snapshot: uuid.UUID,
+    ) -> None:
+        from modulo.core.analytics import record_run_facts
+
+        # A REAL parent run in the same org — runs.parent_run_id is FK'd with a
+        # same-organisation trigger, so a synthetic UUID would be rejected.
+        parent_run_id = await _insert_run(
+            db_session,
+            org_id=org,
+            pipeline_id=pipeline,
+            snapshot_id=snapshot,
+            status="complete",
+            started_at=datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+        )
+        await db_session.commit()
+
+        snapshot_id = await self._seed_snapshot_with_graph(db_engine, org, pipeline)
+        run_id = uuid.uuid4()
+        async with db_session.begin():
+            await db_session.execute(
+                text(
+                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                    "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at, "
+                    "dispatched_at, heartbeat_at, claim_count, cancellation_requested, error_code, "
+                    "outputs_json, rate_limit_key, parent_run_id, dispatcher) "
+                    "VALUES (:id, :oid, :pid, :sid, 'cron', 'failed', :hash, :thread, 42, "
+                    ":started, :completed, :dispatched, :heartbeat, 7, true, 'executor_stalled', "
+                    ":outjson, 'rl:key', :parent, 'saq')"
+                ),
+                {
+                    "id": str(run_id),
+                    "oid": str(org),
+                    "pid": str(pipeline),
+                    "sid": str(snapshot_id),
+                    "hash": uuid.uuid4().hex,
+                    "thread": f"thread-enrich-{run_id.hex[:8]}",
+                    "started": datetime(2026, 8, 7, 10, 0, tzinfo=UTC),
+                    "dispatched": datetime(2026, 8, 7, 10, 0, 15, tzinfo=UTC),
+                    "completed": datetime(2026, 8, 7, 11, 0, 0, tzinfo=UTC),
+                    "heartbeat": datetime(2026, 8, 7, 10, 59, 0, tzinfo=UTC),
+                    "outjson": '{"node_a": {"result": "ok"}}',
+                    "parent": str(parent_run_id),
+                },
+            )
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            run = await db_session.get(Run, run_id)
+            assert run is not None
+            await record_run_facts(db_session, run)
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            row = (
+                await db_session.execute(
+                    text(
+                        "SELECT error_code, claim_count, queue_wait_ms, final_idle_ms, "
+                        "cancellation_requested, dispatcher, node_count, sandbox_agent_node_count, "
+                        "max_node_timeout_seconds, parent_run_id, snapshot_id, run_number, "
+                        "output_bytes, rate_limited "
+                        "FROM run_daily_facts WHERE run_id = :rid"
+                    ),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+        assert row is not None
+        assert row[0] == "executor_stalled"
+        assert row[1] == 7
+        assert row[2] == 15000, "queue_wait_ms = dispatched - started"
+        assert row[3] == 60000, "final_idle_ms = completed - heartbeat"
+        assert row[4] is True
+        assert row[5] == "saq"
+        assert row[6] == 2, "node_count from the snapshot graph_json"
+        assert row[7] == 1, "sandbox_agent_node_count from the snapshot graph_json"
+        assert row[8] == 600, "max_node_timeout_seconds from the snapshot graph_json"
+        assert uuid.UUID(str(row[9])) == parent_run_id
+        assert uuid.UUID(str(row[10])) == snapshot_id
+        assert row[11] == 42
+        assert row[12] is not None and row[12] > 0, "output_bytes from outputs_json"
+        assert row[13] is True, "rate_limited from rate_limit_key"
+
+    async def test_record_run_facts_malformed_graph_is_null_safe(
+        self,
+        db_session: AsyncSession,
+        org: uuid.UUID,
+        pipeline: uuid.UUID,
+        snapshot: uuid.UUID,
+    ) -> None:
+        """A snapshot with an empty/malformed graph_json must not crash the writer.
+
+        The shared ``snapshot`` fixture carries ``{}`` graph_json — no ``nodes``
+        list — so the graph-derived fields degrade to ``(0, 0, None)``.
+        """
+        from modulo.core.analytics import record_run_facts
+
+        run_id = uuid.uuid4()
+        async with db_session.begin():
+            await db_session.execute(
+                text(
+                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                    "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at) "
+                    "VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', :hash, :thread, 5, "
+                    ":started, :completed)"
+                ),
+                {
+                    "id": str(run_id),
+                    "oid": str(org),
+                    "pid": str(pipeline),
+                    "sid": str(snapshot),
+                    "hash": uuid.uuid4().hex,
+                    "thread": f"thread-malformed-{run_id.hex[:8]}",
+                    "started": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+                    "completed": datetime(2026, 8, 7, 9, 30, 0, tzinfo=UTC),
+                },
+            )
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            run = await db_session.get(Run, run_id)
+            assert run is not None
+            await record_run_facts(db_session, run)
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            row = (
+                await db_session.execute(
+                    text(
+                        "SELECT node_count, sandbox_agent_node_count, max_node_timeout_seconds "
+                        "FROM run_daily_facts WHERE run_id = :rid"
+                    ),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+        assert row is not None
+        assert row[0] == 0, "malformed graph → node_count 0, never a crash"
+        assert row[1] == 0
+        assert row[2] is None, "malformed graph → max timeout None, never a crash"
+
+
+# ---------------------------------------------------------------------------
 # Invariant: TERMINAL_STATUSES ⊆ runs.status CHECK constraint
 # ---------------------------------------------------------------------------
 
