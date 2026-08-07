@@ -80,7 +80,7 @@ def _make_mock_primitive(**overrides) -> MagicMock:
     return p
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     session = _make_mock_session()
 
@@ -106,7 +106,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def viewer_client() -> Generator[TestClient, None, None]:
     session = _make_mock_session()
 

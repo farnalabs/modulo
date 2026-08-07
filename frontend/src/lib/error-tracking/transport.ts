@@ -4,6 +4,7 @@ import { getAccessToken, onAuthChange } from '../api/client'
 let _sessionKey: string | null = null
 let _keyPromise: Promise<string | null> | null = null
 let _unsubAuth: (() => void) | null = null
+let _generation = 0
 
 interface PendingItem {
   event: ErrorEventInput
@@ -25,6 +26,7 @@ export function initTransport(onAuthChangeFn: typeof onAuthChange): void {
 }
 
 export function disposeTransport(): void {
+  _generation += 1
   if (flushTimer) {
     clearTimeout(flushTimer)
     flushTimer = null
@@ -37,6 +39,8 @@ export function disposeTransport(): void {
   }
   PENDING.length = 0
   requestTimestamps = []
+  _sessionKey = null
+  _keyPromise = null
 }
 
 function isDisabled(): boolean {
@@ -47,10 +51,14 @@ async function getSessionKey(): Promise<string | null> {
   if (_sessionKey) return _sessionKey
   if (_keyPromise) return _keyPromise
 
+  const gen = _generation
   _keyPromise = fetchSessionKey()
-  _sessionKey = await _keyPromise
-  _keyPromise = null
-  return _sessionKey
+  const key = await _keyPromise
+  if (gen === _generation) {
+    _sessionKey = key
+    _keyPromise = null
+  }
+  return key
 }
 
 async function fetchSessionKey(): Promise<string | null> {
@@ -129,6 +137,7 @@ export function enqueueError(event: ErrorEventInput): void {
 export async function flush(): Promise<void> {
   if (isDisabled() || PENDING.length === 0) return
 
+  const gen = _generation
   const batch = PENDING.splice(0)
   if (isRateLimited()) {
     reQueueWithBackoff(batch)
@@ -138,6 +147,7 @@ export async function flush(): Promise<void> {
 
   try {
     const sessionKey = await getSessionKey()
+    if (gen !== _generation) return
     if (!sessionKey) {
       // Session key not available, re-queue with retry
       reQueueWithBackoff(batch)
@@ -151,6 +161,7 @@ export async function flush(): Promise<void> {
     if (token) headers['Authorization'] = `Bearer ${token}`
 
     const signature = await signPayload(body, sessionKey)
+    if (gen !== _generation) return
     if (signature) {
       headers['X-Modulo-Error-Token'] = signature
     }
@@ -161,6 +172,8 @@ export async function flush(): Promise<void> {
       body,
     })
 
+    if (gen !== _generation) return
+
     if (!res.ok && res.status >= 500) {
       reQueueWithBackoff(batch)
     } else if (!res.ok) {
@@ -168,6 +181,7 @@ export async function flush(): Promise<void> {
       console.warn('[error-tracking] Dropping %d events due to %d response', batch.length, res.status, messages)
     }
   } catch (err) {
+    if (gen !== _generation) return
     console.warn('[error-tracking] Ingest fetch failed, queuing batch for retry:', err)
     reQueueWithBackoff(batch)
   }

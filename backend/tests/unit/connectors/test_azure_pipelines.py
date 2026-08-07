@@ -18,12 +18,12 @@ from modulo.connectors.base import (
 _AZURE_DEVOPS_API = "https://dev.azure.com"
 
 
-@pytest.fixture()
+@pytest.fixture
 def ap_runner():
     return AzurePipelinesConnector(token="apt_test", organization="myorg", project="myproject")
 
 
-@pytest.fixture()
+@pytest.fixture
 def ap_double():
     return _AzurePipelinesTestDouble()
 

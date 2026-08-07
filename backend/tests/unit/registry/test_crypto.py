@@ -209,7 +209,8 @@ class TestPEMCryptoV2:
         priv_pem, pub_pem = generate_keypair()
         data = b"hello world"
         sig = sign(priv_pem, data)
-        assert isinstance(sig, str) and len(sig) > 0
+        assert isinstance(sig, str)
+        assert len(sig) > 0
         assert verify(pub_pem, data, sig) is True
 
     def test_verify_rejects_tampered_data(self):
@@ -281,7 +282,8 @@ class TestTrustAnchor:
 
         _, pub_pem = generate_keypair()
         ta_sig = sign_with_trust_anchor(pub_pem)
-        assert isinstance(ta_sig, str) and len(ta_sig) > 0
+        assert isinstance(ta_sig, str)
+        assert len(ta_sig) > 0
         assert verify_trust_anchor(pub_pem, ta_sig) is True
 
     def test_verify_trust_anchor_rejects_unsigned_key(self):

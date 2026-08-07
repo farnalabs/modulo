@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.vertexai import VERTEXAI_DEFAULT_LOCATION, VertexAIBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.vertexai.ChatVertexAI"):
         return VertexAIBackend(project="my-project", model_id="gemini-2.0-flash-001")

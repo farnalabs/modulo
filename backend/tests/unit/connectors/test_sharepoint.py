@@ -11,7 +11,7 @@ TOKEN = "test_sharepoint_token"
 _API = "https://graph.microsoft.com/v1.0"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return SharePointConnector(token=TOKEN)
 

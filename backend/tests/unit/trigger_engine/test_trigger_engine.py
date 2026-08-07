@@ -201,7 +201,7 @@ def _org_not_paused() -> Generator[None, None, None]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def webhook_client() -> Generator[TestClient, None, None]:
     import sys
     import types
@@ -310,7 +310,7 @@ def test_sha256_hex_returns_empty_for_non_bytes(raw: object) -> None:
 
 class TestVerifyTimestamp:
     @pytest.mark.parametrize(
-        "timestamp_input,expect_raises",
+        ("timestamp_input", "expect_raises"),
         [
             (lambda: str(int(time.time())), False),
             (lambda: str(int(time.time()) - 600), True),
@@ -330,7 +330,7 @@ class TestVerifyTimestamp:
 
 
 @pytest.mark.parametrize(
-    "secret,body,sig_maker,expected",
+    ("secret", "body", "sig_maker", "expected"),
     [
         ("my-secret", b"payload", lambda b, s: (_sha256_sig(b, s, timestamp=int(time.time())), int(time.time())), True),
         ("my-secret", b"payload", lambda b, s: (_sha256_sig(b, s), None), True),
@@ -354,7 +354,7 @@ def test_verify_hmac(secret, body, sig_maker, expected) -> None:
 
 
 @pytest.mark.parametrize(
-    "data,field_path,expected",
+    ("data", "field_path", "expected"),
     [
         ({"a": 1}, "a", 1),
         ({"a": {"b": {"c": "deep"}}}, "a.b.c", "deep"),
@@ -527,7 +527,7 @@ class TestTriggerEngineEvaluateCondition:
     """Tests for the static ``TriggerEngine.evaluate_condition`` helper."""
 
     @pytest.fixture(autouse=True)
-    def _polling_env(self):
+    def polling_env(self):
         settings = MagicMock()
         settings.fernet_key = _VALID_32
         with (
@@ -569,45 +569,45 @@ class TestTriggerEngineEvaluateCondition:
             condition_expression=None,
         )
 
-    async def test_connector_instance_not_found_returns_error(self, _polling_env) -> None:
+    async def test_connector_instance_not_found_returns_error(self) -> None:
         instance_id = uuid.uuid4()
         result = await self._run(self._session(None), instance_id)
 
         assert result == {"status": "error", "error": f"Connector instance {instance_id} not found"}
 
-    async def test_condition_met_returns_records(self, _polling_env) -> None:
+    async def test_condition_met_returns_records(self) -> None:
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
         assert result["status"] == "condition_met"
         assert result["records"] == [{"number": 1}]
         assert result["total"] == 1
 
-    async def test_no_match_returns_records(self, _polling_env) -> None:
-        _sb, _build, mock_eval, _connector = _polling_env
+    async def test_no_match_returns_records(self, polling_env) -> None:
+        _sb, _build, mock_eval, _connector = polling_env
         mock_eval.return_value = False
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
         assert result["status"] == "no_match"
         assert result["records"] == [{"number": 1}]
 
-    async def test_connector_init_failed_returns_error(self, _polling_env) -> None:
-        mock_sb, _build, _eval, _connector = _polling_env
+    async def test_connector_init_failed_returns_error(self, polling_env) -> None:
+        mock_sb, _build, _eval, _connector = polling_env
         mock_sb.side_effect = RuntimeError("fernet key invalid")
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
         assert result["status"] == "error"
         assert "Connector init failed" in result["error"]
 
-    async def test_query_failed_returns_error(self, _polling_env) -> None:
-        _sb, _build, _eval, connector = _polling_env
+    async def test_query_failed_returns_error(self, polling_env) -> None:
+        _sb, _build, _eval, connector = polling_env
         connector.query.side_effect = RuntimeError("upstream 500")
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
         assert result["status"] == "error"
         assert "Query failed" in result["error"]
 
-    async def test_condition_evaluation_failed_returns_error(self, _polling_env) -> None:
-        _sb, _build, mock_eval, _connector = _polling_env
+    async def test_condition_evaluation_failed_returns_error(self, polling_env) -> None:
+        _sb, _build, mock_eval, _connector = polling_env
         mock_eval.side_effect = ValueError("Invalid JMESPath expression")
         result = await self._run(self._session(MagicMock()), uuid.uuid4())
 
@@ -618,8 +618,8 @@ class TestTriggerEngineEvaluateCondition:
         "stage",
         ["connector_init", "query", "condition_eval"],
     )
-    async def test_cancelled_error_propagates(self, _polling_env, stage: str) -> None:
-        mock_sb, _build, mock_eval, connector = _polling_env
+    async def test_cancelled_error_propagates(self, polling_env, stage: str) -> None:
+        mock_sb, _build, mock_eval, connector = polling_env
         if stage == "connector_init":
             mock_sb.side_effect = asyncio.CancelledError()
         elif stage == "query":
@@ -726,7 +726,7 @@ async def test_handle_webhook_applies_payload_mapping() -> None:
 
 
 @pytest.mark.parametrize(
-    "trigger_overrides,session_overrides,hmac_sig,mod_ts_factory,expected_exc,extra_assert",
+    ("trigger_overrides", "session_overrides", "hmac_sig", "mod_ts_factory", "expected_exc", "extra_assert"),
     [
         ({}, {"trigger": None}, None, lambda: str(int(time.time())), TriggerNotFoundError, None),
         ({"active": False}, {}, None, lambda: str(int(time.time())), TriggerInactiveError, None),
@@ -765,7 +765,7 @@ async def test_handle_webhook_validation_raises(
 
 
 @pytest.mark.parametrize(
-    "trigger_overrides,session_overrides,hmac_sig,mod_ts_factory,expected_exc,expected_vr",
+    ("trigger_overrides", "session_overrides", "hmac_sig", "mod_ts_factory", "expected_exc", "expected_vr"),
     [
         ({}, {}, None, lambda: str(int(time.time()) - 600), TimestampExpiredError, "timestamp_expired"),
         (
@@ -1339,7 +1339,7 @@ async def test_cleanup_expired_payloads_none_expired() -> None:
 
 
 @pytest.mark.parametrize(
-    "patch_target,mock_factory,expected_status,expected_body,extra_headers,body_kwargs",
+    ("patch_target", "mock_factory", "expected_status", "expected_body", "extra_headers", "body_kwargs"),
     [
         (
             "handle_webhook",

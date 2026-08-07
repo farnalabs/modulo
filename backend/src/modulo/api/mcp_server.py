@@ -3554,7 +3554,7 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
         return "error: Invalid UUID format"
 
     async with _session(org_id) as s:
-        snap = await get_snapshot_detail(s, sid)
+        snap = await get_snapshot_detail(s, sid, organisation_id=org_id, pipeline_id=uuid.UUID(pipeline_id))
 
     if snap is None:
         return f"error: Snapshot {snapshot_id} not found"

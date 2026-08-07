@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.localai import DEFAULT_LOCALAI_BASE_URL, LocalAIBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return LocalAIBackend(api_key=None, model_id="gpt-4")

@@ -51,7 +51,8 @@ class TestDevtoolsSkills:
             assert isinstance(fm, dict), f"{sf.parent.name}: frontmatter is not a mapping"
             assert "name" in fm, f"{sf.parent.name}: frontmatter missing 'name' field"
             name = fm["name"]
-            assert isinstance(name, str) and name.strip(), f"{sf.parent.name}: 'name' is empty"
+            assert isinstance(name, str), f"{sf.parent.name}: 'name' is empty"
+            assert name.strip(), f"{sf.parent.name}: 'name' is empty"
 
     def test_all_skills_have_description(self, skill_files: list[Path]) -> None:
         for sf in skill_files:
@@ -59,6 +60,7 @@ class TestDevtoolsSkills:
             parts = content.split("---")
             assert len(parts) >= 3, f"{sf.parent.name}: missing YAML frontmatter delimiters"
             fm = yaml.safe_load(parts[1])
-            assert fm is not None and isinstance(fm, dict), f"{sf.parent.name}: invalid frontmatter"
+            assert fm is not None, f"{sf.parent.name}: invalid frontmatter"
+            assert isinstance(fm, dict), f"{sf.parent.name}: invalid frontmatter"
             desc = fm.get("description")
             assert desc, f"{sf.parent.name}: frontmatter missing or empty 'description' field"

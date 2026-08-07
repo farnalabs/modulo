@@ -230,6 +230,26 @@ async def test_find_healthy_fallback_unregistered_logs_warning():
     assert "not registered" in args[0]
 
 
+async def test_find_healthy_fallback_skips_unhealthy_in_list():
+    """_find_healthy_fallback must skip an unhealthy registered fallback and
+    select the next healthy one in the configured list."""
+    hub = ModelBackendHub()
+    primary = uuid.uuid4()
+    unhealthy_fb = uuid.uuid4()
+    healthy_fb = uuid.uuid4()
+    hub.register(primary, _FakeBackend())
+    hub.register(unhealthy_fb, _FakeBackend())
+    hub.register(healthy_fb, _FakeBackend())
+    hub.mark_unhealthy(primary)
+    hub.mark_unhealthy(unhealthy_fb)
+    hub._fallbacks[primary] = [unhealthy_fb, healthy_fb]
+
+    result = await hub.get(primary)
+
+    assert result is hub._backends[healthy_fb]
+    assert hub._fallbacks[primary] == [unhealthy_fb, healthy_fb]
+
+
 async def test_mark_unhealthy_then_health_check_recovers():
     hub = ModelBackendHub()
     bid = uuid.uuid4()
@@ -255,6 +275,7 @@ async def test_get_with_rotation_returns_primary_when_healthy():
     assert result.backend is hub._backends[primary]
     assert result.rotated is False
     assert result.original_id == primary
+    assert result.used_fallback_id is None
 
 
 async def test_get_with_rotation_falls_back_when_primary_unhealthy():
@@ -268,6 +289,7 @@ async def test_get_with_rotation_falls_back_when_primary_unhealthy():
     assert result.backend is hub._backends[fallback]
     assert result.rotated is True
     assert result.original_id == primary
+    assert result.used_fallback_id == fallback
 
 
 async def test_get_with_rotation_raises_when_all_unhealthy():
@@ -277,6 +299,88 @@ async def test_get_with_rotation_raises_when_all_unhealthy():
     hub.mark_unhealthy(bid)
     with pytest.raises(BackendUnavailableError):
         await hub.get_with_rotation(bid)
+
+
+async def test_get_with_rotation_scans_all_backends_when_configured_fallback_unhealthy():
+    """When the configured fallback is registered but unhealthy, get_with_rotation
+    falls back to scanning every registered backend for a healthy one."""
+    hub = ModelBackendHub()
+    primary = uuid.uuid4()
+    configured_fallback = uuid.uuid4()
+    unrelated_healthy = uuid.uuid4()
+    hub.register(primary, _FakeBackend())
+    hub.register(configured_fallback, _FakeBackend())
+    hub.register(unrelated_healthy, _FakeBackend())
+    hub.mark_unhealthy(primary)
+    hub.mark_unhealthy(configured_fallback)
+    hub._fallbacks[primary] = [configured_fallback]
+
+    result = await hub.get_with_rotation(primary)
+
+    assert result.rotated is True
+    assert result.original_id == primary
+    assert result.used_fallback_id == unrelated_healthy
+    assert result.backend is hub._backends[unrelated_healthy]
+
+
+async def test_get_with_rotation_scans_all_backends_when_no_configured_fallback():
+    """A primary with no configured fallbacks still falls back to any healthy
+    backend registered in the hub."""
+    hub = ModelBackendHub()
+    primary = uuid.uuid4()
+    other = uuid.uuid4()
+    hub.register(primary, _FakeBackend())
+    hub.register(other, _FakeBackend())
+    hub.mark_unhealthy(primary)
+
+    result = await hub.get_with_rotation(primary)
+
+    assert result.rotated is True
+    assert result.original_id == primary
+    assert result.used_fallback_id == other
+    assert result.backend is hub._backends[other]
+
+
+async def test_get_with_rotation_scan_all_raises_when_all_unhealthy():
+    """The scan-all loop must not pick an unhealthy backend; if every registered
+    backend is unhealthy, BackendUnavailableError is raised."""
+    hub = ModelBackendHub()
+    bid1 = uuid.uuid4()
+    bid2 = uuid.uuid4()
+    hub.register(bid1, _FakeBackend())
+    hub.register(bid2, _FakeBackend())
+    hub.mark_unhealthy(bid1)
+    hub.mark_unhealthy(bid2)
+
+    with pytest.raises(BackendUnavailableError):
+        await hub.get_with_rotation(bid1)
+
+
+async def test_get_with_rotation_scan_all_emits_failover_event():
+    """The scan-all fallback path emits a model_failover audit event with the
+    scanned backend as the fallback_id."""
+    hub = ModelBackendHub()
+    primary = uuid.uuid4()
+    other = uuid.uuid4()
+    hub.register(primary, _FakeBackend())
+    hub.register(other, _FakeBackend())
+    hub.mark_unhealthy(primary)
+
+    events: list[dict[str, Any]] = []
+
+    async def _audit(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    result = await hub.get_with_rotation(primary, audit_logger=_audit)
+
+    assert result.backend is hub._backends[other]
+    assert events == [
+        {
+            "event_type": "model_failover",
+            "primary_id": str(primary),
+            "fallback_id": str(other),
+        }
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +461,28 @@ async def test_initialise_ollama_defaults_base_url():
         with patch("modulo.model_backends.ollama.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
+
+
+async def test_initialise_forwards_default_params_to_backend():
+    """default_params from the ORM row must be forwarded to the built backend."""
+    mb = _FakeMB(
+        id=uuid.uuid4(),
+        provider="openai",
+        model_id="gpt-4o",
+        credentials_ciphertext=_encrypt({"api_key": "sk-test"}),
+        default_params={"temperature": 0.5, "max_tokens": 512},
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with (
+        patch.object(backend, "get_secret", return_value='{"api_key": "sk-test"}'),
+        patch("modulo.model_backends.module.ChatOpenAI") as mock_chat,
+    ):
+        hub = ModelBackendHub()
+        await hub.initialise([mb], secrets_backend=backend)
+    assert mb.id in hub.backend_ids
+    chat_kwargs = mock_chat.call_args.kwargs
+    assert chat_kwargs["temperature"] == 0.5
+    assert chat_kwargs["max_tokens"] == 512
 
 
 async def test_initialise_plugin_fallback_backend():
@@ -790,7 +916,14 @@ async def test_get_with_rotation_emits_failover_event():
     result = await hub.get_with_rotation(primary, audit_logger=_audit)
     assert result.rotated is True
     assert result.backend is hub._backends[fallback]
-    assert len(events) == 1
+    assert result.used_fallback_id == fallback
+    assert events == [
+        {
+            "event_type": "model_failover",
+            "primary_id": str(primary),
+            "fallback_id": str(fallback),
+        }
+    ]
 
 
 async def test_failover_event_audit_logger_failure_isolated():
@@ -997,3 +1130,74 @@ async def test_build_backend_unknown_provider():
 
     with pytest.raises(ValueError, match="Unknown model backend provider"):
         _build_backend("no_such_provider", "model", {"api_key": "x"}, {})
+
+
+async def test_build_backend_forwards_default_params_to_class_backend():
+    """default_params must be forwarded to non-OpenAI-compatible backends
+    (e.g. cohere) alongside api_key and model_id."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+        mock_cls.return_value = _KWVFakeBackend
+        backend = _build_backend(
+            "cohere",
+            "command-r",
+            {"api_key": "ck"},
+            {"temperature": 0.2, "max_tokens": 100},
+        )
+    assert isinstance(backend, _KWVFakeBackend)
+    assert backend.kwargs == {
+        "api_key": "ck",
+        "model_id": "command-r",
+        "temperature": 0.2,
+        "max_tokens": 100,
+    }
+    mock_cls.assert_called_once_with("cohere", "CohereBackend")
+
+
+async def test_build_backend_forwards_default_params_to_bedrock():
+    """default_params must be forwarded to the bedrock backend."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    with patch("modulo.core.model_backend_hub._backend_class") as mock_cls:
+        mock_cls.return_value = _KWVFakeBackend
+        backend = _build_backend(
+            "bedrock",
+            "nova",
+            {"aws_access_key_id": "a", "aws_secret_access_key": "s"},
+            {"temperature": 0.7},
+        )
+    assert isinstance(backend, _KWVFakeBackend)
+    assert backend.kwargs == {
+        "aws_access_key_id": "a",
+        "aws_secret_access_key": "s",
+        "model_id": "nova",
+        "region": "us-east-1",
+        "temperature": 0.7,
+    }
+
+
+async def test_build_backend_openai_compatible_uses_explicit_base_url():
+    """A creds-supplied base_url must override the provider default."""
+    from modulo.core.model_backend_hub import _build_backend
+    from modulo.model_backends.module import OpenAICompatibleBackend
+
+    backend = _build_backend(
+        "ollama",
+        "model",
+        {"api_key": "", "base_url": "http://custom:9999/v1"},
+        {},
+    )
+    assert isinstance(backend, OpenAICompatibleBackend)
+    assert backend.base_url == "http://custom:9999/v1"
+
+
+async def test_build_backend_openai_compatible_forwards_default_params():
+    """default_params must reach the OpenAI-compatible backend constructor."""
+    from modulo.core.model_backend_hub import _build_backend
+    from modulo.model_backends.module import OpenAICompatibleBackend
+
+    with patch("modulo.model_backends.module.ChatOpenAI") as mock_chat:
+        backend = _build_backend("openai", "gpt-4o", {"api_key": "x"}, {"temperature": 0.5})
+    assert isinstance(backend, OpenAICompatibleBackend)
+    assert mock_chat.call_args.kwargs["temperature"] == 0.5

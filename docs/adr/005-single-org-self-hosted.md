@@ -47,7 +47,7 @@ Concretely:
 
 1. **RLS is hard.** `SET LOCAL app.organisation_id` is a transaction-scoped session variable. Browsing org A while holding a session for org B is not possible without the modulo-cloud routing layer. Building a cross-org admin role means either a super-user bypass of RLS (defeating tenant isolation) or a complex token-switching layer. Neither is worth the complexity for a self-hosted deployment that could simply use teams.
 
-2. **LangGraph checkpoint isolation is incomplete** (PRD §6.2). Checkpoint tables lack `organisation_id`. We'd need to subclass `PostgresSaver` before multi-org SaaS launch. Until then, multiple orgs sharing one Postgres share checkpoint data — a data leak. This is a known gap for SaaS, but it means we must actively discourage multi-org self-hosted until it's fixed.
+2. **LangGraph checkpoint isolation is resolved** (PRD §6.2). The production checkpointer is `ModuloPostgresSaver`, a subclass of `AsyncPostgresSaver` that adds `organisation_id` to all checkpoint tables, enforces it on every read/write, and encrypts checkpoint JSON at rest. The nightly checkpoint retention job operates on that schema. This was a known gap for SaaS; it is fixed.
 
 3. **Teams already cover the workspace pattern.** The Team entity provides pipeline visibility scoping, team-scoped connector access, team-scoped HITL gates, and team membership with roles. A 5-department company gets one org and 5 teams. This is the intended pattern (§8.3).
 
@@ -56,6 +56,6 @@ Concretely:
 ## Related Documents
 
 - PRD §6.2 — SaaS-First Multi-Tenant Architecture
-- PRD §6.2 — LangGraph Checkpoint Isolation (known gap)
+- PRD §6.2 — LangGraph Checkpoint Isolation (resolved via `ModuloPostgresSaver`)
 - PRD §8.3 — Team entity and team-scoped RBAC
 - ADR 002 — Database Abstraction Strategy (RLS vs generic tenant filtering)

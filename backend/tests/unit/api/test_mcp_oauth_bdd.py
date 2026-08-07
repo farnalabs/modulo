@@ -157,7 +157,7 @@ def _make_mock_consent_state(
     return s
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -175,7 +175,7 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def viewer_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

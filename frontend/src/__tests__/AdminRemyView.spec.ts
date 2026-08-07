@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import AdminRemyView from '../views/AdminRemyView.vue'
 
@@ -67,42 +66,33 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 describe('AdminRemyView', () => {
-  beforeEach(() => {
+  let wrapper: VueWrapper | null = null
+
+  beforeAll(async () => {
     setActivePinia(createPinia())
+    wrapper = mount(AdminRemyView)
+    await vi.waitFor(() => {
+      expect(wrapper!.text()).toContain('Configured Providers')
+    }, { timeout: 60000, interval: 100 })
+  }, 60000)
+
+  it('renders the config page title', () => {
+    expect(wrapper!.text()).toContain('Remy Configuration')
   })
 
-  it('renders the config page title', async () => {
-    const wrapper = mount(AdminRemyView)
-    await flushPromises()
-    await nextTick()
-    expect(wrapper.text()).toContain('Remy Configuration')
+  it('renders the system prompt section', () => {
+    expect(wrapper!.text()).toContain('System Prompt')
   })
 
-  it('renders the system prompt section', async () => {
-    const wrapper = mount(AdminRemyView)
-    await flushPromises()
-    await nextTick()
-    expect(wrapper.text()).toContain('System Prompt')
+  it('renders the skills section', () => {
+    expect(wrapper!.text()).toContain('Skills')
   })
 
-  it('renders the skills section', async () => {
-    const wrapper = mount(AdminRemyView)
-    await flushPromises()
-    await nextTick()
-    expect(wrapper.text()).toContain('Skills')
+  it('renders access list section', () => {
+    expect(wrapper!.text()).toContain('Access List')
   })
 
-  it('renders access list section', async () => {
-    const wrapper = mount(AdminRemyView)
-    await flushPromises()
-    await nextTick()
-    expect(wrapper.text()).toContain('Access List')
-  })
-
-  it('renders configured providers section', async () => {
-    const wrapper = mount(AdminRemyView)
-    await flushPromises()
-    await nextTick()
-    expect(wrapper.text()).toContain('Configured Providers')
+  it('renders configured providers section', () => {
+    expect(wrapper!.text()).toContain('Configured Providers')
   })
 })

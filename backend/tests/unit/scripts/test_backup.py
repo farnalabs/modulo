@@ -91,12 +91,10 @@ def test_check_disk_space_passes_when_sufficient(tmp_manifest_dir, capsys):
 
 
 def test_check_disk_space_exits_when_insufficient(tmp_manifest_dir, capsys):
-    with (
-        patch("scripts.backup.shutil.disk_usage") as mock_usage,
-        pytest.raises(SystemExit),
-    ):
+    with patch("scripts.backup.shutil.disk_usage") as mock_usage:
         mock_usage.return_value.free = 0.5 * 1024**3
-        check_disk_space(tmp_manifest_dir, 1)
+        with pytest.raises(SystemExit):
+            check_disk_space(tmp_manifest_dir, 1)
     assert "Insufficient disk space" in capsys.readouterr().out
 
 

@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from modulo.model_backends.base import ModelBackendBase
+import modulo.model_backends
+from modulo.model_backends.base import HealthResult, ModelBackendBase
 from modulo.model_backends.module import OpenAICompatibleBackend
 
 
@@ -351,3 +352,54 @@ class TestSharedBackendContracts:
         messages = [HumanMessage(content="hi")]
         await backend.invoke(messages, max_tokens=500, temperature=0.7)
         mock_invoke.assert_called_once_with(messages, max_tokens=500, temperature=0.7)
+
+
+class TestOpenAICompatibleHealthCheck:
+    async def test_defaults_to_openai_url_when_no_base_url(self):
+        backend = OpenAICompatibleBackend(api_key="sk-test", model_id="gpt-4o")
+        with patch(
+            "modulo.model_backends.module.openai_compatible_health_check",
+            new=AsyncMock(return_value=HealthResult(ok=True)),
+        ) as mock_health:
+            result = await backend.health_check()
+        assert result.ok is True
+        mock_health.assert_awaited_once_with(
+            base_url="https://api.openai.com/v1",
+            api_key="sk-test",
+        )
+
+    async def test_uses_custom_base_url_when_set(self):
+        backend = OpenAICompatibleBackend(
+            api_key="sk-test",
+            model_id="gpt-4o",
+            base_url="https://api.example.com/v1/",
+        )
+        with patch(
+            "modulo.model_backends.module.openai_compatible_health_check",
+            new=AsyncMock(return_value=HealthResult(ok=False, detail="down")),
+        ) as mock_health:
+            result = await backend.health_check()
+        assert result.ok is False
+        assert result.detail == "down"
+        mock_health.assert_awaited_once_with(
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+        )
+
+
+class TestPackageLazyLoading:
+    def test_lazy_getattr_resolves_registered_backend(self):
+        name = "AnthropicBackend"
+        cls = getattr(modulo.model_backends, name)
+        assert cls.__name__ == "AnthropicBackend"
+
+    def test_lazy_getattr_unknown_name_raises_attribute_error(self):
+        missing = "NoSuchBackend"
+        with pytest.raises(AttributeError, match="has no attribute"):
+            getattr(modulo.model_backends, missing)
+
+    def test_dir_includes_all_registered_backend_names(self):
+        names = dir(modulo.model_backends)
+        assert "AnthropicBackend" in names
+        assert "StubModelBackend" in names
+        assert "OpenAIBackend" in names

@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.lm_studio import DEFAULT_LM_STUDIO_BASE_URL, LmStudioBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return LmStudioBackend(api_key=None, model_id="lm-studio-model")

@@ -51,9 +51,24 @@ async def delete_snapshot(
 async def get_snapshot_detail(
     session: AsyncSession,
     snapshot_id: uuid.UUID,
+    *,
+    organisation_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
 ) -> PipelineSnapshot | None:
-    """Get a single snapshot with full graph detail."""
-    return await get_snapshot(session, snapshot_id)
+    """Get a single snapshot with full graph detail.
+
+    Explicit org/pipeline scoping is defense-in-depth on top of RLS: when the
+    caller has tenant/pipeline context, pass it so a snapshot belonging to
+    another org (or another pipeline) can never be returned even if RLS
+    context is missing or misconfigured.
+    """
+    stmt = select(PipelineSnapshot).where(PipelineSnapshot.id == snapshot_id)
+    if organisation_id is not None:
+        stmt = stmt.where(PipelineSnapshot.organisation_id == organisation_id)
+    if pipeline_id is not None:
+        stmt = stmt.where(PipelineSnapshot.pipeline_id == pipeline_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 async def list_snapshots(

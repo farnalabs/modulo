@@ -66,19 +66,19 @@ def _row(
 
 class TestAllowlistRejection:
     def test_group_by_rejects_sql_injection_string(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="not a valid AnalyticsGroupBy"):
             AnalyticsGroupBy("status; DROP TABLE runs")
 
     def test_dimension_rejects_sql_injection_string(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="not a valid AnalyticsDimension"):
             AnalyticsDimension("status; DROP TABLE runs")
 
     def test_trigger_type_rejects_sql_injection_string(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="not a valid AnalyticsTriggerType"):
             AnalyticsTriggerType("manual OR 1=1")
 
     def test_status_rejects_sql_injection_string(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="not a valid AnalyticsStatus"):
             AnalyticsStatus("complete; DROP TABLE runs")
 
     def test_non_allowlisted_dimension_literal_raises(self) -> None:
@@ -140,8 +140,10 @@ class TestCompiledSql:
         # keys (enum members), rendered as bound comparisons — never raw text.
         stmt, _ = build_facts_query(_query(status=AnalyticsStatus.COMPLETE, trigger_type=AnalyticsTriggerType.WEBHOOK))
         sql = str(stmt.compile(dialect=postgresql.dialect()))
-        assert "status" in sql and "trigger_type" in sql
-        assert "'complete'" not in sql and "'webhook'" not in sql, "filter values must be bound, never literal"
+        assert "status" in sql
+        assert "trigger_type" in sql
+        assert "'complete'" not in sql, "filter values must be bound, never literal"
+        assert "'webhook'" not in sql, "filter values must be bound, never literal"
 
 
 class TestFAR102Filters:

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.core.connector_hub.locking import AdvisoryLockService, ConnectorLockError
 
 
-@pytest.fixture()
+@pytest.fixture
 def lock_service():
     return AdvisoryLockService()
 

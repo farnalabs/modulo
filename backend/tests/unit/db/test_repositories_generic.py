@@ -31,7 +31,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 class TestGenericRepository:
-    @pytest.fixture()
+    @pytest.fixture
     def repo(self) -> GenericRepository:
         return GenericRepository(session_factory=MagicMock())
 

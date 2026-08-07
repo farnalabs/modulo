@@ -404,17 +404,143 @@ class TestExportOrgData:
 
 
 class TestBatchDeleteLanggraphCheckpoints:
-    async def test_returns_zero_when_no_checkpoint_tables(self, db_engine: AsyncEngine) -> None:
-        """If the langgraph schema does not exist, the function should handle it."""
+    async def test_deletes_only_expired_rows_across_all_saver_tables(
+        self,
+        db_engine: AsyncEngine,
+    ) -> None:
+        """Retention purges expired checkpoint/blobs/writes but keeps fresh rows.
+
+        The checkpoint tables are created unqualified in the test DB by the
+        integration conftest (which runs ``ModuloPostgresSaver`` migrations),
+        mirroring production. The retention job must delete only rows whose
+        ``created_at`` predates the 30-day cutoff, across all three saver
+        tables.
+        """
         from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        old_ts = datetime.now(UTC) - timedelta(days=31)
+        fresh_ts = datetime.now(UTC)
+        old_org = uuid.uuid4()
+        fresh_org = uuid.uuid4()
+
+        async with db_engine.connect() as conn, conn.begin():
+            for org, thread, ckp, created_at in (
+                (old_org, "thread-old", "ckp-old", old_ts),
+                (fresh_org, "thread-fresh", "ckp-fresh", fresh_ts),
+            ):
+                await conn.execute(
+                    text(
+                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
+                        "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
+                        "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                    ),
+                    {"org": str(org), "thread": thread, "ckp": ckp, "created_at": created_at},
+                )
+                await conn.execute(
+                    text(
+                        "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, "
+                        "channel, version, type, blob, created_at) "
+                        "VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
+                    ),
+                    {
+                        "org": str(org),
+                        "thread": thread,
+                        "channel": "channel",
+                        "version": "v1",
+                        "blob": b"blob-data",
+                        "created_at": created_at,
+                    },
+                )
+                await conn.execute(
+                    text(
+                        "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, "
+                        "checkpoint_id, task_id, idx, channel, type, blob, created_at) "
+                        "VALUES (:org, :thread, '', :ckp, :task, 0, 'channel', 'json', :blob, :created_at)",
+                    ),
+                    {
+                        "org": str(org),
+                        "thread": thread,
+                        "ckp": ckp,
+                        "task": "task-1",
+                        "blob": b"write-data",
+                        "created_at": created_at,
+                    },
+                )
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            try:
-                count = await batch_delete_langgraph_checkpoints(session)
-                assert count == 0
-            except Exception as exc:
-                msg = str(exc).lower()
-                if "does not exist" in msg or "relation" in msg:
-                    pytest.skip("langgraph schema not available in this test DB")
-                raise
+            count = await batch_delete_langgraph_checkpoints(session)
+            await session.commit()
+
+        assert count == 3  # one expired row per saver table
+
+        async with db_engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoints WHERE organisation_id = :oid"),
+                {"oid": str(old_org)},
+            )
+            assert result.scalar_one() == 0
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoint_blobs WHERE organisation_id = :oid"),
+                {"oid": str(old_org)},
+            )
+            assert result.scalar_one() == 0
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoint_writes WHERE organisation_id = :oid"),
+                {"oid": str(old_org)},
+            )
+            assert result.scalar_one() == 0
+
+            # Fresh rows survive the retention pass.
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoints WHERE organisation_id = :oid"),
+                {"oid": str(fresh_org)},
+            )
+            assert result.scalar_one() == 1
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoint_blobs WHERE organisation_id = :oid"),
+                {"oid": str(fresh_org)},
+            )
+            assert result.scalar_one() == 1
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoint_writes WHERE organisation_id = :oid"),
+                {"oid": str(fresh_org)},
+            )
+            assert result.scalar_one() == 1
+
+    async def test_batches_until_all_expired_rows_removed(self, db_engine: AsyncEngine) -> None:
+        """The batch loop repeats until fewer than ``batch_size`` rows remain."""
+        from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
+
+        old_ts = datetime.now(UTC) - timedelta(days=31)
+        org = uuid.uuid4()
+
+        async with db_engine.connect() as conn, conn.begin():
+            for i in range(5):
+                await conn.execute(
+                    text(
+                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
+                        "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
+                        "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                    ),
+                    {
+                        "org": str(org),
+                        "thread": f"thread-{i}",
+                        "ckp": f"ckp-{i}",
+                        "created_at": old_ts,
+                    },
+                )
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            count = await batch_delete_langgraph_checkpoints(session, batch_size=2)
+            await session.commit()
+
+        assert count == 5
+
+        async with db_engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM checkpoints WHERE organisation_id = :oid"),
+                {"oid": str(org)},
+            )
+            assert result.scalar_one() == 0

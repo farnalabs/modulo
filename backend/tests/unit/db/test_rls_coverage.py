@@ -56,7 +56,8 @@ def _org_scoped_orm_tables() -> set[str]:
 
 def _load_migration_module(path: Path) -> object:
     spec = importlib.util.spec_from_file_location(f"_rls_mig_{path.stem}", path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

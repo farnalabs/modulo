@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.vllm import DEFAULT_VLLM_BASE_URL, VllmBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return VllmBackend(api_key=None, model_id="llama-3.1-8b-instruct")
