@@ -3,7 +3,7 @@
 Checks for known bug patterns in sandbox_agent pipeline configs:
 1. Empty ``agent_prompt`` that would cause opencode to hang
 2. ``timeout_seconds`` defaulting to 600 (too short for complex tasks)
-3. ``template_id`` not set to ``"opencode"``
+3. ``template_id`` not in the known-good set {opencode, modulo-opencode}
 """
 
 from __future__ import annotations
@@ -28,9 +28,12 @@ _DEFAULT_FALLBACKS = [
     (
         "template_id",
         "base",
-        "sandbox_agent template_id defaults to 'base' — use 'opencode' template (has opencode CLI pre-installed).",
+        "sandbox_agent template_id defaults to 'base' — use 'opencode' (default, has opencode CLI) "
+        "or 'modulo-opencode' (managed cache-warmed template).",
     ),
 ]
+
+_ALLOWED_TEMPLATE_IDS = {"opencode", "modulo-opencode"}
 
 
 def _fail(message: str) -> None:
@@ -102,12 +105,13 @@ def _check_node_config(path: Path, obj: dict, prefix: str = "") -> None:
         if not ap:
             _fail(f"{path}: agent_prompt is empty in sandbox_agent node {prefix} — opencode will hang")
 
-        # Check template_id is "opencode"
+        # Check template_id is one of the known-good sandbox templates
         tid = obj.get("template_id", "")
-        if tid and tid != "opencode":
+        if tid and tid not in _ALLOWED_TEMPLATE_IDS:
             _fail(
                 f"{path}: template_id is '{tid}' in sandbox_agent node {prefix} — "
-                "should be 'opencode' (has opencode CLI pre-installed)"
+                "should be one of: opencode (default, has opencode CLI), "
+                "modulo-opencode (managed cache-warmed template)"
             )
 
         # Check timeout_seconds is not the default 600
