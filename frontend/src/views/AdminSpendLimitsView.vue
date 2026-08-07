@@ -90,7 +90,7 @@
               <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
                 <span class="text-sm font-medium">{{ $t('views.AdminSpendLimitsView.org_total') }}</span>
                 <span class="text-lg font-semibold" :class="overageClass(orgTotalCost, orgLimit)">
-                  ${{ orgTotalCost.toFixed(2) }}
+                  {{ formatMoney(orgTotalCost, currencyCode) }}
                 </span>
               </div>
               <div v-if="teamCosts.length > 0" class="space-y-2">
@@ -101,7 +101,7 @@
                 >
                   <span class="text-sm">{{ tc.team_name }}</span>
                   <span class="text-sm font-medium" :class="overageClass(tc.cost_usd, tc.limit_usd)">
-                    ${{ tc.cost_usd.toFixed(2) }}
+                    {{ formatMoney(tc.cost_usd, currencyCode) }}
                   </span>
                 </div>
               </div>
@@ -128,8 +128,11 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const planStore = usePlanStore()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 interface SpendLimitData {
   org_daily_limit_usd: number | null
@@ -266,4 +269,5 @@ async function saveTeamLimit(team: TeamRow) {
 }
 
 planStore.fetchPlan()
+loadCurrency()
 </script>
