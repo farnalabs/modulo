@@ -73,6 +73,14 @@ class TestRedisSlidingWindowRateLimiter:
         assert pipe.expire.call_args[0][0] == "ratelimit:k"
         assert pipe.expire.call_args[0][1] == 240
 
+    async def test_expires_key_at_default_double_window(self, mock_redis):
+        """With the default window, the TTL must be 2 * WINDOW_SECONDS."""
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        await limiter.check("k", max_requests=5)
+        pipe = mock_redis.pipeline.return_value
+        pipe.expire.assert_called_once()
+        assert pipe.expire.call_args[0][1] == WINDOW_SECONDS * 2
+
     async def test_records_timestamp_member(self, mock_redis):
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
         await limiter.check("k", max_requests=5)
