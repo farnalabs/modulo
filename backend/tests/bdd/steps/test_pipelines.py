@@ -723,7 +723,8 @@ def check_run_has_final_state(request: pytest.FixtureRequest) -> None:
         assert body["final_state"] is not None
     else:
         mock_run = getattr(request.node, "_mock_run", None)
-        assert mock_run is not None and mock_run.final_state is not None, "Expected run to have a final_state"
+        assert mock_run is not None, "Expected a mock run"
+        assert mock_run.final_state is not None, "Expected run to have a final_state"
 
 
 @then("the run has an error_detail")
@@ -733,7 +734,8 @@ def check_run_has_error_detail(request: pytest.FixtureRequest) -> None:
         assert body["error_detail"] is not None
     else:
         mock_run = getattr(request.node, "_mock_run", None)
-        assert mock_run is not None and mock_run.error_detail is not None, "Expected run to have an error_detail"
+        assert mock_run is not None, "Expected a mock run"
+        assert mock_run.error_detail is not None, "Expected run to have an error_detail"
 
 
 @then(parsers.parse('the effective run context branch is "{expected_branch}"'))

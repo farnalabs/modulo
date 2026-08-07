@@ -90,7 +90,7 @@ def _head_result(head):
 
 class TestEventHash:
     @pytest.mark.parametrize(
-        "event_type,previous_hash,org_id_str,event_id_str,expected_different",
+        ("event_type", "previous_hash", "org_id_str", "event_id_str", "expected_different"),
         [
             ("a", None, ORG_ID, EVENT_ID, False),
             ("b", None, ORG_ID, EVENT_ID, True),
@@ -1030,7 +1030,7 @@ class TestAppendAuditEventEdgeCases:
         return s
 
     @pytest.mark.parametrize(
-        "kwargs,expected_checks",
+        ("kwargs", "expected_checks"),
         [
             ({"payload_json": None}, {"payload_json": {}}),
             ({"payload_json": {}}, {"payload_json": {}}),

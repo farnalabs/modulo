@@ -430,7 +430,8 @@ class TestDemoAuth:
 
     async def test_demo_user_can_login(self, demo_client: AsyncClient) -> None:
         token = await _demo_login(demo_client)
-        assert isinstance(token, str) and len(token) > 20
+        assert isinstance(token, str)
+        assert len(token) > 20
 
     async def test_demo_user_invalid_password(self, demo_client: AsyncClient) -> None:
         resp = await demo_client.post(

@@ -98,7 +98,7 @@ def _mock_resp(is_success: bool = True, status_code: int = 200, text: str = "ok"
 
 class TestPctDelta:
     @pytest.mark.parametrize(
-        "current,previous,expected",
+        ("current", "previous", "expected"),
         [
             (10.0, 0.0, None),
             (150.0, 100.0, 50.0),
@@ -118,7 +118,7 @@ class TestPctDelta:
 
 class TestTrendSymbol:
     @pytest.mark.parametrize(
-        "delta,expected",
+        ("delta", "expected"),
         [
             (10.0, "\u2191"),
             (-10.0, "\u2193"),
@@ -151,7 +151,7 @@ class TestTrendSymbol:
 
 class TestFmtDelta:
     @pytest.mark.parametrize(
-        "delta,expected",
+        ("delta", "expected"),
         [
             (None, "N/A"),
             (10.0, "+10.0%"),

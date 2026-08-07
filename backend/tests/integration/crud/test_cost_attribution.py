@@ -587,7 +587,7 @@ async def test_unique_constraint_enforced(
                     "d": today,
                 },
             )
-            await session.commit()
+        await session.commit()
 
 
 async def test_daily_run_count_isolation_between_orgs(

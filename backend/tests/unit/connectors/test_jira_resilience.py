@@ -308,7 +308,6 @@ async def test_429_exhausted_includes_quota_detail(connector, monkeypatch):
             httpx.Response(429, headers={"X-RateLimit-Limit": "10000", "X-RateLimit-Remaining": "0"}),
         ]
     )
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError, match="HTTP 429") as exc:
         await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
-    assert "HTTP 429" in str(exc.value)
     assert "quota: X-RateLimit-Limit=10000; X-RateLimit-Remaining=0" in str(exc.value)

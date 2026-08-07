@@ -16,12 +16,12 @@ with contextlib.suppress(FileNotFoundError, OSError):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def snyk_connector():
     return SnykConnector(token="snyk_test_token")
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(snyk_connector):
     return snyk_connector
 

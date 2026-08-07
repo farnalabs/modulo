@@ -850,7 +850,7 @@ class TestCrudUnauthorized:
     """Parametrized: list endpoints return 401 without auth header."""
 
     @pytest.mark.parametrize(
-        ("url",),
+        "url",
         [
             pytest.param("/scim/v2/Users", id="list_users"),
             pytest.param("/scim/v2/Groups", id="list_groups"),

@@ -668,9 +668,8 @@ async def test_sweep_redispatches_stranded_capacity_blocked_run(
     assert code == "org_capacity_limited"
 
     heartbeat = await _run_heartbeat(db_engine, org_id, stranded)
-    assert heartbeat is not None and heartbeat > now - timedelta(seconds=30), (
-        "the sweep must stamp a fresh heartbeat so it does not hot-loop"
-    )
+    assert heartbeat is not None, "the sweep must stamp a fresh heartbeat so it does not hot-loop"
+    assert heartbeat > now - timedelta(seconds=30), "the sweep must stamp a fresh heartbeat so it does not hot-loop"
 
 
 async def test_sweep_skips_fresh_heartbeat_capacity_blocked_run(

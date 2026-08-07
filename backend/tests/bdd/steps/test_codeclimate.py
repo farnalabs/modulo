@@ -16,12 +16,12 @@ with contextlib.suppress(FileNotFoundError, OSError):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def codeclimate_connector():
     return CodeClimateConnector(token="cc_test_token")
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(codeclimate_connector):
     return codeclimate_connector
 
