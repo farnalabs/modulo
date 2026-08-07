@@ -2,7 +2,7 @@
   <div class="space-y-3">
     <label for="environmentprofilepicker-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.environment-profiles.EnvironmentProfilePicker.environment_profile') }}</label>
 
-    <Select v-model="selectedId" @update:model-value="emitChange">
+    <Select aria-label="Environment profile" v-model="selectedId" @update:model-value="emitChange">
       <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Environment profile" data-testid="envprofile-picker-select">
         <SelectValue placeholder="None (no sandbox environment)" />
       </SelectTrigger>

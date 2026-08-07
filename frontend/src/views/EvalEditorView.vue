@@ -19,7 +19,7 @@
       <div class="grid gap-6 lg:grid-cols-2">
         <div>
           <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
-          <Select v-model="selectedPipelineId" @update:model-value="onPipelineChange">
+          <Select :aria-label="$t('views.EvalEditorView.pipeline_aria')" v-model="selectedPipelineId" @update:model-value="onPipelineChange">
             <SelectTrigger data-testid="eval-editor-pipeline" :aria-label="$t('views.EvalEditorView.pipeline_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <SelectValue :placeholder="$t('views.EvalEditorView.select_a_pipeline')" />
             </SelectTrigger>
@@ -32,7 +32,7 @@
 
         <div>
           <label for="evaleditorview-field-7" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.node') }} <span class="text-muted-foreground">({{ $t('views.EvalEditorView.node_optional') }})</span></label>
-          <Select v-model="form.node_id" :disabled="!selectedPipelineId || nodesLoading">
+          <Select :aria-label="$t('views.EvalEditorView.node_aria')" v-model="form.node_id" :disabled="!selectedPipelineId || nodesLoading">
             <SelectTrigger data-testid="eval-editor-node" :aria-label="$t('views.EvalEditorView.node_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
               <SelectValue :placeholder="$t('views.EvalEditorView.all_pipeline_outputs')" />
             </SelectTrigger>
@@ -65,7 +65,7 @@
 
               <div>
                 <label for="evaleditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EvalEditorView.eval_type') }}</label>
-                <Select v-model="form.eval_type">
+                <Select :aria-label="$t('views.EvalEditorView.eval_type_aria')" v-model="form.eval_type">
                   <SelectTrigger data-testid="eval-editor-eval-type" :aria-label="$t('views.EvalEditorView.eval_type_aria')" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <SelectValue placeholder="llm_judge" />
                   </SelectTrigger>

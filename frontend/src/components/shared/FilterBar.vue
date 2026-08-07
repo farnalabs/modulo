@@ -18,6 +18,7 @@
       />
     </div>
     <Select
+      :aria-label="filter.label"
       v-for="filter in selectFilters"
       :key="filter.key"
       :model-value="(filterValues[filter.key] ?? '') || '__all__'"

@@ -134,7 +134,7 @@
       <form @submit.prevent="saveTrigger" class="space-y-4">
         <div>
           <label for="settingstriggersview-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.pipeline') }}</label>
-          <Select v-model="form.pipeline_id">
+          <Select :aria-label="$t('views.SettingsTriggersView.pipeline')" v-model="form.pipeline_id">
             <SelectTrigger id="settingstriggersview-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.pipeline')" data-testid="settings-triggers-form-pipeline">
               <SelectValue :placeholder="$t('views.SettingsTriggersView.select_pipeline')" />
             </SelectTrigger>
@@ -146,7 +146,7 @@
 
         <div v-if="!editingId">
           <label for="settingstriggersview-trigger-type" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.trigger_type_label') }}</label>
-          <Select v-model="form.trigger_type">
+          <Select :aria-label="$t('views.SettingsTriggersView.trigger_type_label')" v-model="form.trigger_type">
             <SelectTrigger id="settingstriggersview-trigger-type" class="input-base" :aria-label="$t('views.SettingsTriggersView.trigger_type_label')" data-testid="settings-triggers-form-type">
               <SelectValue :placeholder="$t('views.SettingsTriggersView.select_type')" />
             </SelectTrigger>
@@ -176,7 +176,7 @@
           </div>
           <div>
             <label for="settingstriggersview-http-method" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.http_method') }}</label>
-            <Select v-model="form.webhook_method">
+            <Select :aria-label="$t('views.SettingsTriggersView.http_method')" v-model="form.webhook_method">
               <SelectTrigger id="settingstriggersview-http-method" class="input-base" :aria-label="$t('views.SettingsTriggersView.http_method')" data-testid="settings-triggers-form-webhook-method">
                 <SelectValue :placeholder="$t('views.SettingsTriggersView.select_method')" />
               </SelectTrigger>
@@ -282,7 +282,7 @@
         <template v-if="form.trigger_type === 'agent_signal'">
           <div>
             <label for="settingstriggersview-source-pipeline" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.source_pipeline') }}</label>
-            <Select v-model="form.signal_source_pipeline">
+            <Select :aria-label="$t('views.SettingsTriggersView.source_pipeline')" v-model="form.signal_source_pipeline">
               <SelectTrigger id="settingstriggersview-source-pipeline" class="input-base" :aria-label="$t('views.SettingsTriggersView.source_pipeline')" data-testid="settings-triggers-form-signal-pipeline">
                 <SelectValue :placeholder="$t('views.SettingsTriggersView.select_source_pipeline')" />
               </SelectTrigger>

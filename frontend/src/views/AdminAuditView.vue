@@ -104,7 +104,7 @@
         </div>
         <div>
           <label for="adminauditview-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.target_type') }}</label>
-          <Select v-model="filterTargetType">
+          <Select aria-label="Target Type" v-model="filterTargetType">
             <SelectTrigger data-testid="admin-audit-target-type" aria-label="Target Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
               <SelectValue :placeholder="$t('views.AdminAuditView.all_targets')" />
             </SelectTrigger>

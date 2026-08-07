@@ -235,7 +235,7 @@
         <div class="space-y-4">
           <div>
             <label for="adminremyview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.default_provider') }}</label>
-            <Select v-model="modelConfig.defaultProvider">
+            <Select aria-label="Default Provider" v-model="modelConfig.defaultProvider">
               <SelectTrigger id="adminremyview-field-12" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Default Provider" data-testid="remy-model-provider">
                 <SelectValue placeholder="Select provider" />
               </SelectTrigger>
@@ -385,7 +385,7 @@
       <SectionCard title="Tool Permissions" description="Control which UI actions Remy can perform and whether approval is required.">
         <div class="mb-6">
           <label for="adminremyview-field-13" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.permission_mode') }}</label>
-          <Select v-model="toolPermMode" @update:model-value="applyModePreset">
+          <Select aria-label="Permission Mode" v-model="toolPermMode" @update:model-value="applyModePreset">
             <SelectTrigger id="adminremyview-field-13" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Permission Mode">
               <SelectValue placeholder="Select mode" />
             </SelectTrigger>
@@ -412,7 +412,7 @@
                 <td class="table-cell font-mono text-xs">{{ toolName }}</td>
                 <td class="table-cell text-muted-foreground text-xs">{{ info.description }}</td>
                 <td class="table-cell">
-                  <Select v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'">
+                  <Select aria-label="Tool permission" v-model="toolPerms[toolName]" :disabled="toolPermMode !== 'custom'">
                     <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Tool permission">
                       <SelectValue placeholder="Select" />
                     </SelectTrigger>
@@ -680,7 +680,7 @@
                   </Tooltip>
                 </td>
                 <td class="table-cell">
-                  <Select v-model="contextSources[src.key]" :disabled="contextSaving" @update:model-value="saveContextSource(src.key)">
+                  <Select aria-label="Context source mode" v-model="contextSources[src.key]" :disabled="contextSaving" @update:model-value="saveContextSource(src.key)">
                     <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Context source mode">
                       <SelectValue placeholder="Select" />
                     </SelectTrigger>
@@ -720,7 +720,7 @@
               <tr v-for="skill in skills" :key="skill.id" class="hover:bg-muted/30 transition-colors">
                 <td class="table-cell font-medium">{{ skill.name }}</td>
                 <td class="table-cell">
-                  <Select v-model="skillModes[skill.id]" :disabled="skillModeSaving[skill.id]" @update:model-value="saveSkillSourceMode(skill)">
+                  <Select aria-label="Skill knowledge mode" v-model="skillModes[skill.id]" :disabled="skillModeSaving[skill.id]" @update:model-value="saveSkillSourceMode(skill)">
                     <SelectTrigger class="rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Skill knowledge mode">
                       <SelectValue placeholder="Select" />
                     </SelectTrigger>

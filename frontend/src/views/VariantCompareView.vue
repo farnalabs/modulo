@@ -13,7 +13,7 @@
       <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <Select v-model="selectedGroupId">
+        <Select aria-label="Compare group" v-model="selectedGroupId">
           <SelectTrigger data-testid="variant-compare-group-select" aria-label="Compare group" class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <SelectValue :placeholder="$t('views.variantCompare.selectGroup')" />
           </SelectTrigger>
