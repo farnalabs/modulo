@@ -262,6 +262,12 @@ export default {
       "dismissed": "Proposal dismissed.",
       "publish_failed": "Publish failed:",
       "dismiss_failed": "Dismiss failed:",
+      "status_pending": "Pending",
+      "status_routing": "Routing",
+      "status_correcting": "Correcting",
+      "status_resolved": "Resolved",
+      "status_escalated": "Escalated",
+      "status_dismissed": "Dismissed",
       "proposal_published_eval_definition_created": "Proposal published. Eval definition created.",
       "proposal_dismissed": "Proposal dismissed."
     },
