@@ -13,6 +13,8 @@ import pytest
 from modulo.connectors.base import ConnectorResult
 from modulo.core.trigger_engine.polling import (
     _build_polling_connector,
+    _count_active_runs,
+    _daily_spend_limit_reached,
     _fire_polling_trigger,
     _log_poll_event,
     _set_rls_org,
@@ -29,7 +31,7 @@ from modulo.db.models.trigger import Trigger
 
 class TestEvaluateCondition:
     @pytest.mark.parametrize(
-        "expr,records,expected",
+        ("expr", "records", "expected"),
         [
             (None, [{"id": 1}], True),
             (None, [], False),
@@ -46,6 +48,7 @@ class TestEvaluateCondition:
             ("[0].nested", [{"nested": {}}], False),
             ("[0].flag == `true`", [{"flag": True}], True),
             ("[0].count > `0`", [{"count": 42}], True),
+            ("[0].x", [{"x": Decimal("1.5")}], True),
         ],
     )
     def test_evaluate_condition(self, expr: str | None, records: list[dict], expected: bool) -> None:
@@ -65,7 +68,7 @@ class TestEvaluateCondition:
 
 class TestBuildPollingConnector:
     @pytest.mark.parametrize(
-        "connector_type,config,credentials,expected_type,raises_match",
+        ("connector_type", "config", "credentials", "expected_type", "raises_match"),
         [
             ("filesystem", {"base_path": "/tmp"}, {}, "FilesystemConnector", None),
             ("github", {}, {"token": "ghp_xxx"}, "GitHubConnector", None),
@@ -1039,3 +1042,84 @@ class TestSetRlsOrg:
         await _set_rls_org(session, _ORG_ID)
 
         assert session.info["organisation_id"] == _ORG_ID
+
+    async def test_postgres_dialect_sets_config(self, mock_db_components) -> None:
+        """On Postgres, RLS context is applied via SET LOCAL set_config."""
+        session = mock_db_components
+        session.info = {}
+        bind_mock = MagicMock()
+        bind_mock.dialect.name = "postgresql"
+        session.get_bind = MagicMock(return_value=bind_mock)
+        session.execute = AsyncMock()
+
+        await _set_rls_org(session, _ORG_ID)
+
+        session.execute.assert_awaited_once()
+        stmt, params = session.execute.await_args.args
+        assert "set_config" in str(stmt).lower()
+        assert params == {"val": str(_ORG_ID)}
+
+
+# ---------------------------------------------------------------------------
+# _count_active_runs / _daily_spend_limit_reached — direct unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestCountActiveRuns:
+    async def test_counts_active_runs(self) -> None:
+        session = MagicMock()
+        result = MagicMock()
+        result.scalar_one.return_value = 3
+        session.execute = AsyncMock(return_value=result)
+        trigger_id = uuid.uuid4()
+
+        count = await _count_active_runs(session, trigger_id)
+
+        assert count == 3
+        stmt = str(session.execute.await_args.args[0]).lower()
+        assert "trigger_id" in stmt
+        assert "status in" in stmt
+
+    async def test_zero_runs_when_none(self) -> None:
+        session = MagicMock()
+        result = MagicMock()
+        result.scalar_one.return_value = None
+        session.execute = AsyncMock(return_value=result)
+
+        count = await _count_active_runs(session, uuid.uuid4())
+
+        assert count == 0
+
+
+class TestDailySpendLimitReached:
+    def _session_with_cost(self, today_cost: Any) -> MagicMock:
+        session = MagicMock()
+        result = MagicMock()
+        result.scalar_one.return_value = today_cost
+        session.execute = AsyncMock(return_value=result)
+        return session
+
+    async def test_no_limit_configured_returns_none(self) -> None:
+        session = MagicMock()
+        session.execute = AsyncMock()
+        trigger = _make_trigger(daily_spend_limit=None)
+
+        assert await _daily_spend_limit_reached(session, trigger, _ORG_ID) is None
+        session.execute.assert_not_awaited()
+
+    async def test_limit_not_reached_returns_none(self) -> None:
+        session = self._session_with_cost(Decimal("10.00"))
+        trigger = _make_trigger(daily_spend_limit=Decimal("50.00"))
+
+        assert await _daily_spend_limit_reached(session, trigger, _ORG_ID) is None
+
+    async def test_limit_reached_returns_today_cost(self) -> None:
+        session = self._session_with_cost(Decimal("55.00"))
+        trigger = _make_trigger(daily_spend_limit=Decimal("50.00"))
+
+        result = await _daily_spend_limit_reached(session, trigger, _ORG_ID)
+
+        assert result == Decimal("55.00")
+        stmt = str(session.execute.await_args.args[0]).lower()
+        assert "runs.trigger_id" in stmt
+        assert "runs.organisation_id" in stmt
