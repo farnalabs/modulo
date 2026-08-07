@@ -162,7 +162,10 @@ export function serializeFilters(
   const timespan =
     TIMESPANS.find((t) => t.value === filters.timespan) ??
     TIMESPANS.find((t) => t.value === DEFAULT_FILTERS.timespan)!;
-  const dateTo = parseISO(isoDay(now));
+  // Parse the ISO day as UTC (parseDay appends T00:00:00.000Z). Parsing the bare
+  // date string with parseISO uses local midnight, which round-trips through
+  // toISOString() to the previous UTC day on any UTC+ timezone.
+  const dateTo = parseDay(isoDay(now));
   const dateFrom = shiftUtcDays(dateTo, timespan.days);
   const params: AnalyticsQueryParams = {
     group_by: filters.groupBy,

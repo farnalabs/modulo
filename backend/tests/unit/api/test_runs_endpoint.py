@@ -127,6 +127,7 @@ def _make_mock_session() -> AsyncMock:
     exec_result = MagicMock()
     exec_result.scalar_one_or_none.return_value = None
     exec_result.scalars.return_value.first.return_value = None
+    exec_result.all.return_value = []
     session.execute = AsyncMock(return_value=exec_result)
     return session
 
@@ -550,6 +551,159 @@ def test_run_response_trace_id_deterministic(client: TestClient) -> None:
         resp2 = client.get(f"/api/v1/runs/{_RUN_ID}")
 
     assert resp1.json()["trace_id"] == resp2.json()["trace_id"]
+
+
+# ---------------------------------------------------------------------------
+# Child-run cost rollup — child_runs_cost_usd / aggregate_cost_usd
+# ---------------------------------------------------------------------------
+
+
+def test_get_run_includes_child_cost_rollup(client: TestClient) -> None:
+    run = _make_run(status="complete", total_cost_usd=Decimal("1.000000"))
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch(
+            "modulo.api.routes.runs.get_child_runs_cost",
+            new_callable=AsyncMock,
+            return_value={_RUN_ID: Decimal("0.500000")},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    # total_cost_usd keeps its own-run semantics — never mutated by the rollup.
+    assert body["total_cost_usd"] == "1.000000"
+    assert body["child_runs_cost_usd"] == "0.500000"
+    assert body["aggregate_cost_usd"] == "1.500000"
+
+
+def test_get_run_child_cost_zero_when_no_children(client: TestClient) -> None:
+    run = _make_run(status="complete", total_cost_usd=Decimal("2.000000"))
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch(
+            "modulo.api.routes.runs.get_child_runs_cost",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    assert body["total_cost_usd"] == "2.000000"
+    assert body["child_runs_cost_usd"] == "0.000000"
+    assert body["aggregate_cost_usd"] == "2.000000"
+
+
+def test_get_run_aggregate_zero_when_no_own_or_child_cost(client: TestClient) -> None:
+    run = _make_run(status="pending", total_cost_usd=None)
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch(
+            "modulo.api.routes.runs.get_child_runs_cost",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    assert body["total_cost_usd"] is None
+    assert body["child_runs_cost_usd"] == "0.000000"
+    assert body["aggregate_cost_usd"] == "0.000000"
+
+
+def _make_listable_run(
+    run_id: uuid.UUID,
+    *,
+    status: str = "complete",
+    total_cost_usd: Decimal | None = None,
+) -> MagicMock:
+    r = _make_run(status=status, total_cost_usd=total_cost_usd)
+    r.id = run_id
+    r.trigger_type = "manual"
+    r.run_number = 1
+    r.created_at = None
+    r.started_at = None
+    r.completed_at = None
+    r.account_id = None
+    return r
+
+
+def _make_page(items: list[Any], total: int) -> MagicMock:
+    page = MagicMock()
+    page.items = items
+    page.total = total
+    page.page = 1
+    page.page_size = 20
+    page.next_cursor = None
+    page.has_more = False
+    return page
+
+
+def test_list_runs_includes_child_cost_rollup(client: TestClient) -> None:
+    parent_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+    parent = _make_listable_run(parent_id, total_cost_usd=Decimal("1.000000"))
+    child = _make_listable_run(child_id, total_cost_usd=Decimal("0.500000"))
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([parent, child], 2),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_runs_cost",
+            new_callable=AsyncMock,
+            return_value={parent_id: Decimal("0.500000")},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    items = body["items"]
+    parent_item = next(i for i in items if i["run_id"] == str(parent_id))
+    child_item = next(i for i in items if i["run_id"] == str(child_id))
+    # Parent: own cost unchanged, child cost rolled up.
+    assert parent_item["total_cost_usd"] == "1.000000"
+    assert parent_item["child_runs_cost_usd"] == "0.500000"
+    assert parent_item["aggregate_cost_usd"] == "1.500000"
+    # Child (no children of its own): zeros.
+    assert child_item["total_cost_usd"] == "0.500000"
+    assert child_item["child_runs_cost_usd"] == "0.000000"
+    assert child_item["aggregate_cost_usd"] == "0.500000"
+
+
+def test_list_runs_child_cost_zero_when_no_children(client: TestClient) -> None:
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id, total_cost_usd=Decimal("3.000000"))
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_runs_cost",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    body = resp.json()
+    item = body["items"][0]
+    assert item["total_cost_usd"] == "3.000000"
+    assert item["child_runs_cost_usd"] == "0.000000"
+    assert item["aggregate_cost_usd"] == "3.000000"
 
 
 def test_run_response_all_new_fields_present_in_trigger_endpoint(client: TestClient) -> None:

@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +16,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.audit_logger import append_audit_event
 from modulo.db.crud.account import create_account, get_account_by_email
 from modulo.db.crud.org_membership import create_membership
 from modulo.db.crud.organisation import (
@@ -26,6 +28,7 @@ from modulo.db.crud.organisation import (
     update_organisation,
 )
 from modulo.db.models.organisation import Organisation
+from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
 
@@ -592,3 +595,87 @@ async def admin_set_org_authz_enforce(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
 
     return SetOrgAuthzEnforceResponse(org_id=str(org_id), enforce=req.enforce)
+
+
+# ── Org-wide "pause all pipeline triggers" kill-switch ───────────────────────
+
+
+class SetOrgTriggersPausedRequest(BaseModel):
+    paused: bool
+
+
+class SetOrgTriggersPausedResponse(BaseModel):
+    paused: bool
+    paused_at: str | None
+
+
+@handle_db_errors("admin.orgs.admin_set_org_triggers_paused")
+@router.put("/{org_id}/triggers/pause", response_model=SetOrgTriggersPausedResponse)
+async def admin_set_org_triggers_paused(
+    org_id: uuid.UUID,
+    req: SetOrgTriggersPausedRequest,
+    # Tenancy-bounded (ADR 017 DECISION 3 scope pin): the authz kill-switch must
+    # NOT be able to lift this gate — ``kill_switch_eligible=False`` mirrors the
+    # org.delete immunity in ``require_system_or_org_admin``.
+    current_user: AuthenticatedPrincipal = require_target_org_role(  # type: ignore[assignment]
+        "org.triggers.pause.manage", "admin", kill_switch_eligible=False
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> SetOrgTriggersPausedResponse:
+    try:
+        async with session.begin():
+            # set_rls_org must run in the OUTER transaction BEFORE the audit
+            # append — SET LOCAL is reverted by a savepoint rollback.
+            await set_rls_org(session, org_id)
+            org = await get_organisation(session, org_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+            # Idempotency: toggling to the current state is a no-op (no audit write).
+            if org.triggers_paused == req.paused:
+                paused_at = org.triggers_paused_at.isoformat() if org.triggers_paused_at else None
+                return SetOrgTriggersPausedResponse(paused=org.triggers_paused, paused_at=paused_at)
+
+            org.triggers_paused = req.paused
+            org.triggers_paused_at = datetime.now(UTC) if req.paused else None
+            await session.flush()
+
+            # Audit is fail-open-with-alert: the toggle ALWAYS commits; a failed
+            # audit write is loudly logged and never rolls back the toggle.
+            try:
+                await append_audit_event(
+                    session,
+                    org_id=org_id,
+                    event_type="triggers_paused",
+                    actor_user_id=current_user.user_id,
+                    payload_json={"paused": req.paused},
+                )
+            except SQLAlchemyError:
+                logger.exception("admin_orgs.admin_set_org_triggers_paused audit write failed")
+            except Exception:
+                logger.exception("admin_orgs.admin_set_org_triggers_paused audit write failed (non-DB)")
+
+            return SetOrgTriggersPausedResponse(
+                paused=org.triggers_paused,
+                paused_at=org.triggers_paused_at.isoformat() if org.triggers_paused_at else None,
+            )
+    except ProgrammingError as exc:
+        logger.exception("admin_orgs.admin_set_org_triggers_paused")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        logger.exception("admin_orgs.admin_set_org_triggers_paused")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while updating org trigger pause state.",
+        ) from exc
+    except HTTPException as exc:
+        raise exc
+    except Exception:
+        logger.exception("Unexpected error in admin_set_org_triggers_paused")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
