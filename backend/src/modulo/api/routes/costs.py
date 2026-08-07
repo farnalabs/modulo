@@ -104,7 +104,10 @@ def _read_alert_thresholds(org: object | None) -> list[float]:
     corrupted persisted value degrades to the default instead of raising (which
     would 500 the endpoint). Non-finite floats (``NaN``/``Infinity``) are also
     rejected since ``int()`` cannot coerce them and ``json.loads`` accepts them.
-    Normal writes are validated by
+    Out-of-range ints are checked before any float conversion because
+    ``math.isfinite`` raises ``OverflowError`` for ints too large to fit a
+    float (e.g. a persisted ``[1000000000000000000000000000000]``). Normal
+    writes are validated by
     ``UpdateCostControlsRequest._validate_alert_thresholds``; this read path is
     what keeps defensiveness against previously-corrupted data.
     """
@@ -114,7 +117,10 @@ def _read_alert_thresholds(org: object | None) -> list[float]:
     for item in value:
         if isinstance(item, bool) or not isinstance(item, (int, float)):
             return list(DEFAULT_ALERT_THRESHOLDS)
-        if not math.isfinite(item) or int(item) != item or not 1 <= int(item) <= 100:
+        if isinstance(item, int):
+            if not 1 <= item <= 100:
+                return list(DEFAULT_ALERT_THRESHOLDS)
+        elif not math.isfinite(item) or int(item) != item or not 1 <= item <= 100:
             return list(DEFAULT_ALERT_THRESHOLDS)
     return [float(v) for v in value]
 
