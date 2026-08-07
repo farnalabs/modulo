@@ -164,7 +164,7 @@ def test_collect_secrets_creates_env_file(tmp_manifest_dir, monkeypatch):
 
     secrets_path = os.path.join(tmp_manifest_dir, "secrets.env")
     assert secrets_path in files
-    assert os.path.exists(secrets_path)
+    assert Path(secrets_path).exists()
 
     with Path(secrets_path).open() as f:
         content = f.read()
@@ -176,7 +176,7 @@ def test_collect_secrets_writes_all_keys_with_empty_defaults(tmp_manifest_dir, m
     for key in ("FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"):
         monkeypatch.delenv(key, raising=False)
     files = collect_secrets(tmp_manifest_dir)
-    content = Path(os.path.join(tmp_manifest_dir, "secrets.env")).read_text()
+    content = Path(tmp_manifest_dir, "secrets.env").read_text()
     lines = dict(line.split("=", 1) for line in content.strip().splitlines())
     assert set(lines) == {"FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"}
     assert all(value == "" for value in lines.values())
@@ -187,7 +187,7 @@ def test_collect_secrets_creates_manifest(tmp_manifest_dir):
     files = collect_secrets(tmp_manifest_dir)
     manifest_path = os.path.join(tmp_manifest_dir, "manifest.json")
     assert manifest_path in files
-    assert os.path.exists(manifest_path)
+    assert Path(manifest_path).exists()
 
     with Path(manifest_path).open() as f:
         manifest = json.load(f)
@@ -221,7 +221,7 @@ def test_write_checksums(tmp_manifest_dir):
     Path(a).write_text("aaa")
     Path(b).write_text("bbb")
     cs_path = write_checksums(tmp_manifest_dir, [a, b])
-    assert os.path.exists(cs_path)
+    assert Path(cs_path).exists()
 
     with Path(cs_path).open() as f:
         lines = f.read().strip().split("\n")
@@ -239,7 +239,7 @@ def test_write_checksums_sorted_by_name(tmp_manifest_dir):
     Path(a).write_text("aaa")
     Path(b).write_text("bbb")
     write_checksums(tmp_manifest_dir, [b, a])
-    lines = Path(os.path.join(tmp_manifest_dir, "checksums.sha256")).read_text().strip().splitlines()
+    lines = Path(tmp_manifest_dir, "checksums.sha256").read_text().strip().splitlines()
     assert [line.split("  ", 1)[1] for line in lines] == ["a.dat", "b.dat"]
 
 
@@ -249,12 +249,12 @@ def test_write_checksums_sorted_by_name(tmp_manifest_dir):
 
 
 def test_create_archive_packs_files(tmp_manifest_dir):
-    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
-    Path(os.path.join(tmp_manifest_dir, "b.txt")).write_text("bbb")
+    Path(tmp_manifest_dir, "a.txt").write_text("aaa")
+    Path(tmp_manifest_dir, "b.txt").write_text("bbb")
     output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
     result = create_archive(tmp_manifest_dir, output)
     assert result == output
-    assert os.path.exists(output)
+    assert Path(output).exists()
     assert tarfile.is_tarfile(output)
 
 
@@ -274,9 +274,9 @@ def test_create_archive_keeps_output_without_enc_suffix(tmp_manifest_dir):
 
 
 def test_create_archive_skips_directories(tmp_manifest_dir):
-    Path(os.path.join(tmp_manifest_dir, "a.txt")).write_text("aaa")
-    os.makedirs(os.path.join(tmp_manifest_dir, "subdir"))
-    Path(os.path.join(tmp_manifest_dir, "subdir", "b.txt")).write_text("bbb")
+    Path(tmp_manifest_dir, "a.txt").write_text("aaa")
+    Path(tmp_manifest_dir, "subdir").mkdir(parents=True)
+    Path(tmp_manifest_dir, "subdir", "b.txt").write_text("bbb")
     output = os.path.join(tmp_manifest_dir, "backup.tar.gz")
     result = create_archive(tmp_manifest_dir, output)
     assert result == output
@@ -297,8 +297,8 @@ def test_encrypt_archive_round_trip(tmp_manifest_dir):
     enc = plain + ".enc"
 
     encrypt_archive(plain, "test-pass")
-    assert os.path.exists(enc)
-    assert not os.path.exists(plain)
+    assert Path(enc).exists()
+    assert not Path(plain).exists()
 
     dec = os.path.join(tmp_manifest_dir, "decrypted.tar.gz")
     result = subprocess.run(  # noqa: S603 — test fixture
@@ -360,7 +360,7 @@ def test_encrypt_archive_deletes_plaintext_on_success(tmp_manifest_dir):
         patch("scripts.backup.subprocess.run", return_value=proc) as mock_run,
     ):
         encrypt_archive(plain, "pass")
-    assert not os.path.exists(plain)
+    assert not Path(plain).exists()
     args = mock_run.call_args.args[0]
     assert args[0] == "openssl"
     assert plain in args
