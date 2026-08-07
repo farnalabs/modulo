@@ -70,7 +70,7 @@ Modulo is a self-hosted orchestration layer for agentic SDLC pipelines. This doc
 
 ### API Layer (`modulo/api/`)
 
-FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern — every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
+FastAPI application providing REST endpoints, WebSocket event streaming, and the Remote MCP server at `/mcp`. Implements the ViewModel pattern – every user action maps to a named command. Routes are thin: they validate input, resolve dependencies (auth, org context, PlanContext), and delegate to core engine services.
 
 Includes:
 - CORS middleware (configurable via `CORS_ORIGINS`)
@@ -84,7 +84,7 @@ Built on LangGraph's `StateGraph` with `dict[str, Any]` state. Each pipeline sna
 
 Key design:
 - Compiled graphs cached by `(pipeline_id, snapshot_id)` with LRU eviction
-- `run_context` and `artifact` are sibling keys in state — context-setter-only write enforcement
+- `run_context` and `artifact` are sibling keys in state – context-setter-only write enforcement
 - Human/manual nodes produce `interrupt()` in LangGraph
 - `@cancellable_node` decorator wraps every node for graceful cancellation and per-node timeouts (`asyncio.wait_for`)
 - Pipeline nesting max depth: 3 levels
@@ -95,26 +95,26 @@ Post-node automated quality checks. Runs before any HITL gate check on the same 
 
 | Type | Description |
 |------|-------------|
-| `llm_judge` | LLM-as-judge — passes agent output to a model for scoring |
+| `llm_judge` | LLM-as-judge – passes agent output to a model for scoring |
 | `regex` | Pattern match against output |
 | `json_schema` | Validate output against a JSON Schema |
 | `custom_function` | User-defined Python function |
 
-Each eval has a pass threshold and failure behaviour: `warn` (soft — run continues) or `block` (hard — run fails at this node). Eval results feed into the Feedback System.
+Each eval has a pass threshold and failure behaviour: `warn` (soft – run continues) or `block` (hard – run fails at this node). Eval results feed into the Feedback System.
 
 ### HITL Manager (`modulo/core/hitl_manager/`)
 
 Manages Human-in-the-Loop gates using LangGraph's `interrupt()`. Atomic claim semantics via `SELECT ... FOR UPDATE` on `hitl_claims` table. Claim tokens are opaque random strings (alpha) or short-lived JWTs (v1).
 
 Features:
-- `human_only` flag — blocks LLM approval via MCP
-- `required_team_id` — restricts claims to specific team members
+- `human_only` flag – blocks LLM approval via MCP
+- `required_team_id` – restricts claims to specific team members
 - Claim expiry background job (default: 60s interval, Postgres advisory lock for single-worker execution)
-- `manual` node type — same as HITL but human provides full output
+- `manual` node type – same as HITL but human provides full output
 
 ### Connector Hub (`modulo/connectors/`)
 
-Abstraction over external tool integrations. ConnectorType defines an abstract capability category (e.g. `git-host`, `shell`). ConnectorInstance is a configured, authenticated binding. ConnectorHub decrypts credentials once at run-start into a run-scoped context object — credentials never enter LangGraph state, checkpoints, OTel spans, or logs.
+Abstraction over external tool integrations. ConnectorType defines an abstract capability category (e.g. `git-host`, `shell`). ConnectorInstance is a configured, authenticated binding. ConnectorHub decrypts credentials once at run-start into a run-scoped context object – credentials never enter LangGraph state, checkpoints, OTel spans, or logs.
 
 | Connector | Type | Operations |
 |-----------|------|------------|
@@ -124,7 +124,7 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 
 ### Model Backend Hub (`modulo/model_backends/`)
 
-Registered LLM provider wrappers. Agents bind to a model backend at pipeline-save time; `model_id` is resolved from `PipelineSnapshot.model_backend_pins_json` at run time — not the live entity — ensuring consistency across pauses/resumes.
+Registered LLM provider wrappers. Agents bind to a model backend at pipeline-save time; `model_id` is resolved from `PipelineSnapshot.model_backend_pins_json` at run time – not the live entity – ensuring consistency across pauses/resumes.
 
 | Provider | Status |
 |----------|--------|
@@ -153,7 +153,7 @@ Sandboxed execution environments for coding agents. RuntimeProvider ABC (paralle
 
 ### Auth System (`modulo/auth/`)
 
-Authentication and authorization — JWT, API keys, OIDC/SAML (v1), Basic Auth (alpha). Dual-layer scope enforcement for MCP (middleware + ViewModel command layer). See dedicated section below.
+Authentication and authorization – JWT, API keys, OIDC/SAML (v1), Basic Auth (alpha). Dual-layer scope enforcement for MCP (middleware + ViewModel command layer). See dedicated section below.
 
 ### Schema Registry (`modulo/core/schema_registry/`)
 
@@ -167,13 +167,13 @@ Manages the local and community library of reusable primitives (agents, schemas,
 
 ### Pipeline run lifecycle
 
-1. **Trigger** — A trigger fires (manual POST, webhook HMAC-verified, cron schedule, or agent_signal). TriggerEngine validates input against the entry agent's `input_schema`. A Run record is created in `pending` status. TriggerEvent is logged.
+1. **Trigger** – A trigger fires (manual POST, webhook HMAC-verified, cron schedule, or agent_signal). TriggerEngine validates input against the entry agent's `input_schema`. A Run record is created in `pending` status. TriggerEvent is logged.
 
-2. **Snapshot** — The pipeline's current definition is frozen as a PipelineSnapshot (all agent versions, schema pins, connector bindings, model backend pins, environment profile). The run now executes against this immutable snapshot.
+2. **Snapshot** – The pipeline's current definition is frozen as a PipelineSnapshot (all agent versions, schema pins, connector bindings, model backend pins, environment profile). The run now executes against this immutable snapshot.
 
-3. **Compile** — PipelineExecutor loads the snapshot, compiles the `StateGraph`, and caches it by `(pipeline_id, snapshot_id)`.
+3. **Compile** – PipelineExecutor loads the snapshot, compiles the `StateGraph`, and caches it by `(pipeline_id, snapshot_id)`.
 
-4. **Execute** — Each node:
+4. **Execute** – Each node:
    a. ConnectorHub resolves bound ConnectorInstances and decrypts credentials once per run
    b. ModelBackendHub resolves the pinned model backend
    c. The agent's Jinja2 prompt is rendered (sandboxed environment) with `run_context` and previous outputs
@@ -183,9 +183,9 @@ Manages the local and community library of reusable primitives (agents, schemas,
    g. If eval fails with `block` behaviour, run enters `failed` state
    h. If the outgoing edge has a HITL gate, `interrupt()` pauses the run
 
-5. **HITL** — A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node (or produces a FeedbackRecord).
+5. **HITL** – A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node (or produces a FeedbackRecord).
 
-6. **Complete** — After the terminal node, the run transitions to `complete` or `failed`. OTel spans, audit events, and run metrics are persisted. Notifications are dispatched.
+6. **Complete** – After the terminal node, the run transitions to `complete` or `failed`. OTel spans, audit events, and run metrics are persisted. Notifications are dispatched.
 
 ### WebSocket event flow
 
@@ -234,12 +234,12 @@ Organisation
 
 ### RLS enforcement
 
-Every table carries `organisation_id`. Row-Level Security is enforced via `SET LOCAL app.organisation_id` inside transactions. The session pool resets org context on checkout. LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do not have RLS — this is a known gap for SaaS (V2).
+Every table carries `organisation_id`. Row-Level Security is enforced via `SET LOCAL app.organisation_id` inside transactions. The session pool resets org context on checkout. LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do not have RLS – this is a known gap for SaaS (V2).
 
 ### Key constraints
 
-- `(trigger_id, payload_hash)` unique on `webhook_dedup_hashes` — deduplication window
-- `(run_id, gate_id)` unique on `hitl_claims` — one claim per gate per run
+- `(trigger_id, payload_hash)` unique on `webhook_dedup_hashes` – deduplication window
+- `(run_id, gate_id)` unique on `hitl_claims` – one claim per gate per run
 - SchemaVersion deletion protected by active agent/pipeline references
 - ModelBackend deletion protected by active references (soft-delete via `status: deprecated`)
 
@@ -249,8 +249,8 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 
 | Method | Status | Use case |
 |--------|--------|----------|
-| JWT (access + refresh) | Alpha | Browser UI sessions — 15-min access, 7-day refresh |
-| API key (bearer token) | Alpha | CI/CD, MCP clients — role-scoped (operator/runner) |
+| JWT (access + refresh) | Alpha | Browser UI sessions – 15-min access, 7-day refresh |
+| API key (bearer token) | Alpha | CI/CD, MCP clients – role-scoped (operator/runner) |
 | Basic Auth | Alpha | Multi-user alpha (`MODULO_USERS` env var) |
 | OAuth 2.0 (authlib) | V1 | MCP clients (PKCE, exact redirect_uri) |
 | OIDC / SAML 2.0 | V1 (enterprise) | SSO with JIT provisioning |
@@ -259,8 +259,8 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 
 - Access tokens: 15-min expiry
 - Refresh tokens: 7-day expiry, rotated on use
-- Algorithm pinning: `HS256` only — `none` and other algs rejected
-- SECRET_KEY: minimum 32 bytes (256 bits) — refused at startup if insufficient
+- Algorithm pinning: `HS256` only – `none` and other algs rejected
+- SECRET_KEY: minimum 32 bytes (256 bits) – refused at startup if insufficient
 - Token family invalidation on revocation
 - WebSocket auth via short-lived opaque `ws-token` (60s TTL, single-use, in `Authorization` header, never query string)
 
@@ -270,12 +270,12 @@ Format: `mk_<lookup_prefix>_<random_secret>`. Stored as SHA-256 hash. Role set: 
 
 ### Row-Level Security
 
-All tenant isolation is at the database layer via `SET LOCAL app.organisation_id` inside transactions. Every query runs within the org scope. This prevents cross-tenant leaks even if application-level scoping is bypassed. Team-visibility resources return 404 (not 403) for non-members — no existence enumeration.
+All tenant isolation is at the database layer via `SET LOCAL app.organisation_id` inside transactions. Every query runs within the org scope. This prevents cross-tenant leaks even if application-level scoping is bypassed. Team-visibility resources return 404 (not 403) for non-members – no existence enumeration.
 
-### MCP Scope Enforcement — Dual Layer
+### MCP Scope Enforcement – Dual Layer
 
-1. **Token middleware** — validates required scope on every request
-2. **ViewModel command layer** — re-validates scope for every command
+1. **Token middleware** – validates required scope on every request
+2. **ViewModel command layer** – re-validates scope for every command
 
 Both layers must agree. This prevents scope bypass via routing misconfiguration.
 
@@ -305,14 +305,14 @@ Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory n
 ### Docker Compose
 
 Four compose files:
-- `docker-compose.yml` — dev mode (builds from source, Postgres 16, Redis 7)
-- `docker-compose.local.yml` — with observability profile (otel-collector, Prometheus, Grafana)
-- `docker-compose.test.yml` — CI test environment
-- `docker-compose.mariadb.yml` — MariaDB alternative (experimental multi-backend — **deprecated 2026-07-11**, not actively tested or maintained)
+- `docker-compose.yml` – dev mode (builds from source, Postgres 16, Redis 7)
+- `docker-compose.local.yml` – with observability profile (otel-collector, Prometheus, Grafana)
+- `docker-compose.test.yml` – CI test environment
+- `docker-compose.mariadb.yml` – MariaDB alternative (experimental multi-backend – **deprecated 2026-07-11**, not actively tested or maintained)
 
 ### Kubernetes (Helm)
 
-The Kubernetes/Helm example deployment configs were removed — they were never
+The Kubernetes/Helm example deployment configs were removed – they were never
 exercised by CI or used in production. Self-hosting is via Docker Compose
 (`docker-compose.prod.yml`); the managed deployment path is Fly.io.
 
@@ -344,12 +344,12 @@ OpenTelemetry-native. Default exporter: stdout JSON. Configurable OTLP endpoint 
 
 ### Supporting Resources
 
-- [System Requirements](./system-requirements.md) — minimum resources, supported databases
-- [Configuration Reference](./configuration-reference.md) — full environment variable reference
-- [Deployment Guide](./deployment.md) — production deployment instructions
-- [Deployment Journeys](./deployment-journey.md) — three deployment paths
-- [Upgrade Process](./upgrade-process.md) — upgrading existing deployments
-- [Public Launch Checklist](./public-launch-checklist.md) — production readiness verification
+- [System Requirements](./system-requirements.md) – minimum resources, supported databases
+- [Configuration Reference](./configuration-reference.md) – full environment variable reference
+- [Deployment Guide](./deployment.md) – production deployment instructions
+- [Deployment Journeys](./deployment-journey.md) – three deployment paths
+- [Upgrade Process](./upgrade-process.md) – upgrading existing deployments
+- [Public Launch Checklist](./public-launch-checklist.md) – production readiness verification
 
 ---
 
@@ -373,16 +373,16 @@ ADRs at `docs/adr/` document key trade-offs:
 | 009 | Frontend Monitor Backend Abstraction | Accepted |
 | 010 | Integration Tier Classification (Native / Preview / In-Dev) | Accepted |
 | 011 | Remy Context Sources: Configurable Knowledge Domains with Progressive Disclosure | Active |
-| 012 | Migrate to Managed Fly Postgres | Proposed — implementation deferred until production data warrants backups |
+| 012 | Migrate to Managed Fly Postgres | Proposed – implementation deferred until production data warrants backups |
 | 014 | Remy Stream: JWT as MCP API Key | Accepted |
 | 015 | Bundle Format v2 (YAML) | Accepted |
 | 016 | Agent Log Observability | Accepted |
 | 017 | Celery to SAQ Migration | Accepted |
-| 017/018 | Centralized Authorization: Shared Permission Registry for REST + MCP | v9 — revised after 7 plan-review-iterate cycles |
+| 017/018 | Centralized Authorization: Shared Permission Registry for REST + MCP | v9 – revised after 7 plan-review-iterate cycles |
 | 019 | Cost Formula Engine + E2B Rate/Fallback Decision | Accepted |
 | 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
 
-Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 — Centralized Authorization — exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
+Note: ADR numbers 003/004/005 are shared by two distinct ADR files each (the numbering mirrors the filesystem). ADR 017/018 – Centralized Authorization – exists as both `017-centralized-authorization.md` and `018-centralized-authorization.md` (a duplicated file), so it is listed once here under the combined number.
 
 ## Import Contracts (enforced by import-linter)
 
