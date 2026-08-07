@@ -258,10 +258,10 @@ jobs:
           if [ "$WORKER_COUNT" -eq 0 ]; then
             if [ -n "$IMAGE" ]; then
               echo "No started worker machine -- creating one from the deployed image: $IMAGE"
-              fly machine run "$IMAGE" --app staging-modulo --process-group worker --region lhr
+              fly machine run "$IMAGE" --app staging-modulo --metadata fly_process_group=worker --region lhr
             else
               echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
-              fly machine run . --app staging-modulo --process-group worker --region lhr
+              fly machine run . --app staging-modulo --metadata fly_process_group=worker --region lhr
             fi
           else
             echo "Started worker machine(s) already exist: $WORKER_COUNT"
@@ -429,10 +429,10 @@ jobs:
           if [ "$WORKER_COUNT" -eq 0 ]; then
             if [ -n "$IMAGE" ]; then
               echo "No started worker machine -- creating one from the deployed image: $IMAGE"
-              fly machine run "$IMAGE" --app app-modulo --process-group worker --region lhr
+              fly machine run "$IMAGE" --app app-modulo --metadata fly_process_group=worker --region lhr
             else
               echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
-              fly machine run . --app app-modulo --process-group worker --region lhr
+              fly machine run . --app app-modulo --metadata fly_process_group=worker --region lhr
             fi
           else
             echo "Started worker machine(s) already exist: $WORKER_COUNT"
