@@ -796,7 +796,7 @@ class TestTagSnapshot:
 
 
 class TestGetSnapshotDetail:
-    async def test_get_snapshot_detail_calls_get_snapshot(self):
+    async def test_get_snapshot_detail_returns_snapshot(self):
         session = AsyncMock()
         sid = uuid.uuid4()
 
