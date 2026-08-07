@@ -3,13 +3,13 @@
 Responsibilities:
   - Seed initial LangGraph state from snapshot.run_context_defaults + input_payload
   - Obtain/compile the StateGraph (via graph_cache)
-  - Enforce per-pipeline max_concurrent_runs and the per-org sandbox
-    concurrency cap via count-based capacity checks (no FOR UPDATE; runs
-    declined at capacity are demoted back to ``pending`` with a reason
-    marker and recovered by ``dispatcher_reconcile`` (cron_helpers) when a
-    slot frees, with ``stale_run_recovery_sweep``'s stranded re-dispatch as
-    the durable liveness backstop — plan F3b: there is NO in-process retry
-    loop)
+  - Enforce per-pipeline max_concurrent_runs, the per-org sandbox
+    concurrency cap, and the per-org run-concurrency cap via count-based
+    capacity checks (no FOR UPDATE; runs declined at capacity are demoted
+    back to ``pending`` with a reason marker and recovered by
+    ``dispatcher_reconcile`` (cron_helpers) when a slot frees, with
+    ``stale_run_recovery_sweep``'s stranded re-dispatch as the durable
+    liveness backstop — plan F3b: there is NO in-process retry loop)
   - Consume astream_events() and publish to the per-run RunEventBroker
   - Set up AsyncPostgresSaver as LangGraph checkpointer
   - Stream graph execution, updating Run status on transitions
@@ -71,8 +71,10 @@ from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
     _graph_contains_sandbox_agent,
+    count_active_runs_for_org,
     count_active_runs_for_pipeline,
     count_active_sandbox_runs_for_org,
+    get_org_run_concurrency_limit,
     get_run,
     get_sandbox_concurrency_limit,
     update_run_status,
@@ -302,20 +304,32 @@ class PipelineExecutor:
 
         Soft-cap, no advisory lock. If the pipeline's ``max_concurrent_runs``
         limit OR the organisation's sandbox concurrency cap (when the graph
-        contains a ``sandbox_agent`` node and a cap is configured) is reached,
-        the run is atomically demoted back to ``pending`` with a reason marker
-        on ``error_code`` (``pipeline_capacity`` / ``org_capacity_limited``)
-        and recovered by ``dispatcher_reconcile`` (cron_helpers) / the stale-run
-        sweep (pipeline_execution) — plan F3b: no in-process retry loop.
+        contains a ``sandbox_agent`` node and a cap is configured) OR the
+        organisation's run-concurrency cap (``run_concurrency_limit``, when
+        configured) is reached, the run is atomically demoted back to
+        ``pending`` with a reason marker on ``error_code``
+        (``pipeline_capacity`` / ``org_capacity_limited``) and recovered by
+        ``dispatcher_reconcile`` (cron_helpers) / the stale-run sweep
+        (pipeline_execution) — plan F3b: no in-process retry loop.
+
+        The org run-concurrency cap is the CLAIM-TIME backstop for the
+        dispatch-time admission gate in ``dispatch_run``. Dispatch-time
+        admission counts active runs in one transaction but enqueues later;
+        newly-enqueued runs stay ``pending`` (invisible to the count) until a
+        worker claims them, so a burst of dispatches can each see
+        ``active < limit`` and all enqueue — exceeding the org cap by the
+        batch size. Re-checking the org run cap here, at claim time, closes
+        that TOCTOU window (mirroring the sandbox-cap claim-time check).
 
         When *max_concurrent* is 0 or negative the pipeline is unlimited, but
-        the organisation sandbox cap (if configured) still applies.
+        the organisation caps (sandbox + run, if configured) still apply.
 
-        Fail-open, loud: any error reading the org setting, counting org runs,
-        or scanning the graph logs a warning and ADMITS the run (treats it as
-        no-cap) rather than raising.
+        Fail-open, loud: any error reading the org settings, counting org
+        runs, or scanning the graph logs a warning and ADMITS the run (treats
+        it as no-cap) rather than raising.
         """
         org_sandbox_cap: int | None = await self._read_org_sandbox_cap(org_id, graph_json, snapshot_id)
+        org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
@@ -352,7 +366,24 @@ class PipelineExecutor:
                 else:
                     org_capacity_ok = org_count < org_sandbox_cap
 
-            if pipeline_capacity_ok and org_capacity_ok:
+            org_run_capacity_ok = True
+            org_run_count = 0
+            if org_run_limit is not None:
+                try:
+                    org_run_count = await count_active_runs_for_org(
+                        session, org_id, include_pending=False, exclude_run_id=run_id
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning(
+                        "pipeline.org_run_count_failed",
+                        extra={"org_id": str(org_id), "run_id": str(run_id)},
+                    )
+                else:
+                    org_run_capacity_ok = org_run_count < org_run_limit
+
+            if pipeline_capacity_ok and org_capacity_ok and org_run_capacity_ok:
                 if run.status not in _ADMISSIBLE_STATUSES:
                     # The run went terminal (or hold) while a retry was backing
                     # off — never resurrect it. Return it untouched so the
@@ -377,6 +408,9 @@ class PipelineExecutor:
                 org_sandbox_cap=org_sandbox_cap,
                 org_count=org_count,
                 org_capacity_ok=org_capacity_ok,
+                org_run_limit=org_run_limit,
+                org_run_count=org_run_count,
+                org_run_capacity_ok=org_run_capacity_ok,
             )
             # Demote to pending + reason marker so the recovery sweeps
             # (dispatcher_reconcile / stale-run) pick it up.
@@ -432,6 +466,27 @@ class PipelineExecutor:
             )
             return None
 
+    async def _read_org_run_concurrency_limit(self, org_id: uuid.UUID) -> int | None:
+        """Read the org's run-concurrency cap (``None`` = no cap / fail-open).
+
+        Mirrors :meth:`_read_org_sandbox_cap` but for the org-wide
+        ``run_concurrency_limit`` (applies to EVERY run, not just sandbox
+        graphs). Fail-open: any read error logs a warning and treats the org
+        as uncapped.
+        """
+        try:
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                return await get_org_run_concurrency_limit(session, org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.org_run_cap_read_failed",
+                extra={"org_id": str(org_id)},
+            )
+            return None
+
     @staticmethod
     def _capacity_decline(
         *,
@@ -441,12 +496,20 @@ class PipelineExecutor:
         org_sandbox_cap: int | None,
         org_count: int,
         org_capacity_ok: bool,
+        org_run_limit: int | None = None,
+        org_run_count: int = 0,
+        org_run_capacity_ok: bool = True,
     ) -> tuple[str, str]:
         """Pick the capacity reason marker + sanitized human detail."""
         if not org_capacity_ok and org_sandbox_cap is not None:
             return (
                 ERROR_CODE_ORG_CAPACITY_LIMITED,
                 f"Org sandbox concurrency limit reached: {org_count} active, cap {org_sandbox_cap}",
+            )
+        if not org_run_capacity_ok and org_run_limit is not None:
+            return (
+                ERROR_CODE_ORG_CAPACITY_LIMITED,
+                f"Org run concurrency limit reached: {org_run_count} active, cap {org_run_limit}",
             )
         return (
             ERROR_CODE_PIPELINE_CAPACITY,

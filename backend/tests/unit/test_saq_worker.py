@@ -474,3 +474,38 @@ class TestRetentionCleanup:
         ckpt_delete.assert_awaited_once()
         assert runs_delete.await_args.args[0] is session
         assert ckpt_delete.await_args.args[0] is session
+
+    @pytest.mark.asyncio
+    async def test_missing_checkpoint_schema_does_not_fail_job(self) -> None:
+        """Major 1: a missing saver schema must not roll back the runs purge.
+
+        The system worker's cron can fire before the app boot creates the
+        checkpoint tables / ``created_at`` columns. The checkpoint purge then
+        raises ``ProgrammingError`` (the SQLAlchemy wrapper for the DBAPI's
+        missing-table/column errors); the job must catch it, log a warning,
+        and still report the runs purge (``checkpoints_deleted`` = 0) — the
+        runs purge already committed in its own transaction.
+        """
+        from sqlalchemy.exc import ProgrammingError
+
+        factory, session = _make_retention_factory()
+
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch(
+                "modulo.db.crud.run.batch_delete_old_terminal_runs",
+                new_callable=AsyncMock,
+                return_value=7,
+            ) as runs_delete,
+            patch(
+                "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+                new_callable=AsyncMock,
+                side_effect=ProgrammingError("statement", {}, Exception("checkpoints does not exist")),
+            ) as ckpt_delete,
+        ):
+            result = await sw.retention_cleanup({})
+
+        assert result == {"deleted": 7, "checkpoints_deleted": 0}
+        runs_delete.assert_awaited_once()
+        ckpt_delete.assert_awaited_once()
+        assert runs_delete.await_args.args[0] is session

@@ -97,11 +97,18 @@ many executing/claimed runs across ALL its pipelines is deferred at dispatch
 time so one org cannot flood the shared worker pool. A currently-`pending` run
 is demoted back to `pending` with the `org_capacity_limited` reason marker and
 recovered by the stale-run sweep's stranded-capacity re-dispatch (the same
-mechanism as per-pipeline deferrals), never by `never_dispatched`. A non-`pending`
-run (e.g. a node recovery or committed HITL resume dispatched as `resume_run`)
-is deferred WITHOUT a status write, so its resume payload / committed gate
-decision is preserved and `dispatcher_reconcile` re-dispatches it once a slot
-frees.
+mechanism as per-pipeline deferrals), never by `never_dispatched`. A `resume_run`
+dispatch is NEVER org-cap deferred — a resume is the continuation of an
+already-admitted run (it is already `running` and already consumes a slot), so
+the gate only applies to NEW run admissions; deferring a resume would 500
+`recover_node` and lose the resume payload. The org run cap is ALSO re-checked
+at CLAIM time in the executor (`PipelineExecutor._check_capacity`), mirroring
+the sandbox-cap backstop: dispatch-time admission counts active runs in one
+transaction but enqueues later, and newly-enqueued runs stay `pending`
+(invisible to the count) until a worker claims them — so a burst of dispatches
+can each see `active < limit` and all enqueue, exceeding the cap by the batch
+size. The claim-time re-check demotes the run back to `pending` with the
+`org_capacity_limited` marker, closing that TOCTOU window.
 
 ### Database as system of record
 

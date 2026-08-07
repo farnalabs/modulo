@@ -72,13 +72,27 @@ async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID, org_id: u
     return active >= max_concurrent
 
 
-async def _org_capacity_deferred(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+async def _org_capacity_deferred(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    job_type: str = "execute_run",
+) -> bool:
     """True when the org is at its ``run_concurrency_limit`` (dispatch admission).
 
     Org-level admission control: a run whose org has ``run_concurrency_limit``
     configured and already has that many executing/claimed runs is deferred
     (returned to ``pending``) instead of enqueued — the shared worker pool is
     global, so a single org must not flood it across all its pipelines.
+
+    A ``resume_run`` dispatch is NEVER org-cap deferred: a resume is the
+    continuation of an ALREADY-ADMITTED run — the run is already ``running``
+    and already consumes an org slot — so the org-cap gate (which exists to
+    gate NEW run admissions) must not re-defer it. Deferring a resume would
+    return ``("deferred", None)`` to ``recover_node`` (HTTP 500) and lose the
+    ``resume_data`` when ``dispatcher_reconcile`` later re-dispatches it as
+    ``execute_run`` with empty resume data.
 
     Fail-open, loud: any error reading the org limit or counting active runs
     logs a warning and ADMITS the run (treats it as no-cap), matching the
@@ -100,6 +114,9 @@ async def _org_capacity_deferred(session: AsyncSession, run_id: uuid.UUID, org_i
     intent; the next ``dispatcher_reconcile`` pass re-dispatches it correctly
     as ``resume_run`` once a slot frees.
     """
+    if job_type == "resume_run":
+        return False
+
     from modulo.db.crud.run import (
         ERROR_CODE_ORG_CAPACITY_LIMITED,
         count_active_runs_for_org,
@@ -141,9 +158,22 @@ async def _record_dispatched(session: AsyncSession, run_id: uuid.UUID) -> None:
 
 
 async def _record_saq_job(session: AsyncSession, run_id: uuid.UUID, job_id: str, claim_token: str) -> None:
-    """Record dispatcher='saq' + job id + fresh claim token after a successful SAQ enqueue."""
+    """Record dispatcher='saq' + job id + a fresh claim token after a successful SAQ enqueue.
+
+    The claim token is only written when the run has NOT been claimed yet: the
+    worker can dequeue the job and ``claim_run_async`` (which atomically rotates
+    ``runs.claim_token`` to its own value) between the enqueue and this write.
+    Overwriting it here would clobber the worker's token, so the worker's next
+    heartbeat would raise ``ClaimSupersededError`` and the active executor would
+    abort. Once a worker claims the run, the worker owns the claim token — the
+    dispatcher must not touch it.
+    """
     await session.execute(
-        text("UPDATE runs SET dispatcher='saq', saq_job_id=:jid, claim_token=:tok WHERE id=:rid"),
+        text(
+            "UPDATE runs SET dispatcher='saq', saq_job_id=:jid, "
+            "claim_token = CASE WHEN claim_token IS NULL THEN :tok ELSE claim_token END "
+            "WHERE id=:rid"
+        ),
         {"rid": run_id, "jid": job_id, "tok": claim_token},
     )
 
@@ -268,7 +298,7 @@ async def dispatch_run(
             if await _capacity_deferred(session, rid, oid):
                 _log.info("dispatch_run: run %s capacity-deferred (no enqueue)", rid)
                 return ("deferred", None)
-            if await _org_capacity_deferred(session, rid, oid):
+            if await _org_capacity_deferred(session, rid, oid, job_type=job_type):
                 _log.info("dispatch_run: run %s org-capacity-deferred (no enqueue)", rid)
                 return ("deferred", None)
     finally:
