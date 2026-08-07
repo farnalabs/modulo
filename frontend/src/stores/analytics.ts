@@ -4,6 +4,7 @@ import { parseISO, isValid } from "date-fns";
 import { api } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { toProblemDetail, type ProblemDetail } from "../lib/api/formatError";
+import { formatDateShortWithTime } from "../lib/formatDate";
 
 export type AnalyticsMeasure =
   | "count"
@@ -290,6 +291,20 @@ export function isDimensioned(series: AnalyticsBucket[]): boolean {
   return series.some((b) => b.key != null && b.key !== "");
 }
 
+/**
+ * Humanize a backend bucket label. Hour-granular buckets carry naive-UTC ISO
+ * datetimes (e.g. "2026-08-06T14:00:00") that must be read as UTC — appending Z
+ * so `new Date` parses them as UTC, then formatting in the viewer's timezone.
+ * Day-granular buckets are bare "YYYY-MM-DD" strings and are returned unchanged.
+ */
+export function formatBucketDate(date: string | null | undefined): string {
+  if (date == null) return "";
+  if (date.includes("T")) {
+    return formatDateShortWithTime(`${date}Z`);
+  }
+  return date;
+}
+
 /** Pure series → ECharts option mapping. The backend is the sole bucketing authority. */
 export function buildChartOption(
   series: AnalyticsBucket[],
@@ -298,7 +313,7 @@ export function buildChartOption(
 ): Record<string, unknown> {
   const dimensioned = isDimensioned(series);
   const buckets = dimensioned ? aggregateByKey(series) : series;
-  const labels = buckets.map((b) => b.key ?? b.date);
+  const labels = buckets.map((b) => b.key ?? formatBucketDate(b.date));
   const values = buckets.map((b) => measureValue(b, measure));
   return {
     tooltip: { trigger: "axis" },
@@ -404,7 +419,10 @@ export const useAnalyticsStore = defineStore("analytics", () => {
         (b.total_tokens != null && b.total_tokens > 0),
     ),
   );
-  const groupBy = computed(() => filters.value.groupBy);
+  const groupBy = computed(() => {
+    const timespan = TIMESPANS.find((t) => t.value === filters.value.timespan);
+    return timespan?.granularity === "hour" ? "hour" : filters.value.groupBy;
+  });
 
   function setFilters(patch: Partial<AnalyticsFilters>): void {
     filters.value = { ...filters.value, ...patch };

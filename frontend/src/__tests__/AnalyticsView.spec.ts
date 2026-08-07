@@ -14,6 +14,7 @@ vi.mock('vue-echarts', () => ({
 vi.mock('echarts', () => ({ default: {} }))
 
 import AnalyticsView from '../views/AnalyticsView.vue'
+import { formatDateShortWithTime } from '../lib/formatDate'
 import {
   useAnalyticsStore,
   serializeFilters,
@@ -22,6 +23,7 @@ import {
   formatDeltaPercent,
   formatMeasureValue,
   aggregateByKey,
+  formatBucketDate,
   previousWindowParams,
   type AnalyticsBucket,
 } from '../stores/analytics'
@@ -181,6 +183,22 @@ describe('serializeFilters', () => {
   })
 })
 
+describe('formatBucketDate', () => {
+  it('formats hour-granular bucket timestamps as UTC in the viewer timezone', () => {
+    // Backend hour buckets are naive-UTC ("2026-08-06T14:00:00"); formatBucketDate
+    // must treat them as UTC (append Z) so formatDateShortWithTime renders the
+    // correct local clock time regardless of the viewer timezone.
+    const formatted = formatBucketDate('2026-08-06T14:00:00')
+    expect(formatted).toBe(formatDateShortWithTime('2026-08-06T14:00:00Z'))
+    expect(formatted).not.toContain('2026-08-06T14:00:00')
+  })
+
+  it('leaves day-granular bucket dates unchanged', () => {
+    expect(formatBucketDate('2026-08-01')).toBe('2026-08-01')
+    expect(formatBucketDate(null)).toBe('')
+  })
+})
+
 describe('previousWindowParams', () => {
   it('shifts the window back by exactly one window', () => {
     const params = serializeFilters({ timespan: '7d', groupBy: 'day' }, FIXED_NOW)
@@ -266,6 +284,20 @@ describe('buildChartOption', () => {
       series: Array<{ data: Array<number | null> }>
     }
     expect(option.series[0].data).toEqual([null, 2.5])
+  })
+
+  it('humanizes hour-bucket dates on the chart axis', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-06T14:00:00', count: 3 },
+      { date: '2026-08-06T15:00:00', count: 5 },
+    ]
+    const option = buildChartOption(series, 'count', 'hour') as {
+      xAxis: { data: string[] }
+    }
+    expect(option.xAxis.data).toEqual([
+      formatDateShortWithTime('2026-08-06T14:00:00Z'),
+      formatDateShortWithTime('2026-08-06T15:00:00Z'),
+    ])
   })
 })
 
@@ -361,6 +393,17 @@ describe('analytics store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  it('exposes the effective granularity: hour for 1h/24h, otherwise the selected day/week', () => {
+    const store = useAnalyticsStore()
+    expect(store.groupBy).toBe('day')
+    store.setFilters({ timespan: '24h' })
+    expect(store.groupBy).toBe('hour')
+    store.setFilters({ timespan: '1h' })
+    expect(store.groupBy).toBe('hour')
+    store.setFilters({ timespan: '7d', groupBy: 'week' })
+    expect(store.groupBy).toBe('week')
   })
 
   it('fetches and validates the query response', async () => {
@@ -494,6 +537,19 @@ describe('AnalyticsView', () => {
     expect(wrapper.text()).toContain('2026-08-01')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('3')
     expect(wrapper.find('[data-testid="analytics-table"]').text()).toContain('5')
+  })
+
+  it('hides the day/week group-by control and shows a disabled Hour pill for hour-granular timespans', async () => {
+    setupMocks()
+    const store = useAnalyticsStore()
+    store.setFilters({ timespan: '24h' })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="analytics-group-by-day"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="analytics-group-by-week"]').exists()).toBe(false)
+    const hour = wrapper.find('[data-testid="analytics-group-by-hour"]')
+    expect(hour.exists()).toBe(true)
+    expect(hour.attributes('disabled')).toBeDefined()
   })
 
   it('renders the empty state with data-since when there is no data', async () => {

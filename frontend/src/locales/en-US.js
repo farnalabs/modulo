@@ -834,6 +834,7 @@ export default {
       "timespan_30d": "Last 30d",
       "timespan_90d": "Last 90d",
       "group_by": "Granularity",
+      "group_by_hour": "Hour",
       "group_by_day": "Day",
       "group_by_week": "Week",
       "dimension": "Break down by",
