@@ -106,7 +106,7 @@ class TestCursorEncoding:
 
     @staticmethod
     def test_decode_malformed_cursor_raises() -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid cursor"):
             CursorPaginator.decode_cursor("not-base64!!!")
 
     @staticmethod
@@ -122,7 +122,7 @@ class TestCursorEncoding:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

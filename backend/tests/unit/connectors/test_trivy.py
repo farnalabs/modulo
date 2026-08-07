@@ -11,12 +11,12 @@ TOKEN = "test_token"
 BASE_URL = "http://localhost:8080"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return TrivyConnector(token=TOKEN, base_url=BASE_URL)
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector_noauth():
     return TrivyConnector(base_url=BASE_URL)
 

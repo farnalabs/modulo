@@ -796,7 +796,7 @@ class TestTagSnapshot:
 
 
 class TestGetSnapshotDetail:
-    async def test_get_snapshot_detail_calls_get_snapshot(self):
+    async def test_get_snapshot_detail_returns_snapshot(self):
         session = AsyncMock()
         sid = uuid.uuid4()
 
@@ -810,6 +810,50 @@ class TestGetSnapshotDetail:
         result = await get_snapshot_detail(session, sid)
         assert result is snapshot
         assert result.id == sid
+
+    async def test_get_snapshot_detail_applies_org_filter(self):
+        session = AsyncMock()
+        sid = uuid.uuid4()
+        oid = uuid.uuid4()
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = MagicMock(spec=PipelineSnapshot)
+        session.execute = AsyncMock(return_value=result_mock)
+
+        await get_snapshot_detail(session, sid, organisation_id=oid)
+
+        stmt = session.execute.call_args[0][0]
+        assert stmt.whereclause is not None
+        assert "organisation_id" in str(stmt.whereclause)
+
+    async def test_get_snapshot_detail_applies_pipeline_filter(self):
+        session = AsyncMock()
+        sid = uuid.uuid4()
+        pid = uuid.uuid4()
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = MagicMock(spec=PipelineSnapshot)
+        session.execute = AsyncMock(return_value=result_mock)
+
+        await get_snapshot_detail(session, sid, pipeline_id=pid)
+
+        stmt = session.execute.call_args[0][0]
+        assert stmt.whereclause is not None
+        assert "pipeline_id" in str(stmt.whereclause)
+
+    async def test_get_snapshot_detail_without_scoping_has_no_org_predicate(self):
+        session = AsyncMock()
+        sid = uuid.uuid4()
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = MagicMock(spec=PipelineSnapshot)
+        session.execute = AsyncMock(return_value=result_mock)
+
+        await get_snapshot_detail(session, sid)
+
+        stmt = session.execute.call_args[0][0]
+        assert "organisation_id" not in str(stmt.whereclause)
+        assert "pipeline_id" not in str(stmt.whereclause)
 
 
 class TestListSnapshots:

@@ -12,7 +12,7 @@ ORG = "test-org"
 _BASE = "https://sentry.io/api/0"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> SentryConnector:
     return SentryConnector(token=TOKEN, organization=ORG)
 

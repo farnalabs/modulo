@@ -11,12 +11,12 @@ TOKEN = "yt_perm_token_123"
 _BASE = "https://youtrack.mycompany.com/api"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return YouTrackConnector(token=TOKEN, base_url=_BASE)
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector_custom_url():
     return YouTrackConnector(token=TOKEN, base_url="https://youtrack.example.com/api")
 

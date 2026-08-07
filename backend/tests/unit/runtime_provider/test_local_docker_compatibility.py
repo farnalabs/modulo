@@ -15,7 +15,7 @@ from modulo.core.runtime_provider.docker import DockerRuntimeProvider
 from modulo.core.runtime_provider.local_docker import LocalDockerRuntimeProvider
 
 
-@pytest.fixture()
+@pytest.fixture
 def canonical_provider() -> MagicMock:
     provider = MagicMock(spec=DockerRuntimeProvider)
     provider.create_workspace = AsyncMock(return_value="workspace-ref")

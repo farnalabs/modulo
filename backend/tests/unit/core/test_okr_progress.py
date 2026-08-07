@@ -417,7 +417,7 @@ class TestOkrProgressModel:
 class TestOkrProgressEndpoint:
     URL = "/api/v1/admin/evals/okr-progress/quality-suite-1"
 
-    @pytest.fixture()
+    @pytest.fixture
     def _configure_session(self):
         def _setup(mock_session: AsyncMock) -> None:
             mock_session.execute.side_effect = [
@@ -439,7 +439,7 @@ class TestOkrProgressEndpoint:
 
         return _setup
 
-    @pytest.fixture()
+    @pytest.fixture
     def client(self, _configure_session) -> Generator[TestClient, None, None]:
         mock_session = _make_mock_session()
         _configure_session(mock_session)
@@ -459,7 +459,7 @@ class TestOkrProgressEndpoint:
         yield TestClient(app)
         app.dependency_overrides.clear()
 
-    @pytest.fixture()
+    @pytest.fixture
     def unauth_client(self) -> Generator[TestClient, None, None]:
         app.dependency_overrides.clear()
         app.dependency_overrides[get_settings] = _make_settings

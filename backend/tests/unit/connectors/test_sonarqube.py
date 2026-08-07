@@ -12,12 +12,12 @@ BASE_URL = "https://sonarqube.company.com"
 API_BASE = f"{BASE_URL}/api"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return SonarQubeConnector(token=TOKEN, base_url=BASE_URL)
 
 
-@pytest.fixture()
+@pytest.fixture
 def local_connector():
     return SonarQubeConnector(token=TOKEN)
 

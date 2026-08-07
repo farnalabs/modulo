@@ -34,7 +34,6 @@ DELETION_TOKEN_BYTES = 48
 CONFIRMATION_WINDOW_HOURS = 24
 RUN_RETENTION_DAYS = 30
 CHECKPOINT_BATCH_SIZE = 500
-LANGRAPH_SCHEMA = "langgraph"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -234,27 +233,39 @@ async def batch_delete_langgraph_checkpoints(
     *,
     batch_size: int = CHECKPOINT_BATCH_SIZE,
 ) -> int:
-    """Nightly retention: delete old langgraph.* checkpoint rows.
+    """Nightly retention: delete old LangGraph checkpoint rows.
 
-    Removes checkpoint writes older than the run retention window (30 days).
-    Operates on the ``langgraph.checkpoint`` and ``langgraph.checkpoint_writes``
-    tables directly via raw SQL.
+    Ages out checkpoint writes, blobs, and checkpoints older than the run
+    retention window (30 days). Operates directly on the unqualified table
+    names the ``ModuloPostgresSaver`` migrations create (``checkpoints``,
+    ``checkpoint_blobs``, ``checkpoint_writes``) — they land in the
+    connection's default search_path schema, not a ``langgraph`` schema.
+    Blob rows are not FK-cascaded from checkpoints (the saver migrations
+    define no foreign keys), so all three tables are purged. Age is measured
+    via the ``created_at`` column added by the saver migrations.
     """
     cutoff = datetime.now(UTC) - timedelta(days=RUN_RETENTION_DAYS)
     deleted_total = 0
 
     _table_sql = {
         "checkpoint_writes": (
-            "DELETE FROM langgraph.checkpoint_writes "
+            "DELETE FROM checkpoint_writes "
             "WHERE ctid IN ("
-            "  SELECT ctid FROM langgraph.checkpoint_writes "
+            "  SELECT ctid FROM checkpoint_writes "
+            "  WHERE created_at < :cutoff LIMIT :limit"
+            ")"
+        ),
+        "checkpoint_blobs": (
+            "DELETE FROM checkpoint_blobs "
+            "WHERE ctid IN ("
+            "  SELECT ctid FROM checkpoint_blobs "
             "  WHERE created_at < :cutoff LIMIT :limit"
             ")"
         ),
         "checkpoints": (
-            "DELETE FROM langgraph.checkpoints "
+            "DELETE FROM checkpoints "
             "WHERE ctid IN ("
-            "  SELECT ctid FROM langgraph.checkpoints "
+            "  SELECT ctid FROM checkpoints "
             "  WHERE created_at < :cutoff LIMIT :limit"
             ")"
         ),

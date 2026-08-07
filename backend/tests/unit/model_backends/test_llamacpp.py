@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.llamacpp import DEFAULT_LLAMACPP_BASE_URL, LLamaCppBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return LLamaCppBackend(api_key=None, model_id="llama-model")

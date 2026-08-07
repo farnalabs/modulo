@@ -75,7 +75,7 @@ def _make_row(**attrs) -> MagicMock:
     return m
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
@@ -92,7 +92,7 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def runner_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[_get_engine] = lambda: MagicMock()

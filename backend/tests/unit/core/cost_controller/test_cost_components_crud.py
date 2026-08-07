@@ -145,9 +145,8 @@ async def test_create_org_cap_enforced(mock_dup: AsyncMock) -> None:
     count_result = MagicMock()
     count_result.scalar_one.return_value = 50
     session.execute.return_value = count_result
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="org_cap"):
         await create_cost_component(session, **_component_args())
-    assert str(exc_info.value) == "org_cap"
 
 
 @patch("modulo.db.crud.cost_component._duplicate_exists")
@@ -157,9 +156,8 @@ async def test_create_duplicate_is_409(mock_dup: AsyncMock) -> None:
     count_result = MagicMock()
     count_result.scalar_one.return_value = 0
     session.execute.return_value = count_result
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="duplicate_component"):
         await create_cost_component(session, **_component_args())
-    assert str(exc_info.value) == "duplicate_component"
 
 
 # --- seeder idempotency -------------------------------------------------------

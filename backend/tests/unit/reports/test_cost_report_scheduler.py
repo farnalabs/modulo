@@ -70,18 +70,18 @@ async def test_generate_format_and_deliver_cost_report() -> None:
 
 
 @pytest.mark.parametrize(
-    "config",
+    ("config", "match"),
     [
-        {"period": "hourly", "group_by": "team", "format": "csv"},
-        {"period": "daily", "group_by": "department", "format": "csv"},
-        {"period": "daily", "group_by": "team", "format": "xml"},
-        {},
+        ({"period": "hourly", "group_by": "team", "format": "csv"}, "period"),
+        ({"period": "daily", "group_by": "department", "format": "csv"}, "grouping"),
+        ({"period": "daily", "group_by": "team", "format": "xml"}, "format"),
+        ({}, "period"),
     ],
 )
-async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str]) -> None:
+async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str], match: str) -> None:
     with (
         patch("modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock) as get_cost,
-        pytest.raises(ValueError),
+        pytest.raises(ValueError, match=f"Unsupported scheduled cost report {match}"),
     ):
         await generate_cost_report(
             cast(AsyncSession, MagicMock(spec=AsyncSession)),
@@ -123,26 +123,26 @@ def test_format_cost_report_json_emits_json_array() -> None:
 
 
 def test_format_cost_report_rejects_unknown_format() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unsupported scheduled cost report format"):
         format_cost_report({"period": "daily", "group_by": "team", "format": "pdf", "items": []})
 
 
 @pytest.mark.parametrize(
-    "recipient_config",
+    ("recipient_config", "match"),
     [
-        {"type": "slack", "emails": ["admin@example.com"]},
-        {"type": "email", "emails": "admin@example.com"},
-        {"type": "email", "emails": []},
-        {"type": "email", "emails": [""]},
-        {"type": "email", "emails": ["admin@example.com", 42]},
+        ({"type": "slack", "emails": ["admin@example.com"]}, "require an email recipient"),
+        ({"type": "email", "emails": "admin@example.com"}, "must be a list"),
+        ({"type": "email", "emails": []}, "non-empty"),
+        ({"type": "email", "emails": [""]}, "non-empty"),
+        ({"type": "email", "emails": ["admin@example.com", 42]}, "non-empty"),
     ],
 )
-async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object]) -> None:
+async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object], match: str) -> None:
     payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
     with (
         patch("modulo.core.reports.cost_report.get_settings"),
         patch("modulo.core.reports.cost_report.send_email", new_callable=AsyncMock) as send,
-        pytest.raises(ValueError),
+        pytest.raises(ValueError, match=match),
     ):
         await deliver_cost_report(payload, recipient_config)
     send.assert_not_awaited()

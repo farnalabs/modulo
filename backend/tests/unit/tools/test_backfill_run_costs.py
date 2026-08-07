@@ -47,9 +47,9 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
 
 
 @pytest.fixture
-async def maker(engine: AsyncEngine) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
-    m = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
-    yield m
+async def maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    # Production shape: expire_on_commit=False + autobegin=False.
+    return async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
 
 
 def _enriched_usage() -> dict[str, Any]:
@@ -158,7 +158,8 @@ class TestBackfillRunCosts:
         assert stored is not None
         assert stored.total_cost_usd is not None
         assert stored.total_cost_usd > 0
-        assert isinstance(stored.cost_breakdown, list) and stored.cost_breakdown
+        assert isinstance(stored.cost_breakdown, list)
+        assert stored.cost_breakdown
         sandbox = next((e for e in stored.cost_breakdown if e.get("component") == "sandbox_infra"), None)
         assert sandbox is not None
         assert Decimal(str(sandbox["amount_usd"])) > 0

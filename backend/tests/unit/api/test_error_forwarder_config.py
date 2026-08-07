@@ -54,7 +54,7 @@ def _make_mock_forwarder(ok: bool = True) -> AsyncMock:
     return fwd
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -80,7 +80,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def viewer_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -106,7 +106,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def no_org_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -129,7 +129,7 @@ def no_org_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def gated_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

@@ -429,6 +429,8 @@ jobs:
           MYPY_PID=$!
           uv run --no-sync bandit -r src/modulo/ -ll &
           BANDIT_PID=$!
+          uv run --no-sync ruff format --check . &
+          RUFF_FORMAT_PID=$!
 
           uv run --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
           TEST_EXIT=$?
@@ -438,6 +440,7 @@ jobs:
           wait $RUFF_PID || LINT_FAIL=1
           wait $MYPY_PID || LINT_FAIL=1
           wait $BANDIT_PID || LINT_FAIL=1
+          wait $RUFF_FORMAT_PID || LINT_FAIL=1
 
           # Report failures
           if [ $LINT_FAIL -ne 0 ]; then

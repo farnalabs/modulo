@@ -10,7 +10,7 @@ from modulo.connectors.github import GitHubConnector
 TOKEN = "ghp_test_token"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return GitHubConnector(token=TOKEN)
 
@@ -284,7 +284,8 @@ def test_parse_rate_limit_reset_missing_or_invalid():
     assert _parse_rate_limit_reset(past) is None
     future = httpx.Response(200, headers={"X-RateLimit-Reset": str(time.time() + 10)})
     delay = _parse_rate_limit_reset(future)
-    assert delay is not None and 0 < delay <= 10.0
+    assert delay is not None
+    assert 0 < delay <= 10.0
 
 
 @respx.mock
@@ -315,7 +316,8 @@ async def test_query_429_reset_uses_tight_jitter_not_full(connector, monkeypatch
     result = await connector.query(ConnectorQuery(resource="repos"))
     assert len(result.records) == 1
     assert route.call_count == 2
-    assert sleeps and sleeps[0] >= 9.0
+    assert sleeps
+    assert sleeps[0] >= 9.0
 
 
 @respx.mock
@@ -337,7 +339,8 @@ async def test_query_429_retry_after_uses_tight_jitter_not_full(connector, monke
     )
     result = await connector.query(ConnectorQuery(resource="repos"))
     assert len(result.records) == 1
-    assert sleeps and sleeps[0] >= 9.0
+    assert sleeps
+    assert sleeps[0] >= 9.0
 
 
 @respx.mock
@@ -359,4 +362,5 @@ async def test_query_503_backoff_still_uses_full_jitter(connector, monkeypatch):
     )
     result = await connector.query(ConnectorQuery(resource="repos"))
     assert len(result.records) == 1
-    assert sleeps and sleeps[0] < 1.0
+    assert sleeps
+    assert sleeps[0] < 1.0

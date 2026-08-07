@@ -6,7 +6,7 @@ from modulo.connectors.base import ConnectorPayload, ConnectorQuery
 from modulo.connectors.filesystem import FilesystemConnector, PathTraversalError
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(tmp_path):
     return FilesystemConnector(base_path=str(tmp_path))
 

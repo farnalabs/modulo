@@ -11,7 +11,7 @@ TOKEN = "op_test_token"
 BASE_URL = "http://localhost:8080"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> OnePasswordConnector:
     return OnePasswordConnector(token=TOKEN, base_url=BASE_URL)
 

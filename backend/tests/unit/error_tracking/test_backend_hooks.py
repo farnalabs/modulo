@@ -234,7 +234,7 @@ class TestAsyncEmitEventData:
     that would be handed to ErrorIngestionService.
     """
 
-    @pytest.fixture()
+    @pytest.fixture
     def async_emit_chain(self, monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock, MagicMock]:
         """Install mock DB chain for ``_async_emit``; return ``(service, set_rls, session)`` mocks."""
         session = MagicMock()
@@ -423,7 +423,7 @@ class TestAsyncEmitEventData:
 
 
 class TestEnrichment:
-    @pytest.fixture()
+    @pytest.fixture
     def ingest_chain(self, monkeypatch: pytest.MonkeyPatch) -> tuple[AsyncMock, AsyncMock, MagicMock]:
         """Install mock DB chain for ``_ingest_unhandled_error``; return ``(service, set_rls, session)`` mocks."""
         session = MagicMock()

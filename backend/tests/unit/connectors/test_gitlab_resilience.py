@@ -14,7 +14,7 @@ _SELF_TOKEN_INFO = "https://gitlab.example.com/oauth/token/info"
 _FULL_SCOPES = {"scope": ["read_api", "write_repository", "api"]}
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return GitLabConnector(token=TOKEN)
 
@@ -487,7 +487,7 @@ def test_validate_path_helpers():
         except ValueError:
             continue
         raise AssertionError(f"path {bad!r} was not rejected")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="requires a non-empty 'path'"):
         _validate_path("", "file")
 
 

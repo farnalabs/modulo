@@ -13,12 +13,12 @@ from modulo.connectors.base import (
 from modulo.connectors.buildkite import BuildkiteConnector, _BuildkiteTestDouble
 
 
-@pytest.fixture()
+@pytest.fixture
 def bk_runner():
     return BuildkiteConnector(token="bkt_test")
 
 
-@pytest.fixture()
+@pytest.fixture
 def bk_double():
     return _BuildkiteTestDouble()
 

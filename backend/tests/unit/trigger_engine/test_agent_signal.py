@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.exceptions import TriggersPausedError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from modulo.db.settings_resolver import PAUSE_SKIP_REASON
 
 
 def _make_trigger(
@@ -471,3 +473,36 @@ class TestFireAgentSignal:
                 source_pipeline_id=source_pipeline_id,
                 completed_node_id="my-node",
             )
+
+    async def test_create_run_paused_error_records_paused(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """A TriggersPausedError from create_run must be recorded as paused,
+        not swallowed or reported as a generic failure."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        mock_create_run.side_effect = TriggersPausedError(
+            trigger_id=trigger.id, org_id=org_id, trigger_type="agent_signal"
+        )
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["trigger_id"] == str(trigger.id)
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == PAUSE_SKIP_REASON
+        assert any(getattr(c[0][0], "validation_result", None) == "paused" for c in mock_session.add.call_args_list)

@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import logging
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -21,6 +22,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report
 from modulo.core.cost_settings import (
     COST_CONTROLS_KEY,
+    DEFAULT_ALERT_THRESHOLDS,
     DEFAULT_BILLING_PERIOD,
     DEFAULT_CIRCUIT_BREAKER_ENABLED,
     DEFAULT_CURRENCY,
@@ -95,13 +97,32 @@ def _read_circuit_breaker(org: object | None) -> bool:
 
 
 def _read_alert_thresholds(org: object | None) -> list[float]:
+    """Read persisted alert thresholds, degrading to the default when corrupted.
+
+    ``settings_json`` is persisted JSON and may hold arbitrary shapes. Anything
+    that is not a non-empty list of whole numbers within 1..100 is rejected so a
+    corrupted persisted value degrades to the default instead of raising (which
+    would 500 the endpoint). Non-finite floats (``NaN``/``Infinity``) are also
+    rejected since ``int()`` cannot coerce them and ``json.loads`` accepts them.
+    Out-of-range ints are checked before any float conversion because
+    ``math.isfinite`` raises ``OverflowError`` for ints too large to fit a
+    float (e.g. a persisted ``[1000000000000000000000000000000]``). Normal
+    writes are validated by
+    ``UpdateCostControlsRequest._validate_alert_thresholds``; this read path is
+    what keeps defensiveness against previously-corrupted data.
+    """
     value = _read_cost_control(org, "alert_thresholds", [])
-    if not isinstance(value, list):
-        return []
-    if not value:
-        return []
-    coerced = [float(v) for v in value]
-    return coerced if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value) else []
+    if not isinstance(value, list) or not value:
+        return list(DEFAULT_ALERT_THRESHOLDS)
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return list(DEFAULT_ALERT_THRESHOLDS)
+        if isinstance(item, int):
+            if not 1 <= item <= 100:
+                return list(DEFAULT_ALERT_THRESHOLDS)
+        elif not math.isfinite(item) or int(item) != item or not 1 <= item <= 100:
+            return list(DEFAULT_ALERT_THRESHOLDS)
+    return [float(v) for v in value]
 
 
 class CostReportComponent(BaseModel):
@@ -380,7 +401,7 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alert_thresholds: list[float] = Field(default_factory=list)
+    alert_thresholds: list[float] = Field(default_factory=lambda: list(DEFAULT_ALERT_THRESHOLDS))
     circuit_breaker_enabled: bool = False
     currency: str = "USD"
     billing_period: str = "monthly"

@@ -14,12 +14,12 @@ API_TOKEN = "api_token_123"
 _BASE = f"https://{INSTANCE}"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return ConfluenceConnector(instance=INSTANCE, creds={"token": TOKEN})
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector_basic_auth():
     return ConfluenceConnector(instance=INSTANCE, creds={"email": EMAIL, "api_token": API_TOKEN})
 

@@ -31,7 +31,7 @@ def _make_settings() -> Settings:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = AsyncMock()
     configure_mock_session(mock_session)
