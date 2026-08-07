@@ -23,6 +23,7 @@ Allowed operators: ``+ - * /``, unary minus, parentheses. NO functions, no
 
 from __future__ import annotations
 
+import decimal
 import re
 from decimal import Decimal
 from typing import Any
@@ -256,7 +257,10 @@ def evaluate_formula(
     only the final value is checked.
     """
     node = _compile(formula, allowed_idents)
-    result = _evaluate(node, params)
+    try:
+        result = _evaluate(node, params)
+    except decimal.DecimalException:
+        raise CostFormulaError("eval_error", "non-finite formula result") from None
     if not result.is_finite():
         raise CostFormulaError("eval_error", "non-finite formula result")
     if result < 0:

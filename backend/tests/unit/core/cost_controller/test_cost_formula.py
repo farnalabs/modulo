@@ -66,8 +66,15 @@ def test_decimal_end_to_end() -> None:
 
 
 def test_division_by_zero_raises() -> None:
-    with pytest.raises((CostFormulaError, ArithmeticError)):
+    with pytest.raises(CostFormulaError) as exc_info:
         evaluate_formula("rate / wall_clock_hours", _params(rate=Decimal(1), wall_clock_hours=Decimal(0)), _SANDBOX)
+    assert exc_info.value.code == "eval_error"
+
+
+def test_zero_over_zero_raises() -> None:
+    with pytest.raises(CostFormulaError) as exc_info:
+        evaluate_formula("rate / wall_clock_hours", _params(rate=Decimal(0), wall_clock_hours=Decimal(0)), _SANDBOX)
+    assert exc_info.value.code == "eval_error"
 
 
 def test_unknown_identifier_rejected() -> None:
