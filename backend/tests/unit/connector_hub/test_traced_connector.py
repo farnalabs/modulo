@@ -162,6 +162,8 @@ async def test_query_error_records_exception(traced: _TracedConnector, exporter:
     assert span.status.status_code == StatusCode.ERROR
     event_names = [e.name for e in span.events]
     assert "exception" in event_names
+    assert span.attributes is not None
+    assert span.attributes.get("connector.error_type") == "ValueError"
 
 
 async def test_write_error_records_exception(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
@@ -237,6 +239,8 @@ async def test_query_cancelled_records_error(traced: _TracedConnector, exporter:
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description is not None
+    assert "cancelled" in span.status.description
 
 
 async def test_post_span_callback_failure_does_not_break_result(
@@ -292,6 +296,26 @@ async def test_query_span_sets_result_total_only_when_not_none(tracer, exporter:
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     assert "connector.result_total" not in (spans[0].attributes or {})
+
+
+async def test_run_with_tracing_without_acl_operation(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
+    """_run_with_tracing with acl_operation=None skips ACL enforcement (no-op branch)."""
+    inner = traced._inner
+
+    result = await traced._run_with_tracing(
+        "connector.filesystem.manual",
+        "manual",
+        inner.health_check,
+        acl_operation=None,
+    )
+
+    assert result.ok is True
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes is not None
+    assert span.attributes.get("connector.operation") == "manual"
+    assert span.status.status_code == StatusCode.OK
 
 
 async def test_hub_integration_health_check(tmp_path, hub_global_exporter: InMemorySpanExporter) -> None:
