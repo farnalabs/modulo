@@ -96,11 +96,12 @@ def _read_circuit_breaker(org: object | None) -> bool:
 
 def _read_alert_thresholds(org: object | None) -> list[float]:
     value = _read_cost_control(org, "alert_thresholds", [])
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list):
         return []
-    if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
-        return [float(v) for v in value]
-    return []
+    if not value:
+        return []
+    coerced = [float(v) for v in value]
+    return coerced if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value) else []
 
 
 class CostReportComponent(BaseModel):
