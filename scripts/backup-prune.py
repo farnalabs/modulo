@@ -92,8 +92,6 @@ def classify_backups(backups: list[BackupFile]) -> set[str]:
 
             if reason:
                 keep.add(b.path)
-            else:
-                pass
 
     return keep
 

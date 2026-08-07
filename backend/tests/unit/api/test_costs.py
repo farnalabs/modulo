@@ -38,6 +38,16 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # require_permission -> resolve_authz_enforce reads the org authz kill-switch
+    # via `await session.execute(...)` then calls the un-awaited
+    # `result.scalar_one_or_none()`. With a bare AsyncMock execute result that
+    # chained call leaks an unawaited AsyncMockMixin._execute_mock_call
+    # coroutine (PytestUnraisableExceptionWarning) on EVERY request. Returning
+    # a plain MagicMock result keeps the sync `.scalar_one_or_none()` chain off
+    # the async-mock path; None mirrors the "row absent" default (enforce).
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=execute_result)
     return session
 
 
@@ -753,6 +763,106 @@ class TestCostControlsCurrency:
             resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
 
         assert resp.status_code == 404
+
+
+class TestCostControlsAlertThresholds:
+    """alert_thresholds persist via org.settings_json and round-trip through update/get."""
+
+    ENDPOINT = "/api/v1/admin/costs/controls"
+
+    def _org(self, settings_json: dict | None = None) -> MagicMock:
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = None
+        org.settings_json = settings_json if settings_json is not None else {}
+        return org
+
+    def test_defaults_when_unset(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == []
+
+    def test_defaults_ignores_corrupted_persisted_value(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": "not-a-list"}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == []
+
+    def test_update_persists_alert_thresholds(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 75, 90, 100]})
+
+        assert resp.status_code == 200
+        assert org.settings_json == {"cost_controls": {"alert_thresholds": [50.0, 75.0, 90.0, 100.0]}}
+
+    def test_alert_thresholds_round_trip_through_update_get(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            put_resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 100]})
+            assert put_resp.status_code == 200
+            get_resp = client.get(self.ENDPOINT)
+
+        assert get_resp.status_code == 200
+        assert get_resp.json()["alert_thresholds"] == [50.0, 100.0]
+
+    def test_update_preserves_existing_thresholds_and_currency(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "EUR", "alert_thresholds": [75]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "GBP"})
+
+        assert resp.status_code == 200
+        assert org.settings_json["cost_controls"] == {"currency": "GBP", "alert_thresholds": [75]}
+
+    def test_empty_thresholds_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": []})
+        assert resp.status_code == 422
+
+    def test_out_of_range_threshold_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 150]})
+        assert resp.status_code == 422
+
+    def test_non_integer_threshold_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50.5]})
+        assert resp.status_code == 422
+
+    def test_non_numeric_threshold_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": ["high"]})
+        assert resp.status_code == 422
+
+    def test_operator_returns_403(self, operator_client: TestClient) -> None:
+        resp = operator_client.put(self.ENDPOINT, json={"alert_thresholds": [50]})
+        assert resp.status_code == 403
 
 
 class TestOrgSettingsCurrency:

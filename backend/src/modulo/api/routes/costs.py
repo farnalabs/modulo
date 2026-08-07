@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -389,6 +389,20 @@ class UpdateCostControlsRequest(BaseModel):
     circuit_breaker_enabled: bool | None = None
     currency: Literal["USD", "EUR", "GBP"] | None = None
     billing_period: Literal["monthly", "quarterly", "annual"] | None = None
+
+    @field_validator("alert_thresholds")
+    @classmethod
+    def _validate_alert_thresholds(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("alert_thresholds must be a non-empty list of integers in 1..100")
+        for threshold in value:
+            if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+            if int(threshold) != threshold or not 1 <= int(threshold) <= 100:
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+        return value
 
 
 @handle_db_errors("costs.get_cost_controls")
