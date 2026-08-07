@@ -865,7 +865,8 @@ class TestLiveWriterEnrichment:
         assert uuid.UUID(str(row[9])) == parent_run_id
         assert uuid.UUID(str(row[10])) == snapshot_id
         assert row[11] == 42
-        assert row[12] is not None and row[12] > 0, "output_bytes from outputs_json"
+        assert row[12] is not None, "output_bytes from outputs_json"
+        assert row[12] > 0, "output_bytes from outputs_json"
         assert row[13] is True, "rate_limited from rate_limit_key"
 
     async def test_record_run_facts_malformed_graph_is_null_safe(

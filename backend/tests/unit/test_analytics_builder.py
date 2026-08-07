@@ -156,7 +156,8 @@ class TestFAR102Filters:
         compiled = stmt.compile(dialect=postgresql.dialect())
         sql = str(compiled)
         assert "IN" in sql.upper(), "a multi-value pipeline filter must render an IN clause"
-        assert str(pid_a) not in sql and str(pid_b) not in sql, "pipeline ids must be bound, never interpolated"
+        assert str(pid_a) not in sql, "pipeline ids must be bound, never interpolated"
+        assert str(pid_b) not in sql, "pipeline ids must be bound, never interpolated"
         assert params["pipeline_ids"] == [pid_a, pid_b]
         assert "pipeline_id" in sql
 
