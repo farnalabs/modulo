@@ -14,7 +14,7 @@ export function formatMoney(amount: number, currencyCode?: string | null, digits
   const safe = Number.isFinite(n) ? n : 0
   const code = currencyCode ? currencyCode.trim().toUpperCase() : 'USD'
   try {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: code,
       currencyDisplay: 'narrowSymbol',
