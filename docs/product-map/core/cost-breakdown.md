@@ -5,6 +5,7 @@ delivery-tasks: [task-nv7-cost-breakdown]
 code:
   - backend/src/modulo/core/cost_controller/__init__.py
   - backend/src/modulo/api/routes/costs.py
+  - backend/src/modulo/api/routes/org_settings.py
 depends-on: [feat-teams-team-crud]
 unit-tests:
   - backend/tests/unit/core/cost_controller/test_cost_controller.py
