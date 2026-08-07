@@ -50,6 +50,48 @@ def _coerce_spend_limit_usd(value: Decimal | None) -> float | None:
         return None
 
 
+_COST_CONTROLS_KEY = "cost_controls"
+_DEFAULT_CURRENCY = "USD"
+_DEFAULT_BILLING_PERIOD = "monthly"
+_DEFAULT_CIRCUIT_BREAKER_ENABLED = False
+
+
+def _cost_controls(org: object) -> dict[str, Any]:
+    """Return the org's persisted ``cost_controls`` settings dict (may be empty).
+
+    ``settings_json`` is a JSON column that may be ``None`` or hold any shape;
+    only dict values are treated as cost-control settings.
+    """
+    settings = getattr(org, "settings_json", None)
+    if not isinstance(settings, dict):
+        return {}
+    cc = settings.get(_COST_CONTROLS_KEY)
+    return cc if isinstance(cc, dict) else {}
+
+
+def _read_cost_control(org: object | None, key: str, default: Any) -> Any:
+    """Read a single persisted cost-control field, falling back to ``default``."""
+    if org is None:
+        return default
+    value = _cost_controls(org).get(key, default)
+    return value if value is not None else default
+
+
+def _read_currency(org: object | None) -> str:
+    value = _read_cost_control(org, "currency", _DEFAULT_CURRENCY)
+    return value if isinstance(value, str) and value else _DEFAULT_CURRENCY
+
+
+def _read_billing_period(org: object | None) -> str:
+    value = _read_cost_control(org, "billing_period", _DEFAULT_BILLING_PERIOD)
+    return value if isinstance(value, str) and value else _DEFAULT_BILLING_PERIOD
+
+
+def _read_circuit_breaker(org: object | None) -> bool:
+    value = _read_cost_control(org, "circuit_breaker_enabled", _DEFAULT_CIRCUIT_BREAKER_ENABLED)
+    return value if isinstance(value, bool) else _DEFAULT_CIRCUIT_BREAKER_ENABLED
+
+
 class CostReportComponent(BaseModel):
     name: str
     amount_usd: str
@@ -386,6 +428,9 @@ async def get_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
+        circuit_breaker_enabled=_read_circuit_breaker(org),
+        currency=_read_currency(org),
+        billing_period=_read_billing_period(org),
     )
 
 
@@ -401,16 +446,28 @@ async def update_cost_controls(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            if req.budget is not None:
-                org = await get_organisation(session, current_user.organisation_id)
-                if org is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-
-                org.daily_spend_limit = Decimal(str(req.budget))
-                await session.flush()
-
-            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
             org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+            if req.budget is not None:
+                org.daily_spend_limit = Decimal(str(req.budget))
+
+            if req.currency is not None or req.billing_period is not None or req.circuit_breaker_enabled is not None:
+                settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
+                settings_dict = dict(settings_raw)
+                cc = dict(_cost_controls(org))
+                if req.currency is not None:
+                    cc["currency"] = req.currency
+                if req.billing_period is not None:
+                    cc["billing_period"] = req.billing_period
+                if req.circuit_breaker_enabled is not None:
+                    cc["circuit_breaker_enabled"] = req.circuit_breaker_enabled
+                settings_dict[_COST_CONTROLS_KEY] = cc
+                org.settings_json = settings_dict
+
+            await session.flush()
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
     except ProgrammingError:
         _log.exception("update_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
@@ -443,7 +500,10 @@ async def update_cost_controls(
             }
             for t in teams_result.items
         ],
-        budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
+        budget=_coerce_spend_limit_usd(org.daily_spend_limit),
+        circuit_breaker_enabled=_read_circuit_breaker(org),
+        currency=_read_currency(org),
+        billing_period=_read_billing_period(org),
     )
 
 
