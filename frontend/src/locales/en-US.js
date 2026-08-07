@@ -2044,13 +2044,6 @@ export default {
     "AdminHousekeepingView": {
       "confirm_cleanup": "Confirm Cleanup"
     },
-    "LifecycleMapsView": {
-      "lifecycle_maps": "Lifecycle Maps",
-      "no_lifecycle_maps_yet": "No lifecycle maps yet",
-      "create_lifecycle_map": "Create Lifecycle Map",
-      "name": "Name",
-      "description": "Description"
-    },
     "LifecycleMapList": {
       "create_lifecycle_map": "Create Lifecycle Map",
       "name": "Name",
@@ -2125,16 +2118,6 @@ export default {
         "no_parent_root_level": "No parent (root level)"
       }
     },
-    "environment-profiles": {
-      "EnvironmentProfilePicker": {
-        "environment_profile": "Environment Profile",
-        "provider": "Provider:",
-        "image": "Image:",
-        "capabilities": "Capabilities:",
-        "loading_profiles": "Loading profiles...",
-        "settings": "Settings"
-      }
-    },
     "onboarding": {
       "OnboardingBanner": {
         "set_up_modulo": "Set up Modulo",
@@ -2203,15 +2186,6 @@ export default {
           "multiline": "Multiline",
           "formtype_number_07_default_value": "0.7",
           "default_value_placeholder": "default value"
-        },
-        "CompositeLibraryPicker": {
-          "composite_library": "Composite Library",
-          "no_composites_in_library_yet": "No composites in library yet.",
-          "loading_composites": "Loading composites..."
-        },
-        "CompositeConfigPanel": {
-          "schema_mapping_coming_soon": "Schema mapping coming soon",
-          "no_composite_selected": "No composite selected."
         },
         "SchemaMappingPanel": {
           "schema_mapping": "Schema Mapping",
