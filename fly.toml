@@ -7,6 +7,9 @@ primary_region = 'lhr'
 [deploy]
   strategy = 'rolling'
 
+[release]
+  command = "/release.sh"
+
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
