@@ -1,5 +1,6 @@
 """Unit tests for RemyConfigService — config CRUD and access control."""
 
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -406,3 +407,20 @@ class TestRemyConfigServiceCheckAccess:
         ):
             granted = await service.check_access(org_id, user_id, "admin", [])
         assert granted is False
+
+    async def test_check_access_reraises_cancelled_error(
+        self,
+        service: RemyConfigService,
+        mock_session: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        user_id = uuid.uuid4()
+        with (
+            patch(
+                "modulo.core.remy.config_service.get_config",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await service.check_access(org_id, user_id, "admin", [])
