@@ -563,13 +563,16 @@ async def _seed_modulo_users(settings: Settings) -> None:
 
 
 async def _seed_demo_data(settings: Settings) -> None:
-    """Seed rich demo data when MODULO_DEMO_MODE is enabled.
+    """Seed rich demo data when MODULO_SEED_DEMO_DATA is enabled.
 
     Creates a demo account with admin role, sample pipelines,
     schemas, model backends, connectors, library primitives,
     stages, and other resources for find-and-fix exploration.
+    Seeding NEVER changes the org's plan/tier — a valid signed license
+    (org-level, system in-memory, or MODULO_LICENSE_KEY) is the only way
+    team-tier features activate.
     """
-    if not settings.modulo_demo_mode:
+    if not settings.modulo_seed_demo_data:
         return
 
     from sqlalchemy import select
@@ -596,11 +599,6 @@ async def _seed_demo_data(settings: Settings) -> None:
             return
 
         org_id = org.id
-
-        # Set org to Team Plan so all team-tier features are active
-        if org.plan_id != "team":
-            org.plan_id = "team"
-            logger.info("startup.demo_org_plan_set_to_team")
 
         # Seed or update demo account with admin role
         demo_email = "demo"
@@ -996,7 +994,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("startup.user_seed_failed", exc_info=True)
 
-    # Seed demo data if MODULO_DEMO_MODE is enabled.
+    # Seed demo data if MODULO_SEED_DEMO_DATA is enabled.
     try:
         await _seed_demo_data(settings)
     except Exception:

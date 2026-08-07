@@ -35,7 +35,15 @@ class Settings(BaseSettings):
     modulo_users: str = Field("")
 
     modulo_public_url: str = Field("http://localhost:8000")
-    modulo_demo_mode: bool = Field(False)
+    # Demo-data seeding flag. Deliberately named for what it does (seed rich
+    # demo data) with NO tier implication — it must never grant a paid tier.
+    modulo_seed_demo_data: bool = Field(False)
+    # Deprecated legacy name for the same flag. Kept read-only for backward
+    # compatibility with the old MODULO_DEMO_MODE env var and old Settings
+    # kwargs (fly.toml / docker-compose.yml / integration tests predate the
+    # rename). Migrated onto modulo_seed_demo_data in
+    # ``_migrate_demo_mode_flag``; excluded from serialization.
+    modulo_demo_mode: bool = Field(False, exclude=True)
     modulo_license_key: str = Field("")
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
@@ -374,6 +382,13 @@ class Settings(BaseSettings):
     def _warn_if_no_auth(self) -> "Settings":
         if not self.modulo_admin_password and not self.modulo_users:
             _log.warning("settings.no_auth_configured")
+        return self
+
+    @model_validator(mode="after")
+    def _migrate_demo_mode_flag(self) -> "Settings":
+        """Migrate the legacy MODULO_DEMO_MODE flag onto modulo_seed_demo_data."""
+        if self.modulo_demo_mode and not self.modulo_seed_demo_data:
+            self.modulo_seed_demo_data = True
         return self
 
     @model_validator(mode="after")

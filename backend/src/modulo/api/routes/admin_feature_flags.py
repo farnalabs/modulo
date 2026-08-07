@@ -18,8 +18,8 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.feature_flags import FeatureFlagRegistry
-from modulo.core.license import get_license, parse_and_verify
+from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
+from modulo.core.license import get_license
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
@@ -31,53 +31,19 @@ router = APIRouter(prefix="/api/v1/admin/feature-flags", tags=["admin-feature-fl
 async def _resolve_tier(settings: Settings, session: AsyncSession, current_user: AuthenticatedPrincipal) -> str:
     """Resolve the effective tier for the current user's org.
 
-    Resolution order:
-    1. Org-level license key (from org.settings_json["license_key"])
-    2. System-level in-memory license (store_license())
-    3. System-level env-var license (settings.modulo_license_key)
-    4. Org.plan_id (per-org, from DB)
-    5. Community fallback
+    Delegates to ``resolve_plan_context`` — the same license-gated resolution
+    used by the API plan-context dependency — so the frontend tier path (this
+    endpoint powers the UI plan store) cannot bypass licensing. A bare
+    non-community ``plan_id`` with no valid signed license resolves to
+    community instead of granting the paid tier.
     """
     org = None
     if current_user.organisation_id is not None:
         async with session.begin():
             org = await get_organisation(session, current_user.organisation_id)
 
-    # 1. Org-level license key
-    if org is not None:
-        org_settings = getattr(org, "settings_json", None)
-        org_license_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
-        if org_license_key:
-            try:
-                validation = parse_and_verify(org_license_key)
-                if validation.valid and validation.license_data is not None:
-                    return validation.license_data.tier
-            except Exception:
-                logger.warning("Failed to parse org-level license key", exc_info=True)
-
-    # 2. System-level in-memory license
-    lic = get_license()
-    if lic is not None:
-        return lic.tier
-
-    # 3. System-level env-var license
-    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
-    if raw_key:
-        try:
-            validation = parse_and_verify(raw_key)
-            if validation.valid and validation.license_data is not None:
-                return validation.license_data.tier
-        except Exception:
-            logger.warning("Failed to parse env-var license key", exc_info=True)
-
-    # 4. Org-level plan_id
-    if org is not None:
-        org_plan_id: str | None = getattr(org, "plan_id", None)
-        if org_plan_id:
-            return org_plan_id
-
-    # 5. Community fallback
-    return "community"
+    plan_context = await resolve_plan_context(settings, session, org)
+    return plan_context.tier()
 
 
 async def _build_registry(
