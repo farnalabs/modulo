@@ -14,7 +14,7 @@ class _FakeDockerError(Exception):
     """Stand-in for aiodocker.exceptions.DockerError used in error paths."""
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_container() -> MagicMock:
     container = MagicMock()
     container.id = "cntnr-12345"
@@ -34,7 +34,7 @@ def mock_container() -> MagicMock:
     return container
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_docker_client(mock_container: MagicMock) -> MagicMock:
     client = MagicMock()
     client.ping = AsyncMock()
@@ -46,7 +46,7 @@ def mock_docker_client(mock_container: MagicMock) -> MagicMock:
     return client
 
 
-@pytest.fixture()
+@pytest.fixture
 def provider(mock_docker_client: MagicMock) -> DockerRuntimeProvider:
     with patch(
         "modulo.core.runtime_provider.docker.aiodocker.Docker",
@@ -58,7 +58,7 @@ def provider(mock_docker_client: MagicMock) -> DockerRuntimeProvider:
         return p
 
 
-@pytest.fixture()
+@pytest.fixture
 def spec() -> WorkspaceSpec:
     return WorkspaceSpec(
         environment_profile_id=uuid.uuid4(),

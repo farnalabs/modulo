@@ -8,7 +8,7 @@ from modulo.model_backends.base import HealthResult
 from modulo.model_backends.mistral import MISTRAL_BASE_URL, MistralBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.mistral.ChatMistralAI"):
         return MistralBackend(api_key="sk-test", model_id="mistral-large-latest")

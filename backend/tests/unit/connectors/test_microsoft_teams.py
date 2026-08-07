@@ -11,7 +11,7 @@ TOKEN = "ms_test_token"
 _BASE = "https://graph.microsoft.com/v1.0"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> MicrosoftTeamsConnector:
     return MicrosoftTeamsConnector(token=TOKEN)
 

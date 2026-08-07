@@ -37,7 +37,7 @@ def _make_settings() -> Settings:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
     app.dependency_overrides[get_settings] = _make_settings
@@ -320,7 +320,7 @@ def _worker_blob(hostname: str) -> str:
     return json.dumps({"metadata": {"hostname": hostname}})
 
 
-@pytest.fixture()
+@pytest.fixture
 def reset_stale_probes() -> Generator[None, None, None]:
     import modulo.api.routes.health as health_mod
 

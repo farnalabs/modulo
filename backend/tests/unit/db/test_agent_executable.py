@@ -19,7 +19,7 @@ _AGENT_TABLE_NAMES = {
 }
 
 
-@pytest.fixture()
+@pytest.fixture
 async def engine():
     eng = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with eng.begin() as conn:
@@ -30,7 +30,7 @@ async def engine():
     await eng.dispose()
 
 
-@pytest.fixture()
+@pytest.fixture
 async def session(engine) -> AsyncGenerator[AsyncSession, None]:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as s:

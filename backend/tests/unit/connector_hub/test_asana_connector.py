@@ -11,7 +11,7 @@ PAT = "asana_pat_123"
 _BASE = "https://app.asana.com/api/1.0"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return AsanaConnector(personal_access_token=PAT)
 

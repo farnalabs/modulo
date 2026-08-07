@@ -26,13 +26,12 @@ _VALID_32 = "a" * 32
 
 
 @pytest.fixture(autouse=True)
-def _set_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set required env vars for middleware that calls get_settings() directly."""
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
     monkeypatch.setenv("SECRET_KEY", _VALID_32)
     monkeypatch.setenv("FERNET_KEY", _VALID_32)
     get_settings.cache_clear()
-    yield
 
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -151,7 +150,7 @@ def test_ws_token_rejected_with_wrong_key():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     begin_cm = MagicMock()
@@ -171,7 +170,7 @@ def _mock_redis():
         yield mock
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
 
     async def override_session() -> AsyncGenerator[AsyncMock, None]:

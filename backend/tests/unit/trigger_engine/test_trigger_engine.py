@@ -201,7 +201,7 @@ def _org_not_paused() -> Generator[None, None, None]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def webhook_client() -> Generator[TestClient, None, None]:
     import sys
     import types

@@ -8,7 +8,7 @@ from modulo.model_backends.anthropic import ANTHROPIC_BASE_URL, AnthropicBackend
 from modulo.model_backends.base import HealthResult
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.anthropic.ChatAnthropic"):
         return AnthropicBackend(api_key="sk-ant-test", model_id="claude-haiku-4-5")

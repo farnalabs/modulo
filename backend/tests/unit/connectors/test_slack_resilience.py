@@ -13,7 +13,7 @@ from modulo.connectors.slack import SlackConnector
 BOT_TOKEN = "xoxb-test-token"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return SlackConnector(bot_token=BOT_TOKEN)
 

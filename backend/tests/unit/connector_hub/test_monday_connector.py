@@ -12,7 +12,7 @@ _MONDAY_API = "https://api.monday.com/v2/"
 # Note: trailing slash required — MondayConnector builds the URL as base_url + "/"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return MondayConnector(api_key=API_KEY)
 

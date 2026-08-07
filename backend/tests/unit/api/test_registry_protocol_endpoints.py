@@ -68,7 +68,7 @@ def _make_entry(**overrides: object) -> MagicMock:
     return entry
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

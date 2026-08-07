@@ -8,7 +8,7 @@ from modulo.model_backends.azure_openai import AzureOpenAIBackend
 from modulo.model_backends.base import HealthResult
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.azure_openai.ChatOpenAI"):
         return AzureOpenAIBackend(

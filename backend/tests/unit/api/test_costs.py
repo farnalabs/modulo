@@ -51,7 +51,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -82,7 +82,7 @@ class _EnterprisePlan:
         return []
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
@@ -90,7 +90,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -522,7 +522,7 @@ class TestDeleteReport:
 class TestGetAnomalies:
     ENDPOINT = "/api/v1/admin/costs/anomalies"
 
-    @pytest.fixture()
+    @pytest.fixture
     def anomaly_client(self) -> Generator[TestClient, None, None]:
         """Dedicated fixture that configures session.execute for anomaly tests."""
         mock_session = _make_mock_session()

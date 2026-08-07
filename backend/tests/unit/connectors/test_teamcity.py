@@ -10,12 +10,12 @@ from modulo.connectors.teamcity import TeamCityConnector, _TeamCityTestDouble
 _TC_BASE = "http://teamcity.example.com"
 
 
-@pytest.fixture()
+@pytest.fixture
 def teamcity():
     return TeamCityConnector(token="secret", base_url=_TC_BASE)
 
 
-@pytest.fixture()
+@pytest.fixture
 def teamcity_double():
     return _TeamCityTestDouble()
 

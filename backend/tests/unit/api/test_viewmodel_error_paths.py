@@ -73,7 +73,7 @@ def _make_mock_plan_context() -> MagicMock:
     return ctx
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

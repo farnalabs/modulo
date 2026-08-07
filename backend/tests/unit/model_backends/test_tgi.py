@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.tgi import DEFAULT_TGI_BASE_URL, TgiBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return TgiBackend(api_key=None, model_id="mistral")

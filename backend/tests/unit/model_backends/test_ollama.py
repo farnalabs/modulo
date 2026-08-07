@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.ollama import DEFAULT_OLLAMA_BASE_URL, OllamaBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return OllamaBackend(api_key=None, model_id="llama3")

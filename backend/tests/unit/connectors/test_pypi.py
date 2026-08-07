@@ -10,12 +10,12 @@ from modulo.connectors.pypi import PyPIConnector
 API_BASE = "https://pypi.org/pypi"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return PyPIConnector()
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector_with_token():
     return PyPIConnector(token="pypi_test_token")
 

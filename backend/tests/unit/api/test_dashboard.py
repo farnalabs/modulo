@@ -177,7 +177,7 @@ def _make_period_mock_session(
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -203,7 +203,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def period_client() -> Generator[Callable[..., TestClient], None, None]:
     """Factory fixture — returns a TestClient wired to a period-aware mock session.
 
@@ -239,7 +239,7 @@ def period_client() -> Generator[Callable[..., TestClient], None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()

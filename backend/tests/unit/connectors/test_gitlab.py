@@ -16,7 +16,7 @@ _SELF_TOKEN_INFO = "https://gitlab.example.com/oauth/token/info"
 _FULL_SCOPES = {"scope": ["read_api", "write_repository", "api"]}
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return GitLabConnector(token=TOKEN)
 

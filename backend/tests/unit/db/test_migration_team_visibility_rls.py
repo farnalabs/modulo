@@ -12,7 +12,8 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 
 def _load_migration(filename: str, module_name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(module_name, _VERSIONS / filename)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

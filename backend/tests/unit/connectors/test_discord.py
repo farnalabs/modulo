@@ -11,7 +11,7 @@ TOKEN = "discord_bot_token"
 _BASE = "https://discord.com/api/v10"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> DiscordConnector:
     return DiscordConnector(token=TOKEN)
 
