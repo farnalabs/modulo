@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -193,6 +194,51 @@ def _token(org_id: uuid.UUID | None, user_id: uuid.UUID, role: str, is_system_ad
         org_role=role,
         is_system_admin=is_system_admin,
     )
+
+
+@asynccontextmanager
+async def _plan_client(
+    db_url: str,
+    app_engine: AsyncEngine,
+    plan: PlanContext,
+) -> AsyncGenerator[AsyncClient, None]:
+    """An ASGI client whose get_plan_context resolves to *plan*.
+
+    Shared by the feature-gate tests so each plan variation builds its own
+    client without duplicating the override wiring.
+    """
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from modulo.api.main import app
+    from modulo.settings import Settings, get_settings
+
+    settings = Settings(
+        database_url=db_url,
+        secret_key=_VALID_32,
+        fernet_key=_VALID_32,
+        modulo_csrf_enabled=False,
+        modulo_auth_rate_limit_enabled=False,
+        redis_url="",
+        modulo_admin_password="",
+    )
+
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        factory = async_sessionmaker(app_engine, expire_on_commit=False)
+        async with factory() as session:
+            yield session
+
+    async def _plan_ctx() -> PlanContext:
+        return plan
+
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[_get_engine] = lambda: app_engine
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_plan_context] = _plan_ctx
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture
@@ -921,6 +967,54 @@ class TestExportEndpoint:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 422, f"Expected 422 for export limit > 5000, got {resp.status_code}: {resp.text}"
+
+    async def test_export_org_b_never_sees_org_a(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        user_b: uuid.UUID,
+    ) -> None:
+        """Export is raw fact rows — the same isolation invariant as the query.
+
+        Both orgs hold facts on the same day; org B's export must contain only
+        its own row (the explicit org predicate is the ONLY isolation control).
+        """
+        day = date(2026, 6, 20)
+        rid_b = uuid.uuid4()
+        await _insert_fact(db_engine, org_id=org_a, run_id=uuid.uuid4(), run_date=day, cost=1.25)
+        await _insert_fact(db_engine, org_id=org_b, run_id=rid_b, run_date=day, cost=9.99)
+
+        token = _token(org_b, user_b, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/export?date_from={day.isoformat()}&date_to={day.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        assert payload["total"] == 1, (
+            "org B's export must contain only its own fact — org A's same-day fact leaked "
+            f"(total={payload['total']}, items={payload['items']})"
+        )
+        assert payload["items"][0]["run_id"] == str(rid_b)
+        assert payload["items"][0]["total_cost_usd"] == 9.99
+
+    async def test_export_require_feature_off_returns_402(
+        self,
+        db_url: str,
+        app_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        """/export must be gated by the same analytics_page feature as /query."""
+        token = _token(org_a, user_a, "admin")
+        async with _plan_client(db_url, app_engine, _NoFeatures()) as client:
+            resp = await client.get(
+                "/api/v1/analytics/export",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert resp.status_code == 402, f"Expected 402 when analytics_page is off, got {resp.status_code}: {resp.text}"
 
 
 class TestBackfillEnrichment:

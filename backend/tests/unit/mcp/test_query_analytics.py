@@ -2,9 +2,11 @@
 
 Covers: auth failure, insufficient scope (the analytics.query permission),
 the analytics_page feature gate, typed-param parsing (multi-value pipeline_id,
-error_code, invalid enums), and the shared-service success path.
+error_code, invalid enums), the shared-service success path, and every
+service-error mapping (rate limit, validation, timeout, migration, DB, generic).
 """
 
+import contextlib
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -77,6 +79,18 @@ def _patch_plan(enabled: bool):
         patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
         patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
     )
+
+
+def _plan_enabled_patches() -> list[patch]:
+    """Plan-enabled patches up to (but not including) the service call."""
+    session_cm, org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+    return [
+        session_cm,
+        org_patch,
+        plan_patch,
+        settings_patch,
+        patch("modulo.api.mcp_server._get_session_factory", return_value=AsyncMock()),
+    ]
 
 
 class TestQueryAnalytics(_AuthContext):
@@ -198,3 +212,180 @@ class TestQueryAnalytics(_AuthContext):
         ):
             result = await query_analytics()
         assert result["error"] == "rate_limited"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_invalid_folder_id_returns_invalid_params(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        with contextlib.ExitStack() as stack:
+            for p in _plan_enabled_patches():
+                stack.enter_context(p)
+            result = await query_analytics(folder_id="not-a-uuid")
+        assert result["error"] == "invalid_params"
+        assert "folder_id" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_invalid_date_returns_invalid_params(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        with contextlib.ExitStack() as stack:
+            for p in _plan_enabled_patches():
+                stack.enter_context(p)
+            result = await query_analytics(date_from="not-a-date")
+        assert result["error"] == "invalid_params"
+        assert "date_from" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_date_params_parse_to_aware_datetimes(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        canned = {"group_by": "day", "dimension": None, "date_from": None, "date_to": None, "buckets": []}
+        patches = _plan_enabled_patches()
+        patches.append(patch("modulo.api.mcp_server.run_analytics_query", new=AsyncMock(return_value=canned)))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics(date_from="2026-08-01", date_to="2026-08-05T14:00:00Z")
+        assert result == canned
+        mock_run = patches[-1].new
+        params = mock_run.await_args.kwargs["params"]
+        assert params.date_from is not None and params.date_from.day == 1
+        assert params.date_to is not None and params.date_to.tzinfo is not None, "an ISO datetime keeps its offset"
+        assert params.date_to.hour == 14, "an ISO datetime must be parsed, not treated as a bare date"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_limit_is_clamped_to_query_cap(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        canned = {"group_by": "day", "buckets": []}
+        patches = _plan_enabled_patches()
+        patches.append(patch("modulo.api.mcp_server.run_analytics_query", new=AsyncMock(return_value=canned)))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics(limit=5000)
+        assert result == canned
+        mock_run = patches[-1].new
+        assert mock_run.await_args.kwargs["params"].limit == 1000, "limit must be clamped to the REST cap of 1000"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_validation_error_maps_to_invalid_params(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.analytics.service import AnalyticsValidationError
+
+        patches = _plan_enabled_patches()
+        patches.append(
+            patch(
+                "modulo.api.mcp_server.run_analytics_query",
+                new=AsyncMock(side_effect=AnalyticsValidationError("date range must be 365 days or less")),
+            )
+        )
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics()
+        assert result["error"] == "invalid_params"
+        assert "365 days" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_query_timeout_maps_to_query_timeout(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.analytics.service import AnalyticsQueryTimeoutError
+
+        patches = _plan_enabled_patches()
+        patches.append(
+            patch(
+                "modulo.api.mcp_server.run_analytics_query",
+                new=AsyncMock(side_effect=AnalyticsQueryTimeoutError("query exceeded timeout")),
+            )
+        )
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics()
+        assert result["error"] == "query_timeout"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_migration_required_maps_to_migration_required(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.analytics.service import AnalyticsMigrationRequiredError
+
+        patches = _plan_enabled_patches()
+        patches.append(
+            patch(
+                "modulo.api.mcp_server.run_analytics_query",
+                new=AsyncMock(
+                    side_effect=AnalyticsMigrationRequiredError("Feature is not available. Run database migrations.")
+                ),
+            )
+        )
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics()
+        assert result["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_database_error_maps_to_database_error(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.analytics.service import AnalyticsDatabaseError
+
+        patches = _plan_enabled_patches()
+        patches.append(
+            patch(
+                "modulo.api.mcp_server.run_analytics_query",
+                new=AsyncMock(side_effect=AnalyticsDatabaseError("Database temporarily unavailable.")),
+            )
+        )
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics()
+        assert result["error"] == "database_error"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_programming_error_maps_to_migration_required(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from sqlalchemy.exc import ProgrammingError
+
+        patches = _plan_enabled_patches()
+        patches.append(
+            patch(
+                "modulo.api.mcp_server.run_analytics_query",
+                new=AsyncMock(side_effect=ProgrammingError("SELECT ...", {}, RuntimeError("no such table"))),
+            )
+        )
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics()
+        assert result["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_unexpected_error_maps_to_internal_error(
+        self,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        patches = _plan_enabled_patches()
+        patches.append(
+            patch("modulo.api.mcp_server.run_analytics_query", new=AsyncMock(side_effect=RuntimeError("boom"))),
+        )
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await query_analytics()
+        assert result["error"] == "internal_error"
