@@ -258,17 +258,18 @@ async def seed() -> None:
                     s = Schema(organisation_id=org.id, name=sname, description=desc, created_by=admin.id)
                     session.add(s)
                     await session.flush()
-                    sv = SchemaVersion(
-                        organisation_id=org.id,
-                        schema_id=s.id,
-                        version="1.0",
-                        version_number=1,
-                        definition_json=schema_json,
-                        created_by=admin.id,
+                    session.add(
+                        SchemaVersion(
+                            organisation_id=org.id,
+                            schema_id=s.id,
+                            version="1.0",
+                            version_number=1,
+                            definition_json=schema_json,
+                            created_by=admin.id,
+                        )
                     )
-                    session.add(sv)
                 await session.flush()
-                schemas.append((s, sv))
+                schemas.append(s)
             print("[seed] 6 schemas + versions")
 
             # ── Model Backends (4) ────────────────────────────────────────
@@ -390,8 +391,8 @@ async def seed() -> None:
                 prompt_template,
                 connector_refs,
             ) in agent_defs:
-                in_s = schemas[in_schema_idx][0]
-                out_s = schemas[out_schema_idx][0]
+                in_s = schemas[in_schema_idx]
+                out_s = schemas[out_schema_idx]
                 a = Agent(
                     organisation_id=org.id,
                     name=name,
@@ -987,8 +988,8 @@ async def seed() -> None:
                     teams[0].id,
                     {"user": users[2].email, "team": teams[0].name},
                 ),
-                ("schema.created", admin.id, "schema", schemas[0][0].id, {"name": schemas[0][0].name}),
-                ("schema.created", admin.id, "schema", schemas[1][0].id, {"name": schemas[1][0].name}),
+                ("schema.created", admin.id, "schema", schemas[0].id, {"name": schemas[0].name}),
+                ("schema.created", admin.id, "schema", schemas[1].id, {"name": schemas[1].name}),
                 (
                     "library.primitive_created",
                     admin.id,
