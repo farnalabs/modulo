@@ -23,8 +23,8 @@ The application refuses to start if any required variable is absent or invalid.
 | `DATABASE_URL` | **Yes** | — | `postgresql+asyncpg://user:pass@host:port/db` |
 | `MODULO_DB` | No | `postgres` | Database backend: `postgres`, `sqlite`, `mariadb`, or `mysql` |
 
-`MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).  
-`MODULO_DB=mariadb` or `mysql` uses the aiomysql driver (MariaDB is deprecated since 2026-07-11).  
+`MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).
+`MODULO_DB=mariadb` or `mysql` uses the aiomysql driver (MariaDB is deprecated since 2026-07-11).
 See [`docs/system-requirements.md`](./system-requirements.md) for backend limitations.
 
 ---

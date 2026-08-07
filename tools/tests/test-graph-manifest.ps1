@@ -307,7 +307,7 @@ Describe "Unit-test path validation in product map entries" {
     }
 
     It "passes when a unit-tests: entry carries a trailing inline annotation" {
-        $utestPath = Join-Path (Join-Path (Join-Path (Join-Path $TestDir "frontend") "tests") "e2e") "setup" "fixtures.ts"
+        $utestPath = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $TestDir "frontend") "tests") "e2e") "setup") "fixtures.ts"
         New-Item -ItemType Directory -Path (Split-Path -Parent $utestPath) -Force | Out-Null
         Set-Content -Path $utestPath -Value "export const fixtures = {};`n"
         $goodEntry = "---`nid: feat-utest-annotated`nprd: N/A`nstatus: partial`ncode:`n  - backend/src/modulo/api/routes/existing_route.py`nunit-tests:`n  - frontend/tests/e2e/setup/fixtures.ts (loginAsAdmin real auth on staging)`n---"

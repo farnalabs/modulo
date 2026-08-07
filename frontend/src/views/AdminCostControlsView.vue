@@ -24,21 +24,21 @@
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-total-spend">{{ currencySymbol }}{{ totalSpend.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-total-spend">{{ formatMoney(totalSpend, settings.currency) }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.budget') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-budget">{{ currencySymbol }}{{ settings.budget.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-budget">{{ formatMoney(settings.budget, settings.currency) }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.remaining') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" :class="remainingClass" data-testid="cc-remaining">{{ currencySymbol }}{{ remainingBudget.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" :class="remainingClass" data-testid="cc-remaining">{{ formatMoney(remainingBudget, settings.currency) }}</p>
                 </div>
               </div>
               <div>
                 <div class="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                   <span>{{ percentUsed.toFixed(1) }}% used</span>
-                  <span>{{ currencySymbol }}{{ totalSpend.toFixed(2) }} / {{ currencySymbol }}{{ settings.budget.toFixed(2) }}</span>
+                  <span>{{ formatMoney(totalSpend, settings.currency) }} / {{ formatMoney(settings.budget, settings.currency) }}</span>
                 </div>
                 <div class="h-2.5 w-full overflow-hidden rounded-full bg-muted">
                   <div
@@ -85,7 +85,7 @@
                 <p v-if="(row as any).saveError" class="mt-1 text-xs text-destructive">{{ (row as any).saveError }}</p>
               </template>
               <template #cell-spend="{ row }">
-                <span class="text-muted-foreground">{{ currencySymbol }}{{ teamCostMap[(row as any).id]?.toFixed(2) ?? '0.00' }}</span>
+                <span class="text-muted-foreground">{{ formatMoney(teamCostMap[(row as any).id] ?? 0, settings.currency) }}</span>
               </template>
               <template #cell-actions="{ row }">
                 <div class="text-right">
@@ -239,6 +239,7 @@ import { Button } from '../components/ui/button'
 import { DataTable } from '../components/ui/data-table'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import PageTabs from "../components/PageTabs.vue"
+import { formatMoney } from '../lib/money'
 
 const planStore = usePlanStore()
 
@@ -370,14 +371,6 @@ const thresholdSaveError = ref<string | null>(null)
 const circuitBreakerSaveError = ref<string | null>(null)
 const currencySaveError = ref<string | null>(null)
 const periodSaveError = ref<string | null>(null)
-
-const currencyMap: Record<string, string> = {
-  USD: '$',
-  EUR: '€',
-  GBP: '£',
-}
-
-const currencySymbol = computed(() => currencyMap[settings.value.currency] ?? '$')
 
 const remainingBudget = computed(() => Math.max(0, settings.value.budget - totalSpend.value))
 const percentUsed = computed(() => {

@@ -27,19 +27,31 @@ from modulo.core.housekeeping import (
     _scan_orphan_snapshots,
     _scan_stale_api_keys,
     _scan_stale_pipelines,
+    _scan_unbound_connectors,
     _scan_untriggered_pipelines,
     _scan_unused_environment_profiles,
+    _scan_unused_model_backends,
+    _scan_unused_parameter_schemas,
+    _scan_unused_schemas,
+    _scan_unused_sso_providers,
 )
+from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.base import Base
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.lifecycle_map import LifecycleMap
+from modulo.db.models.model_backend import ModelBackend
+from modulo.db.models.org_membership import OrgMembership
+from modulo.db.models.parameter_schema import ParameterSchema
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.schema import Schema
 from modulo.db.models.secret import Secret
+from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
+from modulo.db.models.sso_provider import SsoProvider
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
@@ -48,15 +60,22 @@ from modulo.db.models.webhook import WebhookDedupHash
 # ``onboarding_progress`` uses a Postgres-only ARRAY column and cannot be
 # rendered on SQLite — exclude it, the scanners never touch it.
 _TABLE_NAMES = {
+    "accounts",
     "agents",
     "connector_instances",
     "environment_profiles",
     "lifecycle_maps",
+    "model_backends",
     "org_api_keys",
+    "org_memberships",
+    "parameter_schemas",
     "pipelines",
     "pipeline_snapshots",
     "runs",
+    "schemas",
     "secrets",
+    "snapshot_schema_pins",
+    "sso_providers",
     "team_memberships",
     "teams",
     "triggers",
@@ -96,6 +115,7 @@ def _snapshot(
     pipeline_id: uuid.UUID,
     version: int = 1,
     environment_profile_id: uuid.UUID | None = None,
+    connector_bindings_json: list[dict] | None = None,
 ) -> PipelineSnapshot:
     return PipelineSnapshot(
         id=uuid.uuid4(),
@@ -105,10 +125,35 @@ def _snapshot(
         account_id=_ACCOUNT,
         environment_profile_id=environment_profile_id,
         graph_json={},
-        connector_bindings_json=[],
+        connector_bindings_json=connector_bindings_json or [],
         schema_pins_json=[],
         prompt_pins_json=[],
         model_backend_pins_json=[],
+    )
+
+
+def _agent(
+    *,
+    organisation_id: uuid.UUID,
+    name: str,
+    model_backend_id: uuid.UUID,
+    parameter_schema_id: uuid.UUID | None = None,
+    input_schema_id: uuid.UUID | None = None,
+    output_schema_id: uuid.UUID | None = None,
+) -> Agent:
+    return Agent(
+        id=uuid.uuid4(),
+        organisation_id=organisation_id,
+        account_id=_ACCOUNT,
+        name=name,
+        input_schema_id=input_schema_id or uuid.uuid4(),
+        input_schema_version="1",
+        output_schema_id=output_schema_id or uuid.uuid4(),
+        output_schema_version="1",
+        prompt_template="prompt",
+        model_backend_id=model_backend_id,
+        connector_type_refs=[],
+        parameter_schema_id=parameter_schema_id,
     )
 
 
@@ -606,3 +651,231 @@ class TestOrphanSecrets:
         candidates = await _scan_orphan_secrets(session, _ORG_A)
 
         assert _candidate_names(candidates) == ["orphan"]
+
+
+class TestUnboundConnectors:
+    async def test_flags_connectors_not_bound_to_any_snapshot(self, session: AsyncSession) -> None:
+        bound = ConnectorInstance(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="bound",
+            connector_type_id="github",
+            config_json={},
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        legacy_key = ConnectorInstance(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="legacy-key",
+            connector_type_id="github",
+            config_json={},
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        unbound = ConnectorInstance(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="unbound",
+            connector_type_id="github",
+            config_json={},
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        other_org = ConnectorInstance(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_B,
+            name="other-org",
+            connector_type_id="github",
+            config_json={},
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        session.add_all([bound, legacy_key, unbound, other_org])
+        session.add(
+            _snapshot(
+                organisation_id=_ORG_A,
+                pipeline_id=uuid.uuid4(),
+                connector_bindings_json=[
+                    {"connector_instance_id": str(bound.id)},
+                    {"connector_id": str(legacy_key.id)},
+                ],
+            )
+        )
+        # A snapshot in another org that binds "unbound" must not shield it.
+        session.add(
+            _snapshot(
+                organisation_id=_ORG_B,
+                pipeline_id=uuid.uuid4(),
+                connector_bindings_json=[{"connector_instance_id": str(unbound.id)}],
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_unbound_connectors(session, _ORG_A)
+
+        assert _candidate_names(candidates) == ["unbound"]
+
+    async def test_malformed_binding_id_is_ignored(self, session: AsyncSession) -> None:
+        connector = ConnectorInstance(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="conn",
+            connector_type_id="github",
+            config_json={},
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        session.add(connector)
+        session.add(
+            _snapshot(
+                organisation_id=_ORG_A,
+                pipeline_id=uuid.uuid4(),
+                connector_bindings_json=[{"connector_instance_id": "not-a-uuid"}],
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_unbound_connectors(session, _ORG_A)
+
+        # The malformed binding reference cannot be resolved, so the connector
+        # is still treated as unbound rather than crashing the scan.
+        assert _candidate_names(candidates) == ["conn"]
+
+
+class TestUnusedModelBackends:
+    async def test_flags_backends_not_assigned_to_any_agent(self, session: AsyncSession) -> None:
+        used = ModelBackend(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="used",
+            display_name="Used",
+            provider="openai",
+            model_id="gpt-4o",
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        unused = ModelBackend(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="unused",
+            display_name="Unused",
+            provider="anthropic",
+            model_id="claude-sonnet-4",
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        other_org = ModelBackend(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_B,
+            name="other-org",
+            display_name="Other Org",
+            provider="openai",
+            model_id="gpt-4o",
+            credentials_ciphertext=b"x",
+            account_id=_ACCOUNT,
+        )
+        session.add_all([used, unused, other_org])
+        session.add(_agent(organisation_id=_ORG_A, name="agent", model_backend_id=used.id))
+        await session.commit()
+
+        candidates = await _scan_unused_model_backends(session, _ORG_A)
+
+        assert _candidate_names(candidates) == ["unused"]
+
+
+class TestUnusedSsoProviders:
+    async def test_flags_providers_with_no_sso_accounts(self, session: AsyncSession) -> None:
+        session.add(SsoProvider(id=uuid.uuid4(), organisation_id=_ORG_A, provider_type="oidc", name="unused"))
+        session.add(SsoProvider(id=uuid.uuid4(), organisation_id=_ORG_B, provider_type="saml", name="other-org"))
+        await session.commit()
+
+        candidates = await _scan_unused_sso_providers(session, _ORG_A)
+
+        assert _candidate_names(candidates) == ["unused"]
+
+    async def test_skips_when_sso_accounts_exist(self, session: AsyncSession) -> None:
+        sso_account = Account(id=uuid.uuid4(), email="sso@example.com", display_name="SSO User", auth_provider="oidc")
+        provider = SsoProvider(id=uuid.uuid4(), organisation_id=_ORG_A, provider_type="oidc", name="used")
+        session.add_all([sso_account, provider])
+        session.add(OrgMembership(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=sso_account.id, role="runner"))
+        await session.commit()
+
+        assert await _scan_unused_sso_providers(session, _ORG_A) == []
+
+    async def test_local_auth_does_not_count_as_sso(self, session: AsyncSession) -> None:
+        local_account = Account(
+            id=uuid.uuid4(), email="local@example.com", display_name="Local User", auth_provider="local"
+        )
+        provider = SsoProvider(id=uuid.uuid4(), organisation_id=_ORG_A, provider_type="oidc", name="used")
+        session.add_all([local_account, provider])
+        session.add(OrgMembership(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=local_account.id, role="runner"))
+        await session.commit()
+
+        candidates = await _scan_unused_sso_providers(session, _ORG_A)
+
+        # Only oidc/saml/scim memberships suppress the warning; a local-only
+        # membership leaves the provider flagged as unused.
+        assert _candidate_names(candidates) == ["used"]
+
+
+class TestUnusedParameterSchemas:
+    async def test_flags_schemas_not_assigned_to_any_agent(self, session: AsyncSession) -> None:
+        now = datetime.now(UTC)
+        used = ParameterSchema(id=uuid.uuid4(), organisation_id=_ORG_A, name="used", version=1, account_id=_ACCOUNT)
+        unused = ParameterSchema(id=uuid.uuid4(), organisation_id=_ORG_A, name="unused", version=1, account_id=_ACCOUNT)
+        deleted = ParameterSchema(
+            id=uuid.uuid4(),
+            organisation_id=_ORG_A,
+            name="deleted",
+            version=1,
+            account_id=_ACCOUNT,
+            deleted_at=now,
+        )
+        other_org = ParameterSchema(
+            id=uuid.uuid4(), organisation_id=_ORG_B, name="other-org", version=1, account_id=_ACCOUNT
+        )
+        session.add_all([used, unused, deleted, other_org])
+        session.add(
+            _agent(organisation_id=_ORG_A, name="agent", model_backend_id=uuid.uuid4(), parameter_schema_id=used.id)
+        )
+        await session.commit()
+
+        candidates = await _scan_unused_parameter_schemas(session, _ORG_A)
+
+        # "used" is referenced by an agent, "deleted" is excluded via the
+        # deleted_at filter, "other-org" is out of scope.
+        assert _candidate_names(candidates) == ["unused"]
+
+
+class TestUnusedSchemas:
+    async def test_flags_schemas_not_used_by_agents_or_pins(self, session: AsyncSession) -> None:
+        unused = Schema(id=uuid.uuid4(), organisation_id=_ORG_A, name="unused", account_id=_ACCOUNT)
+        system = Schema(id=uuid.uuid4(), organisation_id=_ORG_A, name="system-schema", system=True, account_id=_ACCOUNT)
+        used_by_agent = Schema(id=uuid.uuid4(), organisation_id=_ORG_A, name="agent-input", account_id=_ACCOUNT)
+        used_by_pin = Schema(id=uuid.uuid4(), organisation_id=_ORG_A, name="pinned", account_id=_ACCOUNT)
+        other_org = Schema(id=uuid.uuid4(), organisation_id=_ORG_B, name="other-org", account_id=_ACCOUNT)
+        session.add_all([unused, system, used_by_agent, used_by_pin, other_org])
+        session.add(
+            _agent(
+                organisation_id=_ORG_A, name="agent", model_backend_id=uuid.uuid4(), input_schema_id=used_by_agent.id
+            )
+        )
+        session.add(
+            SnapshotSchemaPin(
+                snapshot_id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                node_id=uuid.uuid4(),
+                direction="input",
+                schema_id=used_by_pin.id,
+                schema_version="1",
+            )
+        )
+        await session.commit()
+
+        candidates = await _scan_unused_schemas(session, _ORG_A)
+
+        # "agent-input" is referenced via an agent input pin, "pinned" via a
+        # snapshot schema pin, "system-schema" is system-owned, and
+        # "other-org" is out of scope.
+        assert _candidate_names(candidates) == ["unused"]

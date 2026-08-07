@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Self, cast
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,38 +15,7 @@ from modulo.core.reports.cost_report import deliver_cost_report, format_cost_rep
 from modulo.core.reports.scheduler import _fire_scheduled_report, get_generator
 from modulo.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
 from modulo.db.models.scheduled_report import ScheduledReport
-
-
-class _Begin:
-    async def __aenter__(self) -> None:
-        return None
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
-
-
-class _Session:
-    def __init__(self, results: list[MagicMock]) -> None:
-        self.execute = AsyncMock(side_effect=results)
-        self.delete = AsyncMock()
-        self.flush = AsyncMock()
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
-
-    def begin(self) -> _Begin:
-        return _Begin()
-
-
-class _Factory:
-    def __init__(self, session: _Session) -> None:
-        self._session = session
-
-    def __call__(self) -> _Session:
-        return self._session
+from tests.unit.reports.helpers import MockSession, MockSessionFactory
 
 
 def _report(*, schedule_type: str) -> MagicMock:
@@ -205,14 +174,14 @@ async def test_due_report_executes_and_transitions_schedule(
     report = _report(schedule_type=schedule_type)
     selected = MagicMock()
     selected.scalar_one_or_none.return_value = report
-    session = _Session([selected, MagicMock()])
+    session = MockSession([selected, MagicMock()])
     generator = AsyncMock(return_value={"items": [], "period": "daily", "group_by": "team", "format": "csv"})
     formatter = MagicMock(return_value={"subject": "Cost", "body_html": "<p />", "body_text": "cost"})
     deliverer = AsyncMock(return_value=[{"type": "email", "status": "delivered", "recipient_count": 1}])
 
     with (
         patch("modulo.core.reports.scheduler._get_engine"),
-        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=_Factory(session)),
+        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=MockSessionFactory(session)),
         patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
         patch("modulo.core.reports.scheduler.get_formatter", return_value=formatter),
@@ -235,13 +204,13 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
     report = _report(schedule_type="one_time")
     selected = MagicMock()
     selected.scalar_one_or_none.return_value = report
-    session = _Session([selected])
+    session = MockSession([selected])
     generator = AsyncMock(return_value={"items": [], "period": "daily", "group_by": "team", "format": "csv"})
     deliverer = AsyncMock(side_effect=RuntimeError("SMTP unavailable"))
 
     with (
         patch("modulo.core.reports.scheduler._get_engine"),
-        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=_Factory(session)),
+        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=MockSessionFactory(session)),
         patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
         patch("modulo.core.reports.scheduler.get_formatter", return_value=MagicMock()),
@@ -256,7 +225,7 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
 async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
     listed = MagicMock()
     listed.scalars.return_value.all.return_value = []
-    session = _Session([listed])
+    session = MockSession([listed])
     org_id = uuid.uuid4()
 
     assert await list_scheduled_reports(cast(AsyncSession, session), organisation_id=org_id) == []
@@ -265,7 +234,7 @@ async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
 
     missing = MagicMock()
     missing.scalar_one_or_none.return_value = None
-    session = _Session([missing])
+    session = MockSession([missing])
     deleted = await delete_scheduled_report(
         cast(AsyncSession, session),
         report_id=uuid.uuid4(),
