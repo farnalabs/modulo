@@ -34,7 +34,7 @@
           </div>
           <div>
             <label for="adminviewsview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.view_type') }}</label>
-            <Select v-model="form.view_type">
+            <Select aria-label="View type" v-model="form.view_type">
               <SelectTrigger data-testid="admin-views-type-select" aria-label="View type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
                 <SelectValue placeholder="table" />
               </SelectTrigger>
@@ -77,7 +77,7 @@
             </div>
             <div>
               <label for="adminviewsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.sort_order') }}</label>
-            <Select v-model="form.sort_order">
+            <Select aria-label="Sort order" v-model="form.sort_order">
               <SelectTrigger data-testid="admin-views-sort-order-select" aria-label="Sort order" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50">
                 <SelectValue placeholder="desc" />
               </SelectTrigger>

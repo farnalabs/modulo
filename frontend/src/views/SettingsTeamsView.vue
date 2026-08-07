@@ -128,7 +128,7 @@
                     <td class="py-2">{{ userDisplayName(member.user_id) }}</td>
                     <td class="py-2 text-muted-foreground">{{ userEmail(member.user_id) }}</td>
                     <td class="py-2">
-                      <Select v-model="member.role" @update:model-value="changeMemberRole(team.id, member)">
+                      <Select aria-label="Member role" v-model="member.role" @update:model-value="changeMemberRole(team.id, member)">
                         <SelectTrigger data-testid="settings-teams-member-role" aria-label="Member role" class="rounded border border-input bg-background px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                           <SelectValue placeholder="Select role" />
                         </SelectTrigger>
@@ -148,7 +148,7 @@
             </div>
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">
-              <Select v-model="addMemberUserId">
+              <Select aria-label="Select user" v-model="addMemberUserId">
                 <SelectTrigger data-testid="settings-teams-add-member-user" aria-label="Select user" class="flex-1 rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <SelectValue placeholder="Select a user..." />
                 </SelectTrigger>
@@ -158,7 +158,7 @@
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <Select v-model="addMemberRole">
+              <Select aria-label="Select role" v-model="addMemberRole">
                 <SelectTrigger data-testid="settings-teams-add-member-role" aria-label="Select role" class="rounded border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <SelectValue placeholder="Select role" />
                 </SelectTrigger>

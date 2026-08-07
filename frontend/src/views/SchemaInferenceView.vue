@@ -17,7 +17,7 @@
         <div class="space-y-4">
           <div>
             <label for="schemainferenceview-connector" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
-            <Select v-model="selectedConnectorId">
+            <Select aria-label="Connector" v-model="selectedConnectorId">
               <SelectTrigger id="schemainferenceview-connector" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Connector" data-testid="schema-inference-connector">
                 <SelectValue :placeholder="$t('views.SchemaInferenceView.select_a_connector')" />
               </SelectTrigger>

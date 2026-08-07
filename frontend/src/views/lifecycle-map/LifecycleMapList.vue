@@ -9,7 +9,7 @@
           @update:search="search = $event; page = 1"
         >
           <template #after>
-            <Select v-model="ownerFilter">
+            <Select aria-label="Form control" v-model="ownerFilter">
               <SelectTrigger aria-label="Form control" data-testid="lifecycle-map-list-owner-filter" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
                 <SelectValue placeholder="All teams" />
               </SelectTrigger>

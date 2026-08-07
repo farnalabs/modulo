@@ -2,13 +2,15 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select, text
-from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.break_glass_deny import live_predicate, render_sql
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import CursorResult
 from modulo.db.models.token_family import TokenFamily
 
 

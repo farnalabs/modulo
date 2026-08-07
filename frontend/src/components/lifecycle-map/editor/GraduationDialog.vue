@@ -23,7 +23,7 @@
             />
             Link to existing pipeline
           </label>
-          <Select v-if="mode === 'existing'" v-model="selectedPipelineId">
+          <Select aria-label="Select pipeline" v-if="mode === 'existing'" v-model="selectedPipelineId">
             <SelectTrigger class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Select pipeline">
               <SelectValue placeholder="Select a pipeline..." />
             </SelectTrigger>
@@ -43,7 +43,7 @@
             />
             Create new pipeline from template
           </label>
-          <Select v-if="mode === 'new'" v-model="selectedTemplateId">
+          <Select aria-label="Select template" v-if="mode === 'new'" v-model="selectedTemplateId">
             <SelectTrigger class="ml-6 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Select template">
               <SelectValue placeholder="Select a template..." />
             </SelectTrigger>
