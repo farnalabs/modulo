@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import logging
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -101,7 +102,9 @@ def _read_alert_thresholds(org: object | None) -> list[float]:
     ``settings_json`` is persisted JSON and may hold arbitrary shapes. Anything
     that is not a non-empty list of whole numbers within 1..100 is rejected so a
     corrupted persisted value degrades to the default instead of raising (which
-    would 500 the endpoint). Normal writes are validated by
+    would 500 the endpoint). Non-finite floats (``NaN``/``Infinity``) are also
+    rejected since ``int()`` cannot coerce them and ``json.loads`` accepts them.
+    Normal writes are validated by
     ``UpdateCostControlsRequest._validate_alert_thresholds``; this read path is
     what keeps defensiveness against previously-corrupted data.
     """
@@ -111,7 +114,7 @@ def _read_alert_thresholds(org: object | None) -> list[float]:
     for item in value:
         if isinstance(item, bool) or not isinstance(item, (int, float)):
             return list(DEFAULT_ALERT_THRESHOLDS)
-        if int(item) != item or not 1 <= int(item) <= 100:
+        if not math.isfinite(item) or int(item) != item or not 1 <= int(item) <= 100:
             return list(DEFAULT_ALERT_THRESHOLDS)
     return [float(v) for v in value]
 
