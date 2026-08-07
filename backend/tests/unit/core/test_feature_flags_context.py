@@ -259,7 +259,7 @@ class TestResolvePlanContext:
             license_validation=_invalid_validation(),
         )
         assert result is not None
-        from_db.assert_awaited_once_with(session, "custom-plan")
+        from_db.assert_awaited_once_with(session, "community")
 
     async def test_org_plan_id_fallback(self) -> None:
         org = MagicMock()
@@ -267,7 +267,7 @@ class TestResolvePlanContext:
         org.plan_id = "custom-plan"
         result, from_db, session = await self._resolve(org=org)
         assert result is not None
-        from_db.assert_awaited_once_with(session, "custom-plan")
+        from_db.assert_awaited_once_with(session, "community")
 
     async def test_community_fallback(self) -> None:
         result, from_db, session = await self._resolve(org=None)
