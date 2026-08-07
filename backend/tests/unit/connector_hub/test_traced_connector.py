@@ -162,6 +162,8 @@ async def test_query_error_records_exception(traced: _TracedConnector, exporter:
     assert span.status.status_code == StatusCode.ERROR
     event_names = [e.name for e in span.events]
     assert "exception" in event_names
+    assert span.attributes is not None
+    assert span.attributes.get("connector.error_type") == "ValueError"
 
 
 async def test_write_error_records_exception(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
@@ -198,7 +200,7 @@ def _encrypt_with(key: str, d: dict[str, Any]) -> bytes:
 
 
 @pytest.fixture(scope="module")
-def _hub_global_exporter() -> InMemorySpanExporter:
+def hub_global_exporter() -> InMemorySpanExporter:
     """Module-scoped InMemorySpanExporter for ConnectorHub integration tests.
 
     Calls setup_otel to ensure a fresh TracerProvider, then adds an
@@ -237,6 +239,8 @@ async def test_query_cancelled_records_error(traced: _TracedConnector, exporter:
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description is not None
+    assert "cancelled" in span.status.description
 
 
 async def test_post_span_callback_failure_does_not_break_result(
@@ -294,7 +298,29 @@ async def test_query_span_sets_result_total_only_when_not_none(tracer, exporter:
     assert "connector.result_total" not in (spans[0].attributes or {})
 
 
-async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMemorySpanExporter) -> None:
+async def test_run_with_tracing_without_acl_operation(
+    traced: _TracedConnector, exporter: InMemorySpanExporter
+) -> None:
+    """_run_with_tracing with acl_operation=None skips ACL enforcement (no-op branch)."""
+    inner = traced._inner
+
+    result = await traced._run_with_tracing(
+        "connector.filesystem.manual",
+        "manual",
+        inner.health_check,
+        acl_operation=None,
+    )
+
+    assert result.ok is True
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.attributes is not None
+    assert span.attributes.get("connector.operation") == "manual"
+    assert span.status.status_code == StatusCode.OK
+
+
+async def test_hub_integration_health_check(tmp_path, hub_global_exporter: InMemorySpanExporter) -> None:
     """ConnectorHub wiring produces spans in health_check."""
     key = Fernet.generate_key().decode()
     ci = _FakeCI(
@@ -313,7 +339,7 @@ async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMe
             result = await connector.health_check()
             assert result.ok is True
 
-    spans = _hub_global_exporter.get_finished_spans()
+    spans = hub_global_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
     assert span.attributes is not None
@@ -323,9 +349,9 @@ async def test_hub_integration_health_check(tmp_path, _hub_global_exporter: InMe
     assert span.attributes.get("connector.healthy") is True
 
 
-async def test_hub_integration_query_and_write(tmp_path, _hub_global_exporter: InMemorySpanExporter) -> None:
+async def test_hub_integration_query_and_write(tmp_path, hub_global_exporter: InMemorySpanExporter) -> None:
     """org_id flows through hub to query and write spans."""
-    _hub_global_exporter.clear()
+    hub_global_exporter.clear()
 
     key = Fernet.generate_key().decode()
     ci = _FakeCI(
@@ -346,7 +372,7 @@ async def test_hub_integration_query_and_write(tmp_path, _hub_global_exporter: I
             out_path = tmp_path / "out.txt"
             await connector.write(ConnectorPayload(resource="file", data={"content": "hello", "path": str(out_path)}))
 
-    spans = _hub_global_exporter.get_finished_spans()
+    spans = hub_global_exporter.get_finished_spans()
     assert len(spans) == 2
     for span in spans:
         assert span.attributes is not None

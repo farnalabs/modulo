@@ -55,7 +55,7 @@ class _FakeCI:
 
 
 @pytest.mark.parametrize(
-    "connector_type_id,config_json,credentials_json,expected_type",
+    ("connector_type_id", "config_json", "credentials_json", "expected_type"),
     [
         ("filesystem", {"base_path": "/tmp"}, {}, ConnectorType.FILESYSTEM),
         ("github", {}, {"token": "ghp_test"}, ConnectorType.GITHUB),
