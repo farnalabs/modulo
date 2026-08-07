@@ -304,6 +304,8 @@ const refreshCountdown = ref(30)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 let refreshInFlight = false
+let disposed = false
+const actionMessageTimers: ReturnType<typeof setTimeout>[] = []
 
 function expandKey(gate: GateItem): string {
   return `${gate.run_id}:${gate.gate_id}`
@@ -388,7 +390,7 @@ async function claimGate(gate: GateItem) {
         gates.value[idx] = { ...gates.value[idx], claimed_by: t('views.SettingsHitlReviewView.claimed_by_you'), claimed_at: new Date().toISOString(), expires_at: d.expires_at }
       }
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_claimed_you_can_now_approve_or_reject') }
-      setTimeout(() => { actionMessage.value[key] = null }, 5000)
+      actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
     }
   } catch (e: unknown) {
     actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.claim_failed')} ${formatApiError(e)}` }
@@ -423,7 +425,7 @@ async function approveGate(gate: GateItem) {
         gates.value[idx] = { ...gates.value[idx], decision: 'approved', decision_at: new Date().toISOString() }
       }
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_approved_pipeline_resuming') }
-      setTimeout(() => { actionMessage.value[key] = null }, 5000)
+      actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
     }
   } catch (e: unknown) {
     actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.approve_failed')} ${formatApiError(e)}` }
@@ -460,7 +462,7 @@ async function rejectGate(gate: GateItem) {
         gates.value[idx] = { ...gates.value[idx], decision: 'rejected', decision_at: new Date().toISOString() }
       }
       actionMessage.value[key] = { type: 'success', text: t('views.SettingsHitlReviewView.gate_rejected_pipeline_routed_to_reject_target') }
-      setTimeout(() => { actionMessage.value[key] = null }, 5000)
+      actionMessageTimers.push(setTimeout(() => { actionMessage.value[key] = null }, 5000))
     }
   } catch (e: unknown) {
     actionMessage.value[key] = { type: 'error', text: `${t('views.SettingsHitlReviewView.reject_failed')} ${formatApiError(e)}` }
@@ -481,14 +483,16 @@ function toggleExpand(gate: GateItem) {
 
 function startAutoRefresh() {
   refreshTimer = setInterval(() => {
-    if (refreshInFlight) return
+    if (disposed || refreshInFlight) return
     refreshInFlight = true
     loadGates().finally(() => {
+      if (disposed) return
       refreshInFlight = false
       refreshCountdown.value = Math.floor(refreshInterval.value / 1000)
     })
   }, refreshInterval.value)
   countdownTimer = setInterval(() => {
+    if (disposed) return
     if (refreshCountdown.value > 0) refreshCountdown.value--
   }, 1000)
 }
@@ -505,6 +509,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  disposed = true
   stopAutoRefresh()
+  actionMessageTimers.forEach(timer => clearTimeout(timer))
+  actionMessageTimers.length = 0
 })
 </script>
