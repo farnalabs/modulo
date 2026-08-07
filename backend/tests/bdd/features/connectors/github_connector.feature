@@ -9,6 +9,12 @@ Feature: GitHub Connector
     Then the result has records
     And the records contain repository metadata
 
+  Scenario: Query results expose the rate-limit budget
+    Given a GitHub connector with valid token
+    When I query resource "repos" with limit 5
+    Then the result has records
+    And the result exposes the rate-limit budget
+
   Scenario: Query a file by repo and path
     Given a GitHub connector with valid token
     When I query resource "file" with filters repo "owner/repo" and path "README.md"
@@ -34,6 +40,11 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When the API returns HTTP 429 "Rate limit exceeded"
     Then the connector raises a ValueError with "429"
+
+  Scenario: Exhausted 429 surfaces the rate-limit quota headers
+    Given a GitHub connector with valid token
+    When the GitHub API returns exhausted 429 with quota "X-RateLimit-Reset=1754000000"
+    Then the connector raises a ValueError with "429" and the quota header "X-RateLimit-Reset=1754000000"
 
   Scenario: Query returns error with 500 server error
     Given a GitHub connector with valid token

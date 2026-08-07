@@ -220,6 +220,7 @@ function resultBadge(result: string): string {
   if (result === 'no_match') return 'badge badge-context-slate'
   if (result === 'hmac_failed' || result === 'schema_validation_failed' || result === 'validation_failed') return 'badge badge-status-destructive'
   if (result === 'deduplicated' || result === 'concurrency_limit_reached' || result === 'flood_rejected' || result === 'rate_limited') return 'badge badge-context-orange'
+  if (result === 'paused') return 'badge badge-context-amber'
   if (result === 'timestamp_expired') return 'badge badge-context-slate'
   if (result === 'poll_error') return 'badge badge-context-rose'
   return 'badge badge-context-slate'

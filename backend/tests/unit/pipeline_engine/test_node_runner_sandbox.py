@@ -517,3 +517,105 @@ async def test_stalled_command_output_includes_stall_reason():
     handle.kill.assert_awaited()
     sandbox.kill.assert_awaited()
     sandbox.files.read.assert_not_called()
+
+
+# FAR-98: live stdout/stderr streaming via run event broker
+# ---------------------------------------------------------------------------
+
+
+def _broker_state(broker) -> dict:
+    return {**_run_state(), "_broker": broker}
+
+
+async def test_on_stdout_buffers_and_flushes_joined_chunk():
+    """Within the flush interval chunks are buffered; crossing the boundary
+    flushes the joined buffer in a single node.stdout_chunk event (FAR-98)."""
+    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    broker = RunEventBroker(uuid.uuid4())
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_broker_state(broker))
+
+    assert result["output"]["status"] == "completed"
+    on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+    await on_stdout("line one\n")  # first chunk publishes immediately
+    await on_stdout("line two\n")  # within the 1s window -> buffered
+    await asyncio.sleep(1.05)  # cross the flush boundary
+    await on_stdout("line three\n")  # flushes joined buffer + this chunk
+
+    chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
+    assert len(chunk_events) == 2
+    assert chunk_events[0].payload["chunk"] == "line one\n"
+    assert chunk_events[1].payload["chunk"] == "line two\nline three\n"
+    payload = chunk_events[1].payload
+    assert payload["node_id"] == "n1"
+    assert payload["seq"] == chunk_events[1].seq
+    assert isinstance(payload["ts"], int)
+
+
+async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
+    """With a zero flush interval, each stdout chunk publishes its own event."""
+    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    broker = RunEventBroker(uuid.uuid4())
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_broker_state(broker))
+
+    assert result["output"]["status"] == "completed"
+    on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+    with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
+        await on_stdout("a")
+        await on_stdout("b")
+
+    chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
+    assert len(chunk_events) == 2
+    assert chunk_events[0].payload["chunk"] == "a"
+    assert chunk_events[1].payload["chunk"] == "b"
+
+
+async def test_on_stderr_publishes_stderr_chunk_event():
+    """on_stderr publishes a node.stderr_chunk event with the chunk."""
+    from modulo.core.pipeline_engine.event_broker import RunEventBroker
+
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    broker = RunEventBroker(uuid.uuid4())
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_broker_state(broker))
+
+    assert result["output"]["status"] == "completed"
+    on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
+    await on_stderr("warn: something")
+
+    stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
+    assert len(stderr_events) == 1
+    assert stderr_events[0].payload["chunk"] == "warn: something"
+    assert stderr_events[0].payload["node_id"] == "n1"
+
+
+async def test_streaming_skipped_when_no_broker_in_state():
+    """Without a broker in state, on_stdout/on_stderr skip silently — no error,
+    no publish, node completes normally."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+    on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
+    await on_stdout("ignored")
+    await on_stderr("ignored")
+    assert result["output"]["status"] == "completed"
+    assert result["output"]["summary"] == "done"

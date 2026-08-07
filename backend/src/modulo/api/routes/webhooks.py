@@ -13,6 +13,7 @@ All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 import asyncio
 import logging
 import os
+import time
 import uuid
 from typing import Any
 
@@ -33,7 +34,11 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
-from modulo.core.trigger_engine import (
+from modulo.core.exceptions import TriggersPausedError
+
+# Deprecated private aliases — kept importable so legacy patch targets and
+# callers referencing the underscore names keep working (M5 public-API fix).
+from modulo.core.trigger_engine import (  # noqa: F401
     ConcurrentRunLimitError,
     DuplicateWebhookError,
     HmacValidationError,
@@ -43,12 +48,19 @@ from modulo.core.trigger_engine import (
     TriggerEngine,
     TriggerInactiveError,
     TriggerNotFoundError,
+    _sha256_hex,
     _verify_hmac,
     _verify_timestamp,
+    sha256_hex,
+    verify_hmac,
+    verify_timestamp,
 )
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
+from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookPayload
 from modulo.db.rls import set_rls_org
+from modulo.db.settings_resolver import ensure_triggers_resumable
 from modulo.settings import get_settings
 from modulo.version import get_version
 
@@ -57,6 +69,17 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/triggers", tags=["webhooks"])
 
 _trigger_engine = TriggerEngine()
+
+
+async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Whether the org row still exists.
+
+    Orphan-org guard for the ``paused`` TriggerEvent write: a trigger whose org
+    row was HARD-deleted must not attempt the INSERT (it would violate the
+    organisations FK -> 503). Fail-closed with no event row and no crash.
+    """
+    org_exists = await session.execute(select(Organisation.id).where(Organisation.id == org_id))
+    return org_exists.scalar_one_or_none() is not None
 
 
 async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
@@ -138,7 +161,7 @@ async def receive_webhook(
     """
     raw_body = await request.body()
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
-    modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(__import__("time").time()))
+    modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
 
     try:
         raw_payload: dict[str, Any] = await request.json()
@@ -173,23 +196,69 @@ async def receive_webhook(
                 raise HTTPException(status_code=401, detail="Could not resolve organization")
 
             await set_rls_org(session, org_id)
-            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
-            if snapshot is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create pipeline snapshot for webhook trigger",
-                )
 
-            run, _, _input_payload = await _trigger_engine.handle_webhook(
-                session,
-                trigger_id=trigger_id,
-                org_id=org_id,
-                raw_body=raw_body,
-                raw_payload=raw_payload,
-                hmac_signature=hmac_signature,
-                modulo_timestamp=modulo_timestamp,
-                snapshot_id=snapshot.id,
-            )
+            # Route-level timestamp + HMAC validation (belt-and-braces ahead of
+            # the engine's own check). Only triggers configured with an
+            # hmac_secret are validated here — HMAC-less triggers accept
+            # unauthenticated deliveries by design. Failure events for these
+            # typed errors are rolled back with the request (documented
+            # pre-existing limitation).
+            cfg = trigger.config_json or {}
+            hmac_secret: str | None = cfg.get("hmac_secret")
+            if hmac_secret is not None:
+                ts = verify_timestamp(modulo_timestamp)
+                if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+                    raise HmacValidationError()
+
+            try:
+                # Pause pre-check BEFORE the snapshot and dedup work — a paused
+                # delivery must not touch pipeline_snapshots, webhook_dedup_hashes,
+                # or create a run. The inner catch is the SINGLE writer of the
+                # ``paused`` TriggerEvent; it commits with this transaction.
+                if trigger.active:
+                    await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
+
+                snapshot = await create_snapshot_from_live_graph(
+                    session, pipeline_id=trigger.pipeline_id, account_id=None
+                )
+                if snapshot is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create pipeline snapshot for webhook trigger",
+                    )
+
+                run, _, _input_payload = await _trigger_engine.handle_webhook(
+                    session,
+                    trigger_id=trigger_id,
+                    org_id=org_id,
+                    raw_body=raw_body,
+                    raw_payload=raw_payload,
+                    hmac_signature=hmac_signature,
+                    modulo_timestamp=modulo_timestamp,
+                    snapshot_id=snapshot.id,
+                )
+            except TriggersPausedError:
+                # Safe event write: an orphan trigger whose org row was
+                # HARD-deleted must not attempt the TriggerEvent INSERT (it
+                # would violate the organisations FK -> 503). Fail-closed with
+                # no event row and no crash.
+                if not await _org_row_exists(session, org_id):
+                    _log.warning(
+                        "webhooks.receive_webhook: org %s missing — skipping paused event write for trigger %s",
+                        org_id,
+                        trigger_id,
+                    )
+                    return {"status": "paused"}
+                paused_event = TriggerEvent(
+                    organisation_id=org_id,
+                    trigger_id=trigger.id,
+                    trigger_type="webhook",
+                    raw_payload_hash=sha256_hex(raw_body),
+                    validation_result="paused",
+                )
+                session.add(paused_event)
+                await session.flush()
+                return {"status": "paused"}
     except TriggerNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TriggerInactiveError as exc:
@@ -313,7 +382,7 @@ async def replay_webhook(
                 # over the stored payload (same check as receive_webhook).
                 hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
                 modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
-                ts = _verify_timestamp(modulo_timestamp)
+                ts = verify_timestamp(modulo_timestamp)
                 cfg = trigger.config_json or {}
                 hmac_secret: str | None = cfg.get("hmac_secret")
                 if hmac_secret is None:
@@ -327,22 +396,64 @@ async def replay_webhook(
                 stored = payload_row.scalar_one_or_none()
                 if stored is None:
                     raise ReplayNotFoundError(event_id)
-                if not _verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
+                if not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
                     raise HmacValidationError()
 
-            snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
-            if snapshot is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create pipeline snapshot for webhook replay",
-                )
+            try:
+                # Pause pre-check AFTER principal auth / trigger load, BEFORE the
+                # snapshot — a paused org's replay is dropped with a committed
+                # ``paused`` TriggerEvent reusing the ORIGINAL event's hash.
+                if trigger.active:
+                    await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="webhook")
 
-            run, _, _input_payload = await _trigger_engine.replay_event(
-                session,
-                event_id=event_id,
-                org_id=org_id,
-                snapshot_id=snapshot.id,
-            )
+                snapshot = await create_snapshot_from_live_graph(
+                    session, pipeline_id=trigger.pipeline_id, account_id=None
+                )
+                if snapshot is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create pipeline snapshot for webhook replay",
+                    )
+
+                run, _, _input_payload = await _trigger_engine.replay_event(
+                    session,
+                    event_id=event_id,
+                    org_id=org_id,
+                    snapshot_id=snapshot.id,
+                )
+            except TriggersPausedError:
+                from modulo.db.models.trigger_event import TriggerEvent as _TriggerEventModel
+
+                # Safe event write: an orphan trigger whose org row was
+                # HARD-deleted must not attempt the TriggerEvent INSERT (it
+                # would violate the organisations FK -> 503). Fail-closed with
+                # no event row and no crash.
+                if not await _org_row_exists(session, org_id):
+                    _log.warning(
+                        "webhooks.replay_webhook: org %s missing — skipping paused event write for trigger %s",
+                        org_id,
+                        trigger_id,
+                    )
+                    return {"status": "paused"}
+                orig_result = await session.execute(
+                    select(_TriggerEventModel).where(
+                        _TriggerEventModel.id == event_id,
+                        _TriggerEventModel.organisation_id == org_id,
+                    )
+                )
+                orig = orig_result.scalar_one_or_none()
+                if orig is None:
+                    raise ReplayNotFoundError(event_id) from None
+                paused_event = _TriggerEventModel(
+                    organisation_id=org_id,
+                    trigger_id=trigger.id,
+                    trigger_type="webhook",
+                    raw_payload_hash=orig.raw_payload_hash,
+                    validation_result="paused",
+                )
+                session.add(paused_event)
+                await session.flush()
+                return {"status": "paused"}
     except TimestampExpiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
