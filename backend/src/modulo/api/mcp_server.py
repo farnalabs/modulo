@@ -3579,7 +3579,9 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     for n in nodes:
         safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
         result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
-        ap = n.get("agent_prompt", "") or ""
+        ap = n.get("agent_prompt")
+        if ap is None:
+            ap = ""
         if ap:
             result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
         ac = n.get("agent_command", "") or ""
@@ -4188,7 +4190,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
             {
                 "access_token": access_token,
                 "refresh_token": refresh_token,
-                "token_type": "Bearer",
+                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
                 "expires_in": 3600,
                 "scope": " ".join(scopes_list),
             }
@@ -4344,7 +4346,7 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
             {
                 "access_token": new_access_token,
                 "refresh_token": new_refresh_token,
-                "token_type": "Bearer",
+                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
                 "expires_in": 3600,
                 "scope": " ".join(claims.scopes),
             }
