@@ -40,7 +40,7 @@ def _make_app(with_error_middleware: bool = False) -> FastAPI:
     app.add_middleware(CatchAllMiddleware)
 
     @app.get("/test")
-    async def test_route() -> dict[str, str]:
+    async def root_route() -> dict[str, str]:
         return {"ok": "yes"}
 
     @app.get("/crash")
