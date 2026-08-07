@@ -273,6 +273,34 @@ describe('RunDetailView', () => {
     expect(aggregate.exists()).toBe(true)
     expect(aggregate.text()).toContain('1.480000')
     expect(aggregate.text()).toContain('0.250000')
+    // Count absent → generic wording, no count interpolation.
+    expect(aggregate.text()).toContain('Total including child runs:')
+    wrapper.unmount()
+  })
+
+  it('shows child run count in the aggregate line when available', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      child_runs_cost_usd: '0.25',
+      aggregate_cost_usd: '1.48',
+      child_runs_count: 3,
+    })
+    const aggregate = wrapper.find('[data-testid="run-detail-aggregate-cost"]')
+    expect(aggregate.exists()).toBe(true)
+    expect(aggregate.text()).toContain('Total including 3 child runs:')
+    wrapper.unmount()
+  })
+
+  it('falls back to generic aggregate wording when the count is zero', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      child_runs_cost_usd: '0.25',
+      aggregate_cost_usd: '1.48',
+      child_runs_count: 0,
+    })
+    const aggregate = wrapper.find('[data-testid="run-detail-aggregate-cost"]')
+    expect(aggregate.exists()).toBe(true)
+    expect(aggregate.text()).toContain('Total including child runs:')
     wrapper.unmount()
   })
 

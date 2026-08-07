@@ -108,16 +108,12 @@ echo "=== Bootstrapping modulo_app role ==="
 python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 echo "=== Running DB migrations ==="
-# The Fly [release] command (release.sh) now owns migrations: it runs ONCE per
-# deploy on a single instance BEFORE the new machines roll out, so the
-# boot-time migration race is structurally gone. This boot path is a FAST-PATH
-# SKIP + FALLBACK: when the DB is already at the head revision (the release
-# command just migrated it), skip the advisory-lock migration loop entirely.
-# The check is fail-safe — any error falls through to the 10-attempt loop
-# below, so a machine booting outside the release flow still migrates.
-# The worker group has no app lifespan to retry migrations later, so it
-# FAILS CLOSED here rather than start SAQ workers against a half-migrated
-# schema.
+# The Fly [release] command (release.sh) now owns migrations (ONCE per deploy BEFORE machines
+# roll out). This boot path is a FAST-PATH SKIP + FALLBACK: when the DB is already at head,
+# skip the advisory-lock migration loop entirely (no lock, no alembic run) — machines previously
+# queued on the lock for up to 240s before FATALing even when the schema was current.
+# The check is fail-safe: any error falls through to the 10-attempt loop below. The worker group
+# has no app lifespan to retry later, so it FAILS CLOSED rather than start SAQ workers on a half-migrated schema.
 MIGRATIONS_OK=0
 if python3 - <<'PY'
 import os
@@ -147,7 +143,7 @@ except Exception:
 raise SystemExit(0 if versions == {head} else 1)
 PY
 then
-    echo "  Migrations already at head (release command handled)"
+    echo "  Migrations already at head (release command handled) -- skipping migration loop"
     MIGRATIONS_OK=1
 else
     echo "  Migrations NOT at head (or check failed) -- running migration loop"

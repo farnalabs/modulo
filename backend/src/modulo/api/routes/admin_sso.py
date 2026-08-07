@@ -398,26 +398,16 @@ async def _test_oidc_connection(provider: Any) -> SsoProviderTestResult:
             message="Discovery document missing authorization_endpoint",
         )
 
+    provider_info = {
+        "issuer": disc.get("issuer", ""),
+        "authorization_endpoint": disc.get("authorization_endpoint"),
+        "token_endpoint": disc.get("token_endpoint"),
+        "userinfo_endpoint": disc.get("userinfo_endpoint"),
+        "jwks_uri": disc.get("jwks_uri"),
+        "scopes_supported": disc.get("scopes_supported", []),
+    }
     if provider.client_id:
-        issuer = disc.get("issuer", "")
-        provider_info = {
-            "issuer": issuer,
-            "authorization_endpoint": disc.get("authorization_endpoint"),
-            "token_endpoint": disc.get("token_endpoint"),
-            "userinfo_endpoint": disc.get("userinfo_endpoint"),
-            "jwks_uri": disc.get("jwks_uri"),
-            "scopes_supported": disc.get("scopes_supported", []),
-            "client_id_validated": True,
-        }
-    else:
-        provider_info = {
-            "issuer": disc.get("issuer", ""),
-            "authorization_endpoint": disc.get("authorization_endpoint"),
-            "token_endpoint": disc.get("token_endpoint"),
-            "userinfo_endpoint": disc.get("userinfo_endpoint"),
-            "jwks_uri": disc.get("jwks_uri"),
-            "scopes_supported": disc.get("scopes_supported", []),
-        }
+        provider_info["client_id_validated"] = True
 
     return SsoProviderTestResult(
         success=True,

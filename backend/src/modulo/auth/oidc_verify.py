@@ -78,8 +78,8 @@ def _cache_set(jwks_uri: str, keys: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _fetch_jwks_uri(discovery_url: str) -> str:
-    """Fetch the ``jwks_uri`` from the provider's OpenID discovery document."""
+async def _fetch_discovery_document(discovery_url: str) -> dict[str, Any]:
+    """Fetch and validate the provider's OpenID discovery document."""
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(discovery_url, timeout=10)
@@ -89,10 +89,7 @@ async def _fetch_jwks_uri(discovery_url: str) -> str:
         raise OidcVerifyError(f"Failed to fetch discovery document: {exc}") from exc
     if not isinstance(disc, dict):
         raise OidcVerifyError("Discovery document is not a JSON object")
-    jwks_uri = disc.get("jwks_uri")
-    if not jwks_uri:
-        raise OidcVerifyError("No jwks_uri in discovery document")
-    return str(jwks_uri)
+    return disc
 
 
 async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
@@ -220,17 +217,7 @@ async def verify_id_token_with_discovery(
     issuer. Prefer :func:`verify_id_token` when you already have the JWKS
     URI and issuer from a previously fetched discovery document.
     """
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(discovery_url, timeout=10)
-            resp.raise_for_status()
-            disc: dict[str, Any] = resp.json()
-    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as exc:
-        raise OidcVerifyError(f"Failed to fetch discovery document: {exc}") from exc
-
-    if not isinstance(disc, dict):
-        raise OidcVerifyError("Discovery document is not a JSON object")
-
+    disc = await _fetch_discovery_document(discovery_url)
     jwks_uri = disc.get("jwks_uri")
     if not jwks_uri:
         raise OidcVerifyError("No jwks_uri in discovery document")
