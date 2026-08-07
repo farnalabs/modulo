@@ -9,7 +9,11 @@ The ``analytics_page`` flag was seeded at ``team`` tier. The startup seed
 NOTHING``, so existing deployments that already hold the catalog row keep it at
 ``team`` tier after the flag rollout. This migration UPSERTS the catalog row to
 ``community`` / active so the analytics dashboard is available on the free tier
-everywhere. Data-only — no tables or columns are created or dropped.
+everywhere. It also seeds the ``community``/``team`` rows into ``tier_catalog``
+(ON CONFLICT DO NOTHING) because ``feature_flag_catalog.tier_id`` is FK-constrained
+to ``tier_catalog`` and that table is only populated by the app startup seed,
+which runs after Alembic — on a fresh deployment the upsert would otherwise
+violate the FK. Data-only — no tables or columns are created or dropped.
 """
 
 from __future__ import annotations
@@ -26,12 +30,49 @@ depends_on: str | Sequence[str] | None = None
 
 _ANALYTICS_PAGE_DESCRIPTION = "Run analytics dashboard (rolling-window run/cost/quality series)"
 
+# Tier catalog seed rows (mirrors ``modulo.core.seed_data.catalog.TIERS``). The
+# ``feature_flag_catalog.tier_id`` column is FK-constrained to ``tier_catalog``,
+# and ``tier_catalog`` is populated by the app startup seed — which runs AFTER
+# Alembic migrations. A fresh deployment therefore has an empty ``tier_catalog``
+# when this migration runs, so the flag upsert below would violate the FK. Seed
+# the tiers here first (ON CONFLICT DO NOTHING keeps existing rows untouched).
+_TIERS: list[dict[str, object]] = [
+    {
+        "tier_id": "community",
+        "label": "Community",
+        "rank": 0,
+        "requires_license": False,
+        "description": "Free tier, no license key required",
+    },
+    {
+        "tier_id": "team",
+        "label": "Team",
+        "rank": 1,
+        "requires_license": True,
+        "description": "Self-serve paid tier with team features",
+    },
+]
+
 
 def _is_postgres(bind: sa.Connection) -> bool:
     return bind.dialect.name == "postgresql"
 
 
+def _seed_tiers() -> None:
+    for tier in _TIERS:
+        op.execute(
+            sa.text(
+                """
+                INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description)
+                VALUES (:tier_id, :label, :rank, :requires_license, :description)
+                ON CONFLICT (tier_id) DO NOTHING
+                """
+            ).bindparams(**tier)
+        )
+
+
 def _upsert(name: str, tier_id: str, is_active: bool) -> None:
+    _seed_tiers()
     bind = op.get_bind()
     if _is_postgres(bind):
         op.execute(
