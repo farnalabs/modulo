@@ -188,6 +188,20 @@ def _sanitize_cost_breakdown(breakdown: Any) -> list[dict[str, Any]]:
     return sanitized
 
 
+_MCP_COST_ROLLUP_ZERO = Decimal("0.000000")
+_MCP_COST_ROLLUP_QUANTUM = Decimal("0.000001")
+
+
+def _quantize_mcp_cost_rollup(value: Decimal) -> Decimal:
+    """Normalise a cost rollup value to 6 decimal places (Numeric(14, 6) scale).
+
+    Mirrors the REST runs API's ``_quantize_cost_rollup`` so the MCP run
+    resources render the same ``child_runs_cost_usd`` / ``aggregate_cost_usd``
+    values as the REST surface.
+    """
+    return value.quantize(_MCP_COST_ROLLUP_QUANTUM)
+
+
 def _format_breakdown_line(entry: dict[str, Any]) -> str:
     """Compact single-line rendering of a sanitized breakdown entry."""
     name = entry.get("display_name") or entry.get("component") or "component"
@@ -3280,16 +3294,26 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
         if pipeline is None:
             return f"Pipeline {pipeline_id} not found."
         result = await list_runs(s, pipeline_id=pid, page=1, page_size=50)
+        # Child-run cost rollup: ONE GROUP BY query for the whole page, joined
+        # in Python — never a per-row aggregate (avoids N+1).
+        run_ids = [r.id for r in result.items]
+        from modulo.db.crud.run import get_child_runs_cost
+
+        child_costs = await get_child_runs_cost(s, run_ids) if run_ids else {}
 
     if not result.items:
         return f"Pipeline '{pipeline.name}' has no runs."
 
     lines = []
     for r in result.items:
+        child_cost = _quantize_mcp_cost_rollup(child_costs.get(r.id, _MCP_COST_ROLLUP_ZERO))
+        own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+        aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
         line = (
             f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
             f"created={r.created_at.isoformat()} | "
-            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
+            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
+            f"child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
         )
         if r.cost_breakdown is not None:
             breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
@@ -3439,8 +3463,14 @@ async def resource_run(run_id: str) -> str:
         return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
         run = await get_run(s, rid)
-    if run is None:
-        return f"Run {run_id} not found."
+        if run is None:
+            return f"Run {run_id} not found."
+        from modulo.db.crud.run import get_child_runs_cost
+
+        child_costs = await get_child_runs_cost(s, [rid])
+        child_cost = _quantize_mcp_cost_rollup(child_costs.get(rid, _MCP_COST_ROLLUP_ZERO))
+        own_cost = Decimal(str(run.total_cost_usd)) if run.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+        aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
     parts = [
         f"Run: {run.id}",
         f"Pipeline: {run.pipeline_id}",
@@ -3452,6 +3482,8 @@ async def resource_run(run_id: str) -> str:
         parts.append(f"Error: {run.error_code}")
     if run.total_cost_usd is not None:
         parts.append(f"Total cost: ${run.total_cost_usd}")
+    parts.append(f"Child runs cost: ${child_cost}")
+    parts.append(f"Aggregate cost: ${aggregate_cost}")
     if run.cost_breakdown is not None:
         breakdown = _sanitize_cost_breakdown(run.cost_breakdown)
         if breakdown:
