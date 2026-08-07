@@ -50,9 +50,11 @@ def __dir__() -> list[str]:
     return [*globals().keys(), *_LAZY_MODULES.keys()]
 
 
+_LAZY_BACKEND_NAMES = list(_LAZY_MODULES)
+
 __all__ = [
     "HealthResult",
     "ModelBackendBase",
     "openai_compatible_health_check",
-    *_LAZY_MODULES.keys(),
+    *_LAZY_BACKEND_NAMES,
 ]
