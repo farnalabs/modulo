@@ -31,9 +31,7 @@ async def test_upsert_error_group_creates_group(rls_session: AsyncSession, test_
     assert group.level_peak == "error"
 
 
-async def test_upsert_error_group_increments_existing_group(
-    rls_session: AsyncSession, test_org: uuid.UUID
-) -> None:
+async def test_upsert_error_group_increments_existing_group(rls_session: AsyncSession, test_org: uuid.UUID) -> None:
     fingerprint = "deadbeef" * 8
     first = await upsert_error_group(
         rls_session,
