@@ -21,7 +21,7 @@
               <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend_this_month') }}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-spend">${{ totalSpend.toFixed(2) }}</p>
+              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-total-spend">{{ formatMoney(totalSpend, currencyCode) }}</p>
             </CardContent>
           </Card>
           <Card>
@@ -29,7 +29,7 @@
               <CardTitle class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.avg_cost_per_run') }}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-avg-per-run">${{ avgCostPerRun.toFixed(2) }}</p>
+              <p class="text-2xl font-semibold tabular-nums" data-testid="cost-avg-per-run">{{ formatMoney(avgCostPerRun, currencyCode) }}</p>
             </CardContent>
           </Card>
           <Card>
@@ -63,10 +63,10 @@
                 :rows="tableRows"
               >
                 <template #cell-total_spend_usd="{ value }">
-                  ${{ (value as number).toFixed(2) }}
+                  {{ formatMoney(value as number, currencyCode) }}
                 </template>
                 <template #cell-avg_per_run="{ row }">
-                  ${{ (row as any).total_runs > 0 ? ((row as any).total_spend_usd / (row as any).total_runs).toFixed(2) : '0.00' }}
+                  {{ formatMoney((row as any).total_runs > 0 ? (row as any).total_spend_usd / (row as any).total_runs : 0, currencyCode) }}
                 </template>
                 <template #cell-annotations="{ row }">
                   <div class="text-xs">
@@ -105,8 +105,8 @@
                 <div>
                   <p class="text-sm font-medium">{{ anomaly.anomaly_date }}</p>
                   <p class="text-xs text-muted-foreground">
-                    Spend: <strong>${{ anomaly.amount.toFixed(2) }}</strong>
-                    (baseline: ${{ anomaly.baseline.toFixed(2) }},
+                    Spend: <strong>{{ formatMoney(anomaly.amount, currencyCode) }}</strong>
+                    (baseline: {{ formatMoney(anomaly.baseline, currencyCode) }},
                     {{ anomaly.percent_above > 0 ? '+' : '' }}{{ anomaly.percent_above.toFixed(0) }}% above)
                   </p>
                 </div>
@@ -139,8 +139,11 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Button } from '../components/ui/button'
 import { DataTable } from '../components/ui/data-table'
 import PageTabs from "../components/PageTabs.vue"
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const planStore = usePlanStore()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 interface CostReportRow {
   entity_id: string
@@ -233,5 +236,6 @@ onMounted(() => {
   planStore.fetchPlan()
   loadData()
   loadAnomalies()
+  loadCurrency()
 })
 </script>

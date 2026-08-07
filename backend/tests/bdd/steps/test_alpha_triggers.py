@@ -110,7 +110,7 @@ def no_trigger_exists(trigger_id: str, request, mock_session):
     request.node._mock_session = mock_session
 
 
-def _post_webhook(client, request, payload, *, error=None, trigger_missing=False):
+def _post_webhook(client, request, payload, *, error=None, trigger_missing=False, paused=False):
     """POST /api/v1/triggers/{name}/webhook with the current route's patch targets."""
     from modulo.core import trigger_engine as trigger_engine_module
 
@@ -124,6 +124,11 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
     if error is not None:
         handle_webhook.side_effect = error
     request.node._handle_webhook = handle_webhook
+    # The BDD mock session is an AsyncMock whose ``add`` would return an
+    # unawaited coroutine when the route's paused catch writes an event — make
+    # it a plain MagicMock so the paused path produces no RuntimeWarning.
+    mock_session = request.getfixturevalue("mock_session")
+    mock_session.add = MagicMock()
     with (
         patch("modulo.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
         patch(
@@ -132,7 +137,18 @@ def _post_webhook(client, request, payload, *, error=None, trigger_missing=False
             return_value=make_mock_snapshot(),
         ),
         patch.object(trigger_engine_module.TriggerEngine, "handle_webhook", handle_webhook),
-        patch("modulo.core.pipeline_executor_task.dispatch"),
+        # _dispatch_webhook_run: the route fires it as a background task — a
+        # no-op patch keeps the BDD test hermetic (the old pipeline_executor_task
+        # target was removed in the Celery->SAQ cutover).
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None),
+        # Org-wide pause gate: the mocked org read is a MagicMock that would
+        # fail-closed as paused — force the deterministic state instead.
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=paused),
+        # Route-level timestamp/HMAC validation against the mocked trigger's
+        # MagicMock config_json would 400/401 the happy path — bypass it (the
+        # engine-level HMAC handling is covered by webhook_hmac.feature).
+        patch("modulo.api.routes.webhooks.verify_timestamp", return_value=1700000000),
+        patch("modulo.api.routes.webhooks.verify_hmac", return_value=True),
     ):
         if trigger_missing:
             missing_row = MagicMock()
