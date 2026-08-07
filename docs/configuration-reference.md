@@ -86,7 +86,6 @@ executor — only in-memory rate limiting and an in-memory event broker.
 | `SAQ_REDIS_POOL_SIZE` | No | `20` | SAQ Redis client pool size (Upstash connection budget). Verified 2026-08-06: prod pins this to `5` as a secret with ~15 actual connected clients at sample time, so the old firefight default of 50 was over-provisioned (500 potential conns across 5 machines). 20 caps at 200 potential conns; operators on a small Redis tier may lower to 5, matching prod. |
 | `SAQ_WORKER_CONCURRENCY` | No | `5` | SAQ worker job concurrency, decoupled from Redis pool size. Design target 5/worker x up to 5 machines = up to 25 concurrent runs — verified-safe against the prod Postgres 300-connection cap. |
 | `RUN_CLAIM_STALE_SECONDS` | No | `450` | Staleness gate for re-claiming a SAQ run whose heartbeat is stale |
-| `LEGACY_RUN_CLAIM_STALE_SECONDS` | No | `180` | Legacy claim window for the shared sync claim helpers |
 | `RUN_HEARTBEAT_SECONDS` | No | `30` | DB heartbeat cadence (keep below the 300s SAQ sweep threshold) |
 | `SAQ_TEST_PAUSE` | TEST-ONLY | `false` | Test-only pause flag; refused outside test/staging (`DEBUG=true`) |
 
@@ -188,7 +187,6 @@ via the admin API. Unknown/absent keys default to safe values.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_BACKUP_PASSPHRASE` | For encryption | — | AES-256-CBC backup encryption passphrase (min 32 chars) |
-| `MODULO_AUDIT_RETENTION_DAYS` | No | `365` | Audit log retention period in days |
 
 See [`docs/operations/backup.md`](./operations/backup.md) for backup configuration.
 
@@ -285,10 +283,6 @@ REDIS_URL=redis://redis:6379/0
 
 # Observability (optional)
 MODULO_TELEMETRY_ENABLED=false
-
-# Rate limiting
-RATE_LIMIT_DEFAULT=100/minute
-RATE_LIMIT_AUTH=20/minute
 ```
 
 ---
