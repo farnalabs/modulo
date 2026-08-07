@@ -221,6 +221,23 @@ def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, An
     return result
 
 
+def _node_output_stall_reason(node_output: Any) -> str | None:
+    """Return the stall_reason carried by a captured sandbox-agent node output.
+
+    Sandbox-agent nodes return ``{"artifacts": [...], "output": {...}}`` where
+    the inner ``output`` dict carries ``stall_reason`` when the idle watchdog
+    fired (FAR-98). Returns None for non-dict / garbage output and for nodes
+    that did not stall, so non-sandbox node outputs are never misread.
+    """
+    if not isinstance(node_output, dict):
+        return None
+    inner = node_output.get("output")
+    if not isinstance(inner, dict):
+        return None
+    reason = inner.get("stall_reason")
+    return reason if isinstance(reason, str) and reason else None
+
+
 async def org_sandbox_capacity_free(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -1416,6 +1433,12 @@ class PipelineExecutor:
                             output = data.get("output") if isinstance(data, dict) else None
                             if output is not None:
                                 completed_node_outputs[name] = output
+                                stall_reason = _node_output_stall_reason(output)
+                                if stall_reason:
+                                    broker.publish(
+                                        "run_stalled",
+                                        {"node_id": name, "stall_reason": stall_reason},
+                                    )
 
                 if event_kind == "on_chat_model_end":
                     metadata = lg_event.get("metadata") or {}

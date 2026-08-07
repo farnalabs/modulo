@@ -1529,7 +1529,7 @@ class GraphValidator:
         4. context_files source paths start with /.
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.
-        7. stall_timeout_seconds is a positive integer, not exceeding timeout_seconds.
+        7. stall_timeout_seconds is a positive number, not exceeding timeout_seconds.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -1578,11 +1578,11 @@ class GraphValidator:
             stall_timeout = node.get("stall_timeout_seconds")
             if stall_timeout is not None:
                 try:
-                    st = int(stall_timeout) if not isinstance(stall_timeout, int) else stall_timeout
+                    st = float(stall_timeout) if not isinstance(stall_timeout, (int, float)) else stall_timeout
                     if st <= 0:
                         result.warning(
                             "SANDBOX_STALL_TIMEOUT_INVALID",
-                            f"Sandbox agent node '{nid}' stall_timeout_seconds={st} is not a positive integer",
+                            f"Sandbox agent node '{nid}' stall_timeout_seconds={st} is not a positive number",
                             node_id=nid,
                         )
                     elif timeout is not None:
@@ -1601,7 +1601,7 @@ class GraphValidator:
                 except (ValueError, TypeError):
                     result.warning(
                         "SANDBOX_STALL_TIMEOUT_INVALID",
-                        f"Sandbox agent node '{nid}' stall_timeout_seconds is not a valid integer",
+                        f"Sandbox agent node '{nid}' stall_timeout_seconds is not a valid number",
                         node_id=nid,
                     )
 
