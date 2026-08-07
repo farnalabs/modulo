@@ -82,15 +82,29 @@ async def _org_capacity_deferred(session: AsyncSession, run_id: uuid.UUID, org_i
 
     Fail-open, loud: any error reading the org limit or counting active runs
     logs a warning and ADMITS the run (treats it as no-cap), matching the
-    executor's capacity philosophy. When the cap is hit, writes the
+    executor's capacity philosophy. When the cap is hit the run is deferred
+    and — ONLY for a currently-``pending`` run — demoted with the
     ``org_capacity_limited`` reason marker so the stale-run sweep treats the
     run as stranded-capacity (re-dispatch, never ``never_dispatched``) while
     ``dispatcher_reconcile`` skips it (single re-dispatch owner).
+
+    A run that is NOT currently ``pending`` (``running``/``awaiting_human``/
+    ``claimed`` — e.g. a node recovery or a committed HITL decision being
+    resumed as ``resume_run``) is deferred WITHOUT writing status, mirroring
+    :func:`_capacity_deferred`. Demoting those unconditionally would silently
+    drop the resume payload / committed gate decision: the run would pick up
+    the ``org_capacity_limited`` marker, be excluded from
+    ``dispatcher_reconcile`` (so only the stale-run sweep re-dispatches it, as
+    ``execute_run`` with empty ``resume_data``), and re-interrupt or re-run the
+    failed node. Leaving its status untouched preserves the caller's resume
+    intent; the next ``dispatcher_reconcile`` pass re-dispatches it correctly
+    as ``resume_run`` once a slot frees.
     """
     from modulo.db.crud.run import (
         ERROR_CODE_ORG_CAPACITY_LIMITED,
         count_active_runs_for_org,
         get_org_run_concurrency_limit,
+        get_run,
         update_run_status,
     )
 
@@ -112,7 +126,9 @@ async def _org_capacity_deferred(session: AsyncSession, run_id: uuid.UUID, org_i
         active,
         limit,
     )
-    await update_run_status(session, run_id, "pending", error_code=ERROR_CODE_ORG_CAPACITY_LIMITED)
+    run = await get_run(session, run_id)
+    if run is not None and run.status == "pending":
+        await update_run_status(session, run_id, "pending", error_code=ERROR_CODE_ORG_CAPACITY_LIMITED)
     return True
 
 
@@ -225,9 +241,12 @@ async def dispatch_run(
       * ``('deferred', None)``       — capacity-blocked (no enqueue, no
         dispatched_at). Either the run's pipeline is at
         ``max_concurrent_runs`` or — NEW org-level admission control — the
-        org is at its ``run_concurrency_limit`` (in which case the run also
-        carries the ``org_capacity_limited`` reason marker so the stale-run
-        sweep recovers it as stranded-capacity).
+        org is at its ``run_concurrency_limit``. A currently-``pending`` run
+        is also demoted with the ``org_capacity_limited`` reason marker so the
+        stale-run sweep recovers it as stranded-capacity; a non-pending run
+        (``running``/``awaiting_human``/``claimed`` resume) is deferred without
+        a status write so its resume payload / committed HITL decision is
+        preserved.
       * ``('enqueue_failed', None)`` — fail-fast enqueue failure (webhook path);
         the caller records an ``error_event`` (source='saq',
         function='webhook_dispatch'). Only produced when ``fail_fast=True``.

@@ -94,10 +94,14 @@ feature is implied here — this is a positioning note only.
 honours an org-wide `run_concurrency_limit` (read from
 `Organisation.settings_json`, `None` = uncapped). An org that already has that
 many executing/claimed runs across ALL its pipelines is deferred at dispatch
-time (returned to `pending` with the `org_capacity_limited` reason marker),
-so one org cannot flood the shared worker pool. Deferred runs are recovered by
-the stale-run sweep's stranded-capacity re-dispatch (the same mechanism as
-per-pipeline deferrals), never by `never_dispatched`.
+time so one org cannot flood the shared worker pool. A currently-`pending` run
+is demoted back to `pending` with the `org_capacity_limited` reason marker and
+recovered by the stale-run sweep's stranded-capacity re-dispatch (the same
+mechanism as per-pipeline deferrals), never by `never_dispatched`. A non-`pending`
+run (e.g. a node recovery or committed HITL resume dispatched as `resume_run`)
+is deferred WITHOUT a status write, so its resume payload / committed gate
+decision is preserved and `dispatcher_reconcile` re-dispatches it once a slot
+frees.
 
 ### Database as system of record
 

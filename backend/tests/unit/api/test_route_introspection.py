@@ -142,6 +142,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("PATCH", "/api/v1/teams/{team_id}/members/{membership_id}"): "inline admin-or-team-operator check",
     ("PUT", "/api/v1/admin/org"): "admin.py inline _require_org_admin",
     ("PUT", "/api/v1/admin/org/sandbox-concurrency"): "admin.py inline _require_org_admin",
+    ("PUT", "/api/v1/admin/org/run-concurrency"): "admin.py inline _require_org_admin",
     ("POST", "/api/v1/admin/org/regenerate-api-key"): "admin.py inline _require_org_admin",
 }
 

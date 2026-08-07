@@ -513,6 +513,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/run-concurrency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Get Run Concurrency */
+        get: operations["admin_get_run_concurrency_api_v1_admin_org_run_concurrency_get"];
+        /** Admin Update Run Concurrency */
+        put: operations["admin_update_run_concurrency_api_v1_admin_org_run_concurrency_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/runs/storage": {
         parameters: {
             query?: never;
@@ -11422,6 +11440,11 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** RunConcurrencyResponse */
+        RunConcurrencyResponse: {
+            /** Run Concurrency Limit */
+            run_concurrency_limit?: number | null;
+        };
         /** RunEventItem */
         RunEventItem: {
             /** Seq */
@@ -12927,6 +12950,11 @@ export interface components {
              * @default 90
              */
             retention_days: number;
+        };
+        /** UpdateRunConcurrencyRequest */
+        UpdateRunConcurrencyRequest: {
+            /** Run Concurrency Limit */
+            run_concurrency_limit?: number | null;
         };
         /** UpdateSandboxConcurrencyRequest */
         UpdateSandboxConcurrencyRequest: {
@@ -15067,6 +15095,72 @@ export interface operations {
             };
         };
     };
+    admin_get_run_concurrency_api_v1_admin_org_run_concurrency_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_run_concurrency_api_v1_admin_org_run_concurrency_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRunConcurrencyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     admin_get_storage_api_v1_admin_runs_storage_get: {
         parameters: {
             query?: {
@@ -16714,6 +16808,7 @@ export interface operations {
         parameters: {
             query?: {
                 group_by?: components["schemas"]["AnalyticsGroupBy"];
+                auto_granularity?: boolean;
                 dimension?: components["schemas"]["AnalyticsDimension"] | null;
                 trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
                 status?: components["schemas"]["AnalyticsStatus"] | null;

@@ -905,3 +905,96 @@ async def test_org_run_capacity_isolation_between_orgs(
     assert state["error_code"] is None
     assert state["dispatched_at"] is not None
     assert state["dispatcher"] == "saq"
+
+
+async def test_org_run_capacity_preserves_resume_run_status_at_cap(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A non-pending run dispatched as ``resume_run`` at the org cap is deferred
+    WITHOUT demotion.
+
+    ``recover_node`` sets the run to ``running`` then dispatches with
+    job_type='resume_run' + resume_data. If the org is at its run cap the
+    resume must not be silently dropped: the run keeps its status and has NO
+    capacity marker written, so the next ``dispatcher_reconcile`` pass
+    re-dispatches it correctly as ``resume_run`` once a slot frees.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    from modulo.core import dispatch as dispatch_mod
+
+    org_id = await _seed_org(
+        db_engine,
+        "DispatchResumeOrg",
+        cap=None,
+        settings={"run_concurrency_limit": 1},
+    )
+    account_id = await _seed_account(db_engine, org_id, "dispatch-resume@test.local")
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeDispatchResume", account_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    await _seed_run(db_engine, org_id, pipe, snap, status="running")
+    resumed = await _seed_run(db_engine, org_id, pipe, snap, status="running")
+
+    with patch(
+        "modulo.core.dispatch._enqueue_saq",
+        new_callable=AsyncMock,
+        return_value=("saq:job:runs:dispatch-resume", False),
+    ) as enqueue:
+        outcome, job_id = await dispatch_mod.dispatch_run(
+            str(resumed),
+            str(org_id),
+            job_type="resume_run",
+            resume_data={"action": "replay", "output": {"answer": 42}},
+        )
+
+    assert outcome == "deferred"
+    assert job_id is None
+    enqueue.assert_not_awaited()
+
+    state = await _run_dispatch_state(db_engine, org_id, resumed)
+    assert state["status"] == "running", "resume run must NOT be demoted to pending"
+    assert state["error_code"] is None, "resume run must NOT carry the capacity marker"
+    assert state["dispatched_at"] is None
+
+
+async def test_org_run_capacity_preserves_awaiting_human_status_at_cap(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """An ``awaiting_human`` run re-dispatched as ``resume_run`` at the org cap
+    is deferred without demotion — the committed HITL decision is preserved."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db_url)
+    from modulo.core import dispatch as dispatch_mod
+
+    org_id = await _seed_org(
+        db_engine,
+        "DispatchHitlOrg",
+        cap=None,
+        settings={"run_concurrency_limit": 1},
+    )
+    account_id = await _seed_account(db_engine, org_id, "dispatch-hitl@test.local")
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeDispatchHitl", account_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+
+    await _seed_run(db_engine, org_id, pipe, snap, status="running")
+    awaiting = await _seed_run(db_engine, org_id, pipe, snap, status="awaiting_human")
+
+    with patch(
+        "modulo.core.dispatch._enqueue_saq",
+        new_callable=AsyncMock,
+        return_value=("saq:job:runs:dispatch-hitl", False),
+    ):
+        outcome, _job_id = await dispatch_mod.dispatch_run(
+            str(awaiting),
+            str(org_id),
+            job_type="resume_run",
+            resume_data={"action": "approve", "output": {}},
+        )
+
+    assert outcome == "deferred"
+    state = await _run_dispatch_state(db_engine, org_id, awaiting)
+    assert state["status"] == "awaiting_human", "awaiting_human run must NOT be demoted"
+    assert state["error_code"] is None, "awaiting_human run must NOT carry the capacity marker"

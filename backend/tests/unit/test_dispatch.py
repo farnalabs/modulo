@@ -375,9 +375,15 @@ class TestGetOrgRunConcurrencyLimit:
 # ---------------------------------------------------------------------------
 
 
+def _run_with_status(status: str) -> MagicMock:
+    run = MagicMock()
+    run.status = status
+    return run
+
+
 class TestOrgCapacityDeferred:
     @pytest.mark.asyncio
-    async def test_defers_and_writes_marker_when_at_cap(self) -> None:
+    async def test_defers_and_writes_marker_when_at_cap_and_pending(self) -> None:
         from modulo.db.crud.run import ERROR_CODE_ORG_CAPACITY_LIMITED
 
         session = AsyncMock()
@@ -395,6 +401,11 @@ class TestOrgCapacityDeferred:
                 return_value=2,
             ),
             patch(
+                "modulo.db.crud.run.get_run",
+                new_callable=AsyncMock,
+                return_value=_run_with_status("pending"),
+            ),
+            patch(
                 "modulo.db.crud.run.update_run_status",
                 new_callable=AsyncMock,
             ) as update_status,
@@ -408,6 +419,43 @@ class TestOrgCapacityDeferred:
             "pending",
             error_code=ERROR_CODE_ORG_CAPACITY_LIMITED,
         )
+
+    @pytest.mark.parametrize("current_status", ["running", "awaiting_human", "claimed", "waiting_for_lock"])
+    @pytest.mark.asyncio
+    async def test_defers_non_pending_without_demoting_status(self, current_status: str) -> None:
+        """A resume/recovery run at the org cap is deferred WITHOUT demotion.
+
+        ``recover_node`` and ``dispatcher_reconcile`` re-dispatch non-pending
+        runs (running/awaiting_human/claimed) as ``resume_run``. Demoting those
+        to ``pending`` would drop the resume payload / committed HITL decision,
+        so the gate must defer without writing status — mirroring
+        ``_capacity_deferred``.
+        """
+        session = AsyncMock()
+        run_id = uuid.UUID(RUN_ID)
+        org_id = uuid.UUID(ORG_ID)
+        with (
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                return_value=2,
+            ),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_org",
+                new_callable=AsyncMock,
+                return_value=2,
+            ),
+            patch(
+                "modulo.db.crud.run.get_run",
+                new_callable=AsyncMock,
+                return_value=_run_with_status(current_status),
+            ),
+            patch("modulo.db.crud.run.update_run_status", new_callable=AsyncMock) as update_status,
+        ):
+            deferred = await dispatch._org_capacity_deferred(session, run_id, org_id)
+
+        assert deferred is True
+        update_status.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_admits_when_under_cap(self) -> None:
