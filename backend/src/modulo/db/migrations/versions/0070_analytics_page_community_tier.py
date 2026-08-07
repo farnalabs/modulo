@@ -1,7 +1,7 @@
 """Move analytics_page feature flag to community tier
 
-Revision ID: 0069_analytics_page_community_tier
-Revises: 0068_add_teams_deleted_at
+Revision ID: 0070_analytics_page_community_tier
+Revises: 0069_pause_org_triggers
 Create Date: 2026-08-06
 
 The ``analytics_page`` flag was seeded at ``team`` tier. The startup seed
@@ -19,8 +19,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0069_analytics_page_community_tier"
-down_revision: str | None = "0068_add_teams_deleted_at"
+revision: str = "0070_analytics_page_community_tier"
+down_revision: str | None = "0069_pause_org_triggers"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
