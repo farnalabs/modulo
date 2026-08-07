@@ -125,6 +125,19 @@ describe('RunsListView', () => {
     expect(wrapper.text()).toContain('(+child)')
   })
 
+  it('shows a (+N children) suffix when the child run count is available', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, child_runs_cost_usd: '0.25', aggregate_cost_usd: '0.75', child_runs_count: 3 },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const aggregateCell = wrapper.find('[data-testid="runs-list-aggregate-cost"]')
+    expect(aggregateCell.exists()).toBe(true)
+    expect(wrapper.text()).toContain('(+3 children)')
+    expect(wrapper.text()).not.toContain('(+child)')
+  })
+
   it('shows own cost when aggregate equals own cost (no children)', async () => {
     mockResponses['/api/v1/runs'] = listWith([
       { ...baseRun, child_runs_cost_usd: '0.000000', aggregate_cost_usd: '0.5' },

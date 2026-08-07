@@ -197,6 +197,39 @@ async def list_runs(
 _COST_ROLLUP_QUANTUM = Decimal("0.000001")
 
 
+async def get_child_run_rollup(
+    session: AsyncSession,
+    parent_run_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, tuple[Decimal, int]]:
+    """Roll up child-run cost AND count per parent run.
+
+    ONE ``GROUP BY`` query returning ``{parent_run_id: (total_cost, count)}``
+    so callers avoid N+1 aggregation over the runs list. Parents with no
+    children -- or only NULL-cost children -- are absent from the dict; callers
+    treat a missing key as ``(0, 0)``. NULL ``total_cost_usd`` children
+    contribute 0 to the SUM. Cost values are quantized to 6 decimal places to
+    match the ``Numeric(14, 6)`` column scale.
+    """
+    if not parent_run_ids:
+        return {}
+    result = await session.execute(
+        select(
+            Run.parent_run_id,
+            func.coalesce(func.sum(Run.total_cost_usd), 0),
+            func.count().label("child_count"),
+        )
+        .where(Run.parent_run_id.in_(parent_run_ids))
+        .group_by(Run.parent_run_id)
+    )
+    rollup: dict[uuid.UUID, tuple[Decimal, int]] = {}
+    for parent_id, cost, count in result.all():
+        rollup[uuid.UUID(str(parent_id))] = (
+            Decimal(str(cost)).quantize(_COST_ROLLUP_QUANTUM),
+            int(count),
+        )
+    return rollup
+
+
 async def get_child_runs_cost(
     session: AsyncSession,
     parent_run_ids: list[uuid.UUID],
