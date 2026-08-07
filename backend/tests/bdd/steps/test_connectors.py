@@ -366,6 +366,15 @@ def step_github_connector(ctx):
                         {"full_name": "owner/repo2", "name": "repo2"},
                     ],
                     total=2,
+                    metadata={
+                        "rate_limit": {
+                            "X-RateLimit-Limit": "5000",
+                            "X-RateLimit-Remaining": "4998",
+                            "X-RateLimit-Reset": "1754000000",
+                            "X-RateLimit-Used": "2",
+                            "X-RateLimit-Resource": "core",
+                        }
+                    },
                 )
             case "file":
                 file_path = q.filters.get("path", "")
@@ -729,6 +738,38 @@ def step_records_contain_repo_metadata(ctx):
         assert "full_name" in rec or "name" in rec, f"Record missing repo metadata: {rec}"
 
 
+@then("the result exposes the rate-limit budget")
+def step_result_exposes_rate_limit_budget(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    rate_limit = result.metadata.get("rate_limit")
+    assert rate_limit is not None, "Query result missing metadata['rate_limit']"
+    assert rate_limit.get("X-RateLimit-Limit") is not None, "Missing X-RateLimit-Limit budget header"
+    assert rate_limit.get("X-RateLimit-Remaining") is not None, "Missing X-RateLimit-Remaining budget header"
+    assert rate_limit.get("X-RateLimit-Reset") is not None, "Missing X-RateLimit-Reset budget header"
+
+
+@then(parsers.parse('the connector raises a ValueError with "{expected}" and the quota header "{header}"'))
+def step_connector_raises_value_error_with_quota(expected, header, ctx):
+    import asyncio
+
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
+        ctx["query_error"] = None
+    except ValueError as exc:
+        ctx["query_error"] = str(exc)
+    finally:
+        loop.close()
+
+    assert ctx["query_error"] is not None, f"Expected ValueError with '{expected}' but no error occurred"
+    assert expected in ctx["query_error"], f"Expected '{expected}' in error but got: {ctx['query_error']}"
+    assert header in ctx["query_error"], f"Expected quota header '{header}' in error but got: {ctx['query_error']}"
+
+
 @then("the record contains file content")
 def step_record_contains_file_content(ctx):
     result = ctx["query_result"]
@@ -781,6 +822,18 @@ def step_github_api_returns_error(status_code, reason, ctx):
 
     async def mock_query(q):
         raise ValueError(f"GitHub API HTTP {status_code}: {reason}")
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@when(parsers.parse('the GitHub API returns exhausted 429 with quota "{quota}"'))
+def step_github_api_exhausted_429_with_quota(quota, ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise ValueError(f"GitHub API HTTP 429: Rate limit exceeded (quota: {quota})")
 
     connector.query = mock_query
     ctx["query_error"] = None
