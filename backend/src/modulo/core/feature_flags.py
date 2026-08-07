@@ -244,11 +244,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Runtime configuration overrides",
         tier="team",
     ),
-    # ── In-Dev — analytics page (off by default until the frontend ships) ─
+    # ── Community tier — analytics page (live; frontend shipped in PR #747) ─
     FeatureFlag(
         name="analytics_page",
         description="Run analytics dashboard (rolling-window run/cost/quality series)",
-        tier="team",
+        tier="community",
     ),
 ]
 

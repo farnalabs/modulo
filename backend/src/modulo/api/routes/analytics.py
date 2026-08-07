@@ -15,7 +15,7 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -27,6 +27,7 @@ from starlette import status as http_status
 from modulo.api.dependencies import get_or_create_engine, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.analytics.builder import (
+    HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
     AnalyticsGroupBy,
     AnalyticsQuery,
@@ -34,6 +35,9 @@ from modulo.core.analytics.builder import (
     AnalyticsTriggerType,
     bucket_rows,
     build_facts_query,
+    hour_groupby_span_exceeds,
+    resolve_group_by,
+    to_utc_aware,
 )
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -129,19 +133,26 @@ def _analytics_session_factory(settings: Settings) -> async_sessionmaker[AsyncSe
 @router.get("/query", response_model=AnalyticsResponse)
 async def analytics_query(
     group_by: AnalyticsGroupBy = Query(AnalyticsGroupBy.DAY),
+    auto_granularity: bool = Query(False),
     dimension: AnalyticsDimension | None = Query(None),
     trigger_type: AnalyticsTriggerType | None = Query(None),
     status: AnalyticsStatus | None = Query(None),
     pipeline_id: uuid.UUID | None = Query(None),
     folder_id: uuid.UUID | None = Query(None),
-    date_from: date | None = Query(None),
-    date_to: date | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
     limit: int = Query(1000, ge=1, le=1000),
     settings: Settings = Depends(get_settings),
     principal: TenantPrincipal = require_permission("analytics.query"),
     _: object = require_feature("analytics_page"),
 ) -> AnalyticsResponse:
-    """Bucketed run-facts series over the requested range, grouped day or ISO-week."""
+    """Bucketed run-facts series over the requested range, grouped hour/day/ISO-week.
+
+    ``date_from``/``date_to`` accept bare dates ("2026-08-06", parsed as midnight
+    UTC) or ISO datetimes ("2026-08-06T14:00:00Z"). ``auto_granularity=true``
+    overrides ``group_by`` from the effective range span (hour ≤3d, day ≤90d,
+    week otherwise).
+    """
     org_id = principal.organisation_id
     if org_id is None:
         raise HTTPException(
@@ -154,6 +165,18 @@ async def analytics_query(
     today = datetime.now(UTC).date()
     effective_to = date_to or today
     effective_from = date_from or (effective_to - timedelta(days=364))
+
+    # Normalise BOTH bounds to aware UTC datetimes BEFORE any comparison or
+    # arithmetic: a bare date parses as a NAIVE datetime while an ISO datetime
+    # with a 'Z'/offset parses as AWARE — comparing or subtracting a mixed pair
+    # raises TypeError ("can't compare offset-naive and offset-aware"), which
+    # would escape the try/except below as a 500. Normalising first turns that
+    # into a clean 422. Aware non-UTC offsets are converted (astimezone), so
+    # +05:00 inputs bucket from their UTC-converted instant. Bare dates expand
+    # to 00:00 / 23:59:59 so hourly bucketing covers the whole day.
+    effective_from = to_utc_aware(effective_from)
+    effective_to = to_utc_aware(effective_to, end_of_day=True)
+
     if effective_from > effective_to:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -165,9 +188,21 @@ async def analytics_query(
             detail="date range must be 365 days or less",
         )
 
+    effective_group_by = resolve_group_by(group_by, effective_from, effective_to) if auto_granularity else group_by
+
+    # Explicit hour grouping over a wide range would explode the hour grid (up
+    # to 24 buckets/day per dimension key) before limit truncation — reject it
+    # cleanly. auto_granularity never selects hour for spans this wide, so this
+    # only fires on an explicit group_by=hour.
+    if effective_group_by == AnalyticsGroupBy.HOUR and hour_groupby_span_exceeds(effective_from, effective_to):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"hour granularity supports ranges of {HOUR_GROUPBY_MAX_RANGE_DAYS} days or less",
+        )
+
     query = AnalyticsQuery(
         org_id=org_id,
-        group_by=group_by,
+        group_by=effective_group_by,
         dimension=dimension,
         trigger_type=trigger_type,
         status=status,
@@ -239,14 +274,14 @@ async def analytics_query(
 
     buckets = bucket_rows(
         list(rows),
-        group_by=group_by,
+        group_by=effective_group_by,
         dimension=dimension,
         date_from=effective_from,
         date_to=effective_to,
         limit=limit,
     )
     return AnalyticsResponse(
-        group_by=group_by.value,
+        group_by=effective_group_by.value,
         dimension=dimension.value if dimension is not None else None,
         date_from=effective_from.isoformat(),
         date_to=effective_to.isoformat(),
