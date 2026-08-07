@@ -25,7 +25,7 @@ This document defines the methodology, schedule, scope, and reporting framework 
 | **WebSocket Gateway** | Real-time agent session streaming, HITL approval channels, eval result streaming | `wss://app.modulo.run/ws/` |
 | **Frontend SPA** | Vue 3 single-page application (all routes), including OIDC redirect flows, session handling, and CSRF token management | `app.modulo.run` |
 | **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin) — handshake, callback handling, token exchange, session creation | `app.modulo.run/auth/` |
-| **CI/CD Pipeline** | Self-hosted GitHub Actions runner (Windows + Docker); workflow definitions, secret injection, artifact handling | `github.com/farnalabs/modulo` |
+| **CI/CD Pipeline** | Hosted Ubicloud GitHub Actions runner (ubicloud-standard-2); workflow definitions, secret injection, artifact handling | `github.com/farnalabs/modulo` |
 | **Container Images** | Docker images for backend, frontend, and supporting services; base image provenance, layer contents, runtime user | Registry: `ghcr.io/farnalabs/*` |
 | **Agent Execution Sandbox** | MCP tool execution isolation, prompt injection guards, sensitive data masking, checkpoint encryption | Sandbox Workers on Cloudflare |
 
