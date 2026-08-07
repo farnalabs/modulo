@@ -7,7 +7,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, ClassVar
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -19,6 +19,14 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report
+from modulo.core.cost_settings import (
+    COST_CONTROLS_KEY,
+    DEFAULT_BILLING_PERIOD,
+    DEFAULT_CIRCUIT_BREAKER_ENABLED,
+    DEFAULT_CURRENCY,
+    SUPPORTED_BILLING_PERIODS,
+    SUPPORTED_CURRENCIES,
+)
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.scheduled_report import (
     create_scheduled_report,
@@ -50,12 +58,6 @@ def _coerce_spend_limit_usd(value: Decimal | None) -> float | None:
         return None
 
 
-_COST_CONTROLS_KEY = "cost_controls"
-_DEFAULT_CURRENCY = "USD"
-_DEFAULT_BILLING_PERIOD = "monthly"
-_DEFAULT_CIRCUIT_BREAKER_ENABLED = False
-
-
 def _cost_controls(org: object) -> dict[str, Any]:
     """Return the org's persisted ``cost_controls`` settings dict (may be empty).
 
@@ -65,7 +67,7 @@ def _cost_controls(org: object) -> dict[str, Any]:
     settings = getattr(org, "settings_json", None)
     if not isinstance(settings, dict):
         return {}
-    cc = settings.get(_COST_CONTROLS_KEY)
+    cc = settings.get(COST_CONTROLS_KEY)
     return cc if isinstance(cc, dict) else {}
 
 
@@ -78,18 +80,25 @@ def _read_cost_control(org: object | None, key: str, default: Any) -> Any:
 
 
 def _read_currency(org: object | None) -> str:
-    value = _read_cost_control(org, "currency", _DEFAULT_CURRENCY)
-    return value if isinstance(value, str) and value else _DEFAULT_CURRENCY
+    value = _read_cost_control(org, "currency", DEFAULT_CURRENCY)
+    return value if isinstance(value, str) and value in SUPPORTED_CURRENCIES else DEFAULT_CURRENCY
 
 
 def _read_billing_period(org: object | None) -> str:
-    value = _read_cost_control(org, "billing_period", _DEFAULT_BILLING_PERIOD)
-    return value if isinstance(value, str) and value else _DEFAULT_BILLING_PERIOD
+    value = _read_cost_control(org, "billing_period", DEFAULT_BILLING_PERIOD)
+    return value if isinstance(value, str) and value in SUPPORTED_BILLING_PERIODS else DEFAULT_BILLING_PERIOD
 
 
 def _read_circuit_breaker(org: object | None) -> bool:
-    value = _read_cost_control(org, "circuit_breaker_enabled", _DEFAULT_CIRCUIT_BREAKER_ENABLED)
-    return value if isinstance(value, bool) else _DEFAULT_CIRCUIT_BREAKER_ENABLED
+    value = _read_cost_control(org, "circuit_breaker_enabled", DEFAULT_CIRCUIT_BREAKER_ENABLED)
+    return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
+
+
+def _read_alert_thresholds(org: object | None) -> list[float]:
+    value = _read_cost_control(org, "alert_thresholds", [])
+    if isinstance(value, list) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+        return [float(v) for v in value]
+    return []
 
 
 class CostReportComponent(BaseModel):
@@ -368,7 +377,7 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alert_thresholds: ClassVar[list[float]] = []
+    alert_thresholds: list[float] = Field(default_factory=list)
     circuit_breaker_enabled: bool = False
     currency: str = "USD"
     billing_period: str = "monthly"
@@ -378,8 +387,8 @@ class UpdateCostControlsRequest(BaseModel):
     budget: float | None = None
     alert_thresholds: list[float] | None = None
     circuit_breaker_enabled: bool | None = None
-    currency: str | None = None
-    billing_period: str | None = None
+    currency: Literal["USD", "EUR", "GBP"] | None = None
+    billing_period: Literal["monthly", "quarterly", "annual"] | None = None
 
 
 @handle_db_errors("costs.get_cost_controls")
@@ -428,6 +437,7 @@ async def get_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
+        alert_thresholds=_read_alert_thresholds(org),
         circuit_breaker_enabled=_read_circuit_breaker(org),
         currency=_read_currency(org),
         billing_period=_read_billing_period(org),
@@ -453,7 +463,12 @@ async def update_cost_controls(
             if req.budget is not None:
                 org.daily_spend_limit = Decimal(str(req.budget))
 
-            if req.currency is not None or req.billing_period is not None or req.circuit_breaker_enabled is not None:
+            if (
+                req.currency is not None
+                or req.billing_period is not None
+                or req.circuit_breaker_enabled is not None
+                or req.alert_thresholds is not None
+            ):
                 settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
                 settings_dict = dict(settings_raw)
                 cc = dict(_cost_controls(org))
@@ -463,7 +478,9 @@ async def update_cost_controls(
                     cc["billing_period"] = req.billing_period
                 if req.circuit_breaker_enabled is not None:
                     cc["circuit_breaker_enabled"] = req.circuit_breaker_enabled
-                settings_dict[_COST_CONTROLS_KEY] = cc
+                if req.alert_thresholds is not None:
+                    cc["alert_thresholds"] = [float(t) for t in req.alert_thresholds]
+                settings_dict[COST_CONTROLS_KEY] = cc
                 org.settings_json = settings_dict
 
             await session.flush()
@@ -501,6 +518,7 @@ async def update_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit),
+        alert_thresholds=_read_alert_thresholds(org),
         circuit_breaker_enabled=_read_circuit_breaker(org),
         currency=_read_currency(org),
         billing_period=_read_billing_period(org),

@@ -7665,6 +7665,8 @@ export interface components {
             }[];
             /** Budget */
             budget?: number | null;
+            /** Alert Thresholds */
+            alert_thresholds?: number[];
             /**
              * Circuit Breaker Enabled
              * @default false
@@ -12571,9 +12573,9 @@ export interface components {
             /** Circuit Breaker Enabled */
             circuit_breaker_enabled?: boolean | null;
             /** Currency */
-            currency?: string | null;
+            currency?: "USD" | "EUR" | "GBP" | null;
             /** Billing Period */
-            billing_period?: string | null;
+            billing_period?: "monthly" | "quarterly" | "annual" | null;
         };
         /** UpdateEvalRequest */
         UpdateEvalRequest: {

@@ -401,7 +401,21 @@ async function loadSettings() {
     if (err) {
       return
     } else if (data) {
-      settings.value = { ...settings.value, ...data }
+      const resp = data as {
+        budget?: number | null
+        currency?: string | null
+        billing_period?: string | null
+        alert_thresholds?: number[] | null
+        circuit_breaker_enabled?: boolean | null
+      }
+      settings.value = {
+        ...settings.value,
+        ...(typeof resp.budget === 'number' ? { budget: resp.budget } : {}),
+        ...(typeof resp.currency === 'string' && resp.currency ? { currency: resp.currency as ControlsSettings['currency'] } : {}),
+        ...(typeof resp.billing_period === 'string' && resp.billing_period ? { billingPeriod: resp.billing_period as ControlsSettings['billingPeriod'] } : {}),
+        ...(Array.isArray(resp.alert_thresholds) ? { alertThresholds: resp.alert_thresholds } : {}),
+        ...(typeof resp.circuit_breaker_enabled === 'boolean' ? { circuitBreakerEnabled: resp.circuit_breaker_enabled } : {}),
+      }
     }
   } catch (e) {
     console.warn('Failed to load cost control settings', e)
@@ -461,7 +475,7 @@ async function toggleThreshold(threshold: number) {
   }
   thresholdSaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alertThresholds: settings.value.alertThresholds } })
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alert_thresholds: settings.value.alertThresholds } })
   } catch {
     settings.value.alertThresholds = prev
     thresholdSaveError.value = 'Failed to save thresholds'
@@ -473,7 +487,7 @@ async function toggleCircuitBreaker() {
   settings.value.circuitBreakerEnabled = !prev
   circuitBreakerSaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuitBreakerEnabled: settings.value.circuitBreakerEnabled } })
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuit_breaker_enabled: settings.value.circuitBreakerEnabled } })
   } catch {
     settings.value.circuitBreakerEnabled = prev
     circuitBreakerSaveError.value = 'Failed to save circuit breaker'
@@ -497,7 +511,7 @@ async function onBillingPeriodChange(value: unknown) {
   settings.value.billingPeriod = String(value) as 'monthly' | 'quarterly' | 'annual'
   periodSaveError.value = null
   try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billingPeriod: settings.value.billingPeriod } })
+    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billing_period: settings.value.billingPeriod } })
   } catch {
     settings.value.billingPeriod = prev
     periodSaveError.value = 'Failed to save billing period'
