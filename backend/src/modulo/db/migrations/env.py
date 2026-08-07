@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import sqlalchemy as sa
 from alembic import context
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.pool import NullPool
 
@@ -186,6 +187,35 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
+def _db_is_at_head(engine: Engine) -> bool:
+    """Return True when the DB's ``alembic_version`` already equals the head.
+
+    Boot fast-path: multiple machines boot simultaneously on a fresh deploy and
+    every process group ran ``alembic upgrade heads`` serialised by the
+    advisory lock — machines that did not win the lock waited up to
+    ``_MIGRATION_LOCK_POLL_ATTEMPTS`` seconds before FATALing, even when the
+    schema was already up to date. When the DB is already at head there is no
+    work to do, so the advisory lock acquisition and the alembic run are pure
+    contention and are skipped entirely.
+
+    Fail-safe: any failure (missing table, multiple heads, connection error)
+    returns False so the caller proceeds through the normal lock + upgrade path.
+    """
+    try:
+        head = ScriptDirectory.from_config(config).get_current_head() if config is not None else None
+    except Exception:
+        return False
+    if not head:
+        return False
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(sa.text("SELECT version_num FROM alembic_version"))
+            versions = {row[0] for row in result.fetchall()}
+    except Exception:
+        return False
+    return versions == {head}
+
+
 def run_migrations_online() -> None:
     """Run migrations via a sync engine — no event loop needed.
 
@@ -195,6 +225,10 @@ def run_migrations_online() -> None:
     Serialises against the app lifespan's migration runner and other raw
     `alembic upgrade heads` runs via the shared advisory lock, so the web and
     worker entrypoint migrations that both fire on a fresh deploy cannot race.
+
+    Fast-path: when the DB is already at the head revision, skip the advisory
+    lock and the alembic run entirely so boot is instant and machines never
+    contend for the lock.
     """
     assert config is not None
     url = config.get_main_option("sqlalchemy.url") or ""
@@ -202,6 +236,9 @@ def run_migrations_online() -> None:
 
     engine = create_engine(sync_url, poolclass=NullPool)
     try:
+        if _db_is_at_head(engine):
+            _log.info("startup.migrations_already_at_head -- skipping migration run")
+            return
         with _migration_advisory_lock(engine, url), engine.begin() as connection:
             do_run_migrations(connection)
     finally:

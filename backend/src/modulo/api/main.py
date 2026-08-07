@@ -286,6 +286,44 @@ async def _run_break_glass_watchdog(settings: Settings) -> None:
     logger.info("startup.break_glass_watchdog_ok")
 
 
+async def _db_is_at_migration_head(settings: Settings) -> bool:
+    """Return True when the DB's ``alembic_version`` already equals the head.
+
+    Boot fast-path: multiple machines boot simultaneously on a fresh deploy and
+    every process group runs migrations serialised by the advisory lock —
+    machines that did not win the lock waited up to ``_MIGRATION_LOCK_POLL_ATTEMPTS``
+    before FATALing, even when the schema was already up to date. When the DB is
+    already at head there is no work to do, so the advisory lock acquisition and
+    the alembic run are pure contention and are skipped entirely.
+
+    Fail-safe: any failure (missing table, multiple heads, connection error)
+    returns False so the caller proceeds through the normal retry/lock path.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    alembic_ini = _resolve_alembic_ini()
+    config = Config(str(alembic_ini))
+    config.set_main_option(
+        "script_location",
+        str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
+    )
+    try:
+        head = ScriptDirectory.from_config(config).get_current_head()
+    except Exception:
+        return False
+    if not head:
+        return False
+    engine = get_or_create_engine(settings)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            versions = {row[0] for row in result.fetchall()}
+    except Exception:
+        return False
+    return versions == {head}
+
+
 async def _run_migrations(settings: Settings) -> None:
     """Run Alembic migrations to head, with a bounded retry loop and FATAL exhaustion.
 
@@ -295,6 +333,10 @@ async def _run_migrations(settings: Settings) -> None:
     DB errors are retried; on exhaustion this raises — it is called bare from
     the lifespan, so a persistent failure fails uvicorn boot and logs the
     ``infra_blocked=migration_failed`` key for the deploy-pipeline consumer.
+
+    Fast-path: when the DB is already at the head revision the migration run is
+    skipped entirely (no advisory lock, no alembic run) so boot is instant and
+    machines never contend for the lock.
     """
     from alembic import command
     from alembic.config import Config
@@ -303,6 +345,10 @@ async def _run_migrations(settings: Settings) -> None:
 
     alembic_ini = _resolve_alembic_ini()
     last_error: Exception | None = None
+
+    if await _db_is_at_migration_head(settings):
+        logger.info("startup.migrations_already_at_head -- skipping migration run")
+        return
 
     # Bootstrap BEFORE migrations so the roles 0036 re-owns to / grants on exist.
     await _run_bootstrap(settings)
