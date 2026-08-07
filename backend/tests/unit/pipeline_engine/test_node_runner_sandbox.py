@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import time
+import urllib.request
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +16,9 @@ import pytest
 
 from modulo.core.pipeline_engine.node_runner import (
     _E2B_SANDBOX_USD_PER_HOUR,
+    _MAX_ARTIFACT_LOG,
     _compute_sandbox_cost,
+    _fetch_sandbox_log_tail,
     _wait_command_with_idle_watchdog,
     make_sandbox_agent_fn,
     resolve_env_var_refs,
@@ -619,3 +622,130 @@ async def test_streaming_skipped_when_no_broker_in_state():
     await on_stderr("ignored")
     assert result["output"]["status"] == "completed"
     assert result["output"]["summary"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# FAR-97 observability: stdout_length/stderr_length + sandbox trace at death
+# ---------------------------------------------------------------------------
+
+
+async def test_success_output_carries_full_stdout_length_when_truncated():
+    """When stdout exceeds _MAX_ARTIFACT_LOG the stored agent_stdout is truncated
+    but stdout_length/stderr_length report the FULL pre-truncation lengths — so
+    consumers can tell 'stored-truncated' from a genuine cut (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    long_stdout = "x" * (_MAX_ARTIFACT_LOG + 1234)
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = long_stdout
+    cmd_result.stderr = "stderr line"
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
+    sandbox.kill = AsyncMock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    artifact = result["artifacts"][0]["output"]
+    assert output["status"] == "completed"
+    assert output["stdout_length"] == len(long_stdout)
+    assert output["stderr_length"] == len("stderr line")
+    assert output["agent_stdout"] == long_stdout[:_MAX_ARTIFACT_LOG]
+    assert output["agent_stderr"] == "stderr line"
+    assert artifact["stdout_length"] == output["stdout_length"]
+    assert artifact["stderr_length"] == output["stderr_length"]
+
+
+async def test_success_output_omits_sandbox_log_tail():
+    """Success outputs do NOT carry sandbox_id/sandbox_log_tail — keep them small."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+    sandbox.sandbox_id = "sbx-success"
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert "sandbox_log_tail" not in result["output"]
+    assert "sandbox_id" not in result["output"]
+    assert "sandbox_log_tail" not in result["artifacts"][0]["output"]
+
+
+async def test_timed_out_command_output_includes_sandbox_id_and_log_tail():
+    """A timed-out command's failure output carries sandbox_id + sandbox_log_tail
+    (the E2B kill reason) and the tail is fetched BEFORE the sandbox is killed —
+    the logs endpoint only serves live sandboxes (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    sandbox = MagicMock()
+    sandbox.sandbox_id = "sbx-dead"
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(side_effect=TimeoutError("command timed out"))
+    sandbox.files.read = AsyncMock(side_effect=TimeoutError("no output.json"))
+    sandbox.kill = AsyncMock()
+
+    events: list[str] = []
+
+    async def _fake_tail(*_args, **_kwargs):
+        events.append("fetch")
+        return "sample log line"
+
+    def _record_kill(*_args, **_kwargs):
+        events.append("kill")
+
+    sandbox.kill.side_effect = _record_kill
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=_fake_tail),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    artifact = result["artifacts"][0]["output"]
+    assert output["status"] == "failed"
+    assert output["sandbox_id"] == "sbx-dead"
+    assert output["sandbox_log_tail"] == "sample log line"
+    assert artifact["sandbox_id"] == "sbx-dead"
+    assert artifact["sandbox_log_tail"] == "sample log line"
+    # The tail fetch precedes the kill so the still-live sandbox serves its logs.
+    assert events[0] == "fetch"
+    assert events.index("fetch") < events.index("kill")
+    sandbox.kill.assert_awaited()
+
+
+async def test_fetch_sandbox_log_tail_returns_empty_without_api_key(monkeypatch):
+    """No E2B key configured -> helper returns '' without attempting a fetch."""
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    with patch("urllib.request.urlopen") as _urlopen:
+        assert await _fetch_sandbox_log_tail("sbx-nokey") == ""
+    _urlopen.assert_not_called()
+
+
+async def test_fetch_sandbox_log_tail_never_raises_on_network_failure(monkeypatch):
+    """A failing urlopen (no network / non-2xx / garbage) is swallowed -> ''."""
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    with patch("urllib.request.urlopen", side_effect=OSError("boom")):
+        assert await _fetch_sandbox_log_tail("sbx-netfail") == ""
+    with patch("urllib.request.urlopen", side_effect=urllib.request.HTTPError("url", 401, "unauthorized", None, None)):
+        assert await _fetch_sandbox_log_tail("sbx-netfail") == ""
+
+
+async def test_fetch_sandbox_log_tail_returns_empty_for_invalid_id(monkeypatch):
+    """A non-string/None sandbox id never triggers a network call."""
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+    with patch("urllib.request.urlopen") as _urlopen:
+        assert await _fetch_sandbox_log_tail(None) == ""
+    _urlopen.assert_not_called()

@@ -330,13 +330,14 @@ class GraphValidator:
             stack: list[tuple[str, frozenset[str], int, int]] = [(node, visited, _remaining, 0)]
             while stack:
                 cur, path_visited, remaining, edges = stack.pop()
-                if edges > best:
-                    best = edges
+                best = max(best, edges)
                 if remaining <= 0:
                     continue
-                for child in adj.get(cur, []):
-                    if child not in path_visited:
-                        stack.append((child, path_visited | {cur}, remaining - 1, edges + 1))
+                stack.extend(
+                    (child, path_visited | {cur}, remaining - 1, edges + 1)
+                    for child in adj.get(cur, [])
+                    if child not in path_visited
+                )
             return best
 
         depth = max((_max_depth(eid, frozenset()) for eid in entry_ids), default=0)
@@ -731,7 +732,7 @@ class GraphValidator:
             has_null = "null" in out_type
             accepts_null = isinstance(in_type, list) and "null" in in_type
             errors.extend(
-                f"{path}: type mismatch '{ot}' -> '{in_type}'" for ot in out_type if ot != "null" and ot != in_type
+                f"{path}: type mismatch '{ot}' -> '{in_type}'" for ot in out_type if ot not in ("null", in_type)
             )
             if has_null and not accepts_null:
                 errors.append(f"{path}: output allows null but input does not")

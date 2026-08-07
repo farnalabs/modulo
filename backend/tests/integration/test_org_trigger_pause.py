@@ -28,6 +28,17 @@ pytestmark = pytest.mark.integration
 
 _VALID_32 = "a" * 32
 
+# A single flat ``manual`` node (no agent_id) — enough for
+# ``create_snapshot_from_live_graph`` to produce a runnable snapshot and for
+# the ``POST /api/v1/runs`` basic graph validation (entry node exists) to pass.
+_MINIMAL_GRAPH_NODES = [
+    {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "node_type": "manual",
+        "position": {"x": 0, "y": 0},
+    }
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -111,11 +122,45 @@ async def _seed_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uui
                 "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
                 "run_context_defaults, graph_nodes_json, default_autonomy_level, visibility) "
                 "VALUES (:id, :oid, :name, :uid, 10, 30, 300, "
-                "'{}'::json, '[]'::json, 'manual_approval', 'org')",
+                "'{}'::json, (:graph)::json, 'manual_approval', 'org')",
             ),
-            {"id": str(pipeline_id), "oid": str(org_id), "name": name, "uid": str(user_id)},
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_id),
+                "name": name,
+                "uid": str(user_id),
+                "graph": json.dumps(_MINIMAL_GRAPH_NODES),
+            },
         )
     return pipeline_id
+
+
+async def _seed_snapshot(db_engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID) -> uuid.UUID:
+    snapshot_id = uuid.uuid4()
+    async with db_engine.connect() as conn, conn.begin():
+        version_row = await conn.execute(
+            text("SELECT COALESCE(MAX(snapshot_version), 0) FROM pipeline_snapshots WHERE pipeline_id = :pid"),
+            {"pid": str(pipeline_id)},
+        )
+        snapshot_version = int(version_row.scalar_one()) + 1
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, organisation_id, pipeline_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "composite_bindings_json, run_context_defaults) "
+                "VALUES (:id, :oid, :pid, :ver, (:graph)::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '[]'::json, '{}'::json)"
+            ),
+            {
+                "id": str(snapshot_id),
+                "oid": str(org_id),
+                "pid": str(pipeline_id),
+                "ver": snapshot_version,
+                "graph": json.dumps(_MINIMAL_GRAPH_NODES),
+            },
+        )
+    return snapshot_id
 
 
 async def _seed_webhook_trigger(
@@ -212,7 +257,7 @@ async def _post_webhook(client: AsyncClient, trigger_id: uuid.UUID, secret: str,
 
 
 @pytest_asyncio.fixture
-async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
+async def integration_client(db_url: str, db_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     from modulo.api.dependencies import _get_engine, get_db_session
     from modulo.api.main import app
     from modulo.settings import Settings, get_settings
@@ -228,12 +273,12 @@ async def integration_client(db_url: str, app_engine: AsyncEngine) -> AsyncGener
     )
 
     async def override_session() -> AsyncGenerator:
-        factory = async_sessionmaker(app_engine, expire_on_commit=False, autobegin=False)
+        factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         async with factory() as session:
             yield session
 
     app.dependency_overrides[get_settings] = lambda: settings
-    app.dependency_overrides[_get_engine] = lambda: app_engine
+    app.dependency_overrides[_get_engine] = lambda: db_engine
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)
@@ -550,14 +595,28 @@ async def test_pause_does_not_mutate_running_run(
     await _reset_pauses(db_engine, org_a, uuid.uuid4())
 
     run_id = uuid.uuid4()
+    snapshot_id = await _seed_snapshot(db_engine, org_a, pipeline_a)
     async with db_engine.connect() as conn, conn.begin():
+        run_number_row = await conn.execute(
+            text("SELECT COALESCE(MAX(run_number), 0) FROM runs WHERE organisation_id = :oid"),
+            {"oid": str(org_a)},
+        )
+        run_number = int(run_number_row.scalar_one()) + 1
         await conn.execute(
             text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, status, "
-                "trigger_type, run_number, input_hash, input_payload) "
-                "VALUES (:id, :oid, :pid, 'running', 'manual', 1, :hash, '{}'::json)"
+                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, "
+                "trigger_type, run_number, input_hash, langgraph_thread_id, input_payload) "
+                "VALUES (:id, :oid, :pid, :sid, 'running', 'manual', :rn, :hash, :thread, '{}'::json)"
             ),
-            {"id": str(run_id), "oid": str(org_a), "pid": str(pipeline_a), "hash": "0" * 64},
+            {
+                "id": str(run_id),
+                "oid": str(org_a),
+                "pid": str(pipeline_a),
+                "sid": str(snapshot_id),
+                "rn": run_number,
+                "hash": "0" * 64,
+                "thread": f"{org_a}:{run_id}",
+            },
         )
 
     await _pause_via_api(integration_client, org_a, user_a, paused=True)

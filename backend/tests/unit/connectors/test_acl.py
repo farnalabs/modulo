@@ -24,6 +24,34 @@ def test_acl_blocks_unlisted_operation():
         acl.check("write")
 
 
+def test_acl_operation_matching_is_case_sensitive():
+    acl = ConnectorACL(visibility="org", allowed_operations=["read"])
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("READ")
+
+
+def test_acl_empty_allowlist_denies_all_operations():
+    # An *explicit* empty allowlist is distinct from None — it must deny
+    # every operation, not fall back to the unrestricted default.
+    acl = ConnectorACL(visibility="org", allowed_operations=[])
+    assert acl.allowed_operations == frozenset()
+    with pytest.raises(ConnectorPermissionError, match="No operations allowed"):
+        acl.check("read")
+
+
+def test_acl_team_connector_allows_org_request():
+    # Team connectors serve org-scoped requests; only the reverse (team-scoped
+    # access on an org-only connector) is forbidden.
+    acl = ConnectorACL(visibility="team")
+    assert acl.check("read", request_visibility="org") is None
+
+
+def test_acl_team_connector_still_enforces_allowlist():
+    acl = ConnectorACL(visibility="team", allowed_operations=["read"])
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("write", request_visibility="team")
+
+
 def test_acl_allows_any_when_none_ops():
     # None means no restriction on operations
     acl = ConnectorACL(visibility="org", allowed_operations=None)

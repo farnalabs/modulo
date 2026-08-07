@@ -22,6 +22,12 @@ from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
 
 _POLL_PKG = "modulo.core.trigger_engine.polling"
+# The fire logic lives in ``modulo.core.cron_helpers.fire_polling_trigger``
+# (polling.py re-exports it). Settings are read there via
+# ``cron_helpers.get_settings`` and the secrets backend is constructed via
+# ``modulo.core.secrets_backend.create_secrets_backend``.
+_CRON_PKG = "modulo.core.cron_helpers"
+_SECRETS_PKG = "modulo.core.secrets_backend"
 
 # Share the session-scoped Postgres container from conftest
 pytestmark = [
@@ -225,9 +231,9 @@ async def test_polling_trigger_happy_path(
     secrets_backend_mock.get_secret.return_value = '{"token": "test"}'
 
     with (
-        patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock),
+        patch(f"{_CRON_PKG}.get_settings", return_value=settings_mock),
         patch(f"{_POLL_PKG}._build_polling_connector", return_value=connector_mock),
-        patch(f"{_POLL_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
+        patch(f"{_SECRETS_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
     ):
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,
@@ -293,9 +299,9 @@ async def test_polling_trigger_no_match(
     secrets_backend_mock.get_secret.return_value = '{"token": "test"}'
 
     with (
-        patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock),
+        patch(f"{_CRON_PKG}.get_settings", return_value=settings_mock),
         patch(f"{_POLL_PKG}._build_polling_connector", return_value=connector_mock),
-        patch(f"{_POLL_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
+        patch(f"{_SECRETS_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
     ):
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,
@@ -377,8 +383,8 @@ async def test_polling_trigger_concurrency_limit(
     secrets_backend_mock.get_secret.return_value = '{"token": "test"}'
 
     with (
-        patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock),
-        patch(f"{_POLL_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
+        patch(f"{_CRON_PKG}.get_settings", return_value=settings_mock),
+        patch(f"{_SECRETS_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
     ):
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,
@@ -420,7 +426,7 @@ async def test_polling_trigger_connector_not_found(
     """Verify missing connector_instance logs poll_error."""
 
     with (
-        patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock),
+        patch(f"{_CRON_PKG}.get_settings", return_value=settings_mock),
     ):
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,
@@ -456,7 +462,7 @@ async def test_polling_trigger_inactive(
     finally:
         await engine.dispose()
 
-    with patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock):
+    with patch(f"{_CRON_PKG}.get_settings", return_value=settings_mock):
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,
             org_id=_ORG_ID,
@@ -489,9 +495,9 @@ async def test_polling_trigger_condition_eval_failure(
     secrets_backend_mock.get_secret.return_value = '{"token": "test"}'
 
     with (
-        patch(f"{_POLL_PKG}.get_settings", return_value=settings_mock),
+        patch(f"{_CRON_PKG}.get_settings", return_value=settings_mock),
         patch(f"{_POLL_PKG}._build_polling_connector", return_value=connector_mock),
-        patch(f"{_POLL_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
+        patch(f"{_SECRETS_PKG}.create_secrets_backend", return_value=secrets_backend_mock),
     ):
         result = await _fire_polling_trigger(
             trigger_id=_TRIGGER_ID,

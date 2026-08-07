@@ -209,6 +209,17 @@ def migrated_db_url(db_url: str) -> str:
             if "payload_ciphertext" in cols:
                 await conn.execute(text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL"))
 
+            # LangGraph checkpoint tables — created at production startup by
+            # ``ModuloPostgresSaver.setup()`` (main.py lifespan), not by any
+            # Alembic migration. ``dispatcher_reconcile``'s nodeless-zombie
+            # predicate reads the bare ``checkpoints`` table, so the test DB
+            # must have it or every reconcile scan fails with
+            # UndefinedTableError (breaking the SAQ reconcile integration tests).
+            from modulo.core.pipeline_engine.modulo_saver import _MIGRATION_SQL as _CHECKPOINT_MIGRATION_SQL
+
+            for _ddl in _CHECKPOINT_MIGRATION_SQL:
+                await conn.execute(text(_ddl))
+
             # Force RLS on all org-scoped tables so it applies to the testcontainers
             # superuser role too. In production, the modulo_app role is not a superuser
             # so RLS applies automatically — but testcontainers run as the DB superuser
@@ -287,6 +298,76 @@ async def non_superuser_role(db_engine: AsyncEngine) -> str:
         await conn.execute(text(f'DROP OWNED BY "{role}"'))
         await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
         await conn.execute(text("COMMIT"))
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def cron_helpers_rls_engine(non_superuser_role: str) -> Generator[None, None, None]:
+    """Make the ``cron_helpers`` engine run under RLS (mirrors production).
+
+    ``fire_due_triggers`` / ``dispatcher_reconcile`` build their own engine from
+    ``get_settings().database_url`` — the testcontainer ``test`` superuser, which
+    BYPASSES row-level security. Without RLS the per-org scoping inside
+    ``fire_due_triggers`` is a no-op: a due trigger in a PAUSED org is processed
+    under the first *unpaused* org's iteration and gets enqueued (skip-not-defer
+    broken). In production the app connects as ``modulo_app`` (NOBYPASSRLS), so
+    RLS applies. This fixture patches ``cron_helpers._get_engine`` to
+    ``SET ROLE`` to the non-superuser ``modulo_integration_app`` role on every
+    checkout — the same pattern ``app_engine`` uses — restoring RLS for the SAQ
+    scheduler/reconcile code paths.
+    """
+    import modulo.core.cron_helpers as cron_helpers
+
+    original_get_engine = cron_helpers._get_engine
+    role = non_superuser_role
+
+    def _rls_get_engine() -> AsyncEngine:
+        from sqlalchemy import event
+
+        engine = original_get_engine()
+
+        @event.listens_for(engine.sync_engine, "checkout")
+        def _set_role_on_checkout(
+            dbapi_connection: object,
+            _connection_record: object,
+            _connection_proxy: object,
+        ) -> None:
+            cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+            try:
+                cursor.execute(f'SET ROLE "{role}"')
+            finally:
+                cursor.close()
+
+        return engine
+
+    cron_helpers._get_engine = _rls_get_engine
+    yield
+    cron_helpers._get_engine = original_get_engine
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_shared_test_org_pause(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+) -> AsyncGenerator[None, None]:
+    """Restore the session-scoped shared ``test_org`` to not-paused after each test.
+
+    ``saq/test_fire_due_triggers.py::test_paused_org_skips_enqueue_but_advances_next_fire``
+    sets ``triggers_paused = TRUE`` on the SHARED session-scoped ``test_org`` and
+    never restores it. Every later test that fires a trigger through the shared
+    org re-reads the pause state via ``settings_resolver.org_is_paused`` (fail-closed),
+    so the leaked pause makes them raise ``TriggersPausedError`` regardless of their
+    own setup. This function-scoped autouse teardown re-establishes the not-paused
+    invariant after every test, so a test that intentionally pauses the shared org
+    during its own body is cleaned up before the next test runs.
+    """
+    yield
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "UPDATE organisations SET triggers_paused = false, triggers_paused_at = NULL WHERE id = :oid",
+            ),
+            {"oid": str(test_org)},
+        )
 
 
 @pytest_asyncio.fixture(scope="session")

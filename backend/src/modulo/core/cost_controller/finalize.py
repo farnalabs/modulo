@@ -375,9 +375,7 @@ def _legacy_sandbox_cost(merged_outputs: dict[str, Any]) -> Decimal:
 
 def _entry_amount(amount: Decimal) -> str:
     """6dp string, string-clamped to the flat ceiling (never ``1E+40``)."""
-    if amount > COST_COLUMN_CAP:
-        amount = COST_COLUMN_CAP
-    return format(amount, "f")
+    return format(min(amount, COST_COLUMN_CAP), "f")
 
 
 async def _fallback_write(

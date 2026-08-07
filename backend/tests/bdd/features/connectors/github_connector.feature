@@ -127,3 +127,20 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When I write GitHub files batch for repo "owner/repo" with traversal path "../evil.txt"
     Then the write is an error containing "path traversal"
+
+  Scenario: Query results expose rate-limit budget metadata
+    Given a GitHub connector with valid token
+    When I query resource "repos" with limit 5
+    Then the query result exposes rate-limit metadata
+
+  Scenario: Query the rate-limit budget directly
+    Given a GitHub connector with valid token
+    When I query resource "rate_limit"
+    Then the result has records
+    And the query result exposes rate-limit metadata
+
+  Scenario: Rate-limited response reports quota detail
+    Given a GitHub connector with valid token
+    When the GitHub API is rate limited with zero remaining quota
+    Then the connector raises a ValueError with "quota"
+    And the connector raises a ValueError with "X-RateLimit-Remaining"

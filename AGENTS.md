@@ -1093,7 +1093,7 @@ mypy src/modulo/ 2>&1
 
 ### Known Issues
 
-- **The runner machine (duncan-pc) can go offline.** Check `gh api repos/farnalabs/modulo/actions/runners --jq '.runners[] | [.name, .status, .busy]'`. Restart with `Start-Process -FilePath "C:\actions-runner\run.cmd" -WindowStyle Hidden`.
+- **CI runners are hosted (ubicloud-standard-2).** If CI is backed up, check `gh api repos/farnalabs/modulo/actions/runners --jq '.runners[] | [.name, .status, .busy]'` — all runners are hosted; a full busy queue means a CI-backlog, not a local machine to restart (there is no self-hosted runner anymore).
 - **Force pushes re-trigger CI normally.** A force-push to a PR branch fires a fresh pull_request (synchronize) event and CI re-runs on the new SHA; the autonomous lifecycle handles re-review and merge.
 - **Concurrent run limits on triggers** default to 1. When a pipeline gets a burst of webhooks, increase `max_concurrent_runs` on the trigger to match expected burst volume.
 

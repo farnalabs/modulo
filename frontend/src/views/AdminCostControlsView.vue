@@ -401,7 +401,21 @@ async function loadSettings() {
     if (err) {
       return
     } else if (data) {
-      settings.value = { ...settings.value, ...data }
+      const resp = data as {
+        budget?: number | null
+        currency?: string | null
+        billing_period?: string | null
+        alert_thresholds?: number[] | null
+        circuit_breaker_enabled?: boolean | null
+      }
+      settings.value = {
+        ...settings.value,
+        ...(typeof resp.budget === 'number' ? { budget: resp.budget } : {}),
+        ...(typeof resp.currency === 'string' && resp.currency ? { currency: resp.currency as ControlsSettings['currency'] } : {}),
+        ...(typeof resp.billing_period === 'string' && resp.billing_period ? { billingPeriod: resp.billing_period as ControlsSettings['billingPeriod'] } : {}),
+        ...(Array.isArray(resp.alert_thresholds) ? { alertThresholds: resp.alert_thresholds } : {}),
+        ...(typeof resp.circuit_breaker_enabled === 'boolean' ? { circuitBreakerEnabled: resp.circuit_breaker_enabled } : {}),
+      }
     }
   } catch (e) {
     console.warn('Failed to load cost control settings', e)
@@ -453,30 +467,35 @@ async function saveBudget() {
 async function toggleThreshold(threshold: number) {
   const prev = [...settings.value.alertThresholds]
   const idx = settings.value.alertThresholds.indexOf(threshold)
+  const next = [...prev]
   if (idx >= 0) {
-    settings.value.alertThresholds.splice(idx, 1)
+    next.splice(idx, 1)
   } else {
-    settings.value.alertThresholds.push(threshold)
-    settings.value.alertThresholds.sort((a, b) => a - b)
+    next.push(threshold)
+    next.sort((a, b) => a - b)
   }
+  if (next.length === 0) {
+    thresholdSaveError.value = 'At least one alert threshold must remain enabled'
+    return
+  }
+  settings.value.alertThresholds = next
   thresholdSaveError.value = null
-  try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alertThresholds: settings.value.alertThresholds } })
-  } catch {
+  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alert_thresholds: next } })
+  if (err) {
     settings.value.alertThresholds = prev
-    thresholdSaveError.value = 'Failed to save thresholds'
+    thresholdSaveError.value = `Failed to save thresholds: ${formatApiError(err)}`
   }
 }
 
 async function toggleCircuitBreaker() {
   const prev = settings.value.circuitBreakerEnabled
-  settings.value.circuitBreakerEnabled = !prev
+  const next = !prev
+  settings.value.circuitBreakerEnabled = next
   circuitBreakerSaveError.value = null
-  try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuitBreakerEnabled: settings.value.circuitBreakerEnabled } })
-  } catch {
+  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuit_breaker_enabled: next } })
+  if (err) {
     settings.value.circuitBreakerEnabled = prev
-    circuitBreakerSaveError.value = 'Failed to save circuit breaker'
+    circuitBreakerSaveError.value = `Failed to save circuit breaker: ${formatApiError(err)}`
   }
 }
 
@@ -494,13 +513,13 @@ async function onCurrencyChange(value: unknown) {
 
 async function onBillingPeriodChange(value: unknown) {
   const prev = settings.value.billingPeriod
-  settings.value.billingPeriod = String(value) as 'monthly' | 'quarterly' | 'annual'
+  const next = String(value) as 'monthly' | 'quarterly' | 'annual'
+  settings.value.billingPeriod = next
   periodSaveError.value = null
-  try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billingPeriod: settings.value.billingPeriod } })
-  } catch {
+  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billing_period: next } })
+  if (err) {
     settings.value.billingPeriod = prev
-    periodSaveError.value = 'Failed to save billing period'
+    periodSaveError.value = `Failed to save billing period: ${formatApiError(err)}`
   }
 }
 
