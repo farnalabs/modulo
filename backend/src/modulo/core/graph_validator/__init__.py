@@ -1572,14 +1572,14 @@ class GraphValidator:
                         )
                     elif timeout is not None:
                         try:
-                            t = int(timeout) if not isinstance(timeout, int) else timeout
+                            timeout_seconds = int(timeout) if not isinstance(timeout, int) else timeout
                         except (ValueError, TypeError):
-                            t = None
-                        if t is not None and st > t:
+                            timeout_seconds = None
+                        if timeout_seconds is not None and st > timeout_seconds:
                             result.warning(
                                 "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT",
                                 f"Sandbox agent node '{nid}' stall_timeout_seconds={st} exceeds "
-                                f"timeout_seconds={t} — a stall timeout larger than the total "
+                                f"timeout_seconds={timeout_seconds} — a stall timeout larger than the total "
                                 "timeout is pointless",
                                 node_id=nid,
                             )
