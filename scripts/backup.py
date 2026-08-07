@@ -222,6 +222,8 @@ async def main() -> None:
     org_id = get_org_id(db_url)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output = args.output or f"modulo-backup-{org_id}-{timestamp}.tar.gz.enc"
+    if not output.endswith(".enc"):
+        output += ".enc"
 
     print(f"Starting backup (org={org_id}, timestamp={timestamp})")
     print(f"Output: {output}")
