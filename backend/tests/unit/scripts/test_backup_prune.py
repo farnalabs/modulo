@@ -380,9 +380,7 @@ def test_main_real_delete(monkeypatch, capsys, tmp_path):
 
 def test_main_honours_custom_keep_flags(monkeypatch, capsys, tmp_path):
     _write_backup_stream(tmp_path)
-    ns = prune.argparse.Namespace(
-        backup_dir=str(tmp_path), dry_run=False, keep_daily=3, keep_weekly=4, keep_monthly=12
-    )
+    ns = prune.argparse.Namespace(backup_dir=str(tmp_path), dry_run=False, keep_daily=3, keep_weekly=4, keep_monthly=12)
 
     with patch.object(prune, "parse_args", return_value=ns):
         prune.main()
