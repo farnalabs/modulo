@@ -33,6 +33,7 @@ async def _seed_saq_run(
     heartbeat_stale: bool = True,
     dispatched: bool = True,
     dispatcher: str | None = "saq",
+    claim_token: str | None = "token-a",
 ) -> tuple[uuid.UUID, uuid.UUID]:
     pipeline_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
@@ -70,7 +71,7 @@ async def _seed_saq_run(
                     "VALUES (:id, :oid, :pid, :sid, :uid, 'manual', :status, 'hash', :thread, :rn, :disp, 1, "
                     "CASE WHEN :stale THEN now() - interval '30 minutes' ELSE now() END, "
                     "CASE WHEN :dispatched THEN now() - interval '30 minutes' ELSE NULL END, "
-                    ":job_id, 'token-a')"
+                    ":job_id, :tok)"
                 ),
                 {
                     "id": str(run_id),
@@ -85,6 +86,7 @@ async def _seed_saq_run(
                     "dispatched": dispatched,
                     "disp": dispatcher,
                     "job_id": f"saq:job:runs:run:{run_id}",
+                    "tok": claim_token,
                 },
             )
         return run_id, pipeline_id
@@ -199,6 +201,10 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
         status="pending",
         dispatched=False,
         dispatcher=None,
+        # A real capacity-deferred run was never dispatched and never claimed,
+        # so its claim token is NULL — _record_saq_job only writes a fresh token
+        # when the token is NULL (it must never clobber a worker's claim token).
+        claim_token=None,
     )
 
     # Re-dispatch happens (summary count is global across orgs, so assert on our
@@ -221,6 +227,7 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
     finally:
         await eng.dispose()
     assert row[0] == "saq"
+    assert row[1] is not None
     assert row[1] != "token-a"
 
 
