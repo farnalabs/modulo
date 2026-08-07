@@ -688,9 +688,7 @@ class TestPartialChain:
 
         descriptions, gaps = await registry.describe_partial_chain("1.0.0", "2.0.0")
         assert gaps == []
-        assert descriptions == [
-            {"source_version": "1.0.0", "target_version": "2.0.0", "description": "Rename v1"}
-        ]
+        assert descriptions == [{"source_version": "1.0.0", "target_version": "2.0.0", "description": "Rename v1"}]
 
     async def test_describe_partial_chain_with_gap(self) -> None:
         registry = MigrationRegistry()
