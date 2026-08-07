@@ -583,7 +583,19 @@ When delivering a feature as multiple PRs (e.g. PR A -> PR B -> PR C), once PR N
 
 ### Once a PR exists, ALWAYS merge main in with a merge commit - never rebase
 
-Once a PR branch exists, keep it current with main by running `git merge origin/main --no-edit` (a MERGE COMMIT). NEVER rebase the branch onto main and NEVER rewrite its history with force-push while the branch is shared or being reviewed. Rationale: (a) rebase re-applies the whole diff and re-conflicts on every main movement; (b) merge composes with concurrent agents (Branch Fixer, other pipelines) instead of force-push-warring with them; (c) git records conflict resolutions in the merge commit so they don't re-conflict. If a push is rejected, fetch + merge + push again - do NOT force-push over a branch another agent may be touching.
+Once a PR branch exists, do NOT chase main — merge main in with a merge commit (`git merge origin/main --no-edit`) only when actually required (merge-queue conflict, rejected push, or a chained PR that needs latest main). NEVER rebase the branch onto main and NEVER rewrite its history with force-push while the branch is shared or being reviewed. Rationale: (a) rebase re-applies the whole diff and re-conflicts on every main movement; (b) merge composes with concurrent agents (Branch Fixer, other pipelines) instead of force-push-warring with them; (c) git records conflict resolutions in the merge commit so they don't re-conflict. If a push is rejected, fetch + merge + push again - do NOT force-push over a branch another agent may be touching. Before the first push, rebase against main ONCE — the branch is exclusively yours at that point (see the 'Rebase against main ONCE' lesson below).
+
+### Rebase against main ONCE before first push — don't chase a fast-moving main
+
+Main moves fast (25+ commits in a couple of hours is normal). Guidance that says "keep your branch current with main by merging main in" becomes a treadmill on that cadence — a merge every hour forever, and CI runs the merge ref anyway, so the final state is always validated against latest main regardless.
+
+The rule:
+
+1. **Before the first push** (branch is exclusively yours — never left the machine): `git fetch origin main` + `git rebase origin/main` **once**. Clean linear history, no force-push risk, one conflict-resolution session. After the rebase, run the FULL test package of every module you touched — main may have added tests while you worked, and those are the files most likely to expose your breaking change.
+2. **After the push / once a PR exists**: **stop chasing main.** Don't merge main in on a schedule. Merge main in with a merge commit (`git merge origin/main --no-edit`) *only when actually required* — merge-queue conflict, rejected push, or a chained PR that needs latest main.
+3. **Never** rebase or force-push a branch that is shared or being reviewed — merge commits compose with concurrent agents (Branch Fixer, other pipelines); rebases force-push-war with them.
+
+Post-mortem (FAR-102, 2026-08-07): the analytics PR branched before main added `test_analytics_facts.py` (PR #815). CI runs the merge ref, so main's newest test ran against the branch — and failed — in a file none of the four sprint agents had ever seen. A pre-push rebase would have pulled that test into the branch so local runs caught it; the full-package corollary is what converts "CI surprise" into "caught locally".
 
 ### Use Python for file writes, not PowerShell string ops
 
@@ -668,9 +680,9 @@ sequential number and fix its `down_revision` to point at the current head.
 
 ### Rebasing: only when another branch merged first — and how to resolve conflicts
 
-**PREFERRED: merge main in with a merge commit (`git merge origin/main --no-edit`).**
-Only use rebase when you exclusively own the branch and need a clean linear
-history for a single PR.
+Note: this applies to the LOCAL gate.ps1 merge path and to already-pushed branches. For a branch's FIRST push in PR-based delivery, rebase against main ONCE instead (see the 'Rebase against main ONCE' lesson).
+
+**PREFERRED: rebase against main ONCE before the first push (`git fetch origin main && git rebase origin/main` — the branch is exclusively yours). After the PR exists, only merge main in with a merge commit when actually required (merge-queue conflict, rejected push, chained PR); never rebase or force-push a shared/reviewed branch.**
 
 In general, **no pre-merge is needed** — the worktree branch is based on
 main and the PR flow handles merging. If another PR merged first (changing
