@@ -48,6 +48,7 @@ import math
 import os
 import re as _re
 import time
+import urllib.request
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
@@ -81,7 +82,11 @@ _log = logging.getLogger(__name__)
 
 _is_truthy = bool
 
-_MAX_ARTIFACT_LOG = 102400
+# Cap for the stored artifact stdout/stderr blobs. 512KB keeps storage bounded
+# while capturing realistic sessions (real runs stream 364KB+; the old 100KB
+# cap made every long run look cut mid-JSON). Consumers can tell stored
+# truncation from a genuine cut via the stdout_length/stderr_length fields.
+_MAX_ARTIFACT_LOG = 512000
 _MAX_OTEL_LOG_ATTR = 32768
 _MAX_ERROR_MSG = 500
 
@@ -271,6 +276,59 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     if not math.isfinite(total):
         return 0.0
     return round(total, 6)
+
+
+async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> str:
+    """Fetch the tail of an E2B sandbox's logs — the only place the kill reason lives.
+
+    Uses GET https://api.e2b.app/sandboxes/{sandbox_id}/logs?limit={limit} with
+    header X-API-KEY: <MODULO_E2B_API_KEY or E2B_API_KEY>. Returns a bounded
+    string (last ~limit log lines) or "" if unavailable/disabled. Never raises.
+    """
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        return ""
+    api_key = os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY")
+    if not api_key:
+        return ""
+
+    def _fetch_bytes() -> bytes:
+        _req = urllib.request.Request(
+            f"https://api.e2b.app/sandboxes/{sandbox_id}/logs?limit={limit}",
+            headers={"X-API-KEY": api_key, "Accept": "application/json"},
+        )
+        # URL is a hard-coded https endpoint, not caller-controlled.
+        with urllib.request.urlopen(_req, timeout=8) as _resp:  # noqa: S310  # nosec B310
+            return bytes(_resp.read())
+
+    try:
+        raw = (await asyncio.to_thread(_fetch_bytes)).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    try:
+        payload = json.loads(raw)
+        entries = payload.get("logEntries") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return raw[:4000]
+        preferred: list[str] = []
+        rest: list[str] = []
+        preferred_levels = {"info", "warn", "warning", "error"}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            msg = entry.get("message")
+            if msg is None:
+                msg = entry.get("fields")
+            if not msg:
+                continue
+            text = str(msg)
+            if isinstance(entry.get("level"), str) and entry["level"].lower() in preferred_levels:
+                preferred.append(text)
+            else:
+                rest.append(text)
+        combined = (preferred + rest)[-limit:]
+        return "\n".join(combined)[-6000:]
+    except Exception:
+        return raw[:4000]
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -972,6 +1030,8 @@ def make_sandbox_agent_fn(
 
         _stdout_len = 0
         _stderr_len = 0
+        _sandbox_id: str | None = None
+        _sandbox_log_tail: str = ""
 
         async def _read_current_claim_token() -> str | None:
             """Read the run's current ``runs.claim_token`` via the shared session factory.
@@ -1062,6 +1122,7 @@ def make_sandbox_agent_fn(
                 timeout=min(sandbox_timeout, 120),
             )
             assert sandbox is not None, "Sandbox was not created before use"
+            _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
             for path, content in context_files.items():
                 if path.endswith(".b64"):
                     content = base64.b64decode(content).decode()
@@ -1219,6 +1280,10 @@ def make_sandbox_agent_fn(
                     "No stdout/stderr was captured — the agent likely hung before "
                     "writing any result."
                 )
+                # The E2B kill reason only lives in the sandbox logs, and the logs
+                # endpoint only serves live sandboxes — fetch the tail BEFORE the
+                # kill below (FAR-97 observability).
+                _sandbox_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
                 # The command stalled or timed out. Kill the sandbox BEFORE
                 # reading output.json: the interrupted-but-alive process could
                 # otherwise write a fabricated completion in the grace window
@@ -1291,6 +1356,8 @@ def make_sandbox_agent_fn(
                                     "output_json": output_json,
                                     "agent_stdout": agent_stdout,
                                     "agent_stderr": agent_stderr,
+                                    "stdout_length": _stdout_len,
+                                    "stderr_length": _stderr_len,
                                 },
                             }
                         ],
@@ -1302,6 +1369,8 @@ def make_sandbox_agent_fn(
                             **_build_model_cost_fields(output_json),
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
+                            "stdout_length": _stdout_len,
+                            "stderr_length": _stderr_len,
                         },
                     }
 
@@ -1322,6 +1391,15 @@ def make_sandbox_agent_fn(
 
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
 
+            # Only the timeout/stall failure carries the sandbox trace — the
+            # success path doesn't need it and stays small.
+            _sandbox_failure_fields: dict[str, Any] = {}
+            if cmd_result is None:
+                _sandbox_failure_fields = {
+                    "sandbox_id": _sandbox_id,
+                    "sandbox_log_tail": _sandbox_log_tail,
+                }
+
             return {
                 "artifacts": [
                     {
@@ -1339,6 +1417,9 @@ def make_sandbox_agent_fn(
                             "output_json": output_json,
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
+                            "stdout_length": _stdout_len,
+                            "stderr_length": _stderr_len,
+                            **_sandbox_failure_fields,
                         },
                     }
                 ],
@@ -1350,6 +1431,9 @@ def make_sandbox_agent_fn(
                     **_build_model_cost_fields(output_json),
                     "agent_stdout": agent_stdout,
                     "agent_stderr": agent_stderr,
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                    **_sandbox_failure_fields,
                 },
             }
 
@@ -1395,6 +1479,9 @@ def make_sandbox_agent_fn(
             _exc_stdout = locals().get("agent_stdout", "")
             _exc_stderr = locals().get("agent_stderr", "")
             _exc_output_json = locals().get("output_json")
+            # Best-effort sandbox trace on the generic-exception path too — the
+            # sandbox may already be dead, in which case the helper returns "".
+            _exc_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
             return {
                 "artifacts": [
@@ -1412,6 +1499,10 @@ def make_sandbox_agent_fn(
                             **_build_model_cost_fields(_exc_output_json),
                             "agent_stdout": _exc_stdout,
                             "agent_stderr": _exc_stderr,
+                            "stdout_length": _stdout_len,
+                            "stderr_length": _stderr_len,
+                            "sandbox_id": _sandbox_id,
+                            "sandbox_log_tail": _exc_log_tail,
                         },
                     }
                 ],
@@ -1423,6 +1514,10 @@ def make_sandbox_agent_fn(
                     **_build_model_cost_fields(_exc_output_json),
                     "agent_stdout": _exc_stdout,
                     "agent_stderr": _exc_stderr,
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                    "sandbox_id": _sandbox_id,
+                    "sandbox_log_tail": _exc_log_tail,
                 },
             }
         finally:
