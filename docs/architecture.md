@@ -304,7 +304,7 @@ Redis-backed sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory n
 
 ### Docker Compose
 
-Three compose files:
+Four compose files:
 - `docker-compose.yml` — dev mode (builds from source, Postgres 16, Redis 7)
 - `docker-compose.local.yml` — with observability profile (otel-collector, Prometheus, Grafana)
 - `docker-compose.test.yml` — CI test environment
@@ -359,10 +359,29 @@ ADRs at `docs/adr/` document key trade-offs:
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| 001 | Agent execution environment as a V1 primitive (E2B sandbox) | Active |
-| 002 | Multi-backend database abstraction strategy | Draft |
-| 003 | Packaging & distribution strategy (tiered: Docker → PyPI → binary) | Draft |
-| 004 | User offboarding uses deactivation (not hard deletion) | Accepted |
+| 001 | Agent Execution Environment as a V1 Primitive | Accepted |
+| 002 | Multi-Backend Database Abstraction Strategy | Draft |
+| 003 | Agent Dispatch Model | Accepted |
+| 003 | Packaging & Distribution Strategy | Draft |
+| 004 | Agent as a Self-Contained Bundle | Accepted |
+| 004 | User Offboarding Uses Deactivation (Not Hard Deletion) | Accepted |
+| 005 | Agent Architecture: Two-Tier Orchestration + Execution | Accepted |
+| 005 | Self-Hosted Deployments Use One Org; Teams Are the Separation Boundary | Accepted |
+| 006 | Dashboard Performance: Application Cache Over Materialized View | Accepted |
+| 007 | Remy UI Commands: Frontend-Mediated Browser Automation | Accepted |
+| 008 | Core Shared Manifest: Single Source of Truth for Page Structure | Accepted |
+| 009 | Frontend Monitor Backend Abstraction | Accepted |
+| 010 | Integration Tier Classification (Native / Preview / In-Dev) | Accepted |
+| 011 | Remy Context Sources: Configurable Knowledge Domains with Progressive Disclosure | Accepted |
+| 012 | Migrate to Managed Fly Postgres | Accepted |
+| 014 | Remy Stream: JWT as MCP API Key | Accepted |
+| 015 | Bundle Format v2 (YAML) | Accepted |
+| 016 | Agent Log Observability | Accepted |
+| 017 | Celery to SAQ Migration | Accepted |
+| 017 | Centralized Authorization: Shared Permission Registry for REST + MCP | Accepted |
+| 018 | Centralized Authorization: Shared Permission Registry for REST + MCP | Accepted |
+| 019 | Cost Formula Engine + E2B Rate/Fallback Decision | Accepted |
+| 020 | Analytics: run_daily_facts + typed-params query surface | Accepted |
 
 ## Import Contracts (enforced by import-linter)
 
