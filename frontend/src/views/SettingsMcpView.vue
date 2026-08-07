@@ -114,7 +114,7 @@
         <CardContent class="space-y-4">
           <div class="flex items-center gap-2">
             <label for="settingsmcpview-client" class="text-sm font-medium whitespace-nowrap">{{ $t('views.SettingsMcpView.client') }}:</label>
-            <Select v-model="selectedMcpClient">
+            <Select aria-label="Client" v-model="selectedMcpClient">
               <SelectTrigger id="settingsmcpview-client" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Client">
                 <SelectValue placeholder="Select client" />
               </SelectTrigger>
@@ -174,7 +174,7 @@
         </div>
         <div>
           <label for="settingsmcpview-role" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsMcpView.role') }}</label>
-          <Select v-model="createKeyRole">
+          <Select aria-label="Role" v-model="createKeyRole">
             <SelectTrigger id="settingsmcpview-role" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Role" data-testid="settings-mcp-create-key-role">
               <SelectValue placeholder="Select role" />
             </SelectTrigger>

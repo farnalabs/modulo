@@ -35,7 +35,7 @@
             </div>
             <div>
               <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.type') }}</label>
-              <Select v-model="formData.connector_type">
+              <Select aria-label="Type" v-model="formData.connector_type">
                 <SelectTrigger data-testid="admin-connectors-type-select" aria-label="Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                   <SelectValue placeholder="PostgreSQL" />
                 </SelectTrigger>

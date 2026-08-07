@@ -169,7 +169,7 @@
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <Select :model-value="settings.currency" @update:model-value="onCurrencyChange">
+                <Select aria-label="Currency" :model-value="settings.currency" @update:model-value="onCurrencyChange">
                   <SelectTrigger data-testid="cc-currency" aria-label="Currency" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="USD ($)" />
                   </SelectTrigger>
@@ -183,7 +183,7 @@
               </div>
               <div>
                 <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
-                <Select :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
+                <Select :aria-label="$t('views.AdminCostControlsView.billing_period')" :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
                   <SelectTrigger data-testid="cc-billing-period" :aria-label="$t('views.AdminCostControlsView.billing_period')" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
                     <SelectValue :placeholder="$t('views.AdminCostControlsView.monthly')" />
                   </SelectTrigger>

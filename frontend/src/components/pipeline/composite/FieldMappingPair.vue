@@ -143,7 +143,7 @@ function removeMapping(sourceKey: string) {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label for="fieldmappingpair-field-2" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.source_field') }}</label>
-              <Select v-model="selectedSource">
+              <Select aria-label="Source field" v-model="selectedSource">
                 <SelectTrigger class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs" aria-label="Source field">
                   <SelectValue placeholder="Select source" />
                 </SelectTrigger>
@@ -156,7 +156,7 @@ function removeMapping(sourceKey: string) {
             </div>
             <div>
               <label for="fieldmappingpair-field-1" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('components.pipeline.composite.FieldMappingPair.target_field') }}</label>
-              <Select v-model="selectedTarget">
+              <Select aria-label="Target field" v-model="selectedTarget">
                 <SelectTrigger class="w-full rounded-md border border-border bg-background px-2 py-1 text-xs" aria-label="Target field">
                   <SelectValue placeholder="Select target" />
                 </SelectTrigger>

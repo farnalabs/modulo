@@ -110,7 +110,7 @@
           <!-- Parent folder selector -->
           <div>
             <label for="folder-tree-parent" class="mb-1 block text-sm font-medium">{{ $t('components.pipelines.FolderTree.parent_folder') }}</label>
-            <Select v-model="newFolderParentId">
+            <Select :aria-label="$t('components.pipelines.FolderTree.parent_folder')" v-model="newFolderParentId">
               <SelectTrigger id="folder-tree-parent">
                 <SelectValue :placeholder="$t('components.pipelines.FolderTree.no_parent_root_level')" />
               </SelectTrigger>

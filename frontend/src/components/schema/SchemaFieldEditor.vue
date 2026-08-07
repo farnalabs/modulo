@@ -41,7 +41,7 @@
           </div>
           <div>
             <label :for="`schema-editor-field-${field._key}-type`" class="mb-1 block text-xs text-muted-foreground">{{ $t('views.SchemaEditorView.field_type') }}</label>
-            <Select :model-value="field.type" @update:model-value="update({ type: String($event) })">
+            <Select :aria-label="$t('views.SchemaEditorView.field_type_aria')" :model-value="field.type" @update:model-value="update({ type: String($event) })">
               <SelectTrigger :id="`schema-editor-field-${field._key}-type`" class="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('views.SchemaEditorView.field_type_aria')" data-testid="schema-editor-field-type">
                 <SelectValue :placeholder="$t('views.SchemaEditorView.select_type')" />
               </SelectTrigger>

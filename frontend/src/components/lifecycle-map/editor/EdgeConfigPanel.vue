@@ -2,7 +2,7 @@
   <div class="space-y-4">
     <div>
       <label for="edgeconfigpanel-field-5" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.trigger_type') }}</label>
-      <Select v-model="form.trigger_type">
+      <Select aria-label="Trigger Type" v-model="form.trigger_type">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Trigger Type">
           <SelectValue :placeholder="$t('components.lifecycle-map.editor.EdgeConfigPanel.select_trigger_type')" />
         </SelectTrigger>
@@ -35,7 +35,7 @@
 
     <div>
       <label for="edgeconfigpanel-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.EdgeConfigPanel.estimated_frequency') }}</label>
-      <Select v-model="form.estimated_frequency">
+      <Select aria-label="Estimated Frequency" v-model="form.estimated_frequency">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Estimated Frequency">
           <SelectValue :placeholder="$t('components.lifecycle-map.editor.EdgeConfigPanel.not_specified')" />
         </SelectTrigger>

@@ -44,7 +44,7 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
-                <Select v-model="formData.provider">
+                <Select aria-label="Provider" v-model="formData.provider">
                   <SelectTrigger data-testid="admin-model-backends-provider-select" aria-label="Provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="anthropic" />
                   </SelectTrigger>
@@ -107,7 +107,7 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <Select v-model="formData.visibility">
+                <Select aria-label="Visibility" v-model="formData.visibility">
                   <SelectTrigger data-testid="admin-model-backends-visibility-select" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="org" />
                   </SelectTrigger>
@@ -291,7 +291,7 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <Select v-model="formData.visibility">
+                <Select aria-label="Visibility" v-model="formData.visibility">
                   <SelectTrigger data-testid="admin-model-backends-edit-visibility" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="org" />
                   </SelectTrigger>
