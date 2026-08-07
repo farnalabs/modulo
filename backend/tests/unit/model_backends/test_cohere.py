@@ -1,9 +1,10 @@
 """Unit tests for CohereBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from modulo.model_backends.base import HealthResult
 from modulo.model_backends.cohere import COHERE_BASE_URL, CohereBackend
 
 
@@ -25,3 +26,18 @@ def test_chat_cohere_uses_cohere_base_url():
             api_key="test-key",
             base_url=COHERE_BASE_URL,
         )
+
+
+async def test_health_check_uses_cohere_base_url():
+    with patch("modulo.model_backends.cohere.ChatCohere"):
+        backend = CohereBackend(api_key="test-key", model_id="command-r")
+    with patch(
+        "modulo.model_backends.cohere.openai_compatible_health_check",
+        new=AsyncMock(return_value=HealthResult(ok=True)),
+    ) as mock_health:
+        result = await backend.health_check()
+    assert result.ok is True
+    mock_health.assert_awaited_once_with(
+        base_url=COHERE_BASE_URL,
+        api_key="test-key",
+    )
