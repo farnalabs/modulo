@@ -38,6 +38,16 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # require_permission -> resolve_authz_enforce reads the org authz kill-switch
+    # via `await session.execute(...)` then calls the un-awaited
+    # `result.scalar_one_or_none()`. With a bare AsyncMock execute result that
+    # chained call leaks an unawaited AsyncMockMixin._execute_mock_call
+    # coroutine (PytestUnraisableExceptionWarning) on EVERY request. Returning
+    # a plain MagicMock result keeps the sync `.scalar_one_or_none()` chain off
+    # the async-mock path; None mirrors the "row absent" default (enforce).
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=execute_result)
     return session
 
 

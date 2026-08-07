@@ -187,6 +187,12 @@ class GitHubConnector(ConnectorBase):
       "pr_diff"         — get raw diff of a PR; filters: {"repo": ..., "pull_number": ...}
       "search_issues"   — search issues via the Search API; filters: {"q": ..., optional sort/order/state/labels}
                           (returns total_count and Link-header pagination)
+      "rate_limit"      — current rate-limit budget via GET /rate_limit; records[0] is the full
+                          {"core": ..., "search": ..., ...} resources map
+
+    Every query result exposes ``metadata["rate_limit"]`` — the ``X-RateLimit-*`` headers
+    reported by GitHub on the response (limit/remaining/used/reset/resource) so agents can
+    schedule work within the remaining quota window.
 
     Supported write resources:
       "commit"          — batch file operations in one commit via the Git Database API
@@ -673,6 +679,11 @@ class GitHubConnector(ConnectorBase):
                 items = cast("list[dict[str, Any]]", body.get("items", []))
                 links = _parse_link_header(r)
                 return self._result(items, r, total=body.get("total_count"), next_cursor=links.get("next"))
+            case "rate_limit":
+                r = await self._call_api("GET", "/rate_limit")
+                body = await self._parse_json_object(r)
+                resources = cast("dict[str, Any]", body.get("resources", {}))
+                return self._result([resources], r, total=1)
             case _:
                 raise ValueError(f"Unsupported GitHub resource: {q.resource!r}")
 
