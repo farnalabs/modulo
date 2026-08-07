@@ -319,7 +319,9 @@ async def test_check_and_record_spend_enforces_org_limit(
         )
         ok2, err2 = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(50), team_id=None)
         assert ok2 is False
-        assert err2 == "daily_limit_exceeded"
+        # The reason is the machine code qualified by the refused scope (§4.6).
+        assert err2.startswith("daily_limit_exceeded")
+        assert err2 == "daily_limit_exceeded: organisation"
         await session.commit()
 
     # Verify only the first spend was recorded
@@ -433,7 +435,9 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         ok, err = await check_and_record_spend(session, org_id=org, cost_usd=Decimal(30), team_id=team1.id)
         assert ok is False
-        assert err == "daily_limit_exceeded"
+        # The reason is the machine code qualified by the refused scope (§4.6).
+        assert err.startswith("daily_limit_exceeded")
+        assert err == "daily_limit_exceeded: team"
         await session.commit()
 
     # Team 2: at exact limit (30 + 20 = 50)
