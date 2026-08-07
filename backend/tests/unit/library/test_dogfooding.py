@@ -53,7 +53,7 @@ def test_each_step_has_description() -> None:
 
 
 @pytest.mark.parametrize(
-    "step_id,expected",
+    ("step_id", "expected"),
     [
         (
             "read-issue",

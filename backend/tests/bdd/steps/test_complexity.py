@@ -227,9 +227,8 @@ def step_draft_has_agent_node(ctx):
 @then("the draft has no nodes")
 def step_draft_has_no_nodes(ctx):
     draft = ctx.get("pipeline_draft")
-    assert draft is not None and len(draft.nodes) == 0, (
-        f"Expected empty draft, got {len(draft.nodes) if draft else 0} nodes"
-    )
+    assert draft is not None, "No pipeline draft generated"
+    assert len(draft.nodes) == 0, f"Expected empty draft, got {len(draft.nodes)} nodes"
 
 
 @then("the draft contains automation suggestions")

@@ -96,7 +96,7 @@ def _setup_client():
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     from modulo.api.main import app
 

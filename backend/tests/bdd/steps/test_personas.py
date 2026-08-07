@@ -244,7 +244,7 @@ def mcp_review_hitl_human_only(ctx):
         mock_approve.side_effect = PermissionError("human_only: Only human users can perform this action")
         import asyncio
 
-        try:
+        with pytest.raises(PermissionError, match="human_only"):
             asyncio.run(
                 mock_approve(
                     gate_id=str(uuid.uuid4()),
@@ -252,9 +252,6 @@ def mcp_review_hitl_human_only(ctx):
                     claim_token="test",
                 )
             )
-            raise AssertionError("Expected human_only error but no exception was raised")
-        except PermissionError as e:
-            assert "human_only" in str(e).lower()
 
 
 @then('an API key with role "runner" cannot approve the gate')

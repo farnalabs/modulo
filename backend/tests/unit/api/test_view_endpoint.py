@@ -92,7 +92,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
 
 
 @pytest.mark.parametrize(
-    "method,url,body",
+    ("method", "url", "body"),
     [
         ("GET", "/api/v1/views", None),
         ("POST", "/api/v1/views", {"name": "Test", "view_type": "run_list"}),

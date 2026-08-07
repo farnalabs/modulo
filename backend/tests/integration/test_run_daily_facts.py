@@ -408,7 +408,8 @@ class TestLiveWriter:
             facts = await _count_facts(db_session, run_id)
 
         assert run_status == "complete", "run status must commit despite the facts failure"
-        assert ledger_total is not None and float(ledger_total) > 0, "ledger must commit despite the facts failure"
+        assert ledger_total is not None, "ledger must commit despite the facts failure"
+        assert float(ledger_total) > 0, "ledger must commit despite the facts failure"
         assert facts == 0, "the failed facts write must be rolled back"
 
     async def test_purge_runs_facts_survive(

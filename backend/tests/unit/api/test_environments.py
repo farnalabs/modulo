@@ -118,7 +118,7 @@ _ENV_AUTH_CASES = [
 ]
 
 
-@pytest.mark.parametrize("method,url", _ENV_AUTH_CASES, ids=["list", "create", "get", "update", "delete", "test"])
+@pytest.mark.parametrize(("method", "url"), _ENV_AUTH_CASES, ids=["list", "create", "get", "update", "delete", "test"])
 def test_endpoints_unauthenticated(unauth_client: TestClient, method: str, url: str) -> None:
     resp = getattr(unauth_client, method.lower())(url)
     assert resp.status_code in (401, 403), f"Expected 401/403 for {method} {url}, got {resp.status_code}"
