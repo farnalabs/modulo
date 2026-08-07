@@ -7,10 +7,10 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +54,7 @@ _COST_CONTROLS_KEY = "cost_controls"
 _DEFAULT_CURRENCY = "USD"
 _DEFAULT_BILLING_PERIOD = "monthly"
 _DEFAULT_CIRCUIT_BREAKER_ENABLED = False
+_DEFAULT_ALERT_THRESHOLDS: list[int] = [50, 75, 90]
 
 
 def _cost_controls(org: object) -> dict[str, Any]:
@@ -90,6 +91,33 @@ def _read_billing_period(org: object | None) -> str:
 def _read_circuit_breaker(org: object | None) -> bool:
     value = _read_cost_control(org, "circuit_breaker_enabled", _DEFAULT_CIRCUIT_BREAKER_ENABLED)
     return value if isinstance(value, bool) else _DEFAULT_CIRCUIT_BREAKER_ENABLED
+
+
+def _coerce_alert_thresholds(value: Any) -> list[int] | None:
+    """Return alert-threshold values as a non-empty list of ints in 1..100, else None.
+
+    ``value`` may be a JSON-decoded ``list`` of arbitrary items; anything that is
+    not a non-empty list of whole numbers within 1..100 is rejected so a corrupted
+    ``settings_json`` degrades to the default instead of 500-ing the endpoint.
+    """
+    if not isinstance(value, list) or not value:
+        return None
+    coerced: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return None
+        as_int = int(item)
+        if as_int != item or not 1 <= as_int <= 100:
+            return None
+        coerced.append(as_int)
+    return coerced
+
+
+def _read_alert_thresholds(org: object | None) -> list[int]:
+    if org is None:
+        return list(_DEFAULT_ALERT_THRESHOLDS)
+    coerced = _coerce_alert_thresholds(_cost_controls(org).get("alert_thresholds"))
+    return coerced if coerced is not None else list(_DEFAULT_ALERT_THRESHOLDS)
 
 
 class CostReportComponent(BaseModel):
@@ -368,7 +396,7 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alert_thresholds: ClassVar[list[float]] = []
+    alert_thresholds: list[int] = Field(default_factory=lambda: list(_DEFAULT_ALERT_THRESHOLDS))
     circuit_breaker_enabled: bool = False
     currency: str = "USD"
     billing_period: str = "monthly"
@@ -380,6 +408,20 @@ class UpdateCostControlsRequest(BaseModel):
     circuit_breaker_enabled: bool | None = None
     currency: str | None = None
     billing_period: str | None = None
+
+    @field_validator("alert_thresholds")
+    @classmethod
+    def _validate_alert_thresholds(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("alert_thresholds must be a non-empty list of integers in 1..100")
+        for threshold in value:
+            if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+            if int(threshold) != threshold or not 1 <= int(threshold) <= 100:
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+        return value
 
 
 @handle_db_errors("costs.get_cost_controls")
@@ -428,6 +470,7 @@ async def get_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
+        alert_thresholds=_read_alert_thresholds(org),
         circuit_breaker_enabled=_read_circuit_breaker(org),
         currency=_read_currency(org),
         billing_period=_read_billing_period(org),
@@ -453,7 +496,12 @@ async def update_cost_controls(
             if req.budget is not None:
                 org.daily_spend_limit = Decimal(str(req.budget))
 
-            if req.currency is not None or req.billing_period is not None or req.circuit_breaker_enabled is not None:
+            if (
+                req.currency is not None
+                or req.billing_period is not None
+                or req.circuit_breaker_enabled is not None
+                or req.alert_thresholds is not None
+            ):
                 settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
                 settings_dict = dict(settings_raw)
                 cc = dict(_cost_controls(org))
@@ -463,6 +511,8 @@ async def update_cost_controls(
                     cc["billing_period"] = req.billing_period
                 if req.circuit_breaker_enabled is not None:
                     cc["circuit_breaker_enabled"] = req.circuit_breaker_enabled
+                if req.alert_thresholds is not None:
+                    cc["alert_thresholds"] = [int(t) for t in req.alert_thresholds]
                 settings_dict[_COST_CONTROLS_KEY] = cc
                 org.settings_json = settings_dict
 
@@ -501,6 +551,7 @@ async def update_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit),
+        alert_thresholds=_read_alert_thresholds(org),
         circuit_breaker_enabled=_read_circuit_breaker(org),
         currency=_read_currency(org),
         billing_period=_read_billing_period(org),

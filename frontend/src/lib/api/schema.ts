@@ -7665,6 +7665,8 @@ export interface components {
             }[];
             /** Budget */
             budget?: number | null;
+            /** Alert Thresholds */
+            alert_thresholds?: number[];
             /**
              * Circuit Breaker Enabled
              * @default false
