@@ -212,6 +212,11 @@ class TestSQLConstants:
             if "PRIMARY KEY" in migration and "checkpoint_migrations" not in migration:
                 assert "organisation_id" in migration
 
+    def test_migrations_add_created_at_for_retention(self):
+        migration_sql = "\n".join(ModuloPostgresSaver.MIGRATIONS)
+        for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
+            assert f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS created_at" in migration_sql
+
 
 class TestBlobEncryption:
     """Tests for blob-level encryption (_encrypt_blob, _decrypt_blobs, _decrypt_writes)."""

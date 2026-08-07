@@ -233,10 +233,9 @@ RLS context is set using `SET LOCAL app.organisation_id = :org_id` **inside a tr
 - An integration test asserting cross-tenant isolation holds across pooled connections
 
 #### LangGraph Checkpoint Isolation
-LangGraph's `PostgresSaver` creates its own tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) with no `organisation_id` column. RLS cannot be applied to these tables without schema modification. Thread ID prefixing (`org_id:thread_id`) is application-layer isolation only — insufficient for SaaS.
+The production checkpointer is `ModuloPostgresSaver`, a subclass of LangGraph's `AsyncPostgresSaver`. It creates its own tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) with an `organisation_id` column included in each table's primary key, and enforces it on every read/write. Checkpoint JSON is additionally encrypted at rest with Fernet.
 
-**Alpha**: Acceptable. Alpha is single-org. Thread ID prefix is documented as partial isolation.
-**V2 (before SaaS launch)**: Subclass `PostgresSaver` to add `organisation_id` to all checkpoint tables and enforce it on every read/write. This is required work before multi-tenant SaaS deployment. Documented as a known gap.
+**Alpha**: Achieved — org-scoped checkpoint isolation and encryption ship with `ModuloPostgresSaver`. The nightly checkpoint retention job operates on this schema.
 
 #### modulo-cloud Service Layer
 
@@ -4260,7 +4259,7 @@ The `/analytics` page (sidebar group Core, `analytics.query` permission, communi
 | Model backend management | First-class ModelBackend entity; ModelBackendHub; Fernet-encrypted; health check; rotation; parallel to ConnectorInstance |
 | API key hashing | SHA-256 (not bcrypt); `mk_<lookup_prefix>_<secret>` format |
 | RLS connection pooling | `SET LOCAL app.organisation_id` inside transactions; lint rule banning bare `SET`; isolation integration test |
-| LangGraph checkpoint isolation | Thread ID prefix for alpha (single-org; acceptable); PostgresSaver subclass with org_id in v2 (required before SaaS) |
+| LangGraph checkpoint isolation | `ModuloPostgresSaver` (AsyncPostgresSaver subclass) adds `organisation_id` to all checkpoint tables and enforces it on every read/write; checkpoint JSON encrypted at rest with Fernet |
 | modulo-cloud boundary | Zero coupling to core; would inject CloudPlanContext in V3 SaaS; calls core admin API; deferred to V3 |
 | Org migration | `modulo export-org` / `modulo import-org` CLI; v1 |
 | Org deletion | 30-day soft-delete grace; hard delete after; configurable retention for regulated orgs |
