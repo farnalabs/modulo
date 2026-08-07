@@ -911,14 +911,16 @@ async def test_org_run_capacity_preserves_resume_run_status_at_cap(
     migrated_db_url: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A non-pending run dispatched as ``resume_run`` at the org cap is deferred
-    WITHOUT demotion.
+    """A non-pending run dispatched as ``resume_run`` at the org cap is ADMITTED
+    (enqueued) WITHOUT demotion.
 
     ``recover_node`` sets the run to ``running`` then dispatches with
-    job_type='resume_run' + resume_data. If the org is at its run cap the
-    resume must not be silently dropped: the run keeps its status and has NO
-    capacity marker written, so the next ``dispatcher_reconcile`` pass
-    re-dispatches it correctly as ``resume_run`` once a slot frees.
+    job_type='resume_run' + resume_data. A resume is the continuation of an
+    ALREADY-ADMITTED run — it already consumes an org slot — so the org-cap
+    gate (which exists to gate NEW run admissions) must NOT re-defer it; the
+    org cap is instead re-enforced at claim time in the executor. The run keeps
+    its status and carries NO capacity marker, and the resume_data survives to
+    the worker.
     """
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     from modulo.core import dispatch as dispatch_mod
@@ -948,14 +950,15 @@ async def test_org_run_capacity_preserves_resume_run_status_at_cap(
             resume_data={"action": "replay", "output": {"answer": 42}},
         )
 
-    assert outcome == "deferred"
-    assert job_id is None
-    enqueue.assert_not_awaited()
+    assert outcome == "enqueued"
+    assert job_id == "saq:job:runs:dispatch-resume"
+    enqueue.assert_awaited_once()
 
     state = await _run_dispatch_state(db_engine, org_id, resumed)
     assert state["status"] == "running", "resume run must NOT be demoted to pending"
     assert state["error_code"] is None, "resume run must NOT carry the capacity marker"
-    assert state["dispatched_at"] is None
+    assert state["dispatched_at"] is not None, "resume run is enqueued with dispatched_at recorded"
+    assert state["dispatcher"] == "saq"
 
 
 async def test_org_run_capacity_preserves_awaiting_human_status_at_cap(
@@ -964,7 +967,10 @@ async def test_org_run_capacity_preserves_awaiting_human_status_at_cap(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """An ``awaiting_human`` run re-dispatched as ``resume_run`` at the org cap
-    is deferred without demotion — the committed HITL decision is preserved."""
+    is ADMITTED (enqueued) without demotion — the committed HITL decision is
+    preserved and the run is never dropped at the cap (a resume is the
+    continuation of an already-admitted run; the org cap is re-enforced at
+    claim time in the executor)."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)
     from modulo.core import dispatch as dispatch_mod
 
@@ -993,7 +999,9 @@ async def test_org_run_capacity_preserves_awaiting_human_status_at_cap(
             resume_data={"action": "approve", "output": {}},
         )
 
-    assert outcome == "deferred"
+    assert outcome == "enqueued"
     state = await _run_dispatch_state(db_engine, org_id, awaiting)
     assert state["status"] == "awaiting_human", "awaiting_human run must NOT be demoted"
     assert state["error_code"] is None, "awaiting_human run must NOT carry the capacity marker"
+    assert state["dispatched_at"] is not None
+    assert state["dispatcher"] == "saq"
