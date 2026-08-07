@@ -162,6 +162,26 @@ describe('AdminCostControlsView', () => {
     )
   })
 
+  it('sends snake_case circuit_breaker_enabled when toggling the circuit breaker', async () => {
+    const wrapper = await mountView()
+    mockPut.mockClear()
+    const input = wrapper.find('[data-testid="cc-circuit-breaker"] input')
+    ;(input.element as HTMLInputElement).checked = true
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(mockPut).toHaveBeenCalledWith(
+      '/api/v1/admin/costs/controls',
+      expect.objectContaining({
+        body: expect.objectContaining({ circuit_breaker_enabled: true }),
+      }),
+    )
+    expect(mockPut).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ body: expect.objectContaining({ circuitBreakerEnabled: true }) }),
+    )
+  })
+
   it('loads persisted billing period and circuit breaker into the UI', async () => {
     mockGet.mockImplementation((path: string) => {
       if (path === '/api/v1/admin/costs/controls') {
@@ -223,6 +243,106 @@ describe('AdminCostControlsView', () => {
         body: expect.objectContaining({ billing_period: 'annual' }),
       }),
     )
+  })
+
+  it('sends snake_case billing_period when changing the billing period', async () => {
+    const wrapper = await mountView()
+    mockPut.mockClear()
+    const selects = wrapper.findAllComponents({ name: 'Select' })
+    expect(selects.length).toBeGreaterThanOrEqual(2)
+    selects[1].vm.$emit('update:model-value', 'quarterly')
+    await flushPromises()
+
+    expect(mockPut).toHaveBeenCalledWith(
+      '/api/v1/admin/costs/controls',
+      expect.objectContaining({
+        body: expect.objectContaining({ billing_period: 'quarterly' }),
+      }),
+    )
+    expect(mockPut).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ body: expect.objectContaining({ billingPeriod: 'quarterly' }) }),
+    )
+  })
+
+  it('maps snake_case GET response back to camelCase settings bindings', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs/controls') {
+        return Promise.resolve({
+          data: { budget: 10000, currency: 'EUR', billing_period: 'quarterly', alert_thresholds: [50, 90], circuit_breaker_enabled: true },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    pinia = createPinia()
+    setActivePinia(pinia)
+
+    const wrapper = mount(AdminCostControlsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    const circuitBreaker = wrapper.find('[data-testid="cc-circuit-breaker"] input').element as HTMLInputElement
+    expect(circuitBreaker.checked).toBe(true)
+    const currency = wrapper.find('[data-testid="cc-currency"]').text()
+    expect(currency).toContain('EUR')
+  })
+
+  it('blocks unchecking the last alert threshold and surfaces an error', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs/controls') {
+        return Promise.resolve({
+          data: { budget: 10000, currency: 'USD', billing_period: 'monthly', alert_thresholds: [50], circuit_breaker_enabled: false },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({
+          data: { license: { tier: 'team', has_license_key: true, is_valid: true }, flags: [{ name: 'admin_cost_controls', description: 'Cost Controls', tier: 'team', currently_active: true, depends_on: null }], would_activate: [] },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    pinia = createPinia()
+    setActivePinia(pinia)
+
+    const wrapper = mount(AdminCostControlsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    mockPut.mockClear()
+    const input = wrapper.find('[data-testid="cc-threshold-50"] input')
+    ;(input.element as HTMLInputElement).checked = false
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(mockPut).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('At least one alert threshold must remain enabled')
+  })
+
+  it('rolls back and surfaces an error when the threshold PUT fails', async () => {
+    const wrapper = await mountView()
+    mockPut.mockClear()
+    mockPut.mockResolvedValueOnce({ data: null, error: { detail: 'boom' } })
+    const input = wrapper.find('[data-testid="cc-threshold-100"] input')
+    ;(input.element as HTMLInputElement).checked = true
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('boom')
+    const threshold100 = wrapper.find('[data-testid="cc-threshold-100"] input').element as HTMLInputElement
+    expect(threshold100.checked).toBe(false)
   })
 
   it('shows locked state when feature is disabled', async () => {

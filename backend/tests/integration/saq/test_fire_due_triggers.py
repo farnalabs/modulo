@@ -153,9 +153,6 @@ async def test_paused_org_skips_enqueue_but_advances_next_fire(
         # it unpaused or downstream handle_webhook tests hit TriggersPausedError.
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "UPDATE organisations SET triggers_paused = FALSE, "
-                    "triggers_paused_at = NULL WHERE id = :oid"
-                ),
+                text("UPDATE organisations SET triggers_paused = FALSE, triggers_paused_at = NULL WHERE id = :oid"),
                 {"oid": str(test_org)},
             )
