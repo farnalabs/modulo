@@ -244,9 +244,9 @@ async def analytics_query(
             account_id=principal.account_id,
             org_role=principal.org_role,
         )
-    except HTTPException:
-        raise
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
         raise _map_service_error(exc) from None
     return AnalyticsResponse(**result)
 
@@ -301,9 +301,9 @@ async def analytics_export(
             offset=offset,
             limit=limit,
         )
-    except HTTPException:
-        raise
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
         raise _map_service_error(exc) from None
 
     if format == "csv":

@@ -23,6 +23,7 @@ import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import date as _date
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -1003,8 +1004,6 @@ def _parse_mcp_datetime(value: str, name: str) -> datetime:
     Matches the REST surface: "2026-08-06" is accepted as midnight, ISO
     datetimes accept a trailing 'Z' (Python 3.11+ fromisoformat handles it).
     """
-    from datetime import date as _date
-
     try:
         return datetime.fromisoformat(value)
     except ValueError:

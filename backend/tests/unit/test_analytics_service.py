@@ -8,7 +8,7 @@ validation — the pure logic shared by the REST route and the MCP tool. No DB.
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -104,8 +104,6 @@ class TestNormaliseBounds:
             _normalise_bounds(date.today() - timedelta(days=500), date.today())
 
     def test_non_utc_offset_aware_bounds_normalised(self) -> None:
-        from datetime import datetime, timezone
-
         frm = datetime(2026, 8, 1, 21, 0, 0, tzinfo=timezone(timedelta(hours=5)))
         to = date(2026, 8, 3)
         normalised_frm, _ = _normalise_bounds(frm, to)
