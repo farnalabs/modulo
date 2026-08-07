@@ -127,6 +127,42 @@ def test_classify_keeps_all_when_under_limits():
     assert len(kept_dates(backups)) == 4
 
 
+def test_classify_respects_custom_keep_daily():
+    backups = [make_backup(d) for d in DAILY_STREAM]
+
+    keep = prune.classify_backups(backups, keep_daily=3)
+    kept = sorted(b.date for b in backups if b.path in keep)
+
+    assert kept == [date(2026, 7, d) for d in (10, 11, 13)]
+
+
+def test_classify_respects_custom_keep_weekly():
+    backups = []
+    d = date(2026, 6, 2)
+    while d <= date(2026, 6, 30):
+        backups.append(make_backup(d.strftime("%Y%m%d")))
+        d = date.fromordinal(d.toordinal() + 1)
+    backups.extend(make_backup(ds) for ds in ("20260503", "20260510", "20260517"))
+
+    keep = prune.classify_backups(backups, keep_weekly=2)
+    kept_sundays = [b.date for b in backups if b.path in keep and b.date.isocalendar().weekday == 7]
+
+    assert kept_sundays == [date(2026, 6, d) for d in (21, 28)]
+
+
+def test_classify_respects_custom_keep_monthly():
+    keep_6 = prune.classify_backups(MONTHLY_STREAM, keep_monthly=6)
+    keep_12 = prune.classify_backups(MONTHLY_STREAM, keep_monthly=12)
+
+    kept_6 = {b.date for b in MONTHLY_STREAM if b.path in keep_6}
+    kept_12 = {b.date for b in MONTHLY_STREAM if b.path in keep_12}
+
+    assert date(2026, 6, 1) in kept_6
+    # A smaller monthly budget must retain strictly fewer of the older monthlies.
+    assert kept_6 < kept_12
+    assert date(2025, 1, 1) not in kept_6
+
+
 def test_classify_keeps_seven_most_recent_daily():
     backups = [make_backup(d) for d in DAILY_STREAM]
 
@@ -340,3 +376,17 @@ def test_main_real_delete(monkeypatch, capsys, tmp_path):
     assert len(remaining) == 7
     out = capsys.readouterr().out
     assert "Deleted: modulo-backup-abc123-20260702T010101.tar.gz.enc" in out
+
+
+def test_main_honours_custom_keep_flags(monkeypatch, capsys, tmp_path):
+    _write_backup_stream(tmp_path)
+    ns = prune.argparse.Namespace(
+        backup_dir=str(tmp_path), dry_run=False, keep_daily=3, keep_weekly=4, keep_monthly=12
+    )
+
+    with patch.object(prune, "parse_args", return_value=ns):
+        prune.main()
+
+    remaining = sorted(p.name for p in tmp_path.iterdir())
+    assert len(remaining) == 3
+    assert "Keeping 3, pruning 7" in capsys.readouterr().out

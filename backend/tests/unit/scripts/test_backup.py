@@ -488,3 +488,64 @@ def test_main_exits_on_empty_passphrase(monkeypatch, capsys):
     ):
         asyncio.run(main())
     assert "passphrase cannot be empty" in capsys.readouterr().out
+
+
+def test_main_normalizes_output_without_enc_suffix(tmp_manifest_dir, capsys):
+    raw_output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz")
+    enc_output = raw_output + ".enc"
+    Path(enc_output).write_text("enc")  # exists so the final os.path.getsize() works
+    ns = MagicMock()
+    ns.output = raw_output
+    ns.passphrase = "pass"
+    ns.db_url = None
+    ns.pg_dump = "pg_dump"
+    ns.min_disk_gb = 1
+
+    with (
+        patch("scripts.backup.parse_args", return_value=ns),
+        patch("scripts.backup.get_db_url", return_value="postgresql://u:p@h/db"),
+        patch("scripts.backup.check_disk_space"),
+        patch("scripts.backup.get_org_id", return_value="org123"),
+        patch("scripts.backup.run_pg_dump", new=AsyncMock()),
+        patch("scripts.backup.collect_secrets", return_value=["secrets.env"]),
+        patch("scripts.backup.write_checksums", return_value="checksums.sha256"),
+        patch("scripts.backup.create_archive", return_value=raw_output) as mock_arc,
+        patch("scripts.backup.encrypt_archive") as mock_enc,
+    ):
+        asyncio.run(main())
+
+    # The encrypted archive must land exactly at the user-requested path, so
+    # create_archive receives the .enc-normalised output and getsize reads the
+    # encrypted file that encrypt_archive actually produces.
+    assert mock_arc.call_args.args[1] == enc_output
+    mock_enc.assert_called_once_with(raw_output, "pass")
+    assert "Backup complete:" in capsys.readouterr().out
+
+
+def test_main_keeps_enc_suffix_output_unchanged(tmp_manifest_dir, capsys):
+    output = os.path.join(tmp_manifest_dir, "modulo-backup.tar.gz.enc")
+    Path(output).write_text("enc")  # exists so the final os.path.getsize() works
+    ns = MagicMock()
+    ns.output = output
+    ns.passphrase = "pass"
+    ns.db_url = None
+    ns.pg_dump = "pg_dump"
+    ns.min_disk_gb = 1
+    tar_path = os.path.join(tmp_manifest_dir, "x.tar.gz")
+
+    with (
+        patch("scripts.backup.parse_args", return_value=ns),
+        patch("scripts.backup.get_db_url", return_value="postgresql://u:p@h/db"),
+        patch("scripts.backup.check_disk_space"),
+        patch("scripts.backup.get_org_id", return_value="org123"),
+        patch("scripts.backup.run_pg_dump", new=AsyncMock()),
+        patch("scripts.backup.collect_secrets", return_value=["secrets.env"]),
+        patch("scripts.backup.write_checksums", return_value="checksums.sha256"),
+        patch("scripts.backup.create_archive", return_value=tar_path) as mock_arc,
+        patch("scripts.backup.encrypt_archive") as mock_enc,
+    ):
+        asyncio.run(main())
+
+    assert mock_arc.call_args.args[1] == output
+    mock_enc.assert_called_once_with(tar_path, "pass")
+    assert "Backup complete:" in capsys.readouterr().out
