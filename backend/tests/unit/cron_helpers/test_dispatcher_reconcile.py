@@ -4,6 +4,7 @@ eviction, Redis-error fail-safe, re-enqueue gate-on-return, discriminator.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -311,6 +312,14 @@ class TestReconcilePredicateMatrix:
         assert ch._is_nodeless_zombie_row(row, 45) is False
 
     @pytest.mark.asyncio
+    async def test_nodeless_row_without_started_at_is_not_zombie(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A running row that never recorded a started_at cannot be age-gated —
+        it must not be terminalized by the nodeless branch."""
+        row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
+        row.started_at = None
+        assert ch._is_nodeless_zombie_row(row, 45) is False
+
+    @pytest.mark.asyncio
     async def test_nodeless_with_recent_start_falls_through_to_job_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A nodeless run that started recently (age gate not elapsed) is not
         failed by the nodeless branch; with a fresh heartbeat and no other
@@ -481,3 +490,197 @@ class TestReconcilePrefixAware:
         redis_client.zrem.assert_awaited_with("saq:staging-runs:incomplete", f"saq:job:staging-runs:run:{RUN_RUNNING}")
         redis_client.lrem.assert_any_await("saq:staging-runs:queued", 0, f"saq:job:staging-runs:run:{RUN_RUNNING}")
         redis_client.lrem.assert_any_await("saq:staging-runs:active", 0, f"saq:job:staging-runs:run:{RUN_RUNNING}")
+
+
+class TestReEnqueueRun:
+    @pytest.mark.asyncio
+    async def test_delegates_to_dispatch_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_re_enqueue_run is the single dispatch gating point — it must pass
+        through to dispatch_run unchanged (queue + job_type flow through)."""
+        _patch_env(monkeypatch)
+        with patch(
+            "modulo.core.dispatch.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-42"),
+        ) as dispatch:
+            result = await ch._re_enqueue_run("runs", str(RUN_EVICTED), str(ORG), "execute_run")
+
+        assert result == ("enqueued", "job-42")
+        dispatch.assert_awaited_once_with(str(RUN_EVICTED), str(ORG), queue="runs", job_type="execute_run")
+
+    @pytest.mark.asyncio
+    async def test_resume_run_job_type_flows_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        with patch(
+            "modulo.core.dispatch.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("deduped", None),
+        ) as dispatch:
+            result = await ch._re_enqueue_run("runs", str(RUN_AWAITING), str(ORG), "resume_run")
+
+        assert result == ("deduped", None)
+        dispatch.assert_awaited_once_with(str(RUN_AWAITING), str(ORG), queue="runs", job_type="resume_run")
+
+
+class TestReconcileEmptyOrg:
+    @pytest.mark.asyncio
+    async def test_no_orgs_records_stats_and_returns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An empty org table must still record a fresh last_run_at so
+        /healthz/ready sees the cron ticking even in an empty-org environment."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([])])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["scanned"] == 0
+        assert summary["repaired"] == 0
+        redis_cls.from_url.assert_not_called()
+        assert ch.get_dispatcher_reconcile_stats()["last_run_at"] is not None
+
+
+class TestReconcileFailureBranches:
+    @pytest.mark.asyncio
+    async def test_read_failure_logs_and_continues_to_next_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A per-org row read failure must not abort the whole reconcile — the
+        cron continues scanning the remaining orgs."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG])])
+        original_execute = session.execute
+
+        async def _execute_with_failing_read(stmt: Any, params: dict[str, Any] | None = None) -> Any:
+            if "FROM runs" in str(stmt):
+                raise RuntimeError("read boom")
+            return await original_execute(stmt, params)
+
+        session.execute = _execute_with_failing_read
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=MagicMock(name="runs"))),
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["scanned"] == 0
+        assert summary["repaired"] == 0
+        # The tick still completed (no re-raise) and recorded its stats.
+        assert ch.get_dispatcher_reconcile_stats()["last_run_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_claim_cap_exhausted_run_terminalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An SAQ run whose claim_count reached its cap can never complete —
+        it must be terminalized, never re-dispatched."""
+        _patch_env(monkeypatch)
+        row = _run_row(RUN_RUNNING, "running", stale=True)
+        row.claim_count = 20  # == settings.saq_run_claim_cap default
+        session = _MockSession([_org_result([ORG]), _rows_result([row])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=MagicMock(name="runs"))),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["claim_cap_terminalized"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        # The terminalizer UPDATE was issued.
+        assert any("claim_cap_exhausted" in str(stmt) for stmt, _ in session.executed)
+
+    @pytest.mark.asyncio
+    async def test_partial_eviction_failure_counts_redis_error_and_alerts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Redis failure during the DEL/ZREM/LREM repair must count as a redis
+        error, alert, and NOT re-enqueue (fail-safe on unreadable Redis)."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_EVICTED, "running", stale=True)])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_client.delete = AsyncMock(side_effect=RuntimeError("redis down"))
+        q = _make_queue(redis_client, job_result=None)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["redis_errors"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reenqueue_failure_counts_redis_error_and_alerts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A dispatch failure during re-enqueue must count as a redis error and
+        alert — never silently drop the run."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_EVICTED, "running", stale=True)])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client, job_result=None)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, side_effect=RuntimeError("dispatch boom")),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["redis_errors"] == 1
+        assert summary["repaired"] == 0
+        ingest.assert_awaited_once()
+        assert ingest.await_args.kwargs["function"] == "dispatcher_reconcile"
+
+    @pytest.mark.asyncio
+    async def test_cancelled_redis_read_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A cancelled Redis job lookup must propagate — never treated as a
+        Redis error (which would skip the run on a shutdown signal)."""
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_RUNNING, "running", stale=True)])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = _make_queue(redis_client)
+        q.job = AsyncMock(side_effect=asyncio.CancelledError())
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await ch.dispatcher_reconcile()
