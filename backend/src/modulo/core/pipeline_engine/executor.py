@@ -1004,6 +1004,10 @@ class PipelineExecutor:
             initial_state = _seed_state(snapshot, input_payload)
             initial_state["_run_id"] = run_id
             initial_state["_org_id"] = org_id
+            # Seed the run event broker so sandbox_agent nodes can stream live
+            # stdout/stderr chunks as node.stdout_chunk / node.stderr_chunk
+            # events (FAR-98 follow-up). Private-key convention like _run_id.
+            initial_state["_broker"] = broker
             config = {"configurable": {"thread_id": thread_id}}
             node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
             node_token_budgets: dict[str, int] = {

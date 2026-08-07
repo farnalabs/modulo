@@ -1023,6 +1023,7 @@ export default {
       "copied": "Copied!",
       "prompt_reveal_error": "Failed to reveal prompt.",
       "logs": "Logs",
+      "live_output": "Live Output",
       "agent_stdout": "Agent Stdout",
       "agent_stderr": "Agent Stderr",
       "no_agent_logs": "No agent logs for this node.",
