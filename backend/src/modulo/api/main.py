@@ -443,7 +443,7 @@ async def _assert_no_owner_rows(settings: Settings) -> None:
 
 
 async def _ensure_default_org(settings: Settings) -> None:
-    """Create a default organisation if none exists."""
+    """Ensure a default organisation exists and is on the team plan."""
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
@@ -454,13 +454,18 @@ async def _ensure_default_org(settings: Settings) -> None:
 
     async with factory() as session, session.begin():
         result = await session.execute(select(Organisation).limit(1))
-        if result.scalar_one_or_none() is not None:
+        org = result.scalar_one_or_none()
+        if org is not None:
             logger.info("startup.org_exists")
+            if org.plan_id != "team":
+                org.plan_id = "team"
+                logger.info("startup.org_plan_set_to_team")
             return
 
         org = Organisation(
             name="Default Organisation",
             slug="default",
+            plan_id="team",
         )
         session.add(org)
         await session.flush()
