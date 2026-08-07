@@ -332,7 +332,7 @@ Without Redis: in-process asyncio scheduler, in-memory rate limiting, in-memory 
 
 ### CI/CD Pipeline
 
-Self-hosted GitHub Actions runner on Windows. Workflows:
+Hosted Ubicloud runners (ubicloud-standard-2). Workflows:
 - Lint, type-check, unit test, frontend build, audit, and WCAG contrast test on every push
 - Each backend/frontend container is built once, scanned with Trivy, and published to ghcr.io only from `main` or a version tag
 - Staging smoke, WCAG, and regression suites share one dependency/browser setup while retaining separate result artifacts

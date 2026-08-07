@@ -170,7 +170,9 @@ class ConnectorHub:
                                 plaintext = f.decrypt(ciphertext)
                                 raw_str = json.dumps({"api_key": plaintext.decode()})
                             except Exception:
-                                logger.warning("Failed to decrypt credentials_ciphertext for connector %s", ci.id)
+                                logger.warning(
+                                    "Failed to decrypt credentials_ciphertext for connector %s", ci.id, exc_info=True
+                                )
                                 raise ConnectorDecryptError(ci.id) from None
                         else:
                             raw_str = "{}"

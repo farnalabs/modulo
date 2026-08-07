@@ -11,12 +11,14 @@ Registry construction / no-op fallback / shutdown behaviour is covered by
 modules to avoid duplicating coverage here.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.responses import Response
 from tests.unit.rate_limiter.helpers import make_settings
 
 from modulo.api.middleware.rate_limiter import (
@@ -153,11 +155,36 @@ class TestDispatch:
         assert resp.status_code == 200
         registry.check.assert_not_awaited()
 
+    async def test_fails_open_when_registry_check_raises(self):
+        """A Redis/registry failure must fail open (200), never block traffic."""
+        registry = _registry(allowed=False)
+        registry.check = AsyncMock(side_effect=RuntimeError("redis down"))
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=registry)
+        call_next = AsyncMock(return_value=Response(status_code=200))
+        response = await mw.dispatch(_mock_request(), call_next)
+        assert response.status_code == 200
+        call_next.assert_awaited_once()
+
+    async def test_propagates_cancelled_error_from_registry(self):
+        """asyncio.CancelledError from check must propagate, not fail open."""
+        registry = _registry(allowed=True)
+        registry.check = AsyncMock(side_effect=asyncio.CancelledError())
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=registry)
+        call_next = AsyncMock()
+        with pytest.raises(asyncio.CancelledError):
+            await mw.dispatch(_mock_request(), call_next)
+        call_next.assert_not_awaited()
+
 
 class TestShouldRateLimit:
     def test_skip_get(self):
         mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
         assert mw._should_rate_limit(_mock_request(method="GET")) is False
+
+    @pytest.mark.parametrize("method", ["PUT", "PATCH"])
+    def test_rate_limits_put_and_patch(self, method):
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
+        assert mw._should_rate_limit(_mock_request(method=method)) is True
 
     def test_skip_when_bypass_header_matches(self):
         settings = make_settings(modulo_ratelimit_bypass_token="tok")

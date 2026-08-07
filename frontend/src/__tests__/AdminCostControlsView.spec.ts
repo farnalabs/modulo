@@ -366,4 +366,54 @@ describe('AdminCostControlsView', () => {
 
     expect(wrapper.text()).toContain('Available on higher plan tier')
   })
+
+  it('maps snake_case controls response into camelCase settings on load', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs/controls') {
+        return Promise.resolve({
+          data: { budget: 10000, currency: 'EUR', billing_period: 'quarterly', alert_thresholds: [50, 90], circuit_breaker_enabled: true },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({ data: { period: 'month', group_by: 'team', items: [], org_total: '0', legacy_total: '0', org_unassigned_components: '0' }, error: undefined })
+      }
+      if (path === '/api/v1/admin/costs/limits') {
+        return Promise.resolve({ data: { org_daily_spend_limit: null, team_limits: [] }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(AdminCostControlsView, {
+      global: { plugins: [pinia] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cc-currency"]').exists()).toBe(true)
+    const settings = (wrapper.vm as any).settings
+    expect(settings.currency).toBe('EUR')
+    expect(settings.billingPeriod).toBe('quarterly')
+    expect(settings.alertThresholds).toEqual([50, 90])
+    expect(settings.circuitBreakerEnabled).toBe(true)
+  })
+
+  it('sends snake_case keys when toggling circuit breaker', async () => {
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="cc-circuit-breaker"] input').trigger('change')
+    const putCalls = mockPut.mock.calls
+    expect(putCalls.length).toBeGreaterThan(0)
+    expect(putCalls[0][0]).toBe('/api/v1/admin/costs/controls')
+    expect(putCalls[0][1].body).toHaveProperty('circuit_breaker_enabled')
+    expect(putCalls[0][1].body).not.toHaveProperty('circuitBreakerEnabled')
+  })
+
+  it('sends snake_case keys when toggling alert thresholds', async () => {
+    const wrapper = await mountView()
+    await wrapper.find('[data-testid="cc-threshold-100"] input').trigger('change')
+    const putCalls = mockPut.mock.calls
+    expect(putCalls.length).toBeGreaterThan(0)
+    expect(putCalls[0][0]).toBe('/api/v1/admin/costs/controls')
+    expect(putCalls[0][1].body).toHaveProperty('alert_thresholds')
+    expect(putCalls[0][1].body).not.toHaveProperty('alertThresholds')
+  })
 })

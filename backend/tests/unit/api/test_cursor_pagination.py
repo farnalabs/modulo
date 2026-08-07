@@ -76,21 +76,45 @@ class TestCursorEncoding:
         assert ":" not in encoded  # base64 encoded, no colons visible
 
     @staticmethod
-    def test_different_values_produce_different_cursors() -> None:
-        rid1 = uuid.uuid4()
-        rid2 = uuid.uuid4()
-        t1 = _NOW
-        t2 = _NOW + timedelta(seconds=1)
-
-        c1 = CursorPaginator.encode_cursor(t1, rid1)
-        c2 = CursorPaginator.encode_cursor(t2, rid2)
-
+    def test_same_value_different_id_produces_different_cursor() -> None:
+        # Isolates the record id as the varying component.
+        c1 = CursorPaginator.encode_cursor(_NOW, uuid.uuid4())
+        c2 = CursorPaginator.encode_cursor(_NOW, uuid.uuid4())
         assert c1 != c2
+
+    @staticmethod
+    def test_different_value_same_id_produces_different_cursor() -> None:
+        # Isolates the sort value as the varying component.
+        record_id = uuid.uuid4()
+        c1 = CursorPaginator.encode_cursor(_NOW, record_id)
+        c2 = CursorPaginator.encode_cursor(_NOW + timedelta(seconds=1), record_id)
+        assert c1 != c2
+
+    @staticmethod
+    def test_same_inputs_produce_same_cursor() -> None:
+        # Encoding is deterministic — pagination chaining depends on this.
+        record_id = uuid.uuid4()
+        c1 = CursorPaginator.encode_cursor(_NOW, record_id)
+        c2 = CursorPaginator.encode_cursor(_NOW, record_id)
+        assert c1 == c2
+
+    @staticmethod
+    def test_decode_cursor_with_invalid_record_id_raises() -> None:
+        encoded = CursorPaginator.encode_cursor(_NOW, "not-a-uuid")
+        with pytest.raises(ValueError, match="Invalid cursor"):
+            CursorPaginator.decode_cursor(encoded)
 
     @staticmethod
     def test_decode_malformed_cursor_raises() -> None:
         with pytest.raises(ValueError):
             CursorPaginator.decode_cursor("not-base64!!!")
+
+    @staticmethod
+    def test_decode_valid_base64_without_separator_raises() -> None:
+        # "abc" encoded as urlsafe base64 — decodes cleanly but has no
+        # ``value:id`` separator, so it must be rejected as invalid.
+        with pytest.raises(ValueError, match="Invalid cursor"):
+            CursorPaginator.decode_cursor("YWJj")
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +168,10 @@ class TestPipelinesEndpointCursor:
             resp = client.get("/api/v1/pipelines?cursor=abc123&page_size=10")
 
         assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 0
+        assert body["next_cursor"] is None
+        assert body["has_more"] is False
 
     @staticmethod
     def test_list_without_cursor_backward_compat(client: TestClient) -> None:

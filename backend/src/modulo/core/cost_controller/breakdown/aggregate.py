@@ -93,16 +93,13 @@ def clamp_reported(value: Decimal | float) -> tuple[Decimal, bool, bool] | None:
     raw = d
     clamped = min(raw, MAX_SELF_REPORTED_USD)
     out_of_band_high = raw > MAX_REPORTABLE_BAND_USD
-    if clamped > MAX_REPORTABLE_BAND_USD:
-        clamped = MAX_REPORTABLE_BAND_USD
+    clamped = min(clamped, MAX_REPORTABLE_BAND_USD)
     return clamped, clamped != raw, out_of_band_high
 
 
 def _entry_amount(amount: Decimal) -> str:
     """Serialize an amount as a 6dp string, string-clamped to the flat ceiling."""
-    if amount > COST_COLUMN_CAP:
-        amount = COST_COLUMN_CAP
-    return format(amount, "f")
+    return format(min(amount, COST_COLUMN_CAP), "f")
 
 
 def _basis_within_limit(basis: dict[str, Any]) -> dict[str, Any]:

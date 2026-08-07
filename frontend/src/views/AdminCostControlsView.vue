@@ -401,16 +401,20 @@ async function loadSettings() {
     if (err) {
       return
     } else if (data) {
+      const resp = data as {
+        budget?: number | null
+        currency?: string | null
+        billing_period?: string | null
+        alert_thresholds?: number[] | null
+        circuit_breaker_enabled?: boolean | null
+      }
       settings.value = {
         ...settings.value,
-        ...data,
-        alertThresholds: Array.isArray(data.alert_thresholds) ? data.alert_thresholds : settings.value.alertThresholds,
-        circuitBreakerEnabled: typeof data.circuit_breaker_enabled === 'boolean'
-          ? data.circuit_breaker_enabled
-          : settings.value.circuitBreakerEnabled,
-        billingPeriod: typeof data.billing_period === 'string'
-          ? data.billing_period as ControlsSettings['billingPeriod']
-          : settings.value.billingPeriod,
+        ...(typeof resp.budget === 'number' ? { budget: resp.budget } : {}),
+        ...(typeof resp.currency === 'string' && resp.currency ? { currency: resp.currency as ControlsSettings['currency'] } : {}),
+        ...(typeof resp.billing_period === 'string' && resp.billing_period ? { billingPeriod: resp.billing_period as ControlsSettings['billingPeriod'] } : {}),
+        ...(Array.isArray(resp.alert_thresholds) ? { alertThresholds: resp.alert_thresholds } : {}),
+        ...(typeof resp.circuit_breaker_enabled === 'boolean' ? { circuitBreakerEnabled: resp.circuit_breaker_enabled } : {}),
       }
     }
   } catch (e) {
