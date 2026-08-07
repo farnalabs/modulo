@@ -319,4 +319,4 @@ async def test_context_var_isolation():
             set_cancellation_check(None)
 
     await asyncio.gather(task_a(), task_b())
-    assert results == ["a_cancelled", "b_ran"] or results == ["b_ran", "a_cancelled"]
+    assert results in (["a_cancelled", "b_ran"], ["b_ran", "a_cancelled"])
