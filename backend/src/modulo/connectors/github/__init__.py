@@ -750,7 +750,7 @@ class GitHubConnector(ConnectorBase):
                                 "more than once by the batch",
                             )
                         targeted_paths.add(targeted)
-                    if action_type != "move" and action_type != "delete" and not isinstance(action.get("content"), str):
+                    if action_type not in {"move", "delete"} and not isinstance(action.get("content"), str):
                         raise ValueError(
                             f"GitHub resource {payload.resource!r}: action {action_type!r} requires string 'content'",
                         )
