@@ -105,6 +105,58 @@ async def test_api_key_invalid_raises_401() -> None:
 
 
 @pytest.mark.asyncio
+async def test_api_key_unknown_prefix_raises_401() -> None:
+    """An org lookup that returns no organisation must reject the key with 401,
+    never fall through to validate_api_key."""
+    settings = get_settings()
+    session = _make_session()
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(session),
+        ),
+        patch("modulo.auth.api_key.validate_api_key") as validate_patch,
+        pytest.raises(InvalidToken),
+    ):
+        await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    validate_patch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_api_key_postgres_dialect_uses_lookup_function() -> None:
+    """On Postgres the org is resolved through the SECURITY DEFINER lookup
+    function rather than a prefix scan (org_api_keys has RLS enabled)."""
+    settings = get_settings()
+    session = _make_session()
+    session.get_bind = MagicMock()
+    session.get_bind.return_value.dialect.name = "postgresql"
+
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(session),
+        ),
+        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+    ):
+        principal = await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    assert principal.organisation_id == _ORG_ID
+    assert principal.org_role == "runner"
+    first_stmt = str(session.execute.await_args_list[0].args[0])
+    assert "lookup_api_key_org" in first_stmt
+
+
+@pytest.mark.asyncio
 async def test_api_key_operator_role_principal_is_accepted() -> None:
     settings = get_settings()
     with (

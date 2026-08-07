@@ -86,9 +86,12 @@ class TestRateLimiter:
 class TestNormaliseBounds:
     def test_bare_dates_expand_to_whole_days(self) -> None:
         frm, to = _normalise_bounds(date(2026, 8, 1), date(2026, 8, 2))
-        assert frm.hour == 0 and frm.minute == 0, "date_from must expand to midnight"
-        assert to.hour == 23 and to.minute == 59, "date_to must expand to end-of-day"
-        assert frm.date() == date(2026, 8, 1) and to.date() == date(2026, 8, 2)
+        assert frm.hour == 0, "date_from must expand to midnight"
+        assert frm.minute == 0, "date_from must expand to midnight"
+        assert to.hour == 23, "date_to must expand to end-of-day"
+        assert to.minute == 59, "date_to must expand to end-of-day"
+        assert frm.date() == date(2026, 8, 1)
+        assert to.date() == date(2026, 8, 2)
 
     def test_defaults_to_today_and_364_day_lookback(self) -> None:
         frm, to = _normalise_bounds(None, None)

@@ -185,8 +185,10 @@ class TestQueryAnalytics(_AuthContext):
         assert kwargs["org_id"] == _PLACEHOLDER_ORG_ID
         assert params.pipeline_ids == (pid_a, pid_b)
         assert params.error_code == "executor_stalled"
-        assert params.dimension is not None and params.dimension.value == "error_code"
-        assert params.group_by is not None and params.group_by.value == "day"
+        assert params.dimension is not None
+        assert params.dimension.value == "error_code"
+        assert params.group_by is not None
+        assert params.group_by.value == "day"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_rate_limited_maps_to_error_dict(
@@ -252,8 +254,10 @@ class TestQueryAnalytics(_AuthContext):
         assert result == canned
         mock_run = patches[-1].new
         params = mock_run.await_args.kwargs["params"]
-        assert params.date_from is not None and params.date_from.day == 1
-        assert params.date_to is not None and params.date_to.tzinfo is not None, "an ISO datetime keeps its offset"
+        assert params.date_from is not None
+        assert params.date_from.day == 1
+        assert params.date_to is not None
+        assert params.date_to.tzinfo is not None, "an ISO datetime keeps its offset"
         assert params.date_to.hour == 14, "an ISO datetime must be parsed, not treated as a bare date"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
