@@ -394,14 +394,28 @@ async def claim_expiry(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
-    """System cron — batch-delete terminal runs older than the retention window."""
+    """System cron — batch-delete terminal runs and old LangGraph checkpoint rows.
+
+    Deletes terminal ``runs`` rows older than the retention window (via
+    ``batch_delete_old_terminal_runs``) AND purges LangGraph checkpoint rows
+    (``checkpoints``, ``checkpoint_blobs``, ``checkpoint_writes``) older than
+    the retention window (via ``batch_delete_langgraph_checkpoints``). The
+    retention session is intentionally system-scoped (no ``set_rls_org``) —
+    checkpoint retention is cross-org by design and operates on the saver's
+    unqualified tables.
+    """
+    from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
     from modulo.db.crud.run import batch_delete_old_terminal_runs
 
     async with _make_session_factory()() as session, session.begin():
         deleted = await batch_delete_old_terminal_runs(session)
-    if deleted:
-        _log.info("saq.retention_cleanup.deleted_old_runs", extra={"count": deleted})
-    return {"deleted": deleted}
+        checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
+    if deleted or checkpoints_deleted:
+        _log.info(
+            "saq.retention_cleanup.deleted_old_runs",
+            extra={"count": deleted, "checkpoints_deleted": checkpoints_deleted},
+        )
+    return {"deleted": deleted, "checkpoints_deleted": checkpoints_deleted}
 
 
 async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
