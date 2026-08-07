@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
+import pytest
 import respx
 from cryptography.fernet import Fernet
 
@@ -277,6 +278,32 @@ async def test_nameless_repo_skips_pull_query() -> None:
 
 
 @respx.mock
+async def test_nameless_project_skips_mr_query() -> None:
+    """A GitLab project record with no name must not trigger a per-project MR query."""
+    ci = _fake_ci("gitlab", creds={"token": "glpat_test"})
+    async with _hub(ci) as hub:
+        await hub.initialise([ci])
+
+        respx.get(f"{_GITLAB_API}/user").mock(httpx.Response(200, json={"username": "testuser"}))
+        respx.get(f"{_GITLAB_API}/projects").mock(httpx.Response(200, json=[{"id": 1, "name": "proj1"}, {"id": 2}]))
+        respx.get(path__regex=r".*merge_requests.*").mock(httpx.Response(200, json=[{"id": 42, "title": "MR 1"}]))
+        respx.get("https://gitlab.com/oauth/token/info").mock(
+            httpx.Response(200, json={"scope": ["read_api", "write_repository", "api"]})
+        )
+
+        samples = await run_scan(hub)
+    resources = {s.resource for s in samples}
+    assert "projects" in resources
+    assert "mrs" in resources
+    projects_sample = next(s for s in samples if s.resource == "projects")
+    assert len(projects_sample.records) == 2
+    # Only the named project triggers an MR query; the nameless one is skipped.
+    mrs_samples = [s for s in samples if s.resource == "mrs"]
+    assert len(mrs_samples) == 1
+    assert mrs_samples[0].error is None
+
+
+@respx.mock
 async def test_multiple_connectors_scanned_independently() -> None:
     ci1 = _fake_ci("github", creds={"token": "ghp_one"})
     ci2 = _fake_ci("github", creds={"token": "ghp_two"})
@@ -304,6 +331,76 @@ async def test_all_health_checks_fail_returns_error_samples() -> None:
         samples = await run_scan(hub)
     assert len(samples) > 0
     assert any(s.error for s in samples)
+
+
+async def test_connector_query_cancellation_propagates() -> None:
+    """A CancelledError from a connector query must propagate out of run_scan."""
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
+    cid = uuid.uuid4()
+
+    class _CancellingConnector:
+        connector_type = ConnectorType.GITHUB
+
+        async def health_check(self) -> None:
+            return None
+
+        async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - always cancelled
+            raise asyncio.CancelledError()
+
+    hub._connectors = {cid: _CancellingConnector()}
+    hub._initialised = True
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_scan(hub)
+
+
+async def test_connector_health_check_cancellation_propagates() -> None:
+    """A CancelledError from health_check must propagate out of run_scan."""
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
+    cid = uuid.uuid4()
+
+    class _CancellingHealthCheck:
+        connector_type = ConnectorType.GITHUB
+
+        async def health_check(self) -> None:
+            raise asyncio.CancelledError()
+
+        async def query(self, query: ConnectorQuery) -> None:  # pragma: no cover - never reached
+            raise AssertionError("query should not be reached")
+
+    hub._connectors = {cid: _CancellingHealthCheck()}
+    hub._initialised = True
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_scan(hub)
+
+
+async def test_hub_get_key_error_is_logged_and_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    """A connector_id missing from the hub must be logged and skipped, not abort the scan."""
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
+    hub._connectors = {uuid.uuid4(): object()}
+    hub._initialised = True
+
+    with patch.object(hub, "get", side_effect=KeyError("missing")):
+        samples = await run_scan(hub)
+
+    assert samples == []
+    assert "Connector " in caplog.text
+    assert "not found in hub during scan" in caplog.text
+
+
+async def test_hub_get_unexpected_error_is_logged_and_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    """An unexpected hub.get() error must be logged and skipped, not abort the scan."""
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
+    hub._connectors = {uuid.uuid4(): object()}
+    hub._initialised = True
+
+    with patch.object(hub, "get", side_effect=RuntimeError("retrieval exploded")):
+        samples = await run_scan(hub)
+
+    assert samples == []
+    assert "retrieval failed" in caplog.text
+    assert "retrieval exploded" in caplog.text
 
 
 @respx.mock
