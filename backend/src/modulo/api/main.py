@@ -162,8 +162,8 @@ async def _verify_db_connectivity(settings: Settings) -> None:
 # machines/processes so _run_migrations never interleaves with the entrypoint's
 # `alembic upgrade heads`.
 _MIGRATION_LOCK_KEY = (72001, 1)
-_MIGRATION_LOCK_POLL_ATTEMPTS = 60
-_MIGRATION_LOCK_POLL_INTERVAL = 0.5
+_MIGRATION_LOCK_POLL_ATTEMPTS = 240
+_MIGRATION_LOCK_POLL_INTERVAL = 1.0
 _MIGRATION_MAX_ATTEMPTS = 5
 _MIGRATION_BACKOFF_SECONDS = 3
 

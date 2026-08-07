@@ -49,7 +49,7 @@ def _to_sync_url(url: str) -> str:
 # never race a half-migrated schema. Advisory locks are session-scoped: held on
 # a dedicated connection for the whole migration run and released afterwards.
 _MIGRATION_LOCK_KEY = (72001, 1)
-_MIGRATION_LOCK_POLL_ATTEMPTS = 180
+_MIGRATION_LOCK_POLL_ATTEMPTS = 240
 _MIGRATION_LOCK_POLL_INTERVAL = 1.0
 
 # True while the app lifespan (main.py) already holds the migration lock on its
