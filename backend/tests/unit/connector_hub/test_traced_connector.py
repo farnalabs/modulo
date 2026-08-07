@@ -298,9 +298,7 @@ async def test_query_span_sets_result_total_only_when_not_none(tracer, exporter:
     assert "connector.result_total" not in (spans[0].attributes or {})
 
 
-async def test_run_with_tracing_without_acl_operation(
-    traced: _TracedConnector, exporter: InMemorySpanExporter
-) -> None:
+async def test_run_with_tracing_without_acl_operation(traced: _TracedConnector, exporter: InMemorySpanExporter) -> None:
     """_run_with_tracing with acl_operation=None skips ACL enforcement (no-op branch)."""
     inner = traced._inner
 
