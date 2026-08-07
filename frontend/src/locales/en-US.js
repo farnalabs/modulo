@@ -821,6 +821,7 @@ export default {
       "end": "End",
       "duration": "Duration",
       "cost": "Cost",
+      "cost_includes_child_runs": "(+child)",
       "no_runs_found": "No runs found",
     },
     "AnalyticsView": {
@@ -1069,7 +1070,9 @@ export default {
       "amounts_below_micro_note": "Amounts below $0.000001 display as $0.000000; the basis is shown.",
       "no_attributable_costs_this_run": "No attributable costs this run",
       "cost_accounting_migrated": "Cost accounting migrated; totals reflect component rates.",
-      "total_clamped_to_column_capacity": "Total clamped to column capacity — true spend is higher. See per-run amounts."
+      "total_clamped_to_column_capacity": "Total clamped to column capacity — true spend is higher. See per-run amounts.",
+      "total_including_child_runs": "Total including child runs:",
+      "includes_child_run_cost": "includes {amount} child-run cost"
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",
