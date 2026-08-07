@@ -1,7 +1,8 @@
 """Unit tests for the admin feature-flags API endpoint."""
 
+import uuid
 from collections.abc import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,9 +10,11 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.admin_feature_flags import _resolve_tier
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.feature_flags import FeatureFlagRegistry
+from modulo.core.license import LicenseData, LicenseValidation
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -50,6 +53,20 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_registry_overrides() -> Generator[None, None, None]:
+    """Clear the class-level FeatureFlagRegistry._overrides after each test.
+
+    The toggle endpoint calls ``registry.set_override`` which mutates the
+    shared class variable. Without cleanup it leaks into other test modules
+    that construct a registry (e.g. tests/unit/core/test_plan_context.py) when
+    they run in the same pytest process, making team-tier flags appear active
+    on community tier.
+    """
+    yield
+    FeatureFlagRegistry._overrides.clear()
 
 
 def _mock_registry() -> FeatureFlagRegistry:
@@ -284,3 +301,115 @@ class TestCatchAllMiddlewareFallback:
         assert parsed["detail"] == "An unexpected error occurred"
         assert parsed["type"] == "urn:problem:modulo:internal_error"
         assert parsed["status"] == 500
+
+
+# ---------------------------------------------------------------------------
+# _resolve_tier — license gating for the frontend tier path
+# ---------------------------------------------------------------------------
+# Regression for the PR #854 review finding: _resolve_tier duplicated the
+# 4-step license resolution and returned the bare org.plan_id for team/pro
+# with no license check. It now delegates to resolve_plan_context so a bare
+# non-community plan_id with no valid signed license resolves to community —
+# closing the UI bypass where FeatureGate.vue / featureEnabled() would have
+# shown paid features for an unlicensed org.
+
+
+def _license_data(tier: str = "team", features: list[str] | None = None) -> LicenseData:
+    return LicenseData(
+        tier=tier,
+        features=features or ["sso"],
+        expires_at="",
+        org_id="test-org",
+        raw_payload={},
+        raw_key="",
+    )
+
+
+def _valid_validation(tier: str = "team") -> LicenseValidation:
+    return LicenseValidation(valid=True, license_data=_license_data(tier))
+
+
+def _invalid_validation() -> LicenseValidation:
+    return LicenseValidation(valid=False, error="bad key")
+
+
+def _principal(org_id: uuid.UUID | None = None) -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=org_id or uuid.uuid4(),
+        account_id=uuid.uuid4(),
+        org_role="admin",
+    )
+
+
+def _session() -> AsyncMock:
+    session = AsyncMock()
+    session.begin = MagicMock(return_value=AsyncMock())
+    return session
+
+
+def _settings(license_key: str = "") -> MagicMock:
+    settings = MagicMock()
+    settings.modulo_license_key = license_key
+    return settings
+
+
+def _org(plan_id: str, settings_json: dict | None = None) -> MagicMock:
+    org = MagicMock()
+    org.settings_json = settings_json if settings_json is not None else {}
+    org.plan_id = plan_id
+    return org
+
+
+async def _resolve_tier_value(org: MagicMock, *, license_key: str = "") -> str:
+    """Run _resolve_tier with no org/system license present by default."""
+    session = _session()
+    with (
+        patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
+        patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+        patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+        patch("modulo.core.license.get_license", return_value=None),
+        patch("modulo.core.license.parse_and_verify", return_value=_invalid_validation()),
+    ):
+        return await _resolve_tier(_settings(license_key), session, _principal())
+
+
+class TestResolveTierLicensing:
+    async def test_team_plan_id_without_license_returns_community(self) -> None:
+        """Bare plan_id='team' with NO license must NOT return team tier.
+
+        The old _resolve_tier returned org.plan_id directly (step 4), so the
+        UI plan store showed team features for an unlicensed org.
+        """
+        assert await _resolve_tier_value(_org("team")) == "community"
+
+    async def test_custom_plan_id_without_license_returns_community(self) -> None:
+        assert await _resolve_tier_value(_org("custom-plan")) == "community"
+
+    async def test_team_plan_id_with_env_license_returns_team(self) -> None:
+        org = _org("team")
+        session = _session()
+        with (
+            patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.core.license.get_license", return_value=None),
+            patch("modulo.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
+        ):
+            tier = await _resolve_tier(_settings("env-key"), session, _principal())
+        assert tier == "team"
+
+    async def test_org_license_key_wins_over_plan_id(self) -> None:
+        org = _org("team", settings_json={"license_key": "org-key"})
+        session = _session()
+        with (
+            patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org),
+            patch("modulo.db.crud.tier_catalog.list_tiers", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", new_callable=AsyncMock, return_value=[]),
+            patch("modulo.core.license.parse_and_verify", return_value=_valid_validation(tier="team")),
+        ):
+            tier = await _resolve_tier(_settings(), session, _principal())
+        assert tier == "team"
+
+    async def test_community_plan_id_returns_community(self) -> None:
+        assert await _resolve_tier_value(_org("community")) == "community"

@@ -534,7 +534,7 @@ class TestBillingOverview:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["plan_tier"] == "pro"
+        assert body["plan_tier"] == "community"
         assert body["plan_id"] == "pro_monthly"
         assert body["license_key"] == "LIC-1234-ABCD"
 
