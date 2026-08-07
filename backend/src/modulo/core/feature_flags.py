@@ -364,7 +364,10 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     1. Org-level license key (from ``org.settings_json["license_key"]``)
     2. System-level in-memory license (``store_license()``)
     3. System-level env-var license (``settings.modulo_license_key``)
-    4. Community tier (default fallback)
+    4. Org-level ``plan_id`` — used ONLY for the free "community" tier. Any
+       higher tier (e.g. "team") requires a VALID SIGNED LICENSE; a bare
+       ``plan_id`` with no license (steps 1-3 all empty) resolves to community.
+    5. Community tier (default fallback)
     """
     from modulo.core.license import get_license, parse_and_verify
 
@@ -414,11 +417,21 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
         except Exception:
             logger.warning("Failed to parse env-var license key", exc_info=True)
 
-    # 4. Org-level plan_id (per-org, from DB)
+    # 4. Org-level plan_id (per-org, from DB). Community is the free tier and
+    #    activates without a license. Any higher tier (e.g. "team") may only
+    #    grant paid features when a VALID SIGNED LICENSE is present — steps 1-3
+    #    already returned when one exists, so reaching here with a paid plan_id
+    #    means NO license is present. Downgrade to community instead of silently
+    #    granting the paid tier from a bare plan_id.
     if org is not None:
         org_plan_id: str | None = getattr(org, "plan_id", None)
         if org_plan_id:
-            return await DbPlanContext.from_db(session, org_plan_id)
+            if org_plan_id == "community":
+                return await DbPlanContext.from_db(session, "community")
+            logger.info(
+                "plan.team_without_license_falling_back_to_community",
+                extra={"org_plan_id": org_plan_id},
+            )
 
     # 5. Community fallback
     return await DbPlanContext.from_db(session, "community")

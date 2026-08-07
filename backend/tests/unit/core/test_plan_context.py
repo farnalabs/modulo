@@ -133,6 +133,53 @@ class TestResolvePlanContext:
         assert plan.has_license_key() is True
         assert plan.tier() == "team"
 
+    async def test_team_plan_id_without_license_falls_back_to_community(self) -> None:
+        """Bare plan_id='team' with NO license must NOT grant team tier.
+
+        Regression for the licensing bypass: step 4 previously returned a
+        team-tier context from a bare plan_id, activating paid features with
+        has_license_key=False (e.g. after demo-data seeding set plan_id='team').
+        """
+        session = AsyncMock()
+        org = MagicMock()
+        org.settings_json = {}
+        org.plan_id = "team"
+        settings = MagicMock()
+        settings.modulo_license_key = ""
+
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("modulo.core.license.get_license", return_value=None),
+        ):
+            plan = await resolve_plan_context(settings, session, org=org)
+        assert plan.tier() == "community"
+        assert plan.has_license_key() is False
+        assert plan.feature_enabled("sso") is False
+        assert plan.feature_enabled("saved_views") is True
+
+    async def test_team_plan_id_with_env_var_license_resolves_to_team(self) -> None:
+        """plan_id='team' + a valid MODULO_LICENSE_KEY env license -> team tier."""
+        session = AsyncMock()
+        org = MagicMock()
+        org.settings_json = {}
+        org.plan_id = "team"
+        settings = MagicMock()
+        settings.modulo_license_key = "env-key"
+
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=[]),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=[]),
+            patch("modulo.core.license.get_license", return_value=None),
+            patch("modulo.core.license.parse_and_verify") as mock_verify,
+        ):
+            mock_verify.return_value.valid = True
+            mock_verify.return_value.license_data = _make_license_data(tier="team", features=["sso"])
+            plan = await resolve_plan_context(settings, session, org=org)
+        assert plan.has_license_key() is True
+        assert plan.tier() == "team"
+        assert plan.feature_enabled("sso") is True
+
 
 class TestPlanContextProtocol:
     def test_community_tier_satisfies_protocol(self) -> None:
