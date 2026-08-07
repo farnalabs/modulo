@@ -1330,3 +1330,64 @@ async def test_write_file_absolute_path_blocked(connector):
                 data={"repo": "owner/repo", "path": "/tmp/secret.txt", "content": "SGVsbG8="},
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit budget metadata — X-RateLimit-* headers exposed on every result
+# ---------------------------------------------------------------------------
+
+
+_RATE_LIMIT_HEADERS = {
+    "X-RateLimit-Limit": "5000",
+    "X-RateLimit-Remaining": "4999",
+    "X-RateLimit-Reset": "1754000000",
+    "X-RateLimit-Used": "1",
+    "X-RateLimit-Resource": "core",
+}
+
+
+@respx.mock
+async def test_query_repos_rate_limit_metadata(connector):
+    """List queries expose GitHub X-RateLimit-* budget headers in metadata."""
+    respx.get("https://api.github.com/user/repos").mock(
+        return_value=httpx.Response(200, json=[{"id": 1}], headers=_RATE_LIMIT_HEADERS)
+    )
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert result.metadata["rate_limit"]["X-RateLimit-Limit"] == "5000"
+    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
+    assert result.metadata["rate_limit"]["X-RateLimit-Reset"] == "1754000000"
+    assert result.metadata["rate_limit"]["X-RateLimit-Used"] == "1"
+    assert result.metadata["rate_limit"]["X-RateLimit-Resource"] == "core"
+
+
+@respx.mock
+async def test_query_no_rate_limit_headers_returns_empty(connector):
+    """No X-RateLimit-* headers (e.g. GHES) yields an empty metadata dict."""
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert result.metadata["rate_limit"] == {}
+
+
+@respx.mock
+async def test_single_resource_rate_limit_metadata(connector):
+    """Single-record queries also expose the rate-limit budget."""
+    respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(
+        return_value=httpx.Response(200, json={"id": 1}, headers=_RATE_LIMIT_HEADERS)
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="issue", filters={"repo": "owner/repo", "issue_number": "1"})
+    )
+    assert result.metadata["rate_limit"]["X-RateLimit-Remaining"] == "4999"
+
+
+@respx.mock
+async def test_query_tree_rate_limit_metadata(connector):
+    """The Git Trees API response's quota headers flow through to the result."""
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").mock(
+        return_value=httpx.Response(200, json={"sha": "abc123"})
+    )
+    respx.get("https://api.github.com/repos/owner/repo/git/trees/abc123").mock(
+        return_value=httpx.Response(200, json={"tree": [{"path": "README.md"}]}, headers=_RATE_LIMIT_HEADERS)
+    )
+    result = await connector.query(ConnectorQuery(resource="tree", filters={"repo": "owner/repo"}))
+    assert result.metadata["rate_limit"]["X-RateLimit-Limit"] == "5000"
