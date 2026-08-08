@@ -134,7 +134,8 @@ async def oidc_callback(
     redirect_uri = f"{public_url}/api/v1/auth/oidc/{provider}/callback"
 
     try:
-        tokens = await oidc_process_callback(code, state, settings, session, redirect_uri)
+        async with session.begin():
+            tokens = await oidc_process_callback(code, state, settings, session, redirect_uri)
     except ValueError as exc:
         _log.warning("OIDC callback failed for provider %s: %s", provider, exc, exc_info=True)
         raise HTTPException(
@@ -162,7 +163,6 @@ async def oidc_callback(
             detail="An unexpected error occurred",
         ) from e
 
-    await session.commit()
     return _redirect_to_frontend(tokens, settings)
 
 
@@ -235,7 +235,8 @@ async def saml_acs(
         )
 
     try:
-        tokens = await saml_process_response(raw_saml, settings, session)
+        async with session.begin():
+            tokens = await saml_process_response(raw_saml, settings, session)
     except ValueError as exc:
         _log.warning("SAML ACS failed: %s", exc, exc_info=True)
         raise HTTPException(
@@ -263,7 +264,6 @@ async def saml_acs(
             detail="An unexpected error occurred",
         ) from e
 
-    await session.commit()
     return _redirect_to_frontend(tokens, settings)
 
 

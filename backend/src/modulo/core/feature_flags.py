@@ -608,7 +608,14 @@ class FeatureFlagRegistry:
 
             engine = get_or_create_engine(get_settings())
             async with AsyncSession(engine, autobegin=False) as session:
-                org = await get_organisation(session, org_id)
+                in_transaction = session.in_transaction()
+                if asyncio.iscoroutine(in_transaction):
+                    in_transaction = await in_transaction
+                if in_transaction:
+                    org = await get_organisation(session, org_id)
+                else:
+                    async with session.begin():
+                        org = await get_organisation(session, org_id)
                 if org and org.settings_json:
                     overrides = org.settings_json.get("feature_overrides", {})
                     if flag_name in overrides:
@@ -630,7 +637,14 @@ class FeatureFlagRegistry:
 
             engine = get_or_create_engine(get_settings())
             async with AsyncSession(engine, autobegin=False) as session:
-                team = await get_team(session, team_id)
+                in_transaction = session.in_transaction()
+                if asyncio.iscoroutine(in_transaction):
+                    in_transaction = await in_transaction
+                if in_transaction:
+                    team = await get_team(session, team_id)
+                else:
+                    async with session.begin():
+                        team = await get_team(session, team_id)
                 if team and team.settings:
                     overrides = team.settings.get("feature_overrides", {})
                     if flag_name in overrides:
@@ -652,7 +666,14 @@ class FeatureFlagRegistry:
 
             engine = get_or_create_engine(get_settings())
             async with AsyncSession(engine, autobegin=False) as session:
-                account = await get_account_by_id(session, user_id)
+                in_transaction = session.in_transaction()
+                if asyncio.iscoroutine(in_transaction):
+                    in_transaction = await in_transaction
+                if in_transaction:
+                    account = await get_account_by_id(session, user_id)
+                else:
+                    async with session.begin():
+                        account = await get_account_by_id(session, user_id)
                 if account and account.preferences:
                     overrides = account.preferences.get("feature_overrides", {})
                     if flag_name in overrides:

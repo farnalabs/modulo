@@ -120,7 +120,8 @@ async def get_providers(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[SsoProviderResponse]:
     try:
-        providers = await list_providers(session)
+        async with session.begin():
+            providers = await list_providers(session)
         return [SsoProviderResponse.model_validate(p) for p in providers]
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available: %s", exc, exc_info=True)
@@ -159,24 +160,25 @@ async def create_provider_endpoint(
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderResponse:
     try:
-        provider = await create_provider(
-            session,
-            provider_type=req.provider_type,
-            name=req.name,
-            client_id=req.client_id,
-            client_secret=req.client_secret,
-            discovery_url=req.discovery_url,
-            metadata_url=req.metadata_url,
-            metadata_xml=req.metadata_xml,
-            entity_id=req.entity_id,
-            scopes=req.scopes,
-            enabled=req.enabled,
-            auto_provision=req.auto_provision,
-            default_role=req.default_role,
-            fernet_key=settings.fernet_key,
-            org_id=current_user.organisation_id,
-            actor_user_id=current_user.account_id,
-        )
+        async with session.begin():
+            provider = await create_provider(
+                session,
+                provider_type=req.provider_type,
+                name=req.name,
+                client_id=req.client_id,
+                client_secret=req.client_secret,
+                discovery_url=req.discovery_url,
+                metadata_url=req.metadata_url,
+                metadata_xml=req.metadata_xml,
+                entity_id=req.entity_id,
+                scopes=req.scopes,
+                enabled=req.enabled,
+                auto_provision=req.auto_provision,
+                default_role=req.default_role,
+                fernet_key=settings.fernet_key,
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -226,13 +228,14 @@ async def update_provider_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
 
     try:
-        provider = await update_provider(
-            session,
-            provider_id,
-            actor_user_id=current_user.account_id,
-            fernet_key=settings.fernet_key,
-            **updates,
-        )
+        async with session.begin():
+            provider = await update_provider(
+                session,
+                provider_id,
+                actor_user_id=current_user.account_id,
+                fernet_key=settings.fernet_key,
+                **updates,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -282,7 +285,8 @@ async def delete_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
-        deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
+        async with session.begin():
+            deleted = await delete_provider(session, provider_id, actor_user_id=current_user.account_id)
     except IntegrityError:
         _log.exception("admin_sso.delete_provider_endpoint")
         raise HTTPException(
@@ -326,7 +330,8 @@ async def test_provider_connection(
     settings: Settings = Depends(get_settings),
 ) -> SsoProviderTestResult:
     try:
-        provider = await get_provider(session, provider_id)
+        async with session.begin():
+            provider = await get_provider(session, provider_id)
     except IntegrityError:
         _log.exception("admin_sso.test_provider_connection")
         raise HTTPException(
@@ -504,7 +509,8 @@ async def toggle_provider_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> SsoProviderResponse:
     try:
-        provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
+        async with session.begin():
+            provider = await toggle_provider(session, provider_id, actor_user_id=current_user.account_id)
     except IntegrityError:
         _log.exception("admin_sso.toggle_provider_endpoint")
         raise HTTPException(
@@ -564,7 +570,8 @@ async def set_group_mappings_endpoint(
 ) -> GroupMappingsResponse:
     mappings_dict = [m.model_dump() for m in req.mappings]
     try:
-        provider = await set_group_mappings(session, provider_id, mappings_dict)
+        async with session.begin():
+            provider = await set_group_mappings(session, provider_id, mappings_dict)
     except IntegrityError:
         _log.exception("admin_sso.set_group_mappings_endpoint")
         raise HTTPException(
@@ -608,7 +615,8 @@ async def get_group_mappings_endpoint(
     session: AsyncSession = Depends(get_db_session),
 ) -> GroupMappingsResponse:
     try:
-        provider = await get_provider(session, provider_id)
+        async with session.begin():
+            provider = await get_provider(session, provider_id)
     except ProgrammingError as exc:
         _log.warning("SSO providers table not available on get_group_mappings: %s", exc, exc_info=True)
         raise HTTPException(
