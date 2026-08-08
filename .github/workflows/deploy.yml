@@ -50,7 +50,7 @@ jobs:
           LAST=$(gh run list --repo "${{ github.repository }}" \
             --workflow "Deploy: Staging + Prod" \
             --limit 50 \
-            --json runId,createdAt --jq 'map(select(.runId != "${{ github.run_id }}")) | .[0].createdAt // empty' 2>/dev/null || echo "")
+            --json databaseId,createdAt --jq 'map(select(.databaseId != ${{ github.run_id }})) | .[0].createdAt // empty' 2>/dev/null || echo "")
           echo "last_deploy_attempt=${LAST:-none}"
           if [ -z "$LAST" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
