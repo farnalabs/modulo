@@ -2,11 +2,13 @@
   <div data-theme="agent" class="page-narrow">
     <PageHeader :title="$t('views.SettingsRateLimitsView.rate_limits')" data-test-id="rate-limits-title" :subtitle="$t('views.SettingsRateLimitsView.view_perroute_rate_limiting_rules_and_current_usage')" />
 
+    <FeatureGate feature-name="rate_limits" required-tier="team" show-disabled>
+
     <LoadingSpinner v-if="loading" />
 
-    <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadRules" />
+    <ErrorAlert v-else-if="loadError && !featureRequired" :message="loadError" :on-retry="loadRules" />
 
-    <div v-else class="space-y-6">
+    <div v-else-if="!featureRequired" class="space-y-6">
       <div data-testid="rate-limits-mode" class="rounded-lg border bg-card p-6 shadow-sm">
         <div class="mb-4 flex items-center justify-between">
           <h2 class="text-base font-semibold">{{ $t('views.SettingsRateLimitsView.mode') }}</h2>
@@ -43,19 +45,41 @@
         <div v-else class="text-sm text-muted-foreground">{{ $t('views.SettingsRateLimitsView.no_rate_limit_rules_configured') }}</div>
       </div>
     </div>
+    </FeatureGate>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 
+function isFeatureRequiredError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const obj = err as Record<string, unknown>
+  return obj.status === 402 || obj.type === 'urn:problem:modulo:feature_required'
+}
+
+const featureRequired = ref(false)
 const { loading, error: loadError, data, load: loadRules } = useDataFetch(
-  () => api.GET('/api/v1/admin/rate-limits'),
+  async () => {
+    const res = await api.GET('/api/v1/admin/rate-limits')
+    if (res.error) {
+      if (isFeatureRequiredError(res.error)) {
+        featureRequired.value = true
+        return { data: { mode: 'in_memory', rules: [] }, error: undefined }
+      }
+      featureRequired.value = false
+      return { data: undefined, error: { detail: formatApiError(res.error) } }
+    }
+    featureRequired.value = false
+    return res
+  },
 )
 const mode = computed(() => data.value?.mode ?? 'in_memory')
 const rules = computed(() => data.value?.rules ?? [])
