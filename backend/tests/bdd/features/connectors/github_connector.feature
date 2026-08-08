@@ -168,3 +168,10 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When the GitHub API returns HTTP 429 with exhausted quota
     Then the connector raises a GitHub error with code "rate_limited"
+
+  Scenario: An open circuit fails fast with a machine-readable code
+    Given a GitHub connector with valid token
+    And the GitHub connector circuit is open
+    When I query resource "repos"
+    Then the connector raises a GitHub error with code "circuit_open"
+    And the connector reports an open circuit state
