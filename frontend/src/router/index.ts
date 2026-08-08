@@ -547,7 +547,7 @@ const router = createRouter({
   },
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   try {
     const routeName = to.name
     if (typeof routeName === 'string') {
@@ -587,16 +587,24 @@ router.beforeEach((to) => {
           return { name: 'dashboard' }
         }
       }
-      if (to.meta?.requiredTier) {
+      if (to.meta?.requiredTier || to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev') {
+        // devMode/tier are populated by planStore.fetchPlan(), which is only
+        // kicked off from AppLayout.onMounted — AFTER the initial navigation
+        // resolves. A direct load/refresh of a private_preview/in_dev route
+        // runs this guard before the plan fetch starts, so devMode is still
+        // false and the route is spuriously redirected to the dashboard.
+        // Await the plan here so the guard sees the real devMode/tier.
         const planStore = usePlanStore()
-        if (Object.keys(planStore.features).length > 0 && !planStore.isAtMinimumTier(to.meta.requiredTier)) {
+        if (!planStore.loaded) {
+          await planStore.fetchPlan()
+        }
+        if (to.meta?.requiredTier && Object.keys(planStore.features).length > 0 && !planStore.isAtMinimumTier(to.meta.requiredTier)) {
           return { name: 'dashboard' }
         }
-      }
-      if (to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev') {
-        const planStore = usePlanStore()
-        if (!planStore.devMode) {
-          return { name: 'dashboard' }
+        if (to.meta?.visibility === 'private_preview' || to.meta?.visibility === 'in_dev') {
+          if (!planStore.devMode) {
+            return { name: 'dashboard' }
+          }
         }
       }
     }

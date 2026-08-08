@@ -32,6 +32,7 @@ export const usePlanStore = defineStore("plan", () => {
   const features = ref<Record<string, boolean>>({});
   const devMode = ref(false);
   const isLoading = ref(false);
+  const loaded = ref(false);
   const error = ref<string | null>(null);
   const expiresAt = ref<string | null>(null);
   const orgId = ref<string | null>(null);
@@ -65,7 +66,19 @@ export const usePlanStore = defineStore("plan", () => {
     return currentRank >= minRank;
   }
 
+  let fetchPlanPromise: Promise<void> | null = null;
+
   async function fetchPlan() {
+    if (fetchPlanPromise) return fetchPlanPromise;
+    fetchPlanPromise = doFetchPlan();
+    try {
+      await fetchPlanPromise;
+    } finally {
+      fetchPlanPromise = null;
+    }
+  }
+
+  async function doFetchPlan() {
     if (isLoading.value) return;
     isLoading.value = true;
     error.value = null;
@@ -103,6 +116,7 @@ export const usePlanStore = defineStore("plan", () => {
             map[flag.name] = flag.currently_active;
           }
           features.value = map;
+          loaded.value = true;
         }
       } else {
         apiErrors.push(`Feature flags: ${flagsSettled.reason?.message ?? String(flagsSettled.reason)}`);
@@ -227,6 +241,7 @@ export const usePlanStore = defineStore("plan", () => {
     features,
     devMode,
     isLoading,
+    loaded,
     error,
     isTeam,
     expiresAt,
