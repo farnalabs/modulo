@@ -2028,3 +2028,51 @@ class TestCreateRunPauseClassification:
                 trigger_id=None,
             )
             assert run.id is not None
+
+
+class _StatsRedis:
+    """In-memory redis double for the dispatcher_reconcile shared-stats key."""
+
+    def __init__(self) -> None:
+        self._blob: bytes | None = None
+
+    async def get(self, _key: str) -> bytes | None:
+        return self._blob
+
+    async def set(self, _key: str, value: str) -> None:
+        self._blob = value.encode()
+
+
+class TestDispatcherReconcileSharedStats:
+    """write/read_dispatcher_reconcile_stats — the shared Redis store the WEB
+    process health check reads (the in-process stats dict is worker-local)."""
+
+    @pytest.mark.asyncio
+    async def test_write_then_read_roundtrip(self) -> None:
+        r = _StatsRedis()
+        await ch.write_dispatcher_reconcile_stats(r, {"scanned": 2, "repaired": 1, "skipped": 1})
+        stats = await ch.read_dispatcher_reconcile_stats(r)
+        assert stats is not None
+        assert stats["scanned"] == 2
+        assert stats["repaired"] == 1
+        assert stats["skipped"] == 1
+        assert stats["last_run_at"]
+
+    @pytest.mark.asyncio
+    async def test_read_before_any_write_is_none(self) -> None:
+        r = _StatsRedis()
+        assert await ch.read_dispatcher_reconcile_stats(r) is None
+
+    @pytest.mark.asyncio
+    async def test_read_unparsable_payload_is_none(self) -> None:
+        r = _StatsRedis()
+        await r.set(ch.DISPATCHER_RECONCILE_STATS_KEY, "not json {")
+        assert await ch.read_dispatcher_reconcile_stats(r) is None
+
+    @pytest.mark.asyncio
+    async def test_write_failure_never_raises(self) -> None:
+        class _BrokenRedis:
+            async def set(self, _key: str, _value: str) -> None:
+                raise RuntimeError("redis down")
+
+        await ch.write_dispatcher_reconcile_stats(_BrokenRedis(), {"scanned": 0})
