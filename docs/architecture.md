@@ -327,7 +327,7 @@ Without Redis: in-process asyncio scheduler, in-memory rate limiting, in-memory 
 
 ### Scaling
 
-- **Vertical**: Gunicorn workers (`GUNICORN_WORKERS` env var) for multi-core single replica
+- **Vertical**: Uvicorn worker processes (`uvicorn --workers`) for multi-core single replica
 - **Horizontal**: Multiple backend replicas behind a load balancer. Redis mandatory for coordination. PG advisory locks work cross-replica natively.
 
 ### CI/CD Pipeline

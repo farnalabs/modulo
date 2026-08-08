@@ -589,14 +589,14 @@ browser SDK collects automatically.
 
 ### Frontend sets CSP via `<meta>` tag (no backend CSP for connect-src)
 
-Rejected because CSP `<meta>` tags cannot relax an HTTP header CSP  – 
+Rejected because CSP `<meta>` tags cannot relax an HTTP header CSP –
 both are enforced independently, making it impossible for the frontend to
 add monitoring domains that the header blocks. The backend superset approach
 is simpler and correct.
 
 ### Runtime config from backend /me/settings (no runtime override)
 
-Rejected because: client SDKs must be loaded and initialised at page load  – 
+Rejected because: client SDKs must be loaded and initialised at page load –
 before any API call completes. The dual-layer approach (build-time for SDK
 availability, runtime for activation) is the pragmatic midpoint.
 

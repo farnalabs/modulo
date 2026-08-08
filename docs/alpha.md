@@ -331,12 +331,12 @@ All feature flags in alpha default to **enabled** (no license key enforcement). 
 
 | Flag | Purpose |
 |---|---|
-| `parallel_branches` | Placeholder flag – not surfaced in alpha (sequential only until V1 Extended) |
+| `parallel_branches` | Pipeline nodes with multiple outgoing edges running concurrently |
 | `eval_system` | Placeholder flag – not surfaced in alpha; eval engine lands V1 Core |
 | `webhook_trigger` | Inbound webhook triggers (alpha) |
 | `mcp_server` | Remote MCP endpoint (alpha) |
 | `community_library` | Browse and copy community registry primitives |
-| `cron_trigger` | Placeholder flag – not surfaced in alpha; scheduled triggers land V1 |
+| `cron_trigger` | Scheduled triggers (cron expression) |
 
 ### Enterprise Gate (requires license key – not in alpha)
 
