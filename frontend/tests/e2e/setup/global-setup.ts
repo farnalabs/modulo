@@ -38,6 +38,12 @@ async function globalSetup(_config: FullConfig) {
   await page.click('button[type="submit"]')
   await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 60000 })
 
+  await page.evaluate(() => {
+    localStorage.removeItem('remy-panel-state')
+    localStorage.removeItem('remy-panel-position')
+    localStorage.removeItem('remy-panel-size')
+  })
+
   await page.context().storageState({ path: 'storageState-staging.json' })
   await browser.close()
   console.log('[global-setup] Login complete, storageState saved.')
