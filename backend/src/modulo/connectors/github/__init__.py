@@ -376,7 +376,11 @@ class GitHubConnector(ConnectorBase):
         """Record a service-level failure, tripping the breaker at the threshold.
 
         Only service-level failures (server errors, exhausted rate limits,
-        transport failures) count — client errors (4xx) never open the circuit.
+        transport failures) count — client errors (4xx) never open the circuit
+        from the closed state. A half-open recovery probe is the exception: any
+        terminal error on the probe (including 4xx) is recorded so the breaker
+        re-trips with a fresh cooldown and the half-open flag is always cleared
+        — a probe can never wedge the circuit half-open forever.
         """
         self._consecutive_failures += 1
         self._circuit_half_open = False
@@ -589,6 +593,10 @@ class GitHubConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.request(method, path, **kwargs)
                     if r.status_code == 304:
+                        # 304 is a healthy service response (the resource is
+                        # unchanged) — record it as a success so a half-open
+                        # probe closes the circuit instead of wedging it.
+                        self._record_success()
                         raise GitHubAPIError(
                             "GitHub API returned 304 Not Modified — resource unchanged",
                             error_code="not_modified",
@@ -606,7 +614,11 @@ class GitHubConnector(ConnectorBase):
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
                 status_code = exc.response.status_code
-                if status_code in _RETRYABLE_STATUSES or status_code >= 500:
+                # A 4xx never counts toward the breaker from the closed state,
+                # but a client error on a half-open recovery probe means the
+                # probe did not confirm recovery — re-trip so a fresh probe is
+                # admitted after the next cooldown instead of wedging half-open.
+                if status_code in _RETRYABLE_STATUSES or status_code >= 500 or self._circuit_half_open:
                     self._record_failure()
                 detail = f"GitHub API HTTP {status_code}: {exc.response.text[:200]}"
                 if status_code == 429:

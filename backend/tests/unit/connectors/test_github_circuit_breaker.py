@@ -3,7 +3,9 @@
 The connector trips an open state after a configurable number of consecutive
 service-level failures (5xx, exhausted rate limits, transport failures), then
 fails fast with ``GitHubCircuitOpenError`` until the cooldown elapses and a
-half-open probe succeeds. Client errors (4xx) never count toward the breaker.
+half-open probe succeeds. Client errors (4xx) never count toward the breaker
+from the closed state — but a client error on a half-open recovery probe
+re-trips the breaker so it can never wedge permanently in the half-open state.
 """
 
 import httpx
@@ -139,6 +141,74 @@ async def test_circuit_half_open_probe_failure_reopens(connector, fast_clock):
 
     with pytest.raises(GitHubCircuitOpenError):
         await connector.query(ConnectorQuery(resource="repos"))
+
+
+@respx.mock
+async def test_half_open_probe_client_error_reopens_with_fresh_cooldown(connector, fast_clock):
+    """A 4xx half-open probe re-trips the breaker instead of wedging it half-open.
+
+    Regression: a probe completing with a 4xx used to leave ``_circuit_half_open``
+    stuck ``True`` forever, so no further probe was ever admitted and the
+    breaker never recovered. A 4xx on a half-open probe must record a failure,
+    re-trip with a fresh cooldown, and admit a new probe after that cooldown.
+    """
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(500, text="Server Error"))
+    for _ in range(connector._circuit_failure_threshold):
+        with pytest.raises(GitHubAPIError):
+            await connector.query(ConnectorQuery(resource="repos"))
+
+    fast_clock[0] += 31.0  # cooldown elapsed -> half-open probe admitted
+    route = respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(404, text="Not Found"))
+    with pytest.raises(GitHubAPIError, match="404"):
+        await connector.query(ConnectorQuery(resource="repos"))
+
+    state = connector.circuit_state()
+    assert state["half_open"] is False  # probe outcome cleared the flag
+    assert state["open"] is True  # re-tripped with a fresh cooldown
+    assert state["remaining_cooldown"] > 0
+
+    # Still failing fast while the fresh cooldown is active, with no network.
+    calls_before = route.call_count
+    with pytest.raises(GitHubCircuitOpenError):
+        await connector.query(ConnectorQuery(resource="repos"))
+    assert route.call_count == calls_before
+
+    # After the fresh cooldown, a new probe is admitted and recovery succeeds.
+    fast_clock[0] += 31.0
+    route.mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
+    assert connector.circuit_state()["open"] is False
+
+
+@respx.mock
+async def test_half_open_probe_not_modified_closes_circuit(connector, fast_clock):
+    """A 304 half-open probe is a healthy response and closes the circuit.
+
+    Regression: a 304 probe used to bypass both ``_record_success`` and
+    ``_record_failure``, leaving ``_circuit_half_open`` stuck ``True`` forever.
+    A 304 means the service responded successfully, so it must close the
+    circuit and clear the half-open flag.
+    """
+    respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(500, text="Server Error"))
+    for _ in range(connector._circuit_failure_threshold):
+        with pytest.raises(GitHubAPIError):
+            await connector.query(ConnectorQuery(resource="repos"))
+
+    fast_clock[0] += 31.0  # cooldown elapsed -> half-open probe admitted
+    route = respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(304))
+    with pytest.raises(GitHubAPIError, match="304"):
+        await connector.query(ConnectorQuery(resource="repos"))
+
+    state = connector.circuit_state()
+    assert state["half_open"] is False
+    assert state["open"] is False
+    assert state["consecutive_failures"] == 0
+
+    # A follow-up call passes straight through (circuit closed, not wedged).
+    route.mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    result = await connector.query(ConnectorQuery(resource="repos"))
+    assert len(result.records) == 1
 
 
 @respx.mock
