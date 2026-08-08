@@ -1,5 +1,5 @@
 <template>
-  <div data-theme="agent" class="page-narrow">
+  <div data-theme="agent" class="page-wide">
     <PageHeader :title="$t('views.ApiChangelogView.api_changelog')" data-test-id="changelog-title" :subtitle="$t('views.ApiChangelogView.version_history_and_deprecation_notices_for_the_modulo_api')" />
 
     <LoadingSpinner v-if="loading" />

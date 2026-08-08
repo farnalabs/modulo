@@ -4,6 +4,7 @@ eviction, Redis-error fail-safe, re-enqueue gate-on-return, discriminator.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -539,6 +540,43 @@ class TestReconcileCapacityMarkedRedispatch:
         assert summary["deduped"] == 0
         reenqueue.assert_awaited_once()
         ingest.assert_not_awaited()
+
+
+class TestReconcilePersistsSharedStats:
+    """The cron must persist its outcome to the shared Redis key so the WEB
+    process's /healthz/ready can observe it (the in-process dict is worker-local
+    and invisible to the health check)."""
+
+    @pytest.mark.asyncio
+    async def test_reconcile_persists_stats_to_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        summary, _reenqueue, _ingest, redis_client, _ = await _run_reconcile(
+            monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)]
+        )
+        assert summary["repaired"] == 1
+        stats_sets = [c for c in redis_client.set.await_args_list if c.args[0] == ch.DISPATCHER_RECONCILE_STATS_KEY]
+        assert stats_sets, "dispatcher_reconcile must persist its outcome to the shared Redis stats key"
+        payload = json.loads(stats_sets[0].args[1])
+        assert payload["last_run_at"]
+        assert payload["scanned"] == 1
+        assert payload["repaired"] == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_org_path_still_persists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([_org_result([])])
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+        ):
+            summary = await ch.dispatcher_reconcile()
+        assert summary["scanned"] == 0
+        redis_client.set.assert_awaited_once()
+        assert redis_client.set.await_args.args[0] == ch.DISPATCHER_RECONCILE_STATS_KEY
 
 
 class TestReconcilePrefixAware:

@@ -19,6 +19,7 @@ from modulo.api.dependencies import get_db_session, require_system_permission, r
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_logger import append_audit_event
+from modulo.core.seed_data.cost_components import seed_cost_components_for_org
 from modulo.db.crud.account import create_account, get_account_by_email
 from modulo.db.crud.org_membership import create_membership
 from modulo.db.crud.organisation import (
@@ -81,6 +82,14 @@ async def admin_create_org(
                 plan_id=req.plan_id,
                 created_by=current_user.account_id,
             )
+
+            # Seed default cost components for the new org in the SAME
+            # transaction (idempotent). Fail-open: a seed failure must never
+            # block org creation — log it loudly instead.
+            try:
+                await seed_cost_components_for_org(session, org.id)
+            except Exception:
+                logger.exception("admin_orgs.cost_components_seed_failed")
 
             return CreateOrgResponse(
                 id=str(org.id),

@@ -447,6 +447,7 @@ async def _ensure_default_org(settings: Settings) -> None:
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.core.seed_data.cost_components import seed_cost_components_for_org
     from modulo.db.models.organisation import Organisation
 
     engine = get_or_create_engine(settings)
@@ -465,6 +466,16 @@ async def _ensure_default_org(settings: Settings) -> None:
         session.add(org)
         await session.flush()
         logger.info("startup.default_org_created", extra={"org_id": str(org.id)})
+
+        # Seed default cost components for the new org in the SAME transaction
+        # (idempotent; the per-boot _seed_cost_components also covers it, but a
+        # fresh org gets its components here immediately). Fail-open: a seed
+        # failure must never block default-org creation.
+        try:
+            await seed_cost_components_for_org(session, org.id)
+        except Exception:
+            print(f"SEED_COST_COMPONENTS: default-org {org.id} seed FAILED", flush=True)  # noqa: T201
+            logger.warning("startup.default_org_cost_components_seed_failed", exc_info=True)
 
 
 async def _seed_modulo_users(settings: Settings) -> None:

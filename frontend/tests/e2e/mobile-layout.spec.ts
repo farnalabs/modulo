@@ -58,6 +58,16 @@ function sanitizePath(p: string): string {
   return p.replace(/[^a-z0-9-]/gi, '_').replace(/^_+|_+$/g, '') || 'root'
 }
 
+// Canvas/editor routes (Vue Flow canvases, effectively infinite height) render
+// so much content that a full-page screenshot can exhaust the Playwright
+// worker and crash the whole run ("worker process exited unexpectedly"). All
+// deterministic invariant checks still run — only the screenshot capture is
+// skipped on these routes. Matches manifest entries like /pipelines/:id/editor,
+// /composites/:id/editor, /evals/editor, /schemas/editor/:id.
+function isCanvasRoute(route: string): boolean {
+  return route.includes('/editor') || route.includes('/composites/')
+}
+
 // Navigate, wait for the Vue app to mount and data to settle, then bail out
 // gracefully when an unauthenticated route redirects to /login. Returns false
 // to signal the caller to skip the checks without failing.
@@ -113,36 +123,41 @@ async function checkViewportMeta(page: Page) {
 }
 
 // Check 2 — no horizontal page overflow; log suspected 100vw-width culprits.
+// Note: viewport comparisons use document.documentElement.clientWidth, NOT
+// window.innerWidth — innerWidth inflates to the content width when the page
+// has horizontal overflow in mobile emulation, so it would mask real overflow.
 async function checkNoHorizontalOverflow(page: Page) {
   const result = await page.evaluate(() => {
     const doc = document.documentElement
-    const overflow = doc.scrollWidth > window.innerWidth + 1
+    const vw = document.documentElement.clientWidth
+    const overflow = doc.scrollWidth > vw + 1
     let culprits: string[] = []
     if (overflow) {
-      // computed width:100vw resolves to innerWidth + scrollbar, so elements
+      // computed width:100vw resolves to viewport width + scrollbar, so elements
       // wider than the visible viewport are the classic scrollbar-overflow cause
       culprits = Array.from(document.querySelectorAll('*'))
         .filter(el => {
           const w = parseFloat(getComputedStyle(el).width)
-          return !Number.isNaN(w) && w > window.innerWidth
+          return !Number.isNaN(w) && w > vw
         })
         .slice(0, 10)
         .map(el => `<${el.tagName.toLowerCase()}> width=${getComputedStyle(el).width}`)
     }
-    return { overflow, scrollWidth: doc.scrollWidth, innerWidth: window.innerWidth, culprits }
+    return { overflow, scrollWidth: doc.scrollWidth, viewportWidth: vw, culprits }
   })
   if (result.overflow) {
-    console.log(`[mobile-layout] horizontal overflow: scrollWidth=${result.scrollWidth} innerWidth=${result.innerWidth}`)
+    console.log(`[mobile-layout] horizontal overflow: scrollWidth=${result.scrollWidth} viewportWidth=${result.viewportWidth}`)
     if (result.culprits.length > 0) {
       console.log(`[mobile-layout]   suspected width:100vw culprits: ${result.culprits.join(', ')}`)
     }
   }
-  expect(result.overflow, `Horizontal page overflow (scrollWidth ${result.scrollWidth} > innerWidth ${result.innerWidth})`).toBe(false)
+  expect(result.overflow, `Horizontal page overflow (scrollWidth ${result.scrollWidth} > viewportWidth ${result.viewportWidth})`).toBe(false)
 }
 
 // Check 3 — app shell fills the viewport width; main-content ratio is advisory.
 async function checkAppShellFillsViewport(page: Page) {
   const data = await page.evaluate(() => {
+    const vw = document.documentElement.clientWidth
     const app = document.querySelector('#app')
     let shellRect = app?.getBoundingClientRect()
     if (!shellRect || shellRect.width === 0) {
@@ -157,11 +172,11 @@ async function checkAppShellFillsViewport(page: Page) {
       }
       shellRect = widest?.getBoundingClientRect()
     }
-    const appRatio = shellRect && shellRect.width > 0 ? shellRect.width / window.innerWidth : 0
+    const appRatio = shellRect && shellRect.width > 0 ? shellRect.width / vw : 0
     let mainRatio = 0
     for (const el of Array.from(document.querySelectorAll('main, [role="main"]'))) {
       const r = el.getBoundingClientRect()
-      if (r.width > 0) mainRatio = Math.max(mainRatio, r.width / window.innerWidth)
+      if (r.width > 0) mainRatio = Math.max(mainRatio, r.width / vw)
     }
     return { appRatio, mainRatio }
   })
@@ -173,7 +188,8 @@ async function checkAppShellFillsViewport(page: Page) {
 async function checkInteractiveNotClipped(page: Page) {
   const result = await page.evaluate(() => {
     const doc = document.documentElement
-    const hasHScroll = doc.scrollWidth > window.innerWidth + 1
+    const vw = document.documentElement.clientWidth
+    const hasHScroll = doc.scrollWidth > vw + 1
     if (hasHScroll) {
       return { skip: true, clipped: [] }
     }
@@ -197,12 +213,17 @@ async function checkInteractiveNotClipped(page: Page) {
       if (getComputedStyle(htmlEl).visibility === 'hidden') continue
       const rect = htmlEl.getBoundingClientRect()
       if (rect.width === 0 && rect.height === 0) continue
-      const overhangsRight = rect.right > window.innerWidth + 1
+      const overhangsRight = rect.right > vw + 1
       if (!(rect.left < -1 || overhangsRight)) continue
       // Closed off-canvas drawer (e.g. the mobile sidebar translated fully
       // left): contents sit off-screen in their correct closed state and are
       // reachable when the drawer opens — never a clipping bug.
       if (rect.right <= 0) continue
+      // Closed off-canvas panel resting fully off-screen right (e.g. the
+      // draggable Remy floating panel whose persisted position can sit
+      // outside the viewport): reachable when dragged back — never a
+      // clipping bug.
+      if (rect.left >= window.innerWidth) continue
       // Right-side overhang reachable by scrolling a horizontal container.
       if (overhangsRight && hasHorizontalScrollableAncestor(htmlEl)) continue
       clipped.push({
@@ -306,7 +327,11 @@ async function runFullSweep(page: Page, route: string, env: TestEnv) {
   await checkCLS(page)
   await checkInputFontSize(page)
 
-  await page.screenshot({ path: path.join(CAPTURE_DIR, `${sanitizePath(route)}.png`) })
+  if (isCanvasRoute(route)) {
+    console.log(`[mobile-layout] skipping screenshot for canvas route ${route}`)
+  } else {
+    await page.screenshot({ path: path.join(CAPTURE_DIR, `${sanitizePath(route)}.png`) })
+  }
 }
 
 async function runNarrowChecks(page: Page, route: string, env: TestEnv) {
