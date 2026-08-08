@@ -98,21 +98,31 @@ async def _org_capacity_deferred(
     logs a warning and ADMITS the run (treats it as no-cap), matching the
     executor's capacity philosophy. When the cap is hit the run is deferred
     and — ONLY for a currently-``pending`` run — demoted with the
-    ``org_capacity_limited`` reason marker so the stale-run sweep treats the
-    run as stranded-capacity (re-dispatch, never ``never_dispatched``) while
-    ``dispatcher_reconcile`` skips it (single re-dispatch owner).
+    ``org_capacity_limited`` reason marker so it is treated as
+    stranded-capacity (re-dispatch, never ``never_dispatched``).
+
+    Re-dispatch ownership (FAR-108): ``dispatcher_reconcile`` re-dispatches a
+    capacity-marked pending run whose heartbeat is stale or NULL — the
+    ``CAPACITY_REDISPATCH_SECONDS`` (~120s) carve-out in
+    ``cron_helpers._reconcile_capacity_marker_exclusion``, the fast path that
+    used to wait for the multi-minute stale-run sweep. The re-dispatch is
+    gated atomically by ``dispatch_run`` re-checking capacity, so a
+    still-blocked run is re-deferred (counted ``capacity_deferred``, never
+    alerted). The heartbeat gate throttles the sandbox-cap claim→demote churn
+    loop to one attempt per redispatch window — this is why a FRESH-heartbeat
+    row is NOT re-dispatched on every 60s pass; ``stale_run_recovery_sweep``
+    remains its single re-dispatch owner when it strands past the TTL.
 
     A run that is NOT currently ``pending`` (``running``/``awaiting_human``/
     ``claimed`` — e.g. a node recovery or a committed HITL decision being
     resumed as ``resume_run``) is deferred WITHOUT writing status, mirroring
     :func:`_capacity_deferred`. Demoting those unconditionally would silently
     drop the resume payload / committed gate decision: the run would pick up
-    the ``org_capacity_limited`` marker, be excluded from
-    ``dispatcher_reconcile`` (so only the stale-run sweep re-dispatches it, as
-    ``execute_run`` with empty ``resume_data``), and re-interrupt or re-run the
-    failed node. Leaving its status untouched preserves the caller's resume
-    intent; the next ``dispatcher_reconcile`` pass re-dispatches it correctly
-    as ``resume_run`` once a slot frees.
+    the ``org_capacity_limited`` marker and be re-dispatched as ``execute_run``
+    with empty ``resume_data``, re-interrupting or re-running the failed node.
+    Leaving its status untouched preserves the caller's resume intent; the
+    next ``dispatcher_reconcile`` pass re-dispatches it correctly as
+    ``resume_run`` once a slot frees.
     """
     if job_type == "resume_run":
         return False
