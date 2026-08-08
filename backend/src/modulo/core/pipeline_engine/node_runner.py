@@ -95,6 +95,15 @@ _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
 _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
+# FAR-97 pipe-buffer fix: the agent command's stdout/stderr are redirected to a
+# log file inside the sandbox so the process can never block on a full stdout
+# pipe (a long session emitting >64KB before completion would otherwise stall on
+# write). A periodic drain probe reads that file and uses its success as the
+# idle watchdog's liveness signal — the sandbox connection — instead of the
+# fragile RPC output stream.
+_SANDBOX_LOG_PATH = "/home/user/agent.log"
+_SANDBOX_TAIL_INTERVAL = 5.0  # seconds between sandbox log drain probes
+_SANDBOX_TAIL_READ_TIMEOUT = 10.0  # per-drain probe wait_for timeout
 
 # The raw_reported display clamp for the node-output surface: the RAW value
 # rides for audit, the SEPARATE clamped display field is what the UI/money
@@ -869,6 +878,8 @@ async def _wait_command_with_idle_watchdog(
     total_timeout: float,
     idle_timeout: float,
     last_activity: Callable[[], float],
+    on_tick: Callable[[], Awaitable[None]] | None = None,
+    tick_interval: float | None = None,
 ) -> Any:
     """Wait for a background command, failing fast if the agent goes silent.
 
@@ -878,14 +889,25 @@ async def _wait_command_with_idle_watchdog(
     idle_timeout slices and raises TimeoutError as soon as the agent has
     produced no output for idle_timeout seconds (FAR-97). The caller should
     track last_activity via on_stdout/on_stderr callbacks.
+
+    Since the FAR-97 pipe-buffer fix, liveness is tracked by a per-tick drain
+    probe (*on_tick*) that reads the sandbox-side output log file: the process's
+    stdout is a regular file inside the sandbox, so it can never block on a full
+    pipe, and a successful probe proves the sandbox connection is alive even when
+    the agent emits nothing for a long LLM turn. The poll slice is reduced to
+    *tick_interval* so on_tick runs frequently enough to keep last_activity fresh.
     """
+    if tick_interval is None:
+        tick_interval = _SANDBOX_TAIL_INTERVAL
     deadline = time.monotonic() + total_timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"command exceeded total timeout of {total_timeout:.0f}s")
+        if on_tick is not None:
+            await on_tick()
         try:
-            return await asyncio.wait_for(handle.wait(), timeout=min(idle_timeout, remaining))
+            return await asyncio.wait_for(handle.wait(), timeout=min(tick_interval, remaining))
         except TimeoutError:
             if time.monotonic() - last_activity() >= idle_timeout:
                 # Kill the command so the still-running agent cannot write a
@@ -1211,9 +1233,65 @@ def make_sandbox_agent_fn(
                     _activity["last"] = time.monotonic()
                     _stream_chunk(chunk, "stderr")
 
+                # FAR-97 pipe-buffer fix: the agent command's stdout/stderr are
+                # redirected to a log file inside the sandbox, so the process can
+                # never block on a full stdout pipe. The drain probe below runs on
+                # every watchdog tick: (1) it refreshes the idle watchdog's liveness
+                # signal from the sandbox connection (a successful get_info proves
+                # the sandbox is responsive even when the agent emits no output for
+                # a long LLM turn), (2) it streams newly-appended content to the run
+                # event broker (live output), and (3) it accumulates the content for
+                # the node artifact.
+                _drained_chunks: list[str] = []
+                _drain_offset = 0
+
+                async def _drain_sandbox_log() -> None:
+                    nonlocal _drain_offset
+                    try:
+                        info = await asyncio.wait_for(
+                            sandbox.files.get_info(_SANDBOX_LOG_PATH),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
+                        _activity["last"] = time.monotonic()
+                        size = int(getattr(info, "size", 0) or 0)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # Probe failed (log file not created yet, sandbox connection
+                        # unresponsive). Do NOT refresh liveness — the idle watchdog
+                        # treats a prolonged probe failure as a genuine stall.
+                        return
+                    if size <= _drain_offset:
+                        return
+                    try:
+                        content = await asyncio.wait_for(
+                            sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.log_drain_failed",
+                            extra={"node_id": node_id},
+                        )
+                        return
+                    text = content if isinstance(content, str) else bytes(content).decode("utf-8", "replace")
+                    new = text[_drain_offset:] if _drain_offset < len(text) else ""
+                    if new:
+                        _drained_chunks.append(new)
+                        _stream_chunk(new, "stdout")
+                        _activity["last"] = time.monotonic()
+                    _drain_offset = max(_drain_offset, len(text))
+
+                # Redirect the agent's stdout/stderr into a sandbox log file so
+                # the process writes to a regular file — never a pipe that can
+                # fill and block a long session (FAR-97). The subshell preserves
+                # the command's exit code for the SDK's wait().
+                wrapped_command = f"( {agent_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
                 cmd_handle = await asyncio.wait_for(
                     sandbox.commands.run(
-                        agent_command,
+                        wrapped_command,
                         background=True,
                         on_stdout=_on_stdout,
                         on_stderr=_on_stderr,
@@ -1245,6 +1323,8 @@ def make_sandbox_agent_fn(
                     total_timeout=sandbox_timeout,
                     idle_timeout=_SANDBOX_IDLE_TIMEOUT,
                     last_activity=lambda: _activity["last"],
+                    on_tick=_drain_sandbox_log,
+                    tick_interval=_SANDBOX_TAIL_INTERVAL,
                 )
             except asyncio.CancelledError:
                 raise
@@ -1268,9 +1348,18 @@ def make_sandbox_agent_fn(
                 )
                 cmd_result = getattr(_cee, "result", None) or _cee
 
+            # One final drain so the last growth (between the last tick and the
+            # process exit) is captured before we read output.json. The probe is
+            # fully guarded — on a dead sandbox it returns immediately.
+            await _drain_sandbox_log()
+
             elapsed = time.monotonic() - start_time
             exit_code: int = getattr(cmd_result, "exit_code", -1)
-            agent_stdout_raw: str = getattr(cmd_result, "stdout", "") or ""
+            # The redirected log file is the process's real stdout — prefer the
+            # drained content (which also survives a timeout where cmd_result is
+            # None and would otherwise surface EMPTY output), falling back to the
+            # SDK's captured stream for non-redirected (legacy) paths.
+            agent_stdout_raw: str = "".join(_drained_chunks) or (getattr(cmd_result, "stdout", "") or "")
             agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
             _stdout_len = len(agent_stdout_raw)
             _stderr_len = len(agent_stderr_raw)
