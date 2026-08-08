@@ -78,12 +78,23 @@ These are reasonable but each should be verified to be narrow:
 | `backend/tests/unit/test_devtools_skills.py:26` | `pytest.skip(...)` | Devtools repo not found (sibling/devtools, `DEVTOOLS_PATH`, or `/home/user/devtools`) | **Watch:** this suite only runs when the devtools repo is a sibling. In the farnalabs dev layout it is; in a clean CI checkout of `modulo` alone it silently skips. Confirm CI runs it (it validates every skill's frontmatter). |
 | `backend/tests/unit/test_devtools_skills.py:36` | `pytest.skip(...)` | Skills dir missing under devtools path | Same as above. |
 
-### 2.4 DEAD_CONFIG — marker / mechanism defined but unused
+### 2.4 ACTIVE marker exclusion — `awaiting-implementation` (in use, by design) + one DEAD_CONFIG item (quarantine plugin)
+
+**Correction to the initial draft:** the `awaiting-implementation` marker is **NOT** dead
+config. `@awaiting-implementation` is applied to **55 scenarios across 11 feature files**
+— `personas/{alice-devx-sme,elena-engineering-director,jordan-community-contributor,marcus-ciso,priya-platform-engineer}`,
+`pipelines/{scheduling,webhook_trigger,run_variants}`, `plugins/plugin_registry`,
+`variants/variant_groups`, `workflows/import`. All of those feature files are collected
+via `scenarios(...)` in the corresponding step files (`test_personas.py:16-21`,
+`test_pipelines.py:19-27`, `test_plugin_registry.py:18`, `test_variant_groups.py:12`,
+`test_workflows.py:13`). pytest-bdd applies scenario tags as pytest markers, so the
+`-m 'not awaiting-implementation'` addopts (`pyproject.toml:249`) is **actively deselecting
+those 55 scenarios** — the exclusion is doing exactly its job, not silently hiding anything.
 
 | file:line | item | detail | recommendation |
 |---|---|---|---|
-| `backend/pyproject.toml:249` | `addopts = "-m 'not awaiting-implementation'"` | The `awaiting-implementation` marker is excluded from every run. | **0 tests in `backend/tests/` use this marker** (grep confirmed). The exclusion is dead config that could silently hide future marked tests. Either use the marker (mark genuinely-unimplemented scenarios) or remove the marker + addopts entry. T-shirt: XS. |
-| `backend/pyproject.toml:254` | `"awaiting-implementation"` marker definition | Defined but never applied. | Same as above — remove or use. |
+| `backend/pyproject.toml:249` | `addopts = "-m 'not awaiting-implementation'"` | The `awaiting-implementation` marker is excluded from every run. | **Keep.** The marker is in active use (55 tagged scenarios, all collected via `scenarios(...)`); the exclusion is deselecting them by design. Reversed from the original draft — do NOT remove the marker or the addopts entry. Optionally add a CI assertion that pins the deselected set (so a newly `@awaiting-implementation`-tagged scenario is only deselected deliberately), rather than removing the exclusion. T-shirt: XS. |
+| `backend/pyproject.toml:254` | `"awaiting-implementation"` marker definition | Defined and applied — see the 55 tagged scenarios above. | Keep — the marker is in active use. |
 | `backend/tests/quarantine_plugin.py` | Flaky-test quarantine plugin | Reads `.quarantine.yml` and xfails listed tests. **The plugin is never registered** (no `pytest_plugins` in any conftest; pyproject `plugins` is mypy's pydantic plugin, not pytest). And `.quarantine.yml` currently lists **zero** quarantined tests. | Either register the plugin (so a future quarantine actually applies) or delete both files. Dead safety net that gives a false sense of protection. T-shirt: XS. |
 
 ### 2.5 OTHER — benign / per-case conditional skips (recorded, no action)
@@ -139,7 +150,7 @@ no coverage is lost by them and they are not listed as findings.)*
 | **FEATURE_NOT_IMPLEMENTED** skips | 7 | 5 BDD scenarios (token budget ×1, circuit breaker ×2, ADR 017 team-scope ×1 scenario + 1 extra from unit meta-tests) — spanning 6 skip calls in `test_cost_controls.py`, 1 in `test_alpha_users.py`, 2 meta-tests in `test_cost_controls_bdd.py` |
 | **FLAKY** skips | 1 | `test_connector_instance.py:79` |
 | **ENV_CONDITIONAL** skips | 9 | schemathesis (module-level), personas ×2, backup/restore openssl ×2, devtools-skills ×2 (broad), fly-toml ×2 (structural) |
-| **DEAD_CONFIG** | 3 | `awaiting-implementation` marker + addopts exclusion (unused), unregistered quarantine plugin |
+| **DEAD_CONFIG** | 1 | unregistered quarantine plugin (the `awaiting-implementation` marker + addopts exclusion are in active use — see §2.4) |
 | **OTHER** (benign) | 3 | schema-seeds, audit-immutability ×2 |
 | **Playwright / frontend** | 12 | all `env.name !== 'local'` conditionals — legitimate |
 
@@ -160,8 +171,11 @@ no coverage is lost by them and they are not listed as findings.)*
 4. **Verify env-conditionals are narrow** — specifically confirm CI actually runs the
    schemathesis fuzz (module-level skipif can silently skip if Redis is slow) and the
    devtools-skills suite (silently skips when devtools repo isn't a sibling).
-5. **Remove dead config** — drop or wire the `awaiting-implementation` marker, and
-   register-or-delete the quarantine plugin. XS each.
+5. **Remove dead config** — the only genuine dead item is the unregistered quarantine
+   plugin (`backend/tests/quarantine_plugin.py` + `.quarantine.yml`): register it or delete
+   both. Do **not** touch the `awaiting-implementation` marker / addopts exclusion — it is
+   in active use (55 tagged scenarios across 11 feature files, deselected by design); if a
+   guard is wanted, add a CI assertion that pins the deselected set instead. XS.
 
 ---
 
