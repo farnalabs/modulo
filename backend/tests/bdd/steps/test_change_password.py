@@ -49,6 +49,8 @@ def step_change_password(
         patch("modulo.api.routes.me.get_account_by_id") as mock_get_user,
         patch("modulo.api.routes.me.list_families_for_account") as mock_list,
         patch("modulo.api.routes.me.blacklist_family") as mock_blacklist,
+        patch("modulo.api.routes.me.set_rls_org") as mock_rls,
+        patch("modulo.core.audit_logger.append_audit_event") as mock_audit,
     ):
         mock_user = MagicMock()
         mock_user.password_hash = hash_password("correct-horse-battery")
@@ -68,6 +70,8 @@ def step_change_password(
         )
         _store_response(request, ctx, resp)
         ctx["_mock_blacklist"] = mock_blacklist
+        ctx["_mock_rls"] = mock_rls
+        ctx["_mock_audit"] = mock_audit
 
 
 @when("I attempt to change my password without a local password set")
@@ -109,3 +113,13 @@ def step_all_families_blacklisted(ctx: dict[str, Any]) -> None:
     mock_blacklist = ctx.get("_mock_blacklist")
     assert mock_blacklist is not None, "No blacklist_family mock found — was the When step run?"
     mock_blacklist.assert_called()
+
+
+@then("the password change is recorded in the audit trail")
+def step_password_change_audited(ctx: dict[str, Any]) -> None:
+    mock_audit = ctx.get("_mock_audit")
+    assert mock_audit is not None, "No append_audit_event mock found — was the When step run?"
+    mock_audit.assert_called_once()
+    _, kwargs = mock_audit.call_args
+    assert kwargs["event_type"] == "password_changed"
+    assert kwargs["resource_type"] == "account"
