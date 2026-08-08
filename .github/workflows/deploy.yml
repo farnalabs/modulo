@@ -47,10 +47,28 @@ jobs:
             echo "Deploy/CI-fix commit — bypassing throttle."
             exit 0
           fi
-          LAST=$(gh run list --repo "${{ github.repository }}" \
+          # Anchor the throttle on the most recent run that ACTUALLY deployed to
+          # production — the "Deploy to app.modulo.run" job concluded with success.
+          # A run that was itself throttled (all jobs skipped), failed pre-deploy or
+          # staging E2E, was cancelled, or is still in progress must NOT count as an
+          # attempt; using it as the anchor would push the window forward on every
+          # push and starve real deploys (observed 2026-08-08: prod stuck on the
+          # 10:52 build for 4h while every later run skipped against the previous
+          # skipped run).
+          LAST=""
+          for RID in $(gh run list --repo "${{ github.repository }}" \
             --workflow "Deploy: Staging + Prod" \
             --limit 50 \
-            --json databaseId,createdAt --jq 'map(select(.databaseId != ${{ github.run_id }})) | .[0].createdAt // empty' 2>/dev/null || echo "")
+            --json databaseId --jq '.[].databaseId' 2>/dev/null || echo ""); do
+            [ "$RID" = "${{ github.run_id }}" ] && continue
+            DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs" \
+              --jq '[.jobs[] | select(.name == "Deploy to app.modulo.run") | .conclusion] | .[0] // empty' 2>/dev/null || echo "")"
+            if [ "$DEPLOY_JOB_CONCLUSION" = "success" ]; then
+              LAST="$(gh api "repos/${{ github.repository }}/actions/runs/$RID" \
+                --jq '.created_at' 2>/dev/null || echo "")"
+              break
+            fi
+          done
           echo "last_deploy_attempt=${LAST:-none}"
           if [ -z "$LAST" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
