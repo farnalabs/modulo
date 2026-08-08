@@ -646,10 +646,13 @@ async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
     Re-enters ``claim_run`` → ``execute()`` → ``_check_capacity``, which
     re-checks the org/pipeline cap and either admits the run when a slot frees
     or re-demotes it back to ``pending``. This is the SAME mechanism
-    ``dispatcher_reconcile`` uses; the beat sweep is the durable liveness owner
-    for capacity-blocked runs because ``dispatcher_reconcile`` deliberately
-    excludes them (its exclusion prevents the double-execution double-retry-loop
-    race and must stay — see cron_helpers._reconcile_capacity_marker_exclusion).
+    ``dispatcher_reconcile`` uses; the beat sweep remains the durable liveness
+    backstop for capacity-blocked runs. ``dispatcher_reconcile`` admits a
+    pending capacity-marked run only once its heartbeat is stale (or NULL) —
+    the heartbeat gate throttles the executor sandbox-cap claim/demote churn
+    loop to one attempt per ``CAPACITY_REDISPATCH_SECONDS`` (FAR-108), so a
+    fresh-heartbeat row still has exactly one re-dispatch owner. See
+    cron_helpers._reconcile_capacity_marker_exclusion.
 
     Double-execution safety: ``dispatch_run`` enqueues with the deterministic
     ``run:{id}`` SAQ key (deduped if a job already exists) and the worker's

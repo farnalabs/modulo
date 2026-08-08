@@ -83,6 +83,7 @@ def _run_row(
     dispatched: bool = True,
     stale: bool = True,
     nodeless: bool = False,
+    error_code: str | None = None,
 ) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     return SimpleNamespace(
@@ -96,6 +97,7 @@ def _run_row(
         node_token_usage=None if nodeless else {},
         outputs_json=None if nodeless else {},
         started_at=datetime.now(UTC) - timedelta(minutes=60) if nodeless else datetime.now(UTC) - timedelta(minutes=1),
+        error_code=error_code,
     )
 
 
@@ -423,18 +425,23 @@ class TestPartialEviction:
 
 
 class TestCapacityMarkerExclusion:
-    """PR review: capacity-blocked runs must NEVER be re-dispatched.
+    """Capacity-marked runs are NOT re-dispatched while their heartbeat is
+    fresh (the executor's claim→demote cycle refreshed it — the org sandbox-cap
+    churn loop must be throttled). The FAR-108 carve-out admits a pending
+    capacity-marked run whose heartbeat is stale or NULL so the 60s reconcile —
+    not the multi-minute stale-run sweep — recovers stranded capacity-blocked
+    runs. These assertions fail if the FRESH-heartbeat exclusion is removed.
 
     A run demoted to ``pending`` with ``error_code`` in
     (``org_capacity_limited``, ``pipeline_capacity``) has a LIVE in-process
     retry accelerator (``_retry_pending``). If ``dispatcher_reconcile``
     re-enqueues it, a second worker spawns a SECOND retry loop that can
     double-execute the run. ``_reconcile_capacity_marker_exclusion()`` is the
-    WHERE-clause guard. These assertions fail if the exclusion is removed.
+    WHERE-clause guard for the fresh-heartbeat rows.
     """
 
     def _sql(self) -> str:
-        return str(ch._reconcile_capacity_marker_exclusion().compile(compile_kwargs={"literal_binds": True}))
+        return str(ch._reconcile_capacity_marker_exclusion(120).compile(compile_kwargs={"literal_binds": True}))
 
     def test_null_error_code_not_excluded(self) -> None:
         """error_code IS NULL (no failure) must be allowed through."""
@@ -448,9 +455,90 @@ class TestCapacityMarkerExclusion:
 
     def test_markers_rendered_in_not_in_clause(self) -> None:
         """Both markers live in a single NOT IN clause — a run carrying either
-        marker fails the whole exclusion predicate and is never re-dispatched."""
+        marker fails the whole exclusion predicate and is never re-dispatched
+        (unless the stale-heartbeat carve-out below admits it)."""
         sql = self._sql()
         assert "NOT IN ('org_capacity_limited', 'pipeline_capacity')" in sql
+
+    def test_stale_heartbeat_capacity_marked_pending_admitted(self) -> None:
+        """FAR-108 carve-out: a pending capacity-marked run whose heartbeat is
+        stale passes the exclusion so the 60s reconcile can re-dispatch it."""
+        sql = self._sql()
+        assert "runs.status = 'pending'" in sql
+        assert "runs.heartbeat_at IS NULL" in sql
+        assert "now() - interval '120 seconds'" in sql
+
+    def test_fresh_heartbeat_capacity_marked_pending_excluded(self) -> None:
+        """The carve-out only admits a run whose heartbeat is NULL or older
+        than the redispatch window — a freshly-demoted sandbox-cap run
+        (heartbeat refreshed by the claim) fails both clauses and stays under
+        the NOT IN exclusion, so the reconcile cannot hot-loop the executor
+        claim/demote churn."""
+        sql = self._sql()
+        assert "heartbeat_at IS NULL" in sql
+        assert "now() - interval '120 seconds'" in sql
+        assert "NOT IN" in sql
+
+
+class TestReconcileCapacityMarkedRedispatch:
+    """FAR-108: stranded capacity-marked pending runs are re-dispatched by the
+    60s dispatcher_reconcile once their heartbeat is stale — the fast recovery
+    path that replaces the ~18-minute wait for the stale-run sweep."""
+
+    def _sql(self) -> str:
+        return str(
+            ch._build_re_dispatch_predicate(
+                reenqueue_window=600,
+                stale_window=600,
+                capacity_redispatch_seconds=120,
+            ).compile(compile_kwargs={"literal_binds": True})
+        )
+
+    def test_capacity_marked_stale_branch_present(self) -> None:
+        """The predicate carries a dedicated branch for pending capacity-marked
+        runs with a stale or NULL heartbeat (the reconcile re-dispatch path)."""
+        sql = self._sql()
+        assert "org_capacity_limited" in sql
+        assert "pipeline_capacity" in sql
+        assert "heartbeat_at IS NULL" in sql
+        assert "now() - interval '120 seconds'" in sql
+
+    @pytest.mark.asyncio
+    async def test_capacity_marked_pending_stale_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pending org-capacity-deferred run (dispatched_at NULL, marker set)
+        with a stale heartbeat is re-dispatched as execute_run when the job is
+        missing."""
+        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                _run_row(
+                    RUN_PENDING_UNDISPATCHED,
+                    "pending",
+                    dispatched=False,
+                    error_code="org_capacity_limited",
+                )
+            ],
+        )
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deferred_outcome_not_alerted_as_deduped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A re-enqueue that dispatch_run defers (still capacity-blocked) is
+        counted ``capacity_deferred`` and never raises the deduped error_event
+        — it is expected backoff, not a lost job."""
+        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)],
+            dispatch_result=("deferred", None),
+        )
+        assert summary["capacity_deferred"] == 1
+        assert summary["repaired"] == 0
+        assert summary["deduped"] == 0
+        reenqueue.assert_awaited_once()
+        ingest.assert_not_awaited()
 
 
 class TestReconcilePrefixAware:

@@ -69,6 +69,20 @@ _REPORT_FAILURE_COUNTER_TTL = 6 * 3600  # 6h — long enough to count 5 x 5min
 # dispatcher_reconcile (system cron) — every 60s.
 RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
 
+# Bounded re-dispatch window for stranded capacity-marked pending runs
+# (FAR-108). A run demoted to ``pending`` with ``error_code`` in
+# (``org_capacity_limited``, ``pipeline_capacity``) used to wait for the
+# stale-run sweep's multi-minute stranded window (~12-min TTL + up-to-5-min
+# sweep lag) — the observed ~18-minute pending gap on app.modulo.run.
+# dispatcher_reconcile (every 60s) now re-dispatches such a run once its
+# heartbeat is older than this window (or NULL — a never-claimed org-capacity-
+# deferred run). The heartbeat gate throttles the executor sandbox-cap
+# claim/demote churn loop to one attempt per window; ``dispatch_run`` re-checks
+# pipeline + org run concurrency atomically so a still capacity-blocked run is
+# re-deferred without churn. The stale-run sweep's stranded branch remains the
+# durable backstop.
+CAPACITY_REDISPATCH_SECONDS = 120
+
 # Claimed-but-nodeless zombie repair (2026-08-05). A SAQ run that has been
 # 'running' with a FRESH heartbeat but has NEVER dispatched a node (zero
 # LangGraph checkpoints for its thread) after SAQ_CLAIMED_NODELESS_MINUTES is a
@@ -100,6 +114,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["redis_errors"] = stats.get("redis_errors", 0)
     _dispatcher_reconcile_stats["deduped"] = stats.get("deduped", 0)
     _dispatcher_reconcile_stats["nodeless_failed"] = stats.get("nodeless_failed", 0)
+    _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
 
 
 def get_dispatcher_reconcile_stats() -> dict[str, Any]:
@@ -1362,8 +1377,9 @@ def _resolve_snapshot_id(row: Any, latest_snapshots: dict[uuid.UUID, uuid.UUID])
 # ---------------------------------------------------------------------------
 
 
-def _reconcile_capacity_marker_exclusion() -> Any:
-    """Exclude capacity-block reason markers from re-dispatch.
+def _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds: int) -> Any:
+    """Exclude capacity-block reason markers from re-dispatch — EXCEPT for a
+    pending capacity-marked run whose heartbeat is stale or NULL.
 
     A capacity-blocked run (demoted to ``pending`` with ``error_code`` in
     (``org_capacity_limited``, ``pipeline_capacity``)) is recovered by the
@@ -1371,17 +1387,36 @@ def _reconcile_capacity_marker_exclusion() -> Any:
     (``pipeline_execution.py``) — the durable liveness owner that refreshes
     ``heartbeat_at`` before re-dispatching. The executor's in-process
     ``_retry_pending`` loop was REMOVED (plan F3b), but the exclusion must
-    stay: it keeps ``dispatcher_reconcile`` from ALSO re-dispatching these
-    runs every 60s, preserving exactly ONE re-dispatch owner and preventing
-    double-recovery churn. Literal markers, matching the stale-run sweep.
+    stay for FRESH-heartbeat rows: it keeps ``dispatcher_reconcile`` from
+    hot-looping a run whose heartbeat was just refreshed by the executor's
+    claim→demote cycle (the org sandbox-cap churn loop), preserving exactly
+    ONE re-dispatch owner and preventing double-recovery churn.
+
+    The STALE-heartbeat carve-out (FAR-108) admits a pending capacity-marked
+    run that has sat unexecuted for ``capacity_redispatch_seconds`` (or whose
+    heartbeat is NULL — a never-claimed org-capacity-deferred run). Those rows
+    fall to ``dispatcher_reconcile``'s 60s cadence instead of waiting for the
+    sweep's multi-minute window: the re-dispatch is gated atomically by
+    ``dispatch_run`` (pipeline + org run concurrency re-checked in one
+    transaction) and the heartbeat gate throttles the sandbox-cap churn loop
+    to one claim→demote attempt per window. Literal markers, matching the
+    stale-run sweep.
     """
-    from sqlalchemy import or_
+    from sqlalchemy import and_, or_
 
     from modulo.db.models.run import Run
 
     return or_(
         Run.error_code.is_(None),
         Run.error_code.not_in(("org_capacity_limited", "pipeline_capacity")),
+        and_(
+            Run.status == "pending",
+            Run.error_code.in_(("org_capacity_limited", "pipeline_capacity")),
+            or_(
+                Run.heartbeat_at.is_(None),
+                Run.heartbeat_at < func_now_minus(capacity_redispatch_seconds),
+            ),
+        ),
     )
 
 
@@ -1471,7 +1506,12 @@ async def _fail_nodeless_run(session: AsyncSession, run_id: uuid.UUID, org_id: u
     )
 
 
-def _build_re_dispatch_predicate(*, reenqueue_window: int, stale_window: int) -> Any:
+def _build_re_dispatch_predicate(
+    *,
+    reenqueue_window: int,
+    stale_window: int,
+    capacity_redispatch_seconds: int,
+) -> Any:
     """Build the dispatcher_reconcile re-dispatch predicate (F3c + F6a).
 
     The predicate is a SQL OR of the recovery branches. ``awaiting_human``/
@@ -1482,6 +1522,14 @@ def _build_re_dispatch_predicate(*, reenqueue_window: int, stale_window: int) ->
     gate decision (guard applied per-row in the loop) so a genuinely-waiting
     run is never auto-resumed with an empty decision. Exposed as a module
     function so the reconcile tests can exercise it directly with mocked rows.
+
+    FAR-108: a ``capacity_marked_stale`` branch admits a pending run carrying
+    ``org_capacity_limited``/``pipeline_capacity`` whose heartbeat is stale or
+    NULL — the 60s reconcile (not the multi-minute stale-run sweep) becomes
+    the fast re-dispatch path for stranded capacity-blocked runs. The heartbeat
+    gate throttles the sandbox-cap claim/demote churn loop (one attempt per
+    ``capacity_redispatch_seconds``); ``dispatch_run`` re-checks capacity
+    atomically so a still-blocked run is re-deferred without churn.
     """
     from sqlalchemy import and_, or_
 
@@ -1491,8 +1539,17 @@ def _build_re_dispatch_predicate(*, reenqueue_window: int, stale_window: int) ->
         Run.status == "pending",
         Run.dispatched_at.is_(None),
     )
+    capacity_marked_stale = and_(
+        Run.status == "pending",
+        Run.error_code.in_(("org_capacity_limited", "pipeline_capacity")),
+        or_(
+            Run.heartbeat_at.is_(None),
+            Run.heartbeat_at < func_now_minus(capacity_redispatch_seconds),
+        ),
+    )
     return or_(
         capacity_deferred,
+        capacity_marked_stale,
         # Zombie branch: pending + dispatched_at set + dispatcher NULL — a
         # fail-fast SAQ enqueue failure wrote dispatched_at but no job was
         # enqueued. No staleness gate (re-dispatch immediately).
@@ -1588,6 +1645,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         run's CREATION path (SAQ mode only), NOT ``dispatcher='saq'``, because
         ``dispatch_run`` returns deferred BEFORE recording dispatched_at/
         dispatcher. NO staleness gate (re-dispatch when capacity frees).
+      * pending + capacity marker (``org_capacity_limited``/
+        ``pipeline_capacity``) + stale or NULL heartbeat (FAR-108): a
+        stranded capacity-blocked run is re-dispatched on the 60s cadence once
+        its heartbeat ages past ``CAPACITY_REDISPATCH_SECONDS`` (default
+        120s) — the fast path that used to wait for the multi-minute stale-run
+        sweep. The heartbeat gate throttles the sandbox-cap claim/demote churn
+        loop; ``dispatch_run`` re-checks capacity atomically so a still-blocked
+        run is re-deferred (counted ``capacity_deferred``, never alerted).
       * pending + dispatched_at set + ``dispatcher='saq'``: stale by the
         re-enqueue window.
       * pending + dispatched_at set + dispatcher IS NULL: zombie from a
@@ -1640,6 +1705,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     reenqueue_window = int(settings.saq_reenqueue_window)
     stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
     nodeless_window = int(settings.saq_claimed_nodeless_minutes)
+    capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
     factory = _open_factory()
     summary: dict[str, Any] = {
         "scanned": 0,
@@ -1649,6 +1715,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "deduped": 0,
         "nodeless_failed": 0,
         "claim_cap_terminalized": 0,
+        "capacity_deferred": 0,
     }
 
     async with factory() as session, session.begin():
@@ -1673,6 +1740,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             _build_re_dispatch_predicate(
                 reenqueue_window=reenqueue_window,
                 stale_window=stale_window,
+                capacity_redispatch_seconds=capacity_redispatch_seconds,
             ),
             # Claimed-but-nodeless zombie branch: running + saq + FRESH
             # heartbeat but ZERO node progress after the nodeless window.
@@ -1702,7 +1770,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 Run.organisation_id == org_id,
                                 Run.status.in_(("pending", "running", "awaiting_human", "claimed")),
                                 re_dispatch_predicate,
-                                _reconcile_capacity_marker_exclusion(),
+                                _reconcile_capacity_marker_exclusion(capacity_redispatch_seconds),
                             )
                         )
                     ).all()
@@ -1847,6 +1915,18 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 row.id,
                                 job_type,
                                 new_job_id,
+                            )
+                        elif outcome == "deferred":
+                            # Still capacity-blocked: dispatch_run re-checked
+                            # the pipeline + org run concurrency limits in one
+                            # transaction and deferred without enqueueing. Not
+                            # an error and NOT a dedup — counted separately so
+                            # ops can see the stranded-pending cohort, and no
+                            # false error_event is ingested.
+                            summary["capacity_deferred"] += 1
+                            _log.warning(
+                                "dispatcher_reconcile: run %s still capacity-deferred — pending undispatched",
+                                row.id,
                             )
                         else:
                             summary["deduped"] += 1
