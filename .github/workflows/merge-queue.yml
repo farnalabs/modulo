@@ -478,7 +478,11 @@ jobs:
       - name: Merge source PRs via gh pr merge
         if: success() && steps.merge.outputs.merged_count != '0'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # GITHUB_TOKEN is a GitHub App token and cannot carry the `workflows`
+          # permission, so gh pr merge refuses to merge any PR that touches
+          # .github/workflows/* (observed on PR #870). Use the reviewbot PAT,
+          # which holds the workflows scope, falling back to github.token.
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
         shell: bash
         run: |
           # Extract PR numbers from squash commits on merge-queue (oldest first)
@@ -505,9 +509,14 @@ jobs:
             fi
           done
 
-          # For any PRs that couldn't be merged via gh, close with a reference
+          # For any PRs that couldn't be merged via gh, report the failure
+          # accurately and leave the PR OPEN. Closing a PR whose merge did not
+          # land (e.g. a workflow-file PR rejected for missing `workflows`
+          # permission) would silently drop its changes from the queue while the
+          # close comment claims a merge that never happened (PR #870 incident).
           for NUM in $FAILED; do
-            gh pr close "$NUM" --comment "Merged via merge queue (commit on main)." 2>/dev/null || true
+            echo "::warning::PR #$NUM could not be merged via gh -- leaving open for the next queue cycle."
+            gh pr comment "$NUM" --body "The merge queue could not merge this PR via \`gh pr merge\` (likely a GitHub App \`workflows\` permission limitation on a workflow-file PR). It has been left open and will be retried by the next queue cycle." 2>/dev/null || true
           done
 
           echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
