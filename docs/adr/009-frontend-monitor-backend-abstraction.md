@@ -1,4 +1,4 @@
-# ADR 009 — Frontend Monitor Backend Abstraction
+# ADR 009  –  Frontend Monitor Backend Abstraction
 
 **Date**: 2026-07-03
 **Status**: Accepted
@@ -12,7 +12,7 @@ whichever service they already use (Sentry, Datadog, Grafana Cloud, etc.).
 
 **What already exists:**
 
-- **Backend** — a full forwarder system in `core/error_tracking/forwarders/`
+- **Backend**  –  a full forwarder system in `core/error_tracking/forwarders/`
   with `BaseForwarder` abstract class and implementations for Sentry, Datadog,
   Rollbar, PagerDuty, OpsGenie, and Loki. Forwarders are dispatched after
   the `ErrorIngestionService` ingests an error into the DB. Per-org config
@@ -20,7 +20,7 @@ whichever service they already use (Sentry, Datadog, Grafana Cloud, etc.).
   Separate from this, OTel tracing (`otel_bridge/export.py`) handles span
   export with console + OTLP exporters.
 
-- **Frontend** — a custom `ErrorTracker` class (`src/lib/error-tracking/`)
+- **Frontend**  –  a custom `ErrorTracker` class (`src/lib/error-tracking/`)
   with Vue plugin (`errorHandler`/`warnHandler`), window-level handlers
   (`onerror`/`unhandledrejection`), breadcrumb capture (clicks, API calls,
   route changes), and a batched HMAC-signed transport to
@@ -42,19 +42,19 @@ as part of this ADR):**
 **Gap:** The frontend ErrorTracker sends everything to the backend, which may
 then forward to external services. This works for error events but means:
 
-1. **No client-side SDK features** — session replays, RUM performance metrics,
+1. **No client-side SDK features**  –  session replays, RUM performance metrics,
    JS error source maps, real user monitoring are unavailable unless a browser
    SDK runs on the client.
-2. **Single pipeline** — all errors go through one route (backend DB →
+2. **Single pipeline**  –  all errors go through one route (backend DB →
    optional forwarders). There is no way to send directly to Sentry/Datadog
    from the browser while still keeping the builtin DB pipeline.
-3. **No abstraction** — adding a client SDK today means threading SDK init
+3. **No abstraction**  –  adding a client SDK today means threading SDK init
    through `main.ts` with env-var gating and no consistent interface for
    swapping providers.
 
 ## Decision
 
-Introduce a **`MonitorBackend`** abstraction on the frontend — a plugin
+Introduce a **`MonitorBackend`** abstraction on the frontend  –  a plugin
 interface that mirrors the backend's `BaseForwarder` but for client-side SDKs.
 The existing ErrorTracker is refactored to hold a **registry of
 MonitorBackends** and dispatches every captured event to all registered
@@ -130,7 +130,7 @@ interface MonitorConfig {
 ### CSP strategy
 
 Third-party SDKs connect to external domains. Since CSP `<meta>` tags cannot
-relax a CSP set by HTTP header (they can only tighten it — both policies are
+relax a CSP set by HTTP header (they can only tighten it  –  both policies are
 enforced independently, resources must pass both), the frontend cannot
 supplement the backend's CSP from the client side.
 
@@ -148,7 +148,7 @@ frame-ancestors 'none';
 ```
 
 The `ws:`/`wss:` addition covers existing WebSocket connections. The
-monitoring domains are well-known and slow-changing — using a superset avoids
+monitoring domains are well-known and slow-changing  –  using a superset avoids
 per-backend CSP complexity.
 
 **Custom domains** (for Grafana Faro collectors, self-hosted Sentry, etc.):
@@ -258,7 +258,7 @@ class MonitorBackendRegistry {
 ```
 
 The module-level `_errorHandler`, `_rejectionHandler`, `installWindowHandlers`,
-and `removeWindowHandlers` functions are **removed** — they are replaced by the
+and `removeWindowHandlers` functions are **removed**  –  they are replaced by the
 instance methods above.
 
 **No double-counting:** A backend that implements `captureRawError` receives
@@ -270,12 +270,12 @@ implement both.
 
 Backend selection uses **two layers**:
 
-1. **Build-time** (`VITE_MONITOR_BACKEND`) — determines which SDK code is
+1. **Build-time** (`VITE_MONITOR_BACKEND`)  –  determines which SDK code is
    compiled into the bundle. The default Docker build includes all backends:
    `VITE_MONITOR_BACKEND=builtin,sentry,datadog-rum,grafana-faro`. Power
    users can narrow this to reduce bundle size.
 
-2. **Runtime** (`window.__MODULO_CONFIG__`) — determines which backends
+2. **Runtime** (`window.__MODULO_CONFIG__`)  –  determines which backends
    actually call `init()`. Injected via the container environment variable
    `MODULO_MONITOR_CONFIG` which the backend (or a startup script) writes
    into `index.html` as:
@@ -391,7 +391,7 @@ expired session, public pages) are handled by:
    authenticated ingest endpoint.
 2. The public endpoint is rate-limited (1/60s per IP, 100/day per IP,
    10KB max body) and stores events with a 48-hour TTL only.
-3. Third-party backends (Sentry, Datadog, Grafana) do not need auth — they
+3. Third-party backends (Sentry, Datadog, Grafana) do not need auth  –  they
    authenticate with their own DSN/client token, so unauthenticated errors
    work out of the box.
 
@@ -463,7 +463,7 @@ async init(config: MonitorConfig): Promise<boolean> {
     return true
   } catch (e) {
     if ((e as any)?.code === 'MODULE_NOT_FOUND') {
-      console.warn('[monitor] @sentry/vue not installed — skipping Sentry backend')
+      console.warn('[monitor] @sentry/vue not installed  –  skipping Sentry backend')
     } else {
       console.error('[monitor] Sentry init failed:', e)
     }
@@ -475,7 +475,7 @@ async init(config: MonitorConfig): Promise<boolean> {
 The `@datadog/browser-rum` backend uses the same dynamic `import()` pattern,
 but calls it inside `init()` (before any user interaction) so the SDK is
 loaded early enough to capture initial page metrics. The import is dynamic,
-not static — if the package is absent, the catch block handles it gracefully.
+not static  –  if the package is absent, the catch block handles it gracefully.
 The word "eager" describes the *timing* (called immediately in `init()`),
 not the import syntax.
 
@@ -487,10 +487,10 @@ frontend/src/monitor/
 ├── registry.ts            # MonitorBackendRegistry class
 ├── config.ts              # loadMonitorConfig() from VITE_* + __MODULO_CONFIG__
 ├── backends/
-│   ├── builtin.ts         # BuiltinMonitorBackend — transport.ts wrapper, source: 'frontend'
-│   ├── sentry.ts          # SentryMonitorBackend — @sentry/vue (dynamic import)
-│   ├── datadog-rum.ts     # DatadogRumMonitorBackend — @datadog/browser-rum (dynamic import in init)
-│   ├── grafana-faro.ts    # GrafanaFaroMonitorBackend — @grafana/faro-web-sdk (dynamic import)
+│   ├── builtin.ts         # BuiltinMonitorBackend  –  transport.ts wrapper, source: 'frontend'
+│   ├── sentry.ts          # SentryMonitorBackend  –  @sentry/vue (dynamic import)
+│   ├── datadog-rum.ts     # DatadogRumMonitorBackend  –  @datadog/browser-rum (dynamic import in init)
+│   ├── grafana-faro.ts    # GrafanaFaroMonitorBackend  –  @grafana/faro-web-sdk (dynamic import)
 │   └── index.ts           # loadBackends() factory
 └── __tests__/
     ├── registry.spec.ts
@@ -505,10 +505,10 @@ frontend/src/monitor/
 | File | Change |
 |---|---|
 | `src/main.ts` | `createErrorTracker()` moved before `app.use(i18n)`. Auth flow wires `tracker.setUser()`/`setTags()` on login/logout. |
-| `src/lib/error-tracking/index.ts` | ErrorTracker gains `MonitorBackendRegistry`. Vue plugin + window handlers become instance methods using `this.backends.dispatch()`. Add `setUser()`, `setTags()`. **Remove** module-level `_errorHandler`, `_rejectionHandler`, `installWindowHandlers`, `removeWindowHandlers` — replaced by instance methods. |
+| `src/lib/error-tracking/index.ts` | ErrorTracker gains `MonitorBackendRegistry`. Vue plugin + window handlers become instance methods using `this.backends.dispatch()`. Add `setUser()`, `setTags()`. **Remove** module-level `_errorHandler`, `_rejectionHandler`, `installWindowHandlers`, `removeWindowHandlers`  –  replaced by instance methods. |
 | `src/lib/error-tracking/types.ts` | Add `monitorBackends?: MonitorConfig` to `ErrorTrackerConfig`. Add `UserInfo` type. |
 | `src/lib/error-tracking/transport.ts` | No change (used by `BuiltinMonitorBackend`). |
-| `src/i18n/index.ts` | No change needed — the Vue `warnHandler` (now routed through registry) captures `console.warn` from the `missing` handler. |
+| `src/i18n/index.ts` | No change needed  –  the Vue `warnHandler` (now routed through registry) captures `console.warn` from the `missing` handler. |
 | `vite.config.ts` | No change. |
 | `Dockerfile.prod` | Default `VITE_MONITOR_BACKEND=builtin,sentry,datadog-rum,grafana-faro`. Add `ARG VITE_SENTRY_DSN` etc. as pass-through. |
 | `index.html` | Add `<script>` injection point for `window.__MODULO_CONFIG__` populated from `MODULO_MONITOR_CONFIG` env var. |
@@ -530,20 +530,20 @@ Browser Error ─→ ErrorTracker ─┼─ sentry ──→ Sentry SDK (via dyn
 
 ### Upgrade impact for existing self-hosters
 
-- **Do I need to change docker-compose.yml?** No — the default Docker build
+- **Do I need to change docker-compose.yml?** No  –  the default Docker build
   includes all backends, but only `builtin` activates (no `MODULO_MONITOR_CONFIG`
   set → runtime config is undefined → `activeBackends` falls back to
   `['builtin']` from the build-time default).
 - **Will existing errors still be visible?** They were never reaching the DB
   (the `source: 'frontend'` bug caused 422 on every ingest). After this ADR,
-  frontend errors will successfully reach the DB for the first time — this is
+  frontend errors will successfully reach the DB for the first time  –  this is
   a free improvement, not a regression.
-- **Do npm dependencies increase?** Yes — `node_modules` grows by the three
+- **Do npm dependencies increase?** Yes  –  `node_modules` grows by the three
   optional SDK packages (~2–5 MB each) in the default Docker build. Run
   `npm ci --omit=optional` to exclude them.
 - **What breaks if I do nothing?** Nothing. The builtin backend is the default
   and the ErrorTracker pipeline is unchanged (except the critical bugfixes).
-- **Can I add Sentry later without rebuilding?** Yes — set `MODULO_MONITOR_CONFIG`
+- **Can I add Sentry later without rebuilding?** Yes  –  set `MODULO_MONITOR_CONFIG`
   on the container and redeploy (same image).
 
 ## Consequences
@@ -551,14 +551,14 @@ Browser Error ─→ ErrorTracker ─┼─ sentry ──→ Sentry SDK (via dyn
 **Positive:**
 
 - Self-hosters choose zero-config (builtin only), single-provider, or multi-provider
-  via runtime config — no rebuild for switching.
+  via runtime config  –  no rebuild for switching.
 - The `builtin` backend is always available and requires zero external services,
   preserving the current privacy posture.
 - Frontend SDK features (session replays, source maps, RUM) become available
   without backend changes.
 - The i18n missing-key handler is automatically captured via the existing Vue
-  `warnHandler` — no custom wiring needed.
-- Each backend is independently optional — failure in one does not affect others.
+  `warnHandler`  –  no custom wiring needed.
+- Each backend is independently optional  –  failure in one does not affect others.
 - Adding a new provider is a single file plus data sheet; the `MonitorBackend`
   interface is small (9 methods, 4 optional).
 - Per-backend privacy data sheets equip self-hosters to evaluate compliance.
@@ -566,7 +566,7 @@ Browser Error ─→ ErrorTracker ─┼─ sentry ──→ Sentry SDK (via dyn
 **Negative:**
 
 - Third-party SDK packages increase `node_modules` size when installed. Mitigated
-  by `optionalDependencies` — self-hosters can omit them.
+  by `optionalDependencies`  –  self-hosters can omit them.
 - Third-party SDKs may set cookies, collect performance data, or send additional
   telemetry. This is documented per-backend in the privacy data sheet.
 - The runtime `__MODULO_CONFIG__` injection mechanism adds a new deployment
@@ -589,14 +589,14 @@ browser SDK collects automatically.
 
 ### Frontend sets CSP via `<meta>` tag (no backend CSP for connect-src)
 
-Rejected because CSP `<meta>` tags cannot relax an HTTP header CSP —
+Rejected because CSP `<meta>` tags cannot relax an HTTP header CSP  – 
 both are enforced independently, making it impossible for the frontend to
 add monitoring domains that the header blocks. The backend superset approach
 is simpler and correct.
 
 ### Runtime config from backend /me/settings (no runtime override)
 
-Rejected because: client SDKs must be loaded and initialised at page load —
+Rejected because: client SDKs must be loaded and initialised at page load  – 
 before any API call completes. The dual-layer approach (build-time for SDK
 availability, runtime for activation) is the pragmatic midpoint.
 
@@ -608,38 +608,38 @@ OTLP exporters for all targets.
 Rejected because: OpenTelemetry JS does not have the rich session replay or
 RUM capabilities that Sentry/Datadog provide. Its Vue integration is thin
 compared to `@sentry/vue` or `@datadog/browser-rum`. The backend uses OTel
-for *tracing*, not error monitoring — these are separate concerns.
+for *tracing*, not error monitoring  –  these are separate concerns.
 
 ## Pre-implementation checklist (must be merged first)
 
-1. **Fix `source` field bug** — change `buildBaseEvent()` in
+1. **Fix `source` field bug**  –  change `buildBaseEvent()` in
    `src/lib/error-tracking/index.ts` to send `source: 'frontend'` instead of
    `source: config.appName`.
-2. **Fix `session_key` field name** — update frontend `SessionKeyResponse` to
+2. **Fix `session_key` field name**  –  update frontend `SessionKeyResponse` to
    expect `key` (matching backend's `{"key": ...}` response). Update test
    mocks.
-3. **Add `POST /api/v1/errors/ingest/public` endpoint** — unauthenticated,
+3. **Add `POST /api/v1/errors/ingest/public` endpoint**  –  unauthenticated,
    rate-limited (1/60s per IP, 100/day per IP, 10KB max body),
    `source=frontend` only, `level` warning or lower, 48-hour TTL.
 
 ## Implementation plan
 
-1. **Pre-implementation bugfixes** — fix `source` field, `session_key` field,
+1. **Pre-implementation bugfixes**  –  fix `source` field, `session_key` field,
    add public ingest endpoint. Merge to main.
-2. **Create `src/monitor/`** — `types.ts`, `registry.ts`, `config.ts`,
+2. **Create `src/monitor/`**  –  `types.ts`, `registry.ts`, `config.ts`,
    `backends/builtin.ts`, `backends/index.ts`
-3. **Refactor ErrorTracker** — move Vue plugin + window handlers to instance
+3. **Refactor ErrorTracker**  –  move Vue plugin + window handlers to instance
    methods, add `MonitorBackendRegistry`, pipe `captureError`/`captureMessage`
    through it, add `setUser()`/`setTags()`. Remove old module-level handlers.
-4. **Add Sentry backend** — `backends/sentry.ts` with dynamic `@sentry/vue` import
-5. **Add Datadog RUM backend** — `backends/datadog-rum.ts` with dynamic import
+4. **Add Sentry backend**  –  `backends/sentry.ts` with dynamic `@sentry/vue` import
+5. **Add Datadog RUM backend**  –  `backends/datadog-rum.ts` with dynamic import
    in `init()`, catch absence gracefully
-6. **Add Grafana Faro backend** — `backends/grafana-faro.ts` with dynamic import
-7. **Update CSP** — add monitoring domains to `SecurityHeadersMiddleware` CSP,
+6. **Add Grafana Faro backend**  –  `backends/grafana-faro.ts` with dynamic import
+7. **Update CSP**  –  add monitoring domains to `SecurityHeadersMiddleware` CSP,
    add `MODULO_MONITOR_DOMAINS` to `Settings`
-8. **Update Dockerfile.prod** — default `VITE_MONITOR_BACKEND` includes all
+8. **Update Dockerfile.prod**  –  default `VITE_MONITOR_BACKEND` includes all
    backends, add `index.html` injection for `__MODULO_CONFIG__`
-9. **Wire main.ts** — move `createErrorTracker()` before i18n, wire
+9. **Wire main.ts**  –  move `createErrorTracker()` before i18n, wire
    `authStore.onAuthChange` → `tracker.setUser()`/`setTags()` on login/logout
-10. **Write docs** — per-backend privacy data sheets, operation docs page
+10. **Write docs**  –  per-backend privacy data sheets, operation docs page
     covering env vars and Docker config, upgrade guide for existing self-hosters

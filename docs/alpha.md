@@ -1,4 +1,4 @@
-# Alpha — Modulo Platform
+# Alpha – Modulo Platform
 
 **Last updated:** 2026-06-30
 **Current status:** Pre-release / Internal alpha
@@ -8,7 +8,7 @@
 
 ## Current Status
 
-Modulo is in **internal alpha** — not publicly released. The platform is functional for internal development and feedback only. The goal is to prove composability, "the remainder" (user-defined schemas/agents), and connector swappability before committing to a v1 public release.
+Modulo is in **internal alpha** – not publicly released. The platform is functional for internal development and feedback only. The goal is to prove composability, "the remainder" (user-defined schemas/agents), and connector swappability before committing to a v1 public release.
 
 Two concrete implementations of every primitive type exist to validate the abstraction layer.
 
@@ -42,7 +42,7 @@ Two concrete implementations of every primitive type exist to validate the abstr
 - Security lint rules: `SandboxedEnvironment`, `yaml.safe_load()`, credential-in-state; pre-commit hooks
 - API rate limiting middleware with in-memory fallback and startup warning
 - `owner_team_id` (nullable) + `visibility` (`org`/`team`) columns in initial Alembic migration (team enforcement is v1)
-- `evals: JSON` nullable column on Agent table (not surfaced or executed in alpha — avoids painful v1 migration)
+- `evals: JSON` nullable column on Agent table (not surfaced or executed in alpha – avoids painful v1 migration)
 - Pipeline edge entity in initial migration
 - Org-level API key entity (`mk_<lookup_prefix>_<secret>`; SHA-256 hash)
 
@@ -215,7 +215,7 @@ Two concrete implementations of every primitive type exist to validate the abstr
 
 | Feature | Status | Target |
 |---|---|---|
-| Checkpoint blob encryption | Not in alpha (plaintext—known gap) | V2 |
+| Checkpoint blob encryption | Not in alpha (plaintext–known gap) | V2 |
 | LangGraph PostgresSaver org_id isolation | Not in alpha (thread ID prefix only) | V2 |
 
 ### Community
@@ -232,7 +232,7 @@ Two concrete implementations of every primitive type exist to validate the abstr
 ## Known Limitations and Workarounds
 
 ### LangGraph Checkpoint Isolation
-Checkpoint blobs store all agent inputs/outputs in plaintext in the `langgraph.*` schema, which has no `organisation_id` column. RLS cannot apply. Thread ID prefixing (`org_id:thread_id`) provides application-layer isolation only — insufficient for multi-tenant.
+Checkpoint blobs store all agent inputs/outputs in plaintext in the `langgraph.*` schema, which has no `organisation_id` column. RLS cannot apply. Thread ID prefixing (`org_id:thread_id`) provides application-layer isolation only – insufficient for multi-tenant.
 - **Workaround**: Single-org only in alpha. Restrict Postgres access to the application service account; do not grant direct DB access to operators.
 - **Target fix**: Subclass `PostgresSaver` with org_id column (V2, before SaaS).
 
@@ -247,12 +247,12 @@ Alpha webhook triggers are tested with generic HTTP payloads. GitHub requires HT
 - **Target**: Real TLS with reference Caddy config; GitHub webhooks are a V1 use case.
 
 ### Single-Process Event Broker
-The WebSocket fan-out event broker is in-memory only in alpha — one `astream_events()` consumer per run, in-process pub/sub.
+The WebSocket fan-out event broker is in-memory only in alpha – one `astream_events()` consumer per run, in-process pub/sub.
 - **Workaround**: Redis pub/sub is required for multi-worker deployments (V1).
 - **Startup warning**: Logged on non-Redis configurations.
 
 ### In-Memory Rate Limiting
-Rate limiting uses an in-memory token bucket — not suitable for multi-process deployments.
+Rate limiting uses an in-memory token bucket – not suitable for multi-process deployments.
 - **Workaround**: Single-process for rate-limited endpoints. Redis-backed rate limiting in V1.
 - **Startup warning**: Logged when in-memory fallback is active.
 
@@ -263,7 +263,7 @@ Agent-generated output is not automatically masked. If a pipeline reads files co
 
 ### DOM Sensitive Data
 Sensitive values (API keys, connector credentials) are `●●●●●●` by default with a 30-second server-authenticated reveal. CSS hiding is not a security control.
-- **Workaround**: N/A — this is the intended behaviour.
+- **Workaround**: N/A – this is the intended behaviour.
 
 ### No Audit Viewer
 AuditEvents are recorded for all state-changing actions in alpha, but there is no viewer UI or export.
@@ -311,7 +311,7 @@ npm run dev
 
 ### Run the Demo
 
-Set `MODULO_DEMO_MODE=true` in your `.env`. The pre-loaded `prd-to-requirements` pipeline is available on the dashboard. No external API keys are needed — the demo uses `StubModelBackend`.
+Set `MODULO_DEMO_MODE=true` in your `.env`. The pre-loaded `prd-to-requirements` pipeline is available on the dashboard. No external API keys are needed – the demo uses `StubModelBackend`.
 
 **Full quickstart**: See [quickstart.md](./quickstart.md)
 **Architecture overview**: See [architecture.md](./architecture.md)
@@ -331,14 +331,14 @@ All feature flags in alpha default to **enabled** (no license key enforcement). 
 
 | Flag | Purpose |
 |---|---|
-| `parallel_branches` | Pipeline nodes with multiple outgoing edges running concurrently |
-| `eval_system` | Eval engine (§7.16 — not surfaced in alpha; placeholder flag) |
-| `webhook_trigger` | Inbound webhook triggers |
-| `mcp_server` | Remote MCP endpoint |
+| `parallel_branches` | Placeholder flag – not surfaced in alpha (sequential only until V1 Extended) |
+| `eval_system` | Placeholder flag – not surfaced in alpha; eval engine lands V1 Core |
+| `webhook_trigger` | Inbound webhook triggers (alpha) |
+| `mcp_server` | Remote MCP endpoint (alpha) |
 | `community_library` | Browse and copy community registry primitives |
-| `cron_trigger` | Scheduled triggers (V1 — placeholder flag in alpha) |
+| `cron_trigger` | Placeholder flag – not surfaced in alpha; scheduled triggers land V1 |
 
-### Enterprise Gate (requires license key — not in alpha)
+### Enterprise Gate (requires license key – not in alpha)
 
 | Flag | Purpose | Target |
 |---|---|---|
@@ -352,11 +352,11 @@ All feature flags in alpha default to **enabled** (no license key enforcement). 
 
 ## Alpha Exit Criteria
 
-Alpha is done when ALL six conditions from PRD §10.3b are met. Alpha does not become v1 by default — an explicit decision is required.
+Alpha is done when ALL six conditions from PRD §10.3b are met. Alpha does not become v1 by default – an explicit decision is required.
 
 | # | Criterion | Verification | Status |
 |---|---|---|---|
-| 1 | Demo pipeline (`prd-to-requirements`) walkable by 3 non-authors without assistance, using `MODULO_DEMO_MODE` | Manual sign-off by each walker | PENDING |
+| 1 | Demo pipeline (`prd-to-requirements`) walkable by 3 non-authors without assistance, using `MODULO_DEMO_MODE` (deprecated alias for `modulo_seed_demo_data`) | Manual sign-off by each walker | PENDING |
 | 2 | All happy-path BDD scenarios green in CI | Automated (`scripts/verify-alpha-exit.ps1` runs `pytest tests/bdd/`) | PENDING |
 | 3 | At least one non-demo pipeline built by an internal user and run to completion | Manual sign-off by builder | PENDING |
 | 4 | HITL approve and reject demonstrated by two different named users (`MODULO_USERS` with ≥2 entries) | Manual sign-off by reviewer | PENDING |
@@ -385,8 +385,8 @@ See `docs/prd.md#103b-alpha-exit-criteria` (§10.3b) for the authoritative defin
 
 ## References
 
-- [Product Requirements Document](./prd.md) — full PRD with all alpha scope
-- [Alpha Scope (PRD §13)](./prd.md#13-alpha-scope) — feature checklist
+- [Product Requirements Document](./prd.md) – full PRD with all alpha scope
+- [Alpha Scope (PRD §13)](./prd.md#13-alpha-scope) – feature checklist
 - [Alpha Exit Criteria (PRD §10.3b)](./prd.md#103b-alpha-exit-criteria)
 - [Alpha Documentation Requirements (PRD §10.3a)](./prd.md#103a-alpha-documentation)
 - [Non-Goals (PRD §4)](./prd.md#4-non-goals-alpha)
