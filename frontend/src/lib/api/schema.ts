@@ -12609,6 +12609,11 @@ export interface components {
              * @description System prompt override.
              */
             system_prompt?: string | null;
+            /**
+             * Exclude Ui Tools
+             * @description Exclude the UI-driving tool family (remy-only mode — no browser automation).
+             */
+            exclude_ui_tools?: boolean;
         };
         /** TargetInjection */
         TargetInjection: {

@@ -175,6 +175,10 @@ class StreamRequest(BaseModel):
     mcp_api_key: str | None = Field(None, description="MCP API key for tool execution.")
     page_context: str | None = Field(None, description="Current page context for Remy's context-awareness.")
     system_prompt: str | None = Field(None, description="System prompt override.")
+    exclude_ui_tools: bool = Field(
+        False,
+        description="Exclude the UI-driving tool family (remy-only mode — no browser automation).",
+    )
 
 
 class PermissionResponse(BaseModel):
@@ -1005,6 +1009,24 @@ async def stream_chat(
 
     session_id_str = str(session_id)
 
+    logger.info(
+        "remy.stream_started",
+        extra={
+            "org_id": str(principal.organisation_id),
+            "session_id": session_id_str,
+            "exclude_ui_tools": req.exclude_ui_tools,
+        },
+    )
+    if req.exclude_ui_tools:
+        logger.info(
+            "remy.remy_only_stream_started",
+            extra={
+                "org_id": str(principal.organisation_id),
+                "session_id": session_id_str,
+                "exclude_ui_tools": True,
+            },
+        )
+
     async def event_generator() -> AsyncGenerator[str, None]:
         """SSE event generator — agentic loop with multi-turn LLM + UI commands."""
         msg_id: str | None = None
@@ -1053,7 +1075,7 @@ async def stream_chat(
                         user_id=principal.account_id,
                         page_context=req.page_context,
                         system_prompt_override=req.system_prompt,
-                        include_ui_tools_text=not supports_tools,
+                        include_ui_tools_text=(not supports_tools) and not req.exclude_ui_tools,
                     )
 
                 # 4. Save user message to DB
@@ -1103,7 +1125,8 @@ async def stream_chat(
                     if getattr(backend, "supports_tools", False):
                         await build_tool_registry()
                         tools_param = _get_all_tool_definitions(
-                            include_ui_tools=await _is_ui_driving_enabled(principal.organisation_id, db_session),
+                            include_ui_tools=(await _is_ui_driving_enabled(principal.organisation_id, db_session))
+                            and not req.exclude_ui_tools,
                         )
 
                     async for chunk in backend.stream(langchain_messages, tools=tools_param):
@@ -1248,6 +1271,17 @@ async def stream_chat(
                     ui_tool_calls = [tc for tc in ui_tool_calls if tc["name"] != "get_manifest"]
 
                     for tc in manifest_calls:
+                        if req.exclude_ui_tools:
+                            tool_results.append(
+                                {
+                                    "tool_call_id": tc["id"],
+                                    "tool_name": "get_manifest",
+                                    "success": False,
+                                    "error": "UI driving is not available in this view",
+                                }
+                            )
+                            yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
+                            continue
                         from modulo.core.manifest import get_manifest
 
                         manifest = get_manifest()
@@ -1281,14 +1315,21 @@ async def stream_chat(
                         yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"
 
                     # Handle UI tools
-                    if ui_tool_calls and not await _is_ui_driving_enabled(principal.organisation_id, db_session):
+                    if ui_tool_calls and (
+                        req.exclude_ui_tools or not await _is_ui_driving_enabled(principal.organisation_id, db_session)
+                    ):
+                        ui_driving_error = (
+                            "UI driving is not available in this view"
+                            if req.exclude_ui_tools
+                            else "UI driving is disabled by your organisation."
+                        )
                         for tc in ui_tool_calls:
                             tool_results.append(
                                 {
                                     "tool_call_id": tc["id"],
                                     "tool_name": tc["name"],
                                     "success": False,
-                                    "error": "UI driving is disabled by your organisation.",
+                                    "error": ui_driving_error,
                                 }
                             )
                             yield f"event: tool_call\ndata: {json.dumps(tool_results[-1])}\n\n"

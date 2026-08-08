@@ -18,6 +18,7 @@ declare module 'vue-router' {
     featureFlag?: string
     visibility?: 'public' | 'public_preview' | 'private_preview' | 'in_dev'
     public?: boolean
+    bare?: boolean
   }
 }
 
@@ -124,6 +125,7 @@ const EnvironmentProfileList = () => import('../views/environment-profiles/Envir
 const EnvironmentProfileForm = () => import('../views/environment-profiles/EnvironmentProfileForm.vue')
 const ParameterSchemasView = () => import('../views/ParameterSchemasView.vue')
 const OAuthConsentView = () => import('../views/OAuthConsentView.vue')
+const RemyOnlyView = () => import('../views/RemyOnlyView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -531,6 +533,12 @@ const router = createRouter({
       component: EnvironmentProfileForm,
       meta: { breadcrumb: 'Edit Profile', parent: 'environment-profiles' },
       props: true,
+    },
+    {
+      path: '/remy',
+      name: 'remy-only',
+      component: RemyOnlyView,
+      meta: { bare: true },
     },
     {
       path: '/:pathMatch(.*)*',

@@ -2269,6 +2269,16 @@ Remy is gated at two levels:
 
 The panel state (open/closed, position, size, docked/maximised/floating) is persisted to `localStorage`. The active session and message list live in a Pinia store (`useRemyStore`) scoped to `sessionId`.
 
+#### Remy-Only Mode (Full-Screen Ingress)
+
+A second Remy ingress at the full-screen route `/remy` renders the **same** sessions, conversations, skills, and context sources as the floating panel. The only behavioural difference: the **UI-driving tool family is excluded** (`navigate`, `click`, `fill`, `extract`, `get_page_interactables`, `go_back`, `wait`, `press`, `get_manifest` — the whole `_UI_TOOLS` set).
+
+- The route is dev-mode-gated exactly like the other Remy routes: `visibility: private_preview` + the `<<: *community` tier anchor in `manifest.yaml` (visible only when `MODULO_DEV_MODE=true`), and it never appears in the sidebar.
+- The client sends `exclude_ui_tools: true` on the `/stream` request. The backend then: (1) omits UI tools from the `tools` parameter, (2) omits the text-mode UI-tools block from the system prompt, (3) answers any `get_manifest` call with a `success=False` tool result ("UI driving is not available in this view"), and (4) rejects any UI tool call with the same message before ever yielding a `ui_command_batch`. MCP tool execution is unaffected.
+- Remy-only mode sends no `page_context` — there is no page being driven. On return to the panel, the panel's route-change watcher re-hydrates page context automatically.
+- The view is a multi-tab interface: one tab per open session (persisted in `localStorage`), with titles derived from the session list, a live indicator on the streaming tab, close affordance per tab, and the same skills/context-sources/sessions panels as the panel.
+- Because the UI-driving tools are gone, remy-only mode renders **no permission UI** at all — MCP tools execute un-gated server-side, so there is nothing to approve.
+
 #### Delivery Dependencies
 
 - No new infrastructure dependencies (PostgreSQL, existing auth, existing SSE)
