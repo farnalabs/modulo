@@ -60,7 +60,7 @@ async def expire_stale_claims(
     """
     all_expired: list[dict[str, Any]] = []
 
-    async with factory() as session:
+    async with factory() as session, session.begin():
         result = await session.execute(select(Organisation.id))
         org_ids: list[uuid.UUID] = list(result.scalars())
 

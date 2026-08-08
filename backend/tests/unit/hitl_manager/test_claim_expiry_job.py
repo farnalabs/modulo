@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob
+from modulo.core.hitl_manager.expiry_job import ClaimExpiryJob, expire_stale_claims
 
 _ORG = uuid.uuid4()
 _CLAIM_ID_1 = uuid.uuid4()
@@ -35,6 +35,10 @@ def _org_list_session() -> AsyncMock:
     result = MagicMock()
     result.scalars.return_value = [_ORG]
     session.execute = AsyncMock(return_value=result)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
     return session
 
 
@@ -394,3 +398,84 @@ async def test_run_loop_stops_when_tick_cancelled() -> None:
 
     job._expire_once.assert_awaited_once()
     mock_sleep.assert_not_awaited()
+
+
+class _AutobeginAwareSession:
+    """Fake session whose execute() requires an explicit begin() first.
+
+    Mirrors the production factory's ``autobegin=False``: executing SQL without
+    first entering ``session.begin()`` must fail loudly (as SQLAlchemy does with
+    ``InvalidRequestError: Autobegin is disabled on this Session``). The org-list
+    query is the very first execute; the per-org pass returns no stale claims so
+    the loop body completes without touching the audit/update paths.
+    """
+
+    def __init__(self, org_id: uuid.UUID) -> None:
+        self._org_id = org_id
+        self._in_tx = False
+        self._execute_count = 0
+
+    def in_transaction(self) -> bool:
+        return self._in_tx
+
+    def begin(self) -> "_BeginCtx":
+        return _BeginCtx(self)
+
+    async def execute(self, stmt: object, *args: object) -> MagicMock:
+        assert self._in_tx, "execute() ran outside session.begin() (autobegin=False)"
+        self._execute_count += 1
+        if self._execute_count == 1:
+            result = MagicMock()
+            result.scalars.return_value = [self._org_id]
+            return result
+        if args:
+            result = MagicMock()
+            result.scalar_one.return_value = True
+            return result
+        result = MagicMock()
+        result.all.return_value = []
+        return result
+
+    async def close(self) -> None:
+        pass
+
+
+class _FakeSessionCtx:
+    """Async context manager wrapping a session for ``async with factory()``."""
+
+    def __init__(self, session: _AutobeginAwareSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> _AutobeginAwareSession:
+        return self._session
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+
+class _BeginCtx:
+    """Async context manager returned by ``_AutobeginAwareSession.begin()``."""
+
+    def __init__(self, session: _AutobeginAwareSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> None:
+        self._session._in_tx = True
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        self._session._in_tx = False
+        return False
+
+
+async def test_org_list_query_runs_inside_begin() -> None:
+    """The org-ID listing query must run inside session.begin() (autobegin=False)."""
+    fake_session = _AutobeginAwareSession(_ORG)
+    factory = MagicMock(return_value=_FakeSessionCtx(fake_session))
+
+    with (
+        patch("modulo.core.hitl_manager.expiry_job.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()),
+    ):
+        expired = await expire_stale_claims(factory, notifier=None)
+
+    assert expired == []
