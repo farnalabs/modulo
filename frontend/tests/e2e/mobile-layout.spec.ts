@@ -6,6 +6,10 @@ import path from 'node:path'
 import { test, expect, loginAsAdmin, setupLocalMockApi } from './setup/fixtures'
 import { getTarget, type TestEnv } from './setup/env'
 
+// Layout checks are deterministic — retrying on flake is noise and triples run
+// time against live targets. Top-level scope applies to every test in this file.
+test.describe.configure({ retries: 0 })
+
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
 const ACCEPTABLE_VIOLATIONS = ['color-contrast', 'scrollable-region-focusable']
@@ -173,6 +177,18 @@ async function checkInteractiveNotClipped(page: Page) {
     if (hasHScroll) {
       return { skip: true, clipped: [] }
     }
+    // A right-side overhang inside a horizontal scroll container (e.g. a wide
+    // table with overflow-x: auto) is reachable by scrolling the container —
+    // not a clipping bug. Walk the ancestor chain up to the document root.
+    function hasHorizontalScrollableAncestor(el: Element): boolean {
+      let node = el.parentElement
+      while (node) {
+        const overflowX = getComputedStyle(node).overflowX
+        if (overflowX === 'auto' || overflowX === 'scroll') return true
+        node = node.parentElement
+      }
+      return false
+    }
     const selector = 'button, a, input, select, textarea, [tabindex], [role="button"]'
     const clipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
     for (const el of Array.from(document.querySelectorAll(selector))) {
@@ -181,15 +197,21 @@ async function checkInteractiveNotClipped(page: Page) {
       if (getComputedStyle(htmlEl).visibility === 'hidden') continue
       const rect = htmlEl.getBoundingClientRect()
       if (rect.width === 0 && rect.height === 0) continue
-      if (rect.left < -1 || rect.right > window.innerWidth + 1) {
-        clipped.push({
-          tag: htmlEl.tagName.toLowerCase(),
-          cls: typeof htmlEl.className === 'string' ? htmlEl.className.slice(0, 80) : '',
-          text: (htmlEl.textContent ?? '').trim().slice(0, 60),
-          left: Math.round(rect.left),
-          right: Math.round(rect.right),
-        })
-      }
+      const overhangsRight = rect.right > window.innerWidth + 1
+      if (!(rect.left < -1 || overhangsRight)) continue
+      // Closed off-canvas drawer (e.g. the mobile sidebar translated fully
+      // left): contents sit off-screen in their correct closed state and are
+      // reachable when the drawer opens — never a clipping bug.
+      if (rect.right <= 0) continue
+      // Right-side overhang reachable by scrolling a horizontal container.
+      if (overhangsRight && hasHorizontalScrollableAncestor(htmlEl)) continue
+      clipped.push({
+        tag: htmlEl.tagName.toLowerCase(),
+        cls: typeof htmlEl.className === 'string' ? htmlEl.className.slice(0, 80) : '',
+        text: (htmlEl.textContent ?? '').trim().slice(0, 60),
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+      })
     }
     return { skip: false, clipped: clipped.slice(0, 10) }
   })
