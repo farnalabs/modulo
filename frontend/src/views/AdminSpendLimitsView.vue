@@ -9,7 +9,7 @@
     <PageHeader :title="$t('views.AdminCostBreakdownView.spend_limits')" :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')" />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
-
+      <div class="space-y-6">
       <LoadingSpinner v-if="loading" />
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
@@ -110,6 +110,7 @@
           </CardContent>
         </Card>
       </template>
+      </div>
     </FeatureGate>
   </div>
 </template>

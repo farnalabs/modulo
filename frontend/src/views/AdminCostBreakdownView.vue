@@ -9,7 +9,7 @@
     <PageHeader :title="$t('views.AdminCostBreakdownView.cost_breakdown')" :subtitle="$t('views.AdminCostBreakdownView.monthly_cost_report_and_anomaly_detection_across_teams')" />
 
     <FeatureGate feature-name="admin_cost_breakdown" required-tier="team" show-disabled>
-
+      <div class="space-y-6">
       <LoadingSpinner v-if="loading" />
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
@@ -121,6 +121,7 @@
           </CardContent>
         </Card>
       </template>
+      </div>
     </FeatureGate>
   </div>
 </template>

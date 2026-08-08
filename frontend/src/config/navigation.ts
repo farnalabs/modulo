@@ -57,7 +57,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'admin-users': { icon: 'UserCircle', labelKey: 'components.SidebarNav.item_users' },
   'admin-org': { icon: 'Building', labelKey: 'components.SidebarNav.item_org_settings' },
   'admin-audit': { icon: 'FileText', labelKey: 'components.SidebarNav.item_audit_log' },
-  'admin-costs': { icon: 'DollarSign', labelKey: 'components.SidebarNav.item_overview' },
+  'admin-costs': { icon: 'DollarSign', labelKey: 'components.SidebarNav.item_costs' },
   'admin-costs-limits': { icon: 'CreditCard', labelKey: 'components.SidebarNav.item_spend_limits' },
   'admin-costs-controls': { icon: 'SlidersHorizontal', labelKey: 'components.SidebarNav.item_cost_controls' },
   'admin-connectors': { icon: 'Plug', labelKey: 'components.SidebarNav.item_connectors' },
