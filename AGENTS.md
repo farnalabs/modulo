@@ -563,7 +563,7 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 | Test | File/Command | What it catches |
 |---|---|---|
-| Unit | `tests/unit/app-bootstrap.spec.ts` | Missing route component files, module-level import errors |
+| Unit | `src/__tests__/app-bootstrap.spec.ts` | Missing route component files, module-level import errors |
 | Playwright @smoke | `--grep "@smoke"` across all `tests/e2e/` | Login, auth, navigation, golden path — critical browser flows |
 | Route file check | Part of `smoke-test.ps1` | Every `.vue` imported by the router exists on disk |
 
