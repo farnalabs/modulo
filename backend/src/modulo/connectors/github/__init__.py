@@ -47,6 +47,79 @@ _RATE_LIMIT_HEADERS = (
 )
 
 
+class GitHubError(ValueError):
+    """Base class for all GitHub connector errors.
+
+    Carries a machine-parseable ``error_code`` so callers can branch on
+    failure modes (expired token, missing scope, rate limit, network) without
+    parsing human-readable messages. ``status_code`` holds the GitHub HTTP
+    status when the error originated from an HTTP response (``None`` for
+    transport-level failures and local validation).
+    """
+
+    error_code = "github_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        if error_code is not None:
+            self.error_code = error_code
+        self.status_code = status_code
+
+
+class GitHubAPIError(GitHubError):
+    """Raised when GitHub returns a non-retryable business-level HTTP error."""
+
+    error_code = "api_error"
+
+
+class GitHubRateLimitError(GitHubAPIError):
+    """Raised when GitHub rate-limits the request and automatic retries are exhausted."""
+
+    error_code = "rate_limited"
+
+
+class GitHubAuthError(GitHubAPIError):
+    """Raised when the token is invalid/expired (HTTP 401) or lacks required scopes (HTTP 403).
+
+    The ``error_code`` distinguishes the two auth failure modes:
+    ``token_expired`` (401 — bad credentials) vs ``insufficient_scope``
+    (403 — the token is valid but lacks the required permission).
+    """
+
+    error_code = "authentication_failed"
+
+
+class GitHubNotFoundError(GitHubAPIError):
+    """Raised when GitHub reports a resource does not exist (HTTP 404)."""
+
+    error_code = "not_found"
+
+
+class GitHubNetworkError(GitHubError):
+    """Raised on transport-level failures (timeout, connection error)."""
+
+    error_code = "network_error"
+
+
+def _error_for_status(status_code: int, detail: str) -> GitHubError:
+    """Map a GitHub HTTP status to the matching structured error type."""
+    if status_code == 429:
+        return GitHubRateLimitError(detail, status_code=429)
+    if status_code == 401:
+        return GitHubAuthError(detail, status_code=401, error_code="token_expired")
+    if status_code == 403:
+        return GitHubAuthError(detail, status_code=403, error_code="insufficient_scope")
+    if status_code == 404:
+        return GitHubNotFoundError(detail, status_code=404)
+    return GitHubAPIError(detail, status_code=status_code)
+
+
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitHub API response."""
     value = response.headers.get("Retry-After")
@@ -403,7 +476,11 @@ class GitHubConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.request(method, path, **kwargs)
                     if r.status_code == 304:
-                        raise ValueError("GitHub API returned 304 Not Modified — resource unchanged")
+                        raise GitHubAPIError(
+                            "GitHub API returned 304 Not Modified — resource unchanged",
+                            error_code="not_modified",
+                            status_code=304,
+                        )
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
@@ -414,34 +491,38 @@ class GitHubConnector(ConnectorBase):
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
-                detail = f"GitHub API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
-                if exc.response.status_code == 429:
+                status_code = exc.response.status_code
+                detail = f"GitHub API HTTP {status_code}: {exc.response.text[:200]}"
+                if status_code == 429:
                     quota = _rate_limit_detail(exc.response)
                     if quota:
                         detail = f"{detail} (quota: {quota})"
-                raise ValueError(detail) from exc
+                raise _error_for_status(status_code, detail) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
-                raise ValueError("GitHub API timeout") from exc
+                raise GitHubNetworkError("GitHub API timeout", error_code="network_timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
-                raise ValueError("GitHub API connection error") from exc
-        raise ValueError("GitHub API request failed after retries") from last_exc
+                raise GitHubNetworkError("GitHub API connection error", error_code="network_connection") from exc
+        raise GitHubNetworkError("GitHub API request failed after retries") from last_exc
 
     async def _parse_json(self, response: httpx.Response) -> Any:
-        """Parse JSON response, wrapping decode errors as ValueError."""
+        """Parse JSON response, wrapping decode errors as a typed API error."""
         try:
             return response.json()
         except json.JSONDecodeError as exc:
-            raise ValueError(f"GitHub API returned invalid JSON: {response.text[:200]}") from exc
+            raise GitHubAPIError(
+                f"GitHub API returned invalid JSON: {response.text[:200]}",
+                error_code="invalid_response",
+            ) from exc
 
     async def _parse_json_object(self, response: httpx.Response) -> dict[str, Any]:
         return cast("dict[str, Any]", await self._parse_json(response))
@@ -457,12 +538,10 @@ class GitHubConnector(ConnectorBase):
         """Verify the token has required OAuth scopes via ``X-OAuth-Scopes`` header.
 
         Returns the set of missing scopes (empty if all present).
-        Raises ``ValueError`` if the API call fails (non-200).
+        Raises ``GitHubAuthError`` when the token itself is invalid/expired
+        (401) or lacks the required permission (403).
         """
-        try:
-            r = await self._call_api("GET", "/user")
-        except ValueError as exc:
-            raise ValueError(f"Cannot verify scopes: {exc}") from exc
+        r = await self._call_api("GET", "/user")
 
         token_scopes = self._parse_scopes_from_headers(r)
         # admin:org is a superset of read:org
@@ -473,10 +552,20 @@ class GitHubConnector(ConnectorBase):
     async def health_check(self) -> HealthResult:
         """Check API access and verify required OAuth scopes via ``X-OAuth-Scopes`` header.
 
-        Required scopes: ``repo``, ``read:org``.
+        Required scopes: ``repo``, ``read:org``. Distinguishes expired/invalid
+        tokens (HTTP 401), missing scopes (HTTP 403), rate-limit exhaustion
+        (HTTP 429), and transport failures so the failure mode is actionable.
         """
         try:
             r = await self._call_api("GET", "/user")
+        except GitHubAuthError as exc:
+            if exc.status_code == 401:
+                return HealthResult(ok=False, detail="Invalid or expired GitHub token (HTTP 401)")
+            return HealthResult(ok=False, detail="Missing scopes: token lacks required permission (HTTP 403)")
+        except GitHubRateLimitError as exc:
+            return HealthResult(ok=False, detail=f"GitHub rate limit exhausted: {exc}")
+        except GitHubNetworkError as exc:
+            return HealthResult(ok=False, detail=f"GitHub network error: {exc}")
         except ValueError as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 
@@ -488,9 +577,13 @@ class GitHubConnector(ConnectorBase):
         token_scopes = self._parse_scopes_from_headers(r)
         missing = REQUIRED_SCOPES - token_scopes
         if missing:
+            missing_codes = ", ".join(f"missing_scope:{scope}" for scope in sorted(missing))
             return HealthResult(
                 ok=False,
-                detail=f"Missing scopes: {', '.join(sorted(missing))}. Required: {', '.join(sorted(REQUIRED_SCOPES))}",
+                detail=(
+                    f"Missing scopes: {missing_codes} ({', '.join(sorted(missing))}). "
+                    f"Required: {', '.join(sorted(REQUIRED_SCOPES))}"
+                ),
             )
 
         return HealthResult(ok=True, detail=user_login)
