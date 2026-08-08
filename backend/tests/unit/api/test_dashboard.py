@@ -2,14 +2,21 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
-from typing import ClassVar
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.dashboard import (
+    _compute_period_metrics,
+    _facts_status_counts,
+    _facts_window,
+)
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -66,6 +73,18 @@ class _MockResult:
 
     def __iter__(self):  # type: ignore[no-untyped-def]
         return iter(self._rows if hasattr(self._rows, "__iter__") else [])
+
+
+class _CapturingSession:
+    """Fake AsyncSession that records every statement passed to execute()."""
+
+    def __init__(self, result: "_MockResult") -> None:
+        self._result = result
+        self.statements: list[Any] = []
+
+    async def execute(self, stmt: Any, *_args: object, **_kwargs: object) -> "_MockResult":
+        self.statements.append(stmt)
+        return self._result
 
 
 def _make_mock_session() -> AsyncMock:
@@ -586,3 +605,91 @@ class TestDashboardTrends:
         assert len(body["rejection_trend"]) == expected_len
         assert len(body["correlation"]) == expected_len
         assert len(body["feedback_volume"]) == expected_len
+
+
+class TestFactsWindowRunDate:
+    """Period windows filter ``run_daily_facts`` on ``run_date`` (day-level
+    bucket key), not ``created_at`` — backfilled rows carry a recent
+    ``created_at`` but a ``run_date`` inside the target window (FAR-115)."""
+
+    _FACT_ROW: ClassVar[dict[str, int | float]] = {
+        "total": 5,
+        "active_pipelines": 2,
+        "tokens": 100,
+        "avg_duration_ms": 150.0,
+        "complete": 4,
+    }
+
+    def _compiled_sql(self, stmt: Any) -> str:
+        return str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+
+    async def test_facts_window_filters_on_run_date(self) -> None:
+        start = date(2026, 1, 1)
+        end = date(2026, 1, 8)
+        session = _CapturingSession(_MockResult(rows=[_MockRow(**self._FACT_ROW)]))
+        out = await _facts_window(session, _ORG_ID, start, end)
+        assert out["total_runs"] == 5
+        assert out["active_pipelines"] == 2
+        assert out["success_rate"] == 80.0
+        sql = self._compiled_sql(session.statements[0])
+        assert "run_daily_facts" in sql
+        assert "run_date" in sql
+        assert "created_at" not in sql
+        assert "2026-01-01" in sql and "2026-01-08" in sql
+
+    async def test_facts_status_counts_filters_on_run_date(self) -> None:
+        start = date(2026, 1, 1)
+        end = date(2026, 1, 8)
+        session = _CapturingSession(
+            _MockResult(rows=[_MockRow(status="complete", cnt=3), _MockRow(status="failed", cnt=1)])
+        )
+        out = await _facts_status_counts(session, _ORG_ID, start, end)
+        assert out == {"complete": 3, "failed": 1}
+        sql = self._compiled_sql(session.statements[0])
+        assert "run_date" in sql
+        assert "created_at" not in sql
+        assert "2026-01-01" in sql and "2026-01-08" in sql
+
+    async def test_compute_period_metrics_uses_day_boundaries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Facts/status/spend windows get ``[today - days, today)`` day-bucket
+        boundaries; the eval window keeps now-based datetimes."""
+        facts_calls: list[tuple[date, date]] = []
+        status_calls: list[tuple[date, date]] = []
+        spend_calls: list[tuple[date, date]] = []
+        eval_calls: list[tuple[datetime, datetime]] = []
+
+        async def _fake_facts(_session: Any, _org_id: Any, start: date, end: date) -> dict[str, Any]:
+            facts_calls.append((start, end))
+            return {"total_runs": 0, "active_pipelines": 0, "tokens": 0, "avg_duration_ms": None, "success_rate": None}
+
+        async def _fake_status(_session: Any, _org_id: Any, start: date, end: date) -> dict[str, int]:
+            status_calls.append((start, end))
+            return {}
+
+        async def _fake_spend(_session: Any, _org_id: Any, start: date, end: date) -> float:
+            spend_calls.append((start, end))
+            return 0.0
+
+        async def _fake_eval(_session: Any, _org_id: Any, start: datetime, end: datetime) -> float | None:
+            eval_calls.append((start, end))
+            return None
+
+        monkeypatch.setattr("modulo.api.routes.dashboard._facts_window", _fake_facts)
+        monkeypatch.setattr("modulo.api.routes.dashboard._facts_status_counts", _fake_status)
+        monkeypatch.setattr("modulo.api.routes.dashboard._ledger_spend_window", _fake_spend)
+        monkeypatch.setattr("modulo.api.routes.dashboard._eval_rate_window", _fake_eval)
+
+        await _compute_period_metrics(None, _ORG_ID, 7)  # type: ignore[arg-type]
+
+        today = datetime.now(UTC).date()
+        current_start = today - timedelta(days=7)
+        prev_start = today - timedelta(days=14)
+        prev_end = today - timedelta(days=7)
+
+        assert facts_calls == [(current_start, today), (prev_start, prev_end)]
+        assert status_calls == facts_calls
+        assert spend_calls == facts_calls
+        # Eval windows stay timestamp-based (evaluated_at is not a day bucket).
+        assert all(isinstance(s, datetime) and isinstance(e, datetime) for s, e in eval_calls)
+        assert len(eval_calls) == 2
+        assert all((e - s) == timedelta(days=7) for s, e in eval_calls)

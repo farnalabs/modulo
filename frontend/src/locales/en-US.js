@@ -920,6 +920,7 @@ export default {
       "trend_7d": "7d",
       "trend_30d": "30d",
       "trend_90d": "90d",
+      "trend_all_time": "All time",
       "run_a_pipeline": "Run a Pipeline",
       "select_a_pipeline_and_run_it_with_a_prompt": "Choose a pipeline and configure its parameters before running it.",
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
