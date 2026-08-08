@@ -1,5 +1,5 @@
 <template>
-  <div class="page-narrow">
+  <div class="page-wide">
     <template v-if="!editingSchema">
       <header class="flex items-center justify-between">
         <PageHeader

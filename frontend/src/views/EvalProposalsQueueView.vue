@@ -8,7 +8,7 @@
       { label: $t('views.EvalEditorView.tab_ab_test'), to: '/variants/ab-test' },
     ]" />
 
-    <div class="page-narrow">
+    <div class="page-wide">
     <PageHeader :title="$t('views.EvalProposalsQueueView.title')" :subtitle="$t('views.EvalProposalsQueueView.subtitle')" />
 
     <div v-if="loading" class="space-y-4">

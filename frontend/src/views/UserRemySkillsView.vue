@@ -1,5 +1,5 @@
 <template>
-  <div data-theme="agent" class="page-narrow">
+  <div data-theme="agent" class="page-wide">
       <TooltipProvider>
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('views.UserRemySkillsView.my_remy_skills')" :subtitle="$t('views.UserRemySkillsView.manage_your_personal_skills_for_the_remy_ai_assistant')" />

@@ -1,7 +1,7 @@
 <template>
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
-    <div class="page-narrow">
+    <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader title="Connectors" subtitle="Manage connector instances for data source integration" />
       <Button

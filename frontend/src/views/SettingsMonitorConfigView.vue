@@ -6,7 +6,7 @@
       </div>
     </template>
     <template #default>
-      <div class="page-narrow">
+      <div class="page-wide">
         <PageHeader :title="$t('views.SettingsMonitorConfigView.browser_monitoring')" :subtitle="$t('views.SettingsMonitorConfigView.description')" />
 
         <div v-if="loading" class="flex items-center justify-center h-32">
