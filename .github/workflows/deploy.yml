@@ -28,7 +28,7 @@ jobs:
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
     steps:
-      - name: Check last successful deploy time
+      - name: Check last deploy attempt time
         id: check
         shell: bash
         env:
@@ -40,14 +40,21 @@ jobs:
             echo "Force deploy requested — bypassing throttle."
             exit 0
           fi
+          # Always deploy for deployment/CI-fix commits so the fix is validated end-to-end
+          COMMIT_MSG="$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.message' 2>/dev/null || echo '')"
+          if [[ "$COMMIT_MSG" =~ ^(fix\(deployment\)|fix\(ci\)|infra\(deploy\)) ]]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy/CI-fix commit — bypassing throttle."
+            exit 0
+          fi
           LAST=$(gh run list --repo "${{ github.repository }}" \
             --workflow "Deploy: Staging + Prod" \
-            --status success --limit 1 \
+            --limit 1 \
             --json createdAt --jq '.[0].createdAt' 2>/dev/null || echo "")
-          echo "last_successful_deploy=${LAST:-none}"
+          echo "last_deploy_attempt=${LAST:-none}"
           if [ -z "$LAST" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            echo "No previous successful deploy - deploying."
+            echo "No previous deploy attempt - deploying."
           else
             LAST_TS=$(date -u -d "$LAST" +%s)
             NOW_TS=$(date -u +%s)
@@ -55,10 +62,10 @@ jobs:
             echo "hours_since_deploy=${DIFF_H}"
             if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]; then
               echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::Deployed ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. Use workflow_dispatch to force."
+              echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. Use workflow_dispatch to force."
             else
               echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-              echo "Deploying (${DIFF_H}h since last deploy)."
+              echo "Deploying (${DIFF_H}h since last deploy attempt)."
             fi
           fi
 
