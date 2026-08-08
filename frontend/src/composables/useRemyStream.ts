@@ -215,8 +215,9 @@ export function useRemyStream() {
     if (pending) {
       try {
         await pending
-      } catch {
+      } catch (e) {
         // runStream handles its own errors
+        console.warn('[RemyStream] disconnect error while awaiting stream', e)
       }
     }
     if (streamId === pendingId) {

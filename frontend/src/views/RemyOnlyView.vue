@@ -12,7 +12,7 @@
           </svg>
         </div>
         <div class="min-w-0">
-          <h1 class="truncate text-sm font-semibold">Remy</h1>
+          <h1 class="truncate text-sm font-semibold">{{ $t('components.remy.RemyOnlyView.remy_title') }}</h1>
           <span class="text-xs text-muted-foreground">{{ $t('components.remy.RemyOnlyView.remy_only_mode') }}</span>
         </div>
       </div>

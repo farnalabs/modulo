@@ -2315,6 +2315,7 @@ export default {
         "legend_off": "Off = disabled"
       },
       "RemyOnlyView": {
+        "remy_title": "Remy",
         "remy_only_mode": "Remy Only Mode",
         "banner": "This is a chat-only view — Remy can answer questions and use your skills, but cannot drive the browser here.",
         "return_home": "Return home",
