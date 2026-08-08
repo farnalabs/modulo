@@ -25,8 +25,8 @@ class TestCreateRegistry:
         assert isinstance(registry, _NoopRateLimiter)
         assert rl_mod.redis_available is False
 
-    def test_no_redis_url_returns_noop(self, monkeypatch):
-        monkeypatch.setattr("redis.asyncio.Redis.from_url", MagicMock())
+    def test_no_redis_url_returns_noop(self):
+        """With an empty redis_url, _create_registry must never attempt a connection."""
         registry = _create_registry(make_settings(redis_url=""))
         assert isinstance(registry, _NoopRateLimiter)
         assert rl_mod.redis_available is False

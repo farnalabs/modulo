@@ -10,6 +10,7 @@ conftest versions.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.settings import Settings
@@ -52,3 +53,27 @@ def make_redis_client(*, auth: bool = False) -> MagicMock:
     client.delete = AsyncMock()
     client.setex = AsyncMock()
     return client
+
+
+def make_mock_request(
+    method: str = "POST",
+    path: str = "/api/v1/runs",
+    headers: dict[str, str] | None = None,
+    scope: dict | None = None,
+    client: Any = None,
+) -> MagicMock:
+    """Build a MagicMock stand-in for a starlette.Request.
+
+    ``headers.get`` honours the same default-return contract as the real
+    implementation so callers can simulate X-Forwarded-For / Authorization /
+    bypass headers; ``client`` is attached verbatim to drive the
+    ``client.host`` IP fallback.
+    """
+    req = MagicMock()
+    req.method = method
+    req.url.path = path
+    req.scope = {} if scope is None else scope
+    header_map = headers or {}
+    req.headers.get = MagicMock(side_effect=lambda name, default="": header_map.get(name, default))
+    req.client = client
+    return req
