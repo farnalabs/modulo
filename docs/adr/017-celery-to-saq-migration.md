@@ -66,9 +66,10 @@ firefight, then decoupled. Current (post-fix) model:
   `SAQ_REDIS_POOL_SIZE` is lowered 50 → **20** (workers hold pool conns only
   while running jobs — ~5 jobs x 2 workers = 10 live conns per machine — so 20
   caps at 200 potential conns across 5 machines; operators on a small Redis
-  tier may lower to 5, matching prod). Accepted design target: concurrency 5
-  per worker x up to 5 machines = up to 25 concurrent runs, verified-safe
-  against the 300-connection cap.
+  tier may lower to 5, matching prod). Accepted design target: concurrency 20
+  per worker x up to 5 machines = up to 100 concurrent runs, verified-safe
+  against the 300-connection cap (concurrency does not multiply the per-worker
+  Postgres pool — SAQ runs asyncio jobs on a single engine).
 - **`max_concurrent_ops` reserve clamp** (SAQ RedisQueue semaphore): must stay
   strictly below the pool size so the semaphore can never exhaust every
   connection. Reserve formula: pool ≤ 1 → `pool`; pool 2–5 → `pool − 1`; pool

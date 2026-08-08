@@ -50,6 +50,7 @@ primary_region = 'lhr'
   # exercise team-gated features (retention, cost-controls, etc.) — matches prod.
   MODULO_DEMO_MODE = "true"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  SAQ_WORKER_CONCURRENCY = "20"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-staging-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
@@ -68,6 +69,6 @@ primary_region = 'lhr'
 
 [[vm]]
   processes = ['worker']
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1

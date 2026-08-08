@@ -2,18 +2,20 @@
 
 Two worker processes (plan F1/F2):
 
-* ``runs_settings`` — queue ``runs``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
-  decoupled from Redis pool size), no web UI. Executes
+* ``runs_settings`` — queue ``runs``, concurrency (SAQ_WORKER_CONCURRENCY,
+  default 5, deployed at 20 in prod/staging, decoupled from Redis pool size),
+  no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
-* ``system_settings`` — queue ``system``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
-  decoupled from Redis pool size), web UI on 8081 bound
+* ``system_settings`` — queue ``system``, concurrency (SAQ_WORKER_CONCURRENCY,
+  default 5, deployed at 20 in prod/staging, decoupled from Redis pool size),
+  web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
   webhook-dedup cleanup, stale_run_recovery.
 
-Accepted design target: concurrency 5 per worker x up to 5 machines = up to 25
+Accepted design target: concurrency 20 per worker x up to 5 machines = up to 100
 concurrent runs (recorded in ADR 017).
 
 Staging uses the SAME workers on dedicated queue names so a staging worker can

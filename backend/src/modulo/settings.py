@@ -176,11 +176,12 @@ class Settings(BaseSettings):
     # below this pool so the semaphore can never exhaust every connection.
     saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # SAQ worker concurrency (how many jobs run at once per worker).
-    # KEPT at 5 — the accepted design target (5 per worker x up to 5 machines
-    # = up to 25 concurrent runs), verified-safe against the prod Postgres
-    # 300-connection cap (only ~40 in use). Decoupled from Redis pool size —
-    # pool=20 handles bursty Redis ops while concurrency=5 prevents runaway
-    # job parallelism.
+    # Default 5; prod/staging pin this to 20 via fly.toml — the accepted
+    # design target (20 per worker x up to 5 machines = up to 100 concurrent
+    # runs), verified-safe against the prod Postgres 300-connection cap (only
+    # ~40 in use; SAQ is asyncio single-engine so concurrency does not multiply
+    # the DB pool). Decoupled from Redis pool size — pool=20 handles bursty
+    # Redis ops while concurrency prevents runaway job parallelism.
     saq_worker_concurrency: int = Field(default=5, alias="SAQ_WORKER_CONCURRENCY", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second

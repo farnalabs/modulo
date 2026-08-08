@@ -67,6 +67,7 @@ primary_region = 'lhr'
   # MODULO_USERS is set with `fly secrets set` and must not be committed.
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  SAQ_WORKER_CONCURRENCY = "20"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
@@ -80,6 +81,6 @@ primary_region = 'lhr'
 
 [[vm]]
   processes = ['worker']
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
