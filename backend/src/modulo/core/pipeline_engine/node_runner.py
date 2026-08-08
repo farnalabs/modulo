@@ -1247,6 +1247,9 @@ def make_sandbox_agent_fn(
 
                 async def _drain_sandbox_log() -> None:
                     nonlocal _drain_offset
+                    # Probe failed (log file not created yet, sandbox connection
+                    # unresponsive). Do NOT refresh liveness — the idle watchdog
+                    # treats a prolonged probe failure as a genuine stall.
                     try:
                         info = await asyncio.wait_for(
                             sandbox.files.get_info(_SANDBOX_LOG_PATH),
@@ -1257,9 +1260,6 @@ def make_sandbox_agent_fn(
                     except asyncio.CancelledError:
                         raise
                     except Exception:
-                        # Probe failed (log file not created yet, sandbox connection
-                        # unresponsive). Do NOT refresh liveness — the idle watchdog
-                        # treats a prolonged probe failure as a genuine stall.
                         _log.info(
                             "sandbox_agent.log_drain_probe_failed",
                             extra={"node_id": node_id},
