@@ -9,7 +9,7 @@
     <PageHeader :title="$t('views.AdminCostBreakdownView.cost_controls')" :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')" />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
-
+      <div class="space-y-6">
       <LoadingSpinner v-if="loading" />
       <template v-else>
         <Card>
@@ -220,6 +220,7 @@
           </CardContent>
         </Card>
       </template>
+      </div>
     </FeatureGate>
   </div>
 </template>
