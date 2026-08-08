@@ -16,6 +16,10 @@ export const test = base.extend<{ env: TestEnv }>({
 
 export { expect }
 
+export function isDevModeTarget(env: TestEnv): boolean {
+  return env.name === 'local'
+}
+
 const MOCK_ACCESS_TOKEN = 'mock-access-token-for-e2e-tests'
 const MOCK_REFRESH_TOKEN = 'mock-refresh-token-for-e2e-tests'
 
