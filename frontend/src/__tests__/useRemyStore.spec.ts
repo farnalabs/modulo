@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useRemyStore } from '../composables/useRemyStore'
 
@@ -99,5 +99,56 @@ describe('useRemyStore', () => {
     })
     expect(store.messages[0].content).toContain('failed')
     expect(store.messages[0].content).toContain('timeout')
+  })
+
+  it('collapses floating panel to closed on narrow viewport', () => {
+    const store = useRemyStore()
+    store.setPanelState('floating')
+    vi.stubGlobal('innerWidth', 390)
+    try {
+      store.collapseIfNarrow()
+      expect(store.panelState).toBe('closed')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('collapses docked and maximised panels to closed on narrow viewport', () => {
+    const store = useRemyStore()
+    vi.stubGlobal('innerWidth', 390)
+    try {
+      store.setPanelState('docked')
+      store.collapseIfNarrow()
+      expect(store.panelState).toBe('closed')
+      store.setPanelState('maximised')
+      store.collapseIfNarrow()
+      expect(store.panelState).toBe('closed')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps panel state on wide viewport', () => {
+    const store = useRemyStore()
+    store.setPanelState('floating')
+    vi.stubGlobal('innerWidth', 1280)
+    try {
+      store.collapseIfNarrow()
+      expect(store.panelState).toBe('floating')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('collapseIfNarrow never force-opens a closed panel', () => {
+    const store = useRemyStore()
+    store.setPanelState('closed')
+    vi.stubGlobal('innerWidth', 390)
+    try {
+      store.collapseIfNarrow()
+      expect(store.panelState).toBe('closed')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
