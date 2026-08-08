@@ -261,6 +261,7 @@ async def test_text_mode_backend_gates_include_ui_tools_text(
         loader_build_prompt=build_prompt,
     )
     assert build_prompt.await_count == 1
+    assert build_prompt.await_args is not None
     kwargs = build_prompt.await_args.kwargs
     assert kwargs["include_ui_tools_text"] is expected_text_flag
     assert backend.turns == 1
