@@ -106,6 +106,21 @@
         </div>
 
         <div v-else>
+          <!-- Mobile folder filter — the FolderTree is hidden below md, so offer folder selection here -->
+          <div v-if="foldersList.length > 0" class="md:hidden mb-4">
+            <Select
+              v-model="mobileFolderSelectValue"
+              :aria-label="$t('views.PipelineListView.folders')"
+            >
+              <SelectTrigger class="w-full" :aria-label="$t('views.PipelineListView.folders')" data-testid="pipeline-list-mobile-folder-select">
+                <SelectValue :placeholder="$t('views.PipelineListView.all_pipelines')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{{ $t('views.PipelineListView.all_pipelines') }}</SelectItem>
+                <SelectItem v-for="f in foldersList" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <!-- Breadcrumb navigation -->
           <div class="mb-4 flex items-center gap-2 text-sm">
             <template v-if="selectedFolderId && selectedFolderName">
@@ -570,6 +585,7 @@ import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
@@ -737,6 +753,11 @@ const folderNameMap = computed(() => {
 const selectedFolderName = computed(() => {
   if (!selectedFolderId.value) return ''
   return folderNameMap.value.get(selectedFolderId.value) || ''
+})
+
+const mobileFolderSelectValue = computed<string>({
+  get: () => selectedFolderId.value ?? '__all__',
+  set: (val: string) => onSelectFolder(val === '__all__' ? null : val),
 })
 
 function onPipelineDragStart(pipeline: PipelineItem, event: DragEvent) {
