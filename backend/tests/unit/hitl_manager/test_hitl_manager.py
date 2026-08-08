@@ -130,6 +130,16 @@ def _session_update(
     return session
 
 
+def _assert_decode_scope_args(mock_decode: MagicMock) -> None:
+    """Assert _decode_claim_jwt was called with the run/gate scope bound to the token."""
+    mock_decode.assert_called_once()
+    call_kwargs = mock_decode.call_args.kwargs
+    assert call_kwargs["run_id"] == str(_RUN)
+    assert call_kwargs["gate_id"] == _GATE
+    assert mock_decode.call_args.args[0] == "aaa.bbb.ccc"
+    assert mock_decode.call_args.args[1] == "test-secret-key-with-enough-length"
+
+
 # ---------------------------------------------------------------------------
 # create_gate
 # ---------------------------------------------------------------------------
@@ -737,10 +747,12 @@ async def test_approve_jwt_expired_signature_raises_expired():
         patch(
             "modulo.core.hitl_manager._decode_claim_jwt",
             side_effect=ExpiredSignatureError("token expired"),
-        ),
+        ) as mock_decode,
         pytest.raises(ClaimTokenExpiredError),
     ):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
+
+    _assert_decode_scope_args(mock_decode)
 
 
 async def test_approve_jwt_invalid_signature_raises_invalid():
@@ -756,10 +768,12 @@ async def test_approve_jwt_invalid_signature_raises_invalid():
         patch(
             "modulo.core.hitl_manager._decode_claim_jwt",
             side_effect=InvalidTokenError("bad signature"),
-        ),
+        ) as mock_decode,
         pytest.raises(ClaimTokenInvalidError),
     ):
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
+
+    _assert_decode_scope_args(mock_decode)
 
 
 # ---------------------------------------------------------------------------
