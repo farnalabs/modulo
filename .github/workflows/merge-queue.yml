@@ -45,7 +45,6 @@ jobs:
 
       - name: Check main CI status
         id: check-ci
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -59,9 +58,15 @@ jobs:
             echo "Main CI is green - proceeding with merge queue."
             echo "main_ci_ok=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Main CI is $CI_CONCLUSION - proceeding anyway."
+            echo "Main CI is $CI_CONCLUSION (or could not be determined) - merge queue will be BLOCKED."
             echo "main_ci_ok=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Block merge queue when main CI is not green
+        if: steps.check-ci.outputs.main_ci_ok != 'true'
+        run: |
+          echo "::error::Main CI is not green (main_ci_ok=${{ steps.check-ci.outputs.main_ci_ok }}). The merge queue must never merge PRs onto a failing main. Failing this run - no PRs will be merged."
+          exit 1
       - name: Clean up stale failed merge-queue branches
         if: steps.check-ci.outputs.main_ci_ok == 'true'
         env:
