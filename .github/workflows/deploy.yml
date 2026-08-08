@@ -496,6 +496,7 @@ jobs:
         run: npx playwright install chromium
 
       - name: Run @smoke Playwright tests against app.modulo.run
+        id: smoke-tests
         run: npm run test:e2e:smoke -- --reporter=line
         timeout-minutes: 10
         env:
