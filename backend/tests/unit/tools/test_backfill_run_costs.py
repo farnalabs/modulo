@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.seed_data.cost_components import seed_cost_components_for_org
 from modulo.db.models.base import Base
+from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 from modulo.tools.backfill_run_costs import backfill_run_costs
 
@@ -29,7 +30,7 @@ _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000a2")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000a3")
 
-_TABLE_NAMES = frozenset({"runs", "cost_components"})
+_TABLE_NAMES = frozenset({"organisations", "runs", "cost_components"})
 
 # Sentinel so callers can pass ``usage=None`` explicitly (a run with NO usage).
 _UNSET: Any = object()
@@ -143,6 +144,26 @@ async def _add_many_runs(
 
 
 class TestBackfillRunCosts:
+    async def test_org_enumeration_works_with_autobegin_false(self, maker: async_sessionmaker[AsyncSession]) -> None:
+        # Regression (PR #781): the org-enumeration path (org_id=None) ran its
+        # SELECT without an active transaction. With autobegin=False (the
+        # production factory shape in main()) that raised
+        # InvalidRequestError: Autobegin is disabled on this Session. This
+        # test FAILED before the fix and passes after — enumeration must wrap
+        # the query in session.begin() (mirroring seed_cost_components).
+        async with maker() as session, session.begin():
+            session.add(Organisation(id=_ORG_A, name="Org A", slug="org-a"))
+
+        await _seed_components(maker, _ORG_A)
+        await _add_run(maker, _ORG_A)
+
+        result = await backfill_run_costs(maker)
+
+        assert result.orgs_scanned == 1
+        assert result.candidates == 1
+        assert result.updated == 1
+        assert result.errors == 0
+
     async def test_recomputes_breakdown_and_total(self, maker: async_sessionmaker[AsyncSession]) -> None:
         await _seed_components(maker, _ORG_A)
         run = await _add_run(maker, _ORG_A)

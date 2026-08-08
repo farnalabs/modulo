@@ -265,7 +265,7 @@ async def backfill_run_costs(
     if org_id is not None:
         org_ids: list[uuid.UUID] = [org_id]
     else:
-        async with factory() as session:
+        async with factory() as session, session.begin():
             result = await session.execute(select(Organisation.id).order_by(Organisation.created_at))
             org_ids = [row[0] for row in result.all()]
 
