@@ -16,12 +16,48 @@ env:
 jobs:
   queue:
     name: Merge queue -> main
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
       actions: write
     runs-on: ubicloud-standard-2
     steps:
+      - name: Cancel stale stuck runs (self-healing)
+        # A run that is in_progress with a job that never got picked up by a
+        # runner (startedAt: null) holds the merge-queue concurrency group lock
+        # (cancel-in-progress: false), blocking every later queue run. This sweep
+        # cancels such runs once they exceed ~10 minutes so THIS run can proceed.
+        # Best-effort: a failure here must never fail the queue run itself.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Sweeping for stale in-progress 'Merge: Queue' runs stuck with no started job..."
+          NOW=$(date -u +%s)
+          CUTOFF=$((NOW - 600))
+          IN_PROGRESS=$(gh run list --workflow merge-queue.yml --status in_progress --limit 50 --json databaseId,createdAt 2>/dev/null || echo "[]")
+          CANDIDATES=$(echo "$IN_PROGRESS" | jq -r --argjson me "${{ github.run_id }}" '.[] | select(.databaseId != $me) | select(.createdAt != null) | @base64' 2>/dev/null || true)
+          for CAND in $CANDIDATES; do
+            RUN_ID=$(echo "$CAND" | base64 -d | jq -r '.databaseId')
+            CREATED=$(echo "$CAND" | base64 -d | jq -r '.createdAt')
+            CREATED_TS=$(date -u -d "$CREATED" +%s 2>/dev/null || echo "$NOW")
+            echo "  Checking run #$RUN_ID (created $CREATED)..."
+            if [ "$CREATED_TS" -ge "$CUTOFF" ]; then
+              echo "    Run #$RUN_ID is younger than 10 min - leaving it."
+              continue
+            fi
+            # Only cancel if at least one job is queued but never started
+            UNSTARTED=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs --jq '[.jobs[] | select(.started_at == null)] | length' 2>/dev/null || echo "0")
+            if [ "$UNSTARTED" -gt 0 ]; then
+              echo "    Run #$RUN_ID has $UNSTARTED queued job(s) never started for >10 min - cancelling."
+              gh run cancel "$RUN_ID" --repo ${{ github.repository }} 2>/dev/null && echo "    Cancelled run #$RUN_ID." || echo "    Cancel of #$RUN_ID failed (ignoring)."
+            else
+              echo "    Run #$RUN_ID has no unstarted jobs - leaving it."
+            fi
+          done
+          echo "Stuck-run sweep complete."
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
