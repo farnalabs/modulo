@@ -114,7 +114,8 @@
               <div v-if="membersByTeam[team.id]?.length === 0" class="py-4 text-center text-sm text-muted-foreground">
                 No members yet.
               </div>
-              <table v-else class="w-full text-sm">
+              <div v-else class="overflow-x-auto">
+                <table class="w-full text-sm">
                 <thead>
                   <tr class="border-b text-left text-muted-foreground">
                     <th class="pb-2 font-medium">{{ $t('views.SettingsTeamsView.name') }}</th>
@@ -145,6 +146,7 @@
                   </tr>
                 </tbody>
               </table>
+              </div>
             </div>
 
             <div v-if="addMemberTeamId === team.id" class="mt-4 flex items-center gap-2 rounded-lg border bg-muted/30 p-3">

@@ -154,7 +154,7 @@
     />
 
     <template v-else>
-      <div class="table-wrapper">
+      <div class="table-wrapper overflow-x-auto">
         <table class="w-full">
           <thead>
             <tr>
