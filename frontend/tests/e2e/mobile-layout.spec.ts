@@ -209,6 +209,11 @@ async function checkInteractiveNotClipped(page: Page) {
       // left): contents sit off-screen in their correct closed state and are
       // reachable when the drawer opens — never a clipping bug.
       if (rect.right <= 0) continue
+      // Closed off-canvas panel resting fully off-screen right (e.g. the
+      // draggable Remy floating panel whose persisted position can sit
+      // outside the viewport): reachable when dragged back — never a
+      // clipping bug.
+      if (rect.left >= window.innerWidth) continue
       // Right-side overhang reachable by scrolling a horizontal container.
       if (overhangsRight && hasHorizontalScrollableAncestor(htmlEl)) continue
       clipped.push({
