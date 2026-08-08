@@ -68,7 +68,8 @@ async def get_monitor_config(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-        entry = await get_config(session, _CONFIG_KEY)
+        async with session.begin():
+            entry = await get_config(session, _CONFIG_KEY)
     except ProgrammingError:
         _log.exception("admin.monitor_config.get_monitor_config - table missing")
         raise HTTPException(
@@ -100,12 +101,13 @@ async def set_monitor_config(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-        entry = await set_config(
-            session,
-            _CONFIG_KEY,
-            req.model_dump(),
-            updated_by=current_user.account_id,
-        )
+        async with session.begin():
+            entry = await set_config(
+                session,
+                _CONFIG_KEY,
+                req.model_dump(),
+                updated_by=current_user.account_id,
+            )
     except ProgrammingError:
         _log.exception("admin.monitor_config.set_monitor_config - table missing")
         raise HTTPException(
