@@ -2440,7 +2440,7 @@ Each forwarder: per-org enable/disable toggle, test-connection button, status in
 | Feature | Tier |
 |---|---|
 | Error ingestion (backend + frontend) | Community |
-| Error dashboard list + detail | Community |
+| Error dashboard list + detail | Team |
 | Basic filters (level, status, date) | Community |
 | Acknowledge, resolve | Community |
 | Built-in notification rules (max 3, no webhook) | Community |
@@ -2451,6 +2451,13 @@ Each forwarder: per-org enable/disable toggle, test-connection button, status in
 | External forwarders (all 6) | Team |
 | Extended retention (>30 days) | Team |
 | Rules max 10 + webhook action | Team |
+
+> **Page-level gate**: the Error Dashboard page (`/admin/errors`) is gated as a
+> whole behind the Team-tier `error_tracking` feature flag (FeatureGate +
+> `require_feature("error_tracking")` on the API). Error ingestion always runs
+> on Community tier; only the dashboard UI is Team-gated. Finer-grained
+> per-capability gating within the page (basic filters, acknowledge/resolve)
+> is a future refinement.
 
 ---
 

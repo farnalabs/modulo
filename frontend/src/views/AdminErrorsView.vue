@@ -1,5 +1,5 @@
 <template>
-  <FeatureGate feature-name="error_tracking" show-disabled>
+  <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
   <PageTabs :tabs="[
     { label: 'Dashboard', to: '/admin/errors' },
   ]" />
