@@ -922,6 +922,101 @@ def step_connector_raises_value_error(expected, ctx):
     assert expected in ctx["query_error"], f"Expected '{expected}' in error but got: {ctx['query_error']}"
 
 
+@when("the GitHub API returns HTTP 401 with an expired token")
+def step_github_api_401_expired_token(ctx):
+    from modulo.connectors.github import GitHubAuthError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise GitHubAuthError(
+            "GitHub API HTTP 401: Bad credentials",
+            status_code=401,
+            error_code="token_expired",
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@when("the GitHub API returns HTTP 429 with exhausted quota")
+def step_github_api_429_exhausted_quota(ctx):
+    from modulo.connectors.github import GitHubRateLimitError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise GitHubRateLimitError(
+            "GitHub API HTTP 429: Rate limit exceeded",
+            status_code=429,
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@then(parsers.parse('the connector raises a GitHub error with code "{code}"'))
+def step_connector_raises_github_error_code(code, ctx):
+    import asyncio
+
+    from modulo.connectors.base import ConnectorQuery
+    from modulo.connectors.github import GitHubError
+
+    connector = ctx["connector"]
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
+        ctx["query_error"] = "unexpected_success"
+    except GitHubError as exc:
+        ctx["query_error"] = str(exc)
+        assert exc.error_code == code, f"Expected error code {code!r} but got {exc.error_code!r}"
+    except ValueError as exc:
+        ctx["query_error"] = str(exc)
+        raise AssertionError(f"Expected a GitHubError but got a plain ValueError: {exc}") from exc
+    finally:
+        loop.close()
+
+
+@given("a GitHub connector whose health check reports an expired token")
+def step_github_health_expired_token(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Invalid or expired GitHub token (HTTP 401)")
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@given(parsers.parse('a GitHub connector whose health check reports missing scope "{scope}"'))
+def step_github_health_missing_scope(scope, ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(
+            ok=False,
+            detail=(f"Missing scopes: missing_scope:{scope} ({scope}). Required: repo, read:org"),
+        )
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@then("the health result detail describes an expired token")
+def step_health_detail_expired_token(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert "expired" in result.detail.lower(), f"Expected expired-token detail but got: {result.detail}"
+    assert "HTTP 401" in result.detail
+
+
+@then(parsers.parse('the health result detail contains "{text}"'))
+def step_health_detail_contains(text, ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert text in result.detail, f"Expected {text!r} in detail but got: {result.detail}"
+
+
 @when(parsers.parse('writing a file to GitHub returns HTTP {status_code:d} "{reason}"'))
 def step_github_write_returns_error(status_code, reason, ctx):
     connector = ctx["connector"]
