@@ -2527,10 +2527,8 @@ Admin (advanced mode, default collapsed)
     Users             /admin/users
     Org Settings      /admin/org
     Audit Log         /admin/audit
-  Cost Management     (subgroup)
-    Overview          /admin/costs
-    Spend Limits      /admin/costs/limits
-    Cost Controls     /admin/costs/controls
+  Cost Management     (single entry — in-page tabs)
+    Costs             /admin/costs   (tabs: Overview, Spend Limits, Cost Components, Cost Controls)
   System              (subgroup)
     Connectors        /admin/connectors
     Model Backends    /admin/model-backends
@@ -2558,7 +2556,7 @@ Key structural changes:
 - Pipelines and Evaluation merged into Core as collapsible subgroups (removes duplicate Library entry)
 - Schemas demoted from standalone group to a subgroup under Core
 - New **Remy** group consolidates user-level skills (`/settings/remy`) and admin config (`/admin/remy`) — both previously scattered across Settings and Admin
-- Admin gets 5 visual subgroups (Access Control, Cost Management, System, Monitoring, Extensions) replacing a flat 20-item list
+- Admin gets 4 visual subgroups (Access Control, System, Monitoring, Extensions) replacing a flat 20-item list; Cost Management is a single sidebar entry with in-page tabs
 - Sidebar active-state: exact path match wins; child routes no longer highlight parent links to avoid ambiguity
 
 #### 8.26.3 Secondary Navigation (Page Tabs)
@@ -2567,7 +2565,7 @@ For page domains with 2–5 sibling routes, horizontal tab bars provide in-page 
 
 | Domain | Routes | Tabs |
 |---|---|---|
-| Cost Management | `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls` | Overview \| Spend Limits \| Cost Controls |
+| Cost Management | single sidebar entry `/admin/costs`; tabs route to `/admin/costs/limits`, `/admin/costs/components`, `/admin/costs/controls` | Overview \| Spend Limits \| Cost Components \| Cost Controls |
 | Errors | `/admin/errors`, `/admin/errors/:id` | Dashboard \| *(Error Detail — not in tabs, has back link)* |
 | Schemas | `/schemas`, `/schemas/editor/:id?`, `/schemas/infer` | Browse \| Editor \| Infer |
 | Evaluation | `/evals/editor`, `/evals/proposals`, `/variants/compare`, `/variants/ab-test` | Evals \| Proposals \| Variants \| AB Test |
@@ -3058,8 +3056,8 @@ and improved continuously.
 Stages), Runs & Eval (Output Diff, Evals, Variants, A/B Test), Schemas (Browse,
 Editor, Infer), Remy (My Skills, Admin Config), Settings (Teams, SSO, License, MCP,
 Triggers, Runtime Config, Rate Limits, HITL Review, Observability, Error Forwarders),
-Access Control (Users, Org Settings, Audit Log), Cost Management (Overview, Spend
-Limits, Cost Controls), System (Connectors, Model Backends, Node Categories,
+Access Control (Users, Org Settings, Audit Log), Cost Management (Costs — Overview, Spend
+Limits, Cost Components, Cost Controls), System (Connectors, Model Backends, Node Categories,
 Feature Flags, Environments, Run Retention, Saved Views), Monitoring (Error Dashboard,
 Notification Log, API Changelog, Team Comparison), Extensions (Plugins, Feedback Inbox).
 
