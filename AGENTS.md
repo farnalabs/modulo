@@ -760,6 +760,7 @@ admin-view gaps whenever an `Admin*.vue` file is touched — every
 change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
 FAR-117), the commit is blocked — add the wrapper with the correct feature name
 (match sibling views) rather than bypassing the hook.
+- **`npm install --force` in a worktree can yield node_modules WITHOUT the `.bin` shims** (2026-08-08) — `npm run test:unit` then fails with 'vitest is not recognized' (and `npx` fails too, and `node node_modules/vitest/vitest.mjs` fails with `ERR_MODULE_NOT_FOUND`). Worktree frontend tooling is therefore unreliable even when node_modules appears present. Don't burn time reinstalling in the worktree: use the main tree's node_modules junction (see the junction lesson) when it exists, otherwise skip worktree frontend checks and let GitHub CI (PR) + `gate.ps1`/`smoke-test.ps1` (post-merge, main tree) be the verification gates.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
