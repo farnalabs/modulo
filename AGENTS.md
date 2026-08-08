@@ -112,8 +112,16 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Definition of Done
 
-### Manifest updated
+The full Definition of Done lives in `docs/definition-of-done.md`. It is the
+checklist every implementer applies before reporting a task done AND the checklist
+the PR reviewer applies to every PR. It contains the test suite inventory and the
+test-impact consideration step ("consider all suites, guess which files are affected,
+run the high-confidence subset, defer honestly").
+
+At minimum, before a task is done:
 - [ ] **Manifest updated** — if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
+- [ ] **Test impact considered** — per `docs/definition-of-done.md` §2: all suites considered, affected files guessed and run where the environment allows, deferred items listed
+- [ ] **Self-review passed** — per `docs/definition-of-done.md` §3: files exist, footprint within scope, lint clean, no secrets, PRD accurate
 
 ---
 
@@ -274,6 +282,8 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 **Unit** (`tests/unit/`): no DB, no Docker, `StubModelBackend` for all LLM calls, run in < 30s.
 **Integration** (`tests/integration/`): real Postgres via testcontainers, Alembic migrations applied first, Factory Boy for entities. Cross-tenant isolation test is mandatory.
 **BDD/E2E** (`tests/bdd/features/`, `tests/bdd/steps/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` — never `waitForTimeout()`. Every interactive element needs `data-testid`.
+
+The full suite inventory (root paths, coverage, and run commands) lives in `docs/definition-of-done.md` §1.
 
 Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overall 80%.
 
@@ -717,6 +727,9 @@ The backend suite takes ~35-40 min (14700+ tests). Frontend — from `Repos/modu
 npm run test:unit
 ```
 (478 tests, ~4 min). Both must pass before reporting "tests pass" or proceeding with any merge.
+
+The full inventory of suites and their root paths lives in `docs/definition-of-done.md` §1.
+Agents run targeted files only (see §2 impact consideration) — never the full 35-40 min suite in a worktree.
 
 ### Frontend worktrees and node_modules
 
