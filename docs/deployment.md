@@ -380,7 +380,7 @@ For more than one backend replica, **Redis is mandatory.** Here's why:
 
 ### Vertical scaling (bigger machine)
 
-Adding CPU/RAM to a single replica works without Redis. The asyncio event loop handles many concurrent requests within one process. Gunicorn worker processes (configurable via `GUNICORN_WORKERS` env var) use multiple CPU cores on a single machine.
+Adding CPU/RAM to a single replica works without Redis. The asyncio event loop handles many concurrent requests within one process. Uvicorn worker processes (configurable via `uvicorn --workers`) use multiple CPU cores on a single machine.
 
 ### Configuration
 
