@@ -1,4 +1,4 @@
-# ADR 003 — Agent Dispatch Model
+# ADR 003  –  Agent Dispatch Model
 
 **Date**: 2026-07-16
 **Status**: Supersedes ADR 001 (the agent execution environment concept is replaced by the dispatch model)
@@ -21,7 +21,7 @@ ModelBackend → model inference
 ConnectorHub → GitHub / filesystem / etc.
 ```
 
-In this model, Modulo owned the entire agent runtime — tool calling, execution loops, shell access, and sandbox lifecycle. This was the wrong strategy.
+In this model, Modulo owned the entire agent runtime  –  tool calling, execution loops, shell access, and sandbox lifecycle. This was the wrong strategy.
 
 **Why it was wrong:**
 
@@ -29,15 +29,15 @@ In this model, Modulo owned the entire agent runtime — tool calling, execution
 
 2. **The sandbox is a means, not the product.** Provisioning an E2B sandbox, managing workspace leases, enforcing command allowlists, and tracking shell sessions is infrastructure plumbing. It adds complexity without differentiating Modulo's value proposition.
 
-3. **ShellConnector is a leaky abstraction.** It requires per-connector command allowlists, workspace lease management, runtime provider resolution, and environment profile configuration — all of which are incidental complexity for what should be a simple "dispatch and collect" pattern.
+3. **ShellConnector is a leaky abstraction.** It requires per-connector command allowlists, workspace lease management, runtime provider resolution, and environment profile configuration  –  all of which are incidental complexity for what should be a simple "dispatch and collect" pattern.
 
-4. **Modulo's real value is upstream and downstream.** Modulo excels at pipeline definition, dispatch orchestration, auth and audit, cost tracking, eval gates, and HITL review — not at running agent execution loops.
+4. **Modulo's real value is upstream and downstream.** Modulo excels at pipeline definition, dispatch orchestration, auth and audit, cost tracking, eval gates, and HITL review  –  not at running agent execution loops.
 
 ---
 
 ## Decision
 
-**Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output.** Modulo is the SDLC orchestration layer — it owns dispatch, auth, audit, cost tracking, eval gates, and HITL — not the agent loop itself.
+**Modulo dispatches work to external agent runtimes in sandboxes, then evaluates the output.** Modulo is the SDLC orchestration layer  –  it owns dispatch, auth, audit, cost tracking, eval gates, and HITL  –  not the agent loop itself.
 
 ### Architecture
 
@@ -78,7 +78,7 @@ Every sandbox agent execution returns structured JSON:
 }
 ```
 
-- All observable metrics (wall-clock time, exit code, output validity) are captured natively by Modulo — no follow-up step required.
+- All observable metrics (wall-clock time, exit code, output validity) are captured natively by Modulo  –  no follow-up step required.
 - The output schema is validated at the pipeline level, not inside the sandbox.
 
 #### Post-hoc eval
@@ -100,11 +100,11 @@ Aggregated metrics per agent template:
 
 ### ShellConnector is deprecated
 
-ShellConnector was built for ADR 001's model where Modulo agents would have shell access inside sandboxes. Under the new dispatch model, no Modulo agent runs inside a sandbox — the external agent runtime handles all file operations, git commands, and shell execution. ShellConnector will be removed in a future release.
+ShellConnector was built for ADR 001's model where Modulo agents would have shell access inside sandboxes. Under the new dispatch model, no Modulo agent runs inside a sandbox  –  the external agent runtime handles all file operations, git commands, and shell execution. ShellConnector will be removed in a future release.
 
 ### RuntimeProvider ABC, E2BRuntimeProvider, and WorkspaceLease remain useful
 
-These provide sandbox lifecycle primitives (create sandbox, run command, destroy sandbox) that the `sandbox_agent` node type uses internally. The abstraction is sound — only ShellConnector's usage pattern was wrong.
+These provide sandbox lifecycle primitives (create sandbox, run command, destroy sandbox) that the `sandbox_agent` node type uses internally. The abstraction is sound  –  only ShellConnector's usage pattern was wrong.
 
 ### Modulo is no longer in the "agent runtime" business
 
@@ -116,7 +116,7 @@ Existing pipelines that use ShellConnector nodes will continue to execute, but t
 
 ### Graph validator changes
 
-The graph validator must allow `sandbox_agent` as a valid node type alongside `agent`, `manual`, and `connector`. The `sandbox_agent` node type does not require `connector_binding` or `model_backend_id` — only `agent_prompt`, `template_id`, and optionally `output_schema_json`.
+The graph validator must allow `sandbox_agent` as a valid node type alongside `agent`, `manual`, and `connector`. The `sandbox_agent` node type does not require `connector_binding` or `model_backend_id`  –  only `agent_prompt`, `template_id`, and optionally `output_schema_json`.
 
 ---
 
@@ -126,5 +126,5 @@ The graph validator must allow `sandbox_agent` as a valid node type alongside `a
 2. ShellConnector is deprecated with a runtime `DeprecationWarning`.
 3. The `sandbox_agent` node type is added to `build_graph_from_json` in `graph_cache.py`.
 4. Existing ShellConnector pipelines continue to work but will show a deprecation notice.
-5. No data migration is required — ShellConnector configuration in pipeline snapshots remains readable.
+5. No data migration is required  –  ShellConnector configuration in pipeline snapshots remains readable.
 6. The product map entry for `runtime-provider-core` is updated with a deprecation notice.

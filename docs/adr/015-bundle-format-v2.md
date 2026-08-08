@@ -1,4 +1,4 @@
-# ADR 015 — Bundle Format v2 (YAML)
+# ADR 015  –  Bundle Format v2 (YAML)
 
 **Date**: 2026-07-16
 **Status**: Accepted
@@ -33,7 +33,7 @@ HITL gate config but has several limitations:
    registry but there is no mechanism for publishers to sign their bundles or
    for consumers to verify authenticity.
 8. **ZIP is opaque.** The v1 ZIP+JSON format cannot be inspected, diffed, or
-   edited with standard tools. Version control integration is poor — reviewing
+   edited with standard tools. Version control integration is poor  –  reviewing
    a bundle change requires unzipping and diffing JSON manually.
 
 ## Decision
@@ -44,7 +44,7 @@ envelope. YAML was chosen over JSON, TOML, or protobuf for the following reasons
 - **Readability.** YAML with comments is human-writable and human-reviewable.
   A bundle can be inspected in any text editor or diff tool.
 - **Composability.** YAML anchors and aliases allow schema definitions to be
-  referenced multiple times without duplication — useful for multi-agent
+  referenced multiple times without duplication  –  useful for multi-agent
   pipelines where the same schema serves as input to one agent and output
   of another.
 - **Tooling.** Standard CI workflows can diff, lint, and validate YAML files
@@ -58,7 +58,7 @@ The format specification is defined below and validated by the JSON Schema at
 
 ---
 
-## Decision — Format Specification
+## Decision  –  Format Specification
 
 ### Top-level structure
 
@@ -69,10 +69,10 @@ modulo_workflow:
   version: "1.0.0"
   author: "author@example.com"
 
-  # NEW: team ownership — resolved during import
+  # NEW: team ownership  –  resolved during import
   owner_team: null | "<team-name>"
 
-  # NEW: visibility — defaults to org on import
+  # NEW: visibility  –  defaults to org on import
   visibility: org | team | private
 
   # NEW: lifecycle map reference
@@ -186,10 +186,10 @@ config:
 On import, the `owner_team` field is resolved against the importing org's team
 roster:
 
-1. If `owner_team` is `null` — ownership defaults to org-wide (same as v1)
-2. If `owner_team` matches a team name in the importing org — the imported
+1. If `owner_team` is `null`  –  ownership defaults to org-wide (same as v1)
+2. If `owner_team` matches a team name in the importing org  –  the imported
    pipeline is owned by that team
-3. If `owner_team` does not match any team — the importer is prompted to
+3. If `owner_team` does not match any team  –  the importer is prompted to
    select a team or default to org-wide, and a warning is emitted
 
 The `owner_team` value in the bundle is a **team name** (human-readable), not
@@ -214,7 +214,7 @@ presented with a visibility picker alongside the ownership picker.
 
 A `partial: true` bundle represents an incomplete pipeline that must be
 assembled with other bundles or manually extended before it is runnable.
-Partial bundles cannot be triggered — the `triggers` section must be empty or
+Partial bundles cannot be triggered  –  the `triggers` section must be empty or
 absent.
 
 Use cases:
@@ -227,7 +227,7 @@ Use cases:
 - **In-progress work.** A pipeline being developed across multiple sessions
   can be exported as `partial: true` and re-imported for continued editing.
 
-On import, partial bundles are created in `draft` status — they cannot run
+On import, partial bundles are created in `draft` status  –  they cannot run
 until `partial` is set to `false` and all required connectors and schemas are
 bound.
 
@@ -235,7 +235,7 @@ bound.
 
 `composite_template_refs` allows a bundle to declare that it participates in
 one or more lifecycle templates (e.g. `code-review`, `deploy-canary`). These
-are template IDs from the Modulo lifecycle map — the importing org must have
+are template IDs from the Modulo lifecycle map  –  the importing org must have
 compatible templates defined.
 
 On import:
@@ -265,7 +265,7 @@ the YAML content:
   from the registry
 - Unverified bundles are accepted with a warning; verified bundles display a
   "verified publisher" badge
-- Modulo never signs bundles on behalf of users — signing is always
+- Modulo never signs bundles on behalf of users  –  signing is always
   publisher-initiated
 
 ### JSON Schema validation
@@ -304,13 +304,13 @@ The complete JSON Schema for v2 bundles is defined at
 
 4. **Trigger secret handling.** Webhook trigger configs may reference secrets
    by name. Secret names are resolved against the org's connector instances
-   at import time — never embedded in the bundle.
+   at import time  –  never embedded in the bundle.
 
 5. **Path traversal.** The `template_id` field references E2B template IDs or
-   Docker image refs. Both are validated against allowlists — no arbitrary
+   Docker image refs. Both are validated against allowlists  –  no arbitrary
    image references are accepted.
 
-6. **Partial bundle validation.** Partial bundles cannot be triggered — the
+6. **Partial bundle validation.** Partial bundles cannot be triggered  –  the
    engine must reject any attempt to run a pipeline with `partial: true`.
    This check happens at the engine level, not just in the UI.
 
@@ -346,14 +346,14 @@ The conversion maps:
 | `agents[].input_schema` | `agents[].input_schema` (unchanged) |
 | `agents[].output_schema` | `agents[].output_schema` (unchanged) |
 | `edges` | `edges` (unchanged, if present) |
-| — (not present) | `agents[].template_id` → `null` |
-| — (not present) | `agents[].agent_command` → `null` |
-| — (not present) | `triggers` → `[]` |
-| — (not present) | `owner_team` → `null` |
-| — (not present) | `visibility` → `org` |
-| — (not present) | `partial` → `false` |
-| — (not present) | `lifecycle_map_ref` → `null` |
-| — (not present) | `composite_template_refs` → `[]` |
+|  –  (not present) | `agents[].template_id` → `null` |
+|  –  (not present) | `agents[].agent_command` → `null` |
+|  –  (not present) | `triggers` → `[]` |
+|  –  (not present) | `owner_team` → `null` |
+|  –  (not present) | `visibility` → `org` |
+|  –  (not present) | `partial` → `false` |
+|  –  (not present) | `lifecycle_map_ref` → `null` |
+|  –  (not present) | `composite_template_refs` → `[]` |
 
 ### Deprecation timeline
 
@@ -374,7 +374,7 @@ The conversion maps:
 - **Richer metadata.** Triggers, team ownership, visibility, lifecycle maps, and
   composite templates make bundles truly self-contained.
 - **Partial bundles enable composition.** Reusable subgraphs can be published
-  and assembled — not every pipeline needs to be monolithic.
+  and assembled  –  not every pipeline needs to be monolithic.
 - **Runtime configuration travels with agents.** `template_id` and `agent_command`
   on agent definitions mean agent runtimes are not lost on export/import.
 - **Signature verification.** The optional Ed25519 envelope gives consumers
@@ -384,7 +384,7 @@ The conversion maps:
 
 ### Negative
 
-- **YAML complexity.** YAML 1.2 is more complex than JSON — edge cases around
+- **YAML complexity.** YAML 1.2 is more complex than JSON  –  edge cases around
   implicit typing, indentation sensitivity, and multi-line strings require
   careful handling.
 - **Migration cost.** Existing v1 bundles need conversion. The conversion tool
@@ -409,8 +409,8 @@ The conversion maps:
 - Should the YAML file extension be `.yaml` (preferred) or `.yml`? Proposal:
   accept both, canonicalise to `.yaml` in the UI and docs.
 - Should partial bundles support merging at the YAML level (e.g. `!include`
-  directives)? Proposal: no — YAML `!include` is not standard. Assembly is
+  directives)? Proposal: no  –  YAML `!include` is not standard. Assembly is
   handled at the application level during import.
 - Should the signature envelope be mandatory for community library bundles?
-  Proposal: no — signing is optional. Verified bundles get a badge; unsigned
+  Proposal: no  –  signing is optional. Verified bundles get a badge; unsigned
   bundles are accepted with a warning.
