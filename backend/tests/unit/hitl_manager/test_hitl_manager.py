@@ -160,6 +160,7 @@ async def test_create_gate_integrity_error_returns_existing_row():
     """A concurrent insert racing our own insert falls back to the existing row."""
     existing = _gate()
     session = AsyncMock()
+    session.add = MagicMock()
     session.flush = AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
 
     calls = 0
@@ -186,6 +187,7 @@ async def test_create_gate_integrity_error_returns_existing_row():
 async def test_create_gate_integrity_error_lost_race_raises():
     """If the concurrent winner vanishes between our insert and re-fetch, raise."""
     session = AsyncMock()
+    session.add = MagicMock()
     session.flush = AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
 
     async def _execute(stmt: Any) -> Any:
@@ -220,6 +222,29 @@ async def test_claim_success_sets_token_and_expiry():
     mgr = HITLManager()
     result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
     assert result is claimed_gate
+
+
+async def test_claim_with_secret_key_uses_jwt_token():
+    """claim() with a configured secret_key mints a signed JWT claim token."""
+    pre_check = _gate(account_id=None)
+    claimed_gate = _gate(
+        account_id=_USER,
+        claim_token="signed.token.value",
+        expires_at=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session = _session_update(rows_returned=1, gate=claimed_gate, pre_check_gate=pre_check)
+    mgr = HITLManager(secret_key="test-secret-key-with-enough-length")
+
+    with patch("modulo.core.hitl_manager._create_claim_jwt", return_value="signed.token.value") as mock_jwt:
+        result = await mgr.claim(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claimant_id=_USER)
+
+    assert result is claimed_gate
+    mock_jwt.assert_called_once()
+    call_kwargs = mock_jwt.call_args.kwargs
+    assert call_kwargs["run_id"] == str(_RUN)
+    assert call_kwargs["gate_id"] == _GATE
+    assert call_kwargs["client_id"] == str(_USER)
+    assert call_kwargs["expiry_minutes"] == 15
 
 
 async def test_claim_already_claimed_raises():
@@ -699,6 +724,44 @@ async def test_approve_gate_vanished_after_update_raises():
         await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok")
 
 
+async def test_approve_jwt_expired_signature_raises_expired():
+    """A JWT claim token whose signature has expired maps to ClaimTokenExpiredError."""
+    from jwt import ExpiredSignatureError
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="aaa.bbb.ccc", expires_at=future)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager(secret_key="test-secret-key-with-enough-length")
+
+    with (
+        patch(
+            "modulo.core.hitl_manager._decode_claim_jwt",
+            side_effect=ExpiredSignatureError("token expired"),
+        ),
+        pytest.raises(ClaimTokenExpiredError),
+    ):
+        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
+
+
+async def test_approve_jwt_invalid_signature_raises_invalid():
+    """A JWT claim token with a bad signature/scope maps to ClaimTokenInvalidError."""
+    from jwt import InvalidTokenError
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="aaa.bbb.ccc", expires_at=future)
+    session = _session_decide(update_returns_id=None, diagnosis_gate=gate)
+    mgr = HITLManager(secret_key="test-secret-key-with-enough-length")
+
+    with (
+        patch(
+            "modulo.core.hitl_manager._decode_claim_jwt",
+            side_effect=InvalidTokenError("bad signature"),
+        ),
+        pytest.raises(ClaimTokenInvalidError),
+    ):
+        await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="aaa.bbb.ccc")
+
+
 # ---------------------------------------------------------------------------
 # approve_with_modification
 # ---------------------------------------------------------------------------
@@ -1110,6 +1173,17 @@ async def test_count_overdue_returns_zero():
 # ---------------------------------------------------------------------------
 # Executor integration — GraphInterrupt handling
 # ---------------------------------------------------------------------------
+
+
+def test_looks_like_jwt_true_for_three_segments():
+    """A token with exactly two dots (three base64 segments) is treated as a JWT."""
+    assert HITLManager._looks_like_jwt("aaa.bbb.ccc") is True
+
+
+def test_looks_like_jwt_false_for_opaque_token():
+    """Opaque alpha tokens (no dots) are not treated as JWTs."""
+    assert HITLManager._looks_like_jwt("opaque-token") is False
+    assert HITLManager._looks_like_jwt("one.two.three.four") is False
 
 
 def _mock_graph_validator() -> MagicMock:
