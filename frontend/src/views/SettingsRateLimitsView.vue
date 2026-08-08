@@ -26,7 +26,8 @@
 
       <div data-testid="rate-limits-rules" class="rounded-lg border bg-card p-6 shadow-sm">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsRateLimitsView.rules') }}</h2>
-        <table v-if="rules.length > 0" data-testid="rate-limits-table" class="w-full text-sm">
+        <div v-if="rules.length > 0" class="overflow-x-auto">
+          <table data-testid="rate-limits-table" class="w-full text-sm">
           <thead>
             <tr class="border-b text-left text-muted-foreground">
               <th class="pb-2 font-medium">{{ $t('views.SettingsRateLimitsView.path_prefix') }}</th>
@@ -42,6 +43,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
         <div v-else class="text-sm text-muted-foreground">{{ $t('views.SettingsRateLimitsView.no_rate_limit_rules_configured') }}</div>
       </div>
     </div>

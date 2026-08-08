@@ -176,7 +176,7 @@
           </p>
         </div>
 
-      <div class="table-wrapper">
+      <div class="table-wrapper overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead>
             <tr>

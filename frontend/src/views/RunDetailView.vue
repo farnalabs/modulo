@@ -183,7 +183,8 @@
           {{ $t('views.RunDetailView.no_node_data_failed') }}
         </div>
 
-        <table v-else class="w-full text-left text-sm">
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
           <thead>
             <tr class="border-b text-xs uppercase text-muted-foreground">
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.node') }}</th>
@@ -319,6 +320,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
       </section>
 
       <!-- Workspace Lease -->

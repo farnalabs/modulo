@@ -66,7 +66,7 @@
     </div>
 
     <template v-else>
-      <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <div class="overflow-x-auto rounded-lg border bg-card shadow-sm">
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
             <tr>

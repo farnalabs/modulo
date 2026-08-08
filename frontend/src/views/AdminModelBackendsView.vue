@@ -147,7 +147,7 @@
           </p>
         </div>
 
-        <div v-else class="table-wrapper">
+        <div v-else class="table-wrapper overflow-x-auto">
           <table class="w-full text-left text-sm">
             <thead>
               <tr>
@@ -202,7 +202,7 @@
           <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
             {{ $t('views.AdminModelBackendsView.preview_model_backends_count', { count: previewBackends.length }, previewBackends.length) }}
           </summary>
-          <div class="overflow-hidden border-t">
+          <div class="overflow-x-auto border-t">
           <table class="w-full text-left text-sm">
             <thead>
               <tr>

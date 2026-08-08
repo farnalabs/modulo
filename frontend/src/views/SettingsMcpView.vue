@@ -64,7 +64,8 @@
             No API keys created yet.
           </div>
 
-          <table v-else class="w-full text-sm">
+          <div v-else class="overflow-x-auto">
+            <table class="w-full text-sm">
             <thead>
               <tr class="border-b text-left text-muted-foreground">
                 <th class="pb-2 font-medium">{{ $t('views.SettingsMcpView.name') }}</th>
@@ -102,6 +103,7 @@
               </tr>
             </tbody>
           </table>
+          </div>
         </CardContent>
       </Card>
 
