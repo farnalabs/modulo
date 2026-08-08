@@ -11,7 +11,25 @@
     <div class="page-narrow">
     <PageHeader :title="$t('views.EvalProposalsQueueView.title')" :subtitle="$t('views.EvalProposalsQueueView.subtitle')" />
 
-    <LoadingSpinner v-if="loading" />
+    <div v-if="loading" class="space-y-4">
+      <div v-for="i in 3" :key="i" class="card p-5 animate-pulse">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex-1 space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="h-5 w-24 bg-muted rounded" />
+              <div class="h-5 w-20 bg-muted rounded" />
+            </div>
+            <div class="h-4 w-1/3 bg-muted rounded" />
+            <div class="h-3 w-2/3 bg-muted rounded" />
+            <div class="h-3 w-1/2 bg-muted rounded" />
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            <div class="h-9 w-20 bg-muted rounded" />
+            <div class="h-9 w-20 bg-muted rounded" />
+          </div>
+        </div>
+      </div>
+    </div>
 
     <ErrorAlert v-else-if="pageError" :message="pageError" :on-retry="loadProposals" />
 
@@ -60,8 +78,8 @@
                   <span v-if="p.producing_node_name" class="text-muted-foreground">{{ p.producing_node_name }}</span>
                   <span v-else class="font-mono text-xs text-muted-foreground">{{ shortId(p.producing_node_id) }}</span>
                 </div>
-                <div v-if="p.created_at">
-                  <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.detected') }}</span> {{ formatDate(p.created_at) }}
+                <div>
+                  <span class="font-medium text-foreground">{{ $t('views.EvalProposalsQueueView.detected') }}</span> {{ p.created_at ? formatDate(p.created_at) : '—' }}
                 </div>
                 <div v-if="p.needs_human_review">
                   <span class="font-medium text-amber-500">{{ $t('views.EvalProposalsQueueView.needs_human_review') }}</span>
@@ -106,7 +124,6 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
