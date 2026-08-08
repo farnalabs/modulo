@@ -1,0 +1,137 @@
+"""Unit tests for the dispatcher_reconcile readiness check (cross-process stats).
+
+The dispatcher_reconcile system cron runs in the SYSTEM WORKER process; the
+/healthz/ready check runs in the WEB process. The check must read the shared
+Redis key the cron persists every tick (the cron_helpers in-process dict is
+worker-local and invisible to the health check) — these tests lock that in.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+
+from modulo.api.routes.health import _check_dispatcher_reconcile
+from modulo.core import cron_helpers as ch
+from modulo.settings import Settings
+
+
+def _make_settings(redis_url: str = "redis://localhost:6379/0") -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key="a" * 32,
+        modulo_admin_password="test",
+        redis_url=redis_url,
+    )
+
+
+class _FakeStatsRedis:
+    """In-memory redis double: get/set over the reconcile stats key."""
+
+    def __init__(self, blob: bytes | None = None, fail_get: bool = False) -> None:
+        self._blob = blob
+        self._fail_get = fail_get
+
+    async def get(self, _key: str) -> bytes | None:
+        if self._fail_get:
+            raise RuntimeError("redis down")
+        return self._blob
+
+    async def set(self, _key: str, value: str) -> None:
+        self._blob = value.encode()
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _fresh_payload(**overrides: Any) -> str:
+    payload: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "scanned": 3,
+        "repaired": 1,
+        "skipped": 2,
+        "redis_errors": 0,
+        "deduped": 0,
+        "nodeless_failed": 0,
+        "capacity_deferred": 0,
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+class TestCheckDispatcherReconcile:
+    @pytest.mark.asyncio
+    async def test_never_run_degraded(self) -> None:
+        fake = _FakeStatsRedis(blob=None)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "degraded"
+        assert "has never run" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_ok(self) -> None:
+        fake = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert "scanned=3" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_stale_run_degraded(self) -> None:
+        stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=300)).isoformat())
+        fake = _FakeStatsRedis(blob=stale.encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "degraded"
+        assert "stale" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_unparsable_last_run_at_degraded(self) -> None:
+        fake = _FakeStatsRedis(blob=_fresh_payload(last_run_at="not-a-date").encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "degraded"
+        assert "unparsable" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_redis_read_error_fails_open(self) -> None:
+        fake = _FakeStatsRedis(fail_get=True)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert "unavailable" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_cron_written_stats_reported_ok(self) -> None:
+        """End-to-end fix exercise: the system worker persists its outcome via
+        write_dispatcher_reconcile_stats, then the health check reads the SAME
+        key and reports ok — not 'has never run'."""
+        fake = _FakeStatsRedis(blob=None)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            await ch.write_dispatcher_reconcile_stats(fake, {"scanned": 2, "repaired": 0, "skipped": 2})
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert "scanned=2" in result.detail
