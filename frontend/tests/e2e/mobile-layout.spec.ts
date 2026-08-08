@@ -58,6 +58,16 @@ function sanitizePath(p: string): string {
   return p.replace(/[^a-z0-9-]/gi, '_').replace(/^_+|_+$/g, '') || 'root'
 }
 
+// Canvas/editor routes (Vue Flow canvases, effectively infinite height) render
+// so much content that a full-page screenshot can exhaust the Playwright
+// worker and crash the whole run ("worker process exited unexpectedly"). All
+// deterministic invariant checks still run — only the screenshot capture is
+// skipped on these routes. Matches manifest entries like /pipelines/:id/editor,
+// /composites/:id/editor, /evals/editor, /schemas/editor/:id.
+function isCanvasRoute(route: string): boolean {
+  return route.includes('/editor') || route.includes('/composites/')
+}
+
 // Navigate, wait for the Vue app to mount and data to settle, then bail out
 // gracefully when an unauthenticated route redirects to /login. Returns false
 // to signal the caller to skip the checks without failing.
@@ -317,7 +327,11 @@ async function runFullSweep(page: Page, route: string, env: TestEnv) {
   await checkCLS(page)
   await checkInputFontSize(page)
 
-  await page.screenshot({ path: path.join(CAPTURE_DIR, `${sanitizePath(route)}.png`) })
+  if (isCanvasRoute(route)) {
+    console.log(`[mobile-layout] skipping screenshot for canvas route ${route}`)
+  } else {
+    await page.screenshot({ path: path.join(CAPTURE_DIR, `${sanitizePath(route)}.png`) })
+  }
 }
 
 async function runNarrowChecks(page: Page, route: string, env: TestEnv) {
