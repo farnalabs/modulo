@@ -23,7 +23,7 @@
 
       <!-- Rolling-window toggle (FAR-92): period-scopes the stat cards below -->
       <div class="flex justify-end mb-4">
-        <div class="flex gap-1">
+        <div class="flex flex-wrap justify-end gap-1">
           <button
             v-for="w in trendWindows"
             :key="w.value"
