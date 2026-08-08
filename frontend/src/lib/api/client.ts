@@ -17,6 +17,15 @@ export {
   getAuthHeaders,
 } from './auth'
 
+// Decides the app's initial auth state at startup (used by App.vue). An
+// existing stored token means the user is already authenticated regardless of
+// auto-login config; auto-login only runs when no session exists yet. The
+// hasAutoLogin arg is deliberately not consulted so a configured auto-login can
+// never force a false-negative start for a user who already has a valid token.
+export function getInitialAuthState(hasToken: boolean, _hasAutoLogin: boolean): boolean {
+  return hasToken
+}
+
 export const api = createClient<paths>({
   baseUrl: '',
   headers: getAuthHeaders(),

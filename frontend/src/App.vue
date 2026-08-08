@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange } from './lib/api/client'
+import { getAccessToken, setAccessToken, setRefreshToken, onAuthChange, getInitialAuthState } from './lib/api/client'
 import { getErrorTracker } from './lib/error-tracking'
 import { getAutoLoginConfig } from './config/runtime'
 import LoginView from './views/LoginView.vue'
@@ -15,11 +15,10 @@ import { useWebVitals } from './composables/useWebVitals'
 
 const router = useRouter()
 
-// When auto-login is configured, don't trust localStorage tokens at
-// startup — wait for the auto-login API call to complete first.
+// A stored token means the user is already authenticated — render the app
+// immediately. Auto-login (below) only runs when no session exists yet.
 const autoLogin = getAutoLoginConfig()
-const hasAutoLogin = !!autoLogin
-const isAuthenticated = ref(hasAutoLogin ? false : !!getAccessToken())
+const isAuthenticated = ref(getInitialAuthState(!!getAccessToken(), !!autoLogin))
 
 useWebVitals()
 
