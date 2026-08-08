@@ -372,6 +372,17 @@ class TestAppendOnlyGuardListenerLogic:
 
         assert str(event.id) in str(exc_info.value)
 
+    def test_listener_uses_placeholder_when_target_has_no_id(self):
+        """The error message falls back to '?' when the target exposes no id."""
+        listeners = _capture_listeners()
+        blocker = listeners[(AuditEvent, "before_update")]
+
+        with pytest.raises(AppendOnlyViolationError) as exc_info:
+            blocker(None, None, object())
+
+        assert "AuditEvent ?" in str(exc_info.value)
+        assert "cannot be updated" in str(exc_info.value)
+
 
 class TestAppendOnlyGuardWithMockSession:
     """Tests that append_audit_event still works with guard registered."""
