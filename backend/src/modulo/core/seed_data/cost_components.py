@@ -115,13 +115,20 @@ async def seed_cost_components(factory: async_sessionmaker[AsyncSession]) -> int
         org_result = await session.execute(select(Organisation.id).order_by(Organisation.created_at))
         org_ids = [row[0] for row in org_result.all()]
 
+    print(f"SEED_COST_COMPONENTS: enumerated orgs={len(org_ids)}", flush=True)  # noqa: T201
+    if not org_ids:
+        print("SEED_COST_COMPONENTS: NO ORGS — enumeration returned zero", flush=True)  # noqa: T201
+
     seeded = 0
     for org_id in org_ids:
         try:
             async with factory() as session, session.begin():
                 await seed_cost_components_for_org(session, org_id)
+            print(f"SEED_COST_COMPONENTS: org {org_id} OK", flush=True)  # noqa: T201
             seeded += 1
-        except Exception:
+        except Exception as e:
             _log.exception("cost_components.seed_org_failed", extra={"org_id": str(org_id)})
+            print(f"SEED_COST_COMPONENTS: org {org_id} FAILED: {e!r}", flush=True)  # noqa: T201
+    print(f"SEED_COST_COMPONENTS: complete seeded={seeded} of orgs={len(org_ids)}", flush=True)  # noqa: T201
     _log.info("cost_components.seed_complete", extra={"orgs": seeded})
     return seeded

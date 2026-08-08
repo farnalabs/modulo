@@ -23,12 +23,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.seed_data.cost_components import seed_cost_components
+from modulo.core.seed_data.cost_components import seed_cost_components, seed_cost_components_for_org
 from modulo.db.models.base import Base
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.organisation import Organisation
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_ORG_FRESH = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TABLES = {"organisations", "cost_components"}
 
 
@@ -81,3 +82,59 @@ async def test_seed_cost_components_is_idempotent(
         result = await session.execute(select(CostComponent).where(CostComponent.organisation_id == _ORG))
         components = result.scalars().all()
     assert len(components) == 3  # no duplicates from the second pass
+
+
+async def test_seed_cost_components_emits_print_diagnostics(
+    factory: async_sessionmaker[AsyncSession],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The print() diagnostics must not crash the seed and must be emitted.
+
+    These lines are the ONLY way the seed failure is visible in `fly logs`
+    (the structured JsonFormatter logger lines do not render there), so they
+    must survive the factory path the lifespan uses.
+    """
+    async with factory() as session, session.begin():
+        session.add(Organisation(id=_ORG, name="Seed Org", slug="seed-org"))
+
+    seeded = await seed_cost_components(factory)
+
+    out = capsys.readouterr().out
+    assert "SEED_COST_COMPONENTS: enumerated orgs=1" in out
+    assert f"SEED_COST_COMPONENTS: org {_ORG} OK" in out
+    assert f"SEED_COST_COMPONENTS: complete seeded={seeded} of orgs=1" in out
+
+
+async def test_seed_cost_components_no_orgs_emits_warning_diagnostic(
+    factory: async_sessionmaker[AsyncSession],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Zero-org enumeration must print the 'NO ORGS' diagnostic, not fail."""
+    seeded = await seed_cost_components(factory)
+
+    assert seeded == 0
+    out = capsys.readouterr().out
+    assert "SEED_COST_COMPONENTS: enumerated orgs=0" in out
+    assert "SEED_COST_COMPONENTS: NO ORGS" in out
+
+
+async def test_seed_cost_components_for_org_seeds_fresh_org(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Org-creation wiring: a fresh org gets its 3 components immediately.
+
+    Mirrors what ``_ensure_default_org`` and ``admin_create_org`` now invoke
+    in the same transaction as the org row.
+    """
+    async with factory() as session, session.begin():
+        session.add(Organisation(id=_ORG_FRESH, name="Fresh Org", slug="fresh-org"))
+
+    async with factory() as session, session.begin():
+        await seed_cost_components_for_org(session, _ORG_FRESH)
+
+    async with factory() as session, session.begin():
+        result = await session.execute(select(CostComponent).where(CostComponent.organisation_id == _ORG_FRESH))
+        components = result.scalars().all()
+    assert {c.name for c in components} == {"llm_tokens", "sandbox_infra", "model_tokens"}
+    assert len(components) == 3
+    assert all(c.enabled for c in components)
