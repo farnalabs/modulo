@@ -74,14 +74,18 @@
             :title="$t('components.remy.RemyOnlyView.live')"
             :aria-label="$t('components.remy.RemyOnlyView.live')"
           />
-          <button
+          <span
             class="remy-only-tab-close"
+            role="button"
+            tabindex="0"
             :aria-label="$t('components.remy.RemyOnlyView.close_tab')"
             :title="$t('components.remy.RemyOnlyView.close_tab')"
             @click.stop="closeTab(tab)"
+            @keydown.enter.prevent="closeTab(tab)"
+            @keydown.space.prevent="closeTab(tab)"
           >
             <X class="h-3 w-3" aria-hidden="true" />
-          </button>
+          </span>
         </button>
         <button
           class="remy-only-new-tab"
