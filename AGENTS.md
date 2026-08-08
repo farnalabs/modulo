@@ -1226,3 +1226,63 @@ hardening and deletions of passing coverage (PR #792, #775, #759, #391,
 - Never delete passing tests or gut behavioural assertions as part of a
   stylistic refactor. If a test conflicts, fix it in place; if a deletion is
   genuinely required, justify it in the PR description.
+
+### 4. Migration heads: branch off the current head, never edit shipped migrations
+
+Migration problems appear in 15 PRs (divergent Alembic heads, editing shipped
+migrations in place, deleting applied migrations). Rules:
+- Before creating a migration, verify `down_revision` points at the CURRENT
+  head — not a mid-chain revision. A migration branching off an old revision
+  creates a second Alembic head and a permanent fork every future migration
+  must merge around (PR #381). Run `alembic heads` (or the `check-migration-heads`
+  pre-commit hook, which fires when migration files are staged) before committing.
+- NEVER edit a migration that has already shipped/merged. Alembic records it
+  as applied, so the change only lands on fresh DBs — existing deployments
+  never execute it (PR #367 edited migration 0022 in place). Add a NEW
+  migration on top instead.
+- NEVER delete a migration file that has been applied. `alembic_version`
+  points at a now-missing revision, breaking the next `alembic upgrade` on
+  every existing environment (PR #518).
+- If `check-migration-heads.ps1` blocks you: renumber your migration to the
+  next free sequential number and fix its `down_revision` to point at the
+  current head.
+
+### 5. i18n: no hardcoded user-facing strings in frontend views
+
+The reviewer flags hardcoded English in `.vue` views that otherwise use
+`$t()` (16 reviews). Rules:
+- Every new user-facing string in a view that already uses
+  `$t()`/`t()`/`useI18n` must use a locale key — a hardcoded string is a
+  major finding (PR #816, #775, #784, #371).
+- Add the key in the CORRECT namespace. A key under the wrong namespace
+  silently fails to resolve (PR #438). Keys live in
+  `frontend/src/locales/en-US.js` under the view's namespace
+  (`views.<ViewName>...`) unless a shared namespace already exists.
+- Add the key to ALL locale files, not just `en-US` — a missing key in a
+  secondary locale is a silent UI gap.
+- Never put JS expressions inside translation values — the vue-i18n message
+  compiler cannot parse ternaries; use pluralization syntax
+  (`"key | key_plural"`) or simplify the message.
+- If the change removes a `$t(w.labelKey)` pattern, re-add the keys to the
+  locale file — deleting keys orphans every other locale that references them.
+
+### 6. A11y: dynamic status needs aria-live, icon buttons need labels, keyboards stay usable
+
+The reviewer applies the ux-conformance criteria (A11Y-1/2/4, STATE-1/2/6) to
+every frontend diff (33 reviews). Self-check these before pushing:
+- Dynamic status messages that appear/disappear (banners, toggle labels
+  swapping between "Pause all"/"Resume") need `role="status"` /
+  `aria-live="polite"` — WCAG 4.1.3 Status Messages, Level AA (PR #674).
+- Error feedback regions need `aria-live="assertive"` (or `role="alert"`) and
+  should be wired via `aria-describedby` to the controls they describe (PR
+  #784).
+- Icon-only buttons need `aria-label` (or visible text). Check every new icon
+  button in the diff.
+- Keyboard handlers on a container must not break editable children:
+  `@keydown.left/right.prevent` on a titlebar fires on bubbled events from a
+  child `<input>`, breaking text-cursor movement — ignore events originating
+  from `INPUT`/`TEXTAREA` (PR #634).
+- Follow `ux-conformance/criteria.yaml` — the same criteria the reviewer
+  loads. If a new interactive element lacks `data-testid`, `aria-label`,
+  focus-visible ring, or keyboard equivalent, the reviewer will request
+  changes.
