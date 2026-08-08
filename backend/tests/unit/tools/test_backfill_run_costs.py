@@ -10,10 +10,12 @@ REAL cost engine (``load_live_components`` / ``build_telemetry`` /
 
 from __future__ import annotations
 
+import sys
 import uuid
 from collections.abc import AsyncGenerator
 from decimal import Decimal
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -22,7 +24,8 @@ from modulo.core.seed_data.cost_components import seed_cost_components_for_org
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
-from modulo.tools.backfill_run_costs import backfill_run_costs
+from modulo.tools import backfill_run_costs as _tool
+from modulo.tools.backfill_run_costs import BackfillSummary, backfill_run_costs
 
 _ORG_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
 _ORG_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")
@@ -274,3 +277,64 @@ class TestBackfillRunCosts:
         assert result.updated == 600
         assert result.skipped == 1
         assert result.errors == 0
+
+
+class TestMainEngineConnectArgs:
+    """Regression (PR #896): ``main()`` must create its engine with the app
+    factory's ``connect_args`` (``ssl=False`` + ``statement_cache_size=0`` for
+    Postgres). asyncpg defaults to ``prefer`` SSL, which raises
+    ``ConnectionResetError`` during the TLS handshake against Fly Postgres
+    private networks (no TLS listener). ``_fix_database_url`` strips
+    ``?sslmode=disable`` from the URL, so ``connect_args`` is the ONLY
+    mechanism — this test FAILED before the fix because
+    ``create_async_engine`` was called with just the URL and no
+    ``connect_args`` at all.
+    """
+
+    async def test_main_passes_ssl_disabled_connect_args_for_postgres(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_engine = AsyncMock()
+        create_engine = MagicMock(return_value=fake_engine)
+        monkeypatch.setattr(_tool, "create_async_engine", create_engine)
+
+        fake_settings = MagicMock()
+        fake_settings.modulo_db = "postgres"
+        fake_settings.database_url = "postgresql+asyncpg://modulo:modulo@localhost:5432/modulo"
+        monkeypatch.setattr(_tool, "get_settings", lambda: fake_settings)
+
+        monkeypatch.setattr(_tool, "backfill_run_costs", AsyncMock(return_value=BackfillSummary()))
+        monkeypatch.setattr(sys, "argv", ["backfill_run_costs", "--dry-run"])
+
+        await _tool.main()
+
+        create_engine.assert_called_once()
+        assert create_engine.call_args.args[0] == fake_settings.database_url
+        kwargs = create_engine.call_args.kwargs
+        assert kwargs["pool_pre_ping"] is True
+        connect_args = kwargs["connect_args"]
+        assert connect_args["timeout"] == 10
+        assert connect_args["ssl"] is False
+        assert connect_args["statement_cache_size"] == 0
+
+    async def test_main_skips_ssl_args_for_sqlite(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Guard against the connect_args block leaking onto non-Postgres
+        # backends — SQLite/aiosqlite would reject unknown ``ssl`` /
+        # ``statement_cache_size`` driver args.
+        fake_engine = AsyncMock()
+        create_engine = MagicMock(return_value=fake_engine)
+        monkeypatch.setattr(_tool, "create_async_engine", create_engine)
+
+        fake_settings = MagicMock()
+        fake_settings.modulo_db = "sqlite"
+        fake_settings.database_url = "sqlite+aiosqlite:///./modulo.db"
+        monkeypatch.setattr(_tool, "get_settings", lambda: fake_settings)
+
+        monkeypatch.setattr(_tool, "backfill_run_costs", AsyncMock(return_value=BackfillSummary()))
+        monkeypatch.setattr(sys, "argv", ["backfill_run_costs", "--dry-run"])
+
+        await _tool.main()
+
+        create_engine.assert_called_once()
+        assert "ssl" not in create_engine.call_args.kwargs["connect_args"]

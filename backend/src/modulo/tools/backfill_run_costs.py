@@ -303,7 +303,16 @@ async def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     args = _parse_args()
     settings = get_settings()
-    engine = create_async_engine(settings.database_url)
+    # asyncpg defaults to "prefer" SSL which causes ConnectionResetError on Fly
+    # Postgres private networks (no TLS listener). Match the app factory
+    # (api.dependencies.get_or_create_engine) and pass connect_args explicitly
+    # for Postgres — _fix_database_url strips ?sslmode=disable, so the URL alone
+    # cannot express this.
+    connect_args: dict[str, Any] = {"timeout": 10}
+    if settings.modulo_db.lower() == "postgres":
+        connect_args["ssl"] = False
+        connect_args["statement_cache_size"] = 0
+    engine = create_async_engine(settings.database_url, pool_pre_ping=True, connect_args=connect_args)
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
     try:
         summary = await backfill_run_costs(factory, org_id=args.org_id, limit=args.limit, dry_run=args.dry_run)
