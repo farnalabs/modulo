@@ -1,4 +1,4 @@
-﻿import { test, expect, loginAsAdmin, isDevModeTarget } from './setup/fixtures'
+﻿import { test, expect, loginAsAdmin } from './setup/fixtures'
 
 test.describe('Schemas Page', { tag: "@regression" }, () => {
   test('Browse tab is active by default', { tag: "@regression" }, async ({ page, env }) => {
@@ -15,7 +15,6 @@ test.describe('Schemas Page', { tag: "@regression" }, () => {
   })
 
   test('navigates to Infer tab', { tag: "@regression" }, async ({ page, env }) => {
-    test.skip(!isDevModeTarget(env), 'Route is dev-mode-gated (private_preview); only runs on a dev-mode target')
     await loginAsAdmin(page, env)
 
     await page.goto('/schemas/infer')
