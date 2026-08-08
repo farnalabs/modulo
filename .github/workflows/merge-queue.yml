@@ -20,7 +20,6 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
-      workflows: write
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
@@ -386,8 +385,15 @@ jobs:
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1
-          echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
+          # Best-effort: GITHUB_TOKEN cannot carry the `workflows` permission, so
+          # pushing a merged branch that modifies .github/workflows/* is rejected.
+          # The reference branch is a debug aid only - a rejection must not abort
+          # the queue before the real gates (migration heads, backend, frontend) run.
+          if git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1; then
+            echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Reference push rejected (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission). Queue continues without a reference branch."
+          fi
 
       - name: Initialize failure tracking
         if: steps.merge.outputs.merged_count != '0'
@@ -532,9 +538,16 @@ jobs:
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1
-          echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
-          echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
+          # Best-effort: same limitation as the reference push - GITHUB_TOKEN cannot
+          # push branches that modify .github/workflows/*. If the preserve push fails,
+          # the fixer still receives the notification (with the merged PRs), so the
+          # branch is a convenience, not a hard requirement.
+          if git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1; then
+            echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
+            echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
+          else
+            echo "::warning::Could not preserve merge-queue branch (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission)."
+          fi
 
       - name: Notify branch-fixer on CI failure
         if: failure() && steps.merge.outputs.merged_count != '0'
