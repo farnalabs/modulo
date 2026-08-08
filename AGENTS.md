@@ -734,9 +734,32 @@ Agents run targeted files only (see §2 impact consideration) — never the full
 ### Frontend worktrees and node_modules
 
 `git worktree add` creates a new working tree with no installed dependencies.
-Frontend Workers cannot reliably run `npm run lint`, `npx vue-tsc`, or `npm test`
-inside worktrees. Workers implement and commit without frontend tooling;
+Fast path on Windows — junction the main repo's `frontend/node_modules` into the
+worktree (validated FAR-115/117/118/119, 2026-08-08). If the main repo's
+node_modules is current (lockfiles match):
+
+```powershell
+Test-Path "<worktree>\frontend\node_modules"   # expect False
+cmd /c mklink /J "<worktree>\frontend\node_modules" "<main-repo>\frontend\node_modules"
+```
+
+The junction is gitignored and harmless. With it, Workers can run `npm run lint`,
+`npx vue-tsc --noEmit`, and `npx vitest run <spec> --pool=threads --maxWorkers=2`
+in the worktree — and the pre-commit `eslint` hook passes on commit (without it,
+`git commit` fails at eslint with `'eslint' is not recognized`, even for
+CSS-only changes). Remove the junction before `git worktree remove` if desired
+(leftover is harmless). If lockfiles differ, `npm install --force` in the
+worktree instead.
+
+Without a junction, Workers implement and commit without frontend tooling;
 verification happens via GitHub CI on the PR.
+
+**Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
+admin-view gaps whenever an `Admin*.vue` file is touched — every
+`frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your
+change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
+FAR-117), the commit is blocked — add the wrapper with the correct feature name
+(match sibling views) rather than bypassing the hook.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
