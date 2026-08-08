@@ -25,7 +25,7 @@
       description="Users will appear here once they are created or sign up."
     />
 
-    <div v-else class="table-wrapper">
+    <div v-else class="table-wrapper overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
           <tr>

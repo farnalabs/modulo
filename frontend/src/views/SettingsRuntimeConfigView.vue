@@ -24,7 +24,7 @@
 
     <ErrorAlert v-else-if="error && !featureRequired" :message="error" :on-retry="loadConfig" />
 
-    <div v-else-if="!featureRequired" class="rounded-lg border">
+    <div v-else-if="!featureRequired" class="rounded-lg border overflow-x-auto">
       <table class="w-full">
         <thead>
           <tr class="border-b text-left text-sm font-medium text-muted-foreground">

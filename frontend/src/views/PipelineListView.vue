@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-background flex flex-col">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
+      <div class="mx-auto flex flex-wrap items-center justify-between gap-3 max-w-6xl">
         <PageHeader :title="$t('views.PipelineListView.title')" />
         <FilterBar
           :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
@@ -55,7 +55,7 @@
         Failed to load folders: {{ folderError }}
       </p>
 
-      <main class="flex-1 page-wide">
+      <main class="flex-1 page-wide min-w-0">
         <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
           <span>{{ moveError }}</span>
           <button class="shrink-0 text-destructive/70 hover:text-destructive" aria-label="Dismiss" @click="moveError = null">
@@ -196,7 +196,8 @@
 
           <!-- Table / Tree view -->
           <div v-else class="card rounded-lg border border-border overflow-hidden">
-            <table class="w-full text-left text-sm">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
               <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
                 <tr>
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.name') }}</th>
@@ -310,7 +311,8 @@
                   </tr>
                 </template>
               </tbody>
-            </table>
+              </table>
+            </div>
           </div>
         </div>
 
