@@ -23,19 +23,24 @@ describe('app bootstrap', () => {
   it('every route component factory resolves to a module', async () => {
     const routes = router.getRoutes()
     for (const route of routes) {
-      if (typeof route.component === 'function') {
-        const module = await route.component()
-        expect(module, `lazy route ${route.path} component failed to resolve`).toBeTruthy()
+      for (const component of Object.values(route.components ?? {})) {
+        if (typeof component === 'function') {
+          const module = await (component as () => Promise<unknown>)()
+          expect(module, `lazy route ${route.path} component failed to resolve`).toBeTruthy()
+        }
       }
       // Statically imported components (LoginView, OAuthConsentView) already
       // resolved when the router module was imported above; redirect-only
-      // routes carry no component and are covered by the redirect test below.
+      // routes carry no components and are covered by the redirect test below.
     }
   })
 
   it('routes without a component define a redirect', () => {
     const routes = router.getRoutes()
-    const withoutComponent = routes.filter((route) => !route.component && !route.components)
+    const withoutComponent = routes.filter((route) => {
+      const components = route.components
+      return !components || Object.keys(components).length === 0
+    })
     expect(withoutComponent.length).toBeGreaterThan(0)
     for (const route of withoutComponent) {
       expect(route.redirect, `route ${route.path} has no component or redirect`).toBeDefined()
