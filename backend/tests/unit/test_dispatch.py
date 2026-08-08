@@ -1008,7 +1008,7 @@ class TestReconcileF6aRecovery:
         branch (F6a), alongside the pending/running branches."""
         from modulo.core import cron_helpers as ch
 
-        pred = ch._build_re_dispatch_predicate(reenqueue_window=600, stale_window=600)
+        pred = ch._build_re_dispatch_predicate(reenqueue_window=600, stale_window=600, capacity_redispatch_seconds=120)
         rendered = str(pred.compile(compile_kwargs={"literal_binds": True}))
         assert "awaiting_human" in rendered
         assert "claimed" in rendered
