@@ -23,7 +23,7 @@ const FALLBACK_ROUTES = ['/login', '/', '/pipelines', '/stages', '/schemas', '/a
 // list when the manifest cannot be read or yields nothing.
 function enumerateRoutes(): string[] {
   try {
-    const manifestPath = path.join(__dirname, '../src/manifest.yaml')
+    const manifestPath = path.join(__dirname, '../../src/manifest.yaml')
     const manifest = yaml.load(fs.readFileSync(manifestPath, 'utf-8')) as { routes?: Record<string, unknown> }
     const routes = Object.keys(manifest.routes ?? {})
       .filter(p => p.startsWith('/'))
@@ -278,8 +278,11 @@ test.describe('Mobile layout audit — full route sweep', { tag: ['@regression',
 })
 
 test.describe('Mobile layout audit — narrow viewport bounding sweep', { tag: '@mobile' }, () => {
+  // defaultBrowserType is stripped from the Pixel 5 spread: Playwright forbids
+  // use({ defaultBrowserType }) inside a describe group (it forces a new worker).
+  const pixel5 = devices['Pixel 5']
   const narrowViewports = [
-    { name: 'pixel5', ...devices['Pixel 5'], deviceScaleFactor: 1 },
+    { name: 'pixel5', viewport: pixel5.viewport, userAgent: pixel5.userAgent, screen: pixel5.screen, isMobile: true, hasTouch: true, deviceScaleFactor: 1 },
     { name: '320x568', viewport: { width: 320, height: 568 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 },
     { name: '768x1024', viewport: { width: 768, height: 1024 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 },
   ]
