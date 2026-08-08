@@ -144,3 +144,27 @@ Feature: GitHub Connector
     When the GitHub API is rate limited with zero remaining quota
     Then the connector raises a ValueError with "quota"
     And the connector raises a ValueError with "X-RateLimit-Remaining"
+
+  Scenario: Health check detects an expired token
+    Given a GitHub connector with valid token
+    And a GitHub connector whose health check reports an expired token
+    When I perform a health check
+    Then the health result indicates failure
+    And the health result detail describes an expired token
+
+  Scenario: Health check reports missing scopes with machine-readable codes
+    Given a GitHub connector with valid token
+    And a GitHub connector whose health check reports missing scope "repo"
+    When I perform a health check
+    Then the health result indicates failure
+    And the health result detail contains "missing_scope:repo"
+
+  Scenario: Query surfaces a typed auth error with a machine-readable code
+    Given a GitHub connector with valid token
+    When the GitHub API returns HTTP 401 with an expired token
+    Then the connector raises a GitHub error with code "token_expired"
+
+  Scenario: Query surfaces a rate-limit error with a machine-readable code
+    Given a GitHub connector with valid token
+    When the GitHub API returns HTTP 429 with exhausted quota
+    Then the connector raises a GitHub error with code "rate_limited"

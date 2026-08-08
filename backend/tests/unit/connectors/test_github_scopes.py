@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.github import REQUIRED_SCOPES, GitHubConnector
+from modulo.connectors.github import REQUIRED_SCOPES, GitHubAuthError, GitHubConnector, GitHubNetworkError
 
 TOKEN = "ghp_test_token"
 
@@ -63,9 +63,31 @@ async def test_verify_scopes_extra_scopes(connector):
 
 @respx.mock
 async def test_verify_scopes_api_failure(connector):
+    """A 401 from /user raises a typed GitHubAuthError with code token_expired."""
     respx.get("https://api.github.com/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    with pytest.raises(ValueError, match="Cannot verify scopes: GitHub API HTTP 401"):
+    with pytest.raises(GitHubAuthError, match="GitHub API HTTP 401") as excinfo:
         await connector.verify_scopes()
+    assert excinfo.value.error_code == "token_expired"
+    assert excinfo.value.status_code == 401
+
+
+@respx.mock
+async def test_verify_scopes_403_insufficient_scope(connector):
+    """A 403 from /user raises a GitHubAuthError with code insufficient_scope."""
+    respx.get("https://api.github.com/user").mock(return_value=httpx.Response(403, text="Forbidden"))
+    with pytest.raises(GitHubAuthError, match="GitHub API HTTP 403") as excinfo:
+        await connector.verify_scopes()
+    assert excinfo.value.error_code == "insufficient_scope"
+    assert excinfo.value.status_code == 403
+
+
+@respx.mock
+async def test_verify_scopes_network_error(connector):
+    """A connection failure raises a GitHubNetworkError (not an auth error)."""
+    respx.get("https://api.github.com/user").mock(side_effect=httpx.ConnectError("Connection refused"))
+    with pytest.raises(GitHubNetworkError, match="connection error"):
+        await connector.verify_scopes()
+    assert issubclass(GitHubNetworkError, ValueError)
 
 
 @respx.mock
