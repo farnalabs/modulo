@@ -2391,7 +2391,7 @@ export default {
       "item_users": "Users",
       "item_org_settings": "Org Settings",
       "item_audit_log": "Audit Log",
-      "item_overview": "Overview",
+      "item_costs": "Costs",
       "item_spend_limits": "Spend Limits",
       "item_cost_controls": "Cost Controls",
       "item_connectors": "Connectors",

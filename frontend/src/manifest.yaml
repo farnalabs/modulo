@@ -459,7 +459,7 @@ routes:
 
     /admin/costs:
         name: admin-costs
-        breadcrumb: Cost Overview
+        breadcrumb: Costs
         parent: /
         product_map:
         sidebar_group: admin
@@ -474,8 +474,8 @@ routes:
         breadcrumb: Spend Limits
         parent: /admin/costs
         product_map:
-        sidebar_group: admin
-        sidebar_order: 2
+        sidebar_group:
+        sidebar_order:
         type: form_page
         <<: *team
         deprecated: false
@@ -485,8 +485,8 @@ routes:
         breadcrumb: Cost Controls
         parent: /admin/costs
         product_map:
-        sidebar_group: admin
-        sidebar_order: 3
+        sidebar_group:
+        sidebar_order:
         type: form_page
         <<: *team
         deprecated: false
@@ -496,8 +496,8 @@ routes:
         breadcrumb: Cost Components
         parent: /admin/costs
         product_map:
-        sidebar_group: admin
-        sidebar_order: 4
+        sidebar_group:
+        sidebar_order:
         type: form_page
         <<: *team
         deprecated: false
