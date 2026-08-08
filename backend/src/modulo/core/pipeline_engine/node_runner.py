@@ -1260,6 +1260,10 @@ def make_sandbox_agent_fn(
                         # Probe failed (log file not created yet, sandbox connection
                         # unresponsive). Do NOT refresh liveness — the idle watchdog
                         # treats a prolonged probe failure as a genuine stall.
+                        _log.info(
+                            "sandbox_agent.log_drain_probe_failed",
+                            extra={"node_id": node_id},
+                        )
                         return
                     if size <= _drain_offset:
                         return
