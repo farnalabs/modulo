@@ -6,7 +6,9 @@ RLS is set to test_org; all ORM changes are rolled back after each test.
 import uuid
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
@@ -15,6 +17,7 @@ from modulo.db.crud.connector_instance import (
     list_connector_instances,
     update_connector_instance,
 )
+from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -76,11 +79,31 @@ async def test_update_connector_instance(rls_session: AsyncSession, test_org: uu
     assert updated.name == "Renamed Connector"
 
 
-@pytest.mark.skip(reason="flaky: asyncpg connection race in teardown")
 async def test_update_connector_instance_unknown_returns_none(
-    rls_session: AsyncSession,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
 ) -> None:
-    assert await update_connector_instance(rls_session, uuid.uuid4(), {"name": "x"}) is None
+    """Update on an unknown connector instance returns None.
+
+    This test owns its engine with ``NullPool`` (matching the ``db_engine`` /
+    ``app_engine`` fixtures) instead of the shared ``rls_session`` fixture,
+    whose pooled engine raced asyncpg connection closure at teardown — the
+    flake this test was skipped for. NullPool opens a fresh connection per
+    checkout and disposes it on the same event loop, so teardown never races a
+    pooled connection close. The fix belongs in the ``rls_session`` fixture
+    (add ``poolclass=NullPool``); this self-contained form keeps the test
+    robust without a conftest change.
+    """
+    engine = create_async_engine(migrated_db_url, echo=False, poolclass=NullPool)
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(text("SELECT 1"))
+            await set_rls_org(session, test_org)
+            assert await update_connector_instance(session, uuid.uuid4(), {"name": "x"}) is None
+            await session.rollback()
+    finally:
+        await engine.dispose()
 
 
 async def test_delete_connector_instance(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
