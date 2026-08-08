@@ -3,11 +3,17 @@ import AxeBuilder from '@axe-core/playwright'
 import yaml from 'js-yaml'
 import fs from 'node:fs'
 import path from 'node:path'
-import { test, expect } from './setup/fixtures'
+import { test, expect, loginAsAdmin, setupLocalMockApi } from './setup/fixtures'
+import { getTarget, type TestEnv } from './setup/env'
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
 const ACCEPTABLE_VIOLATIONS = ['color-contrast', 'scrollable-region-focusable']
+
+// Mirror the fixtures.ts mock token values (not exported there) so the local
+// auth seed keeps the app's session markers consistent across specs.
+const MOCK_ACCESS_TOKEN = 'mock-access-token-for-e2e-tests'
+const MOCK_REFRESH_TOKEN = 'mock-refresh-token-for-e2e-tests'
 
 function filterViolations(violations: { id: string }[]) {
   return violations.filter(v => !ACCEPTABLE_VIOLATIONS.includes(v.id))
@@ -51,7 +57,7 @@ function sanitizePath(p: string): string {
 // Navigate, wait for the Vue app to mount and data to settle, then bail out
 // gracefully when an unauthenticated route redirects to /login. Returns false
 // to signal the caller to skip the checks without failing.
-async function preparePage(page: Page, route: string): Promise<boolean> {
+async function preparePage(page: Page, route: string, env: TestEnv): Promise<boolean> {
   await page.goto(route)
   await page.waitForURL('**/*', { timeout: 5000 }).catch(() => {})
 
@@ -59,6 +65,30 @@ async function preparePage(page: Page, route: string): Promise<boolean> {
 
   // Content settle — not every route renders a data-loading marker.
   await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
+
+  if (env.name === 'local') {
+    // Local CI: mock all /api/v1 traffic and seed the auth tokens so
+    // authenticated routes render with mocked data (mirrors loginAsAdmin's
+    // local branch). Re-navigate so the router guard picks up the seeded
+    // session; /login stays untouched so the login page renders as-is.
+    await setupLocalMockApi(page)
+    if (route !== '/login') {
+      await page.evaluate(([token, refresh]) => {
+        localStorage.setItem('modulo_access_token', token)
+        localStorage.setItem('modulo_refresh_token', refresh)
+      }, [MOCK_ACCESS_TOKEN, MOCK_REFRESH_TOKEN])
+      await page.goto(route)
+      await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+      await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
+    }
+  } else if (page.url().includes('/login') && route !== '/login') {
+    // storageState may have expired — fall back to a single real login, then
+    // retry the route and re-run the mount/settle waits before proceeding.
+    await loginAsAdmin(page, env)
+    await page.goto(route)
+    await page.waitForFunction(() => document.querySelector('#app')?.children.length > 0)
+    await page.waitForSelector('[data-loading="false"]', { timeout: 15000 }).catch(() => {})
+  }
 
   const finalUrl = page.url()
   const redirectedToLogin = finalUrl.includes('/login') && route !== '/login'
@@ -243,8 +273,8 @@ async function checkInputFontSize(page: Page) {
   }
 }
 
-async function runFullSweep(page: Page, route: string) {
-  if (!(await preparePage(page, route))) return
+async function runFullSweep(page: Page, route: string, env: TestEnv) {
+  if (!(await preparePage(page, route, env))) return
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
@@ -257,8 +287,8 @@ async function runFullSweep(page: Page, route: string) {
   await page.screenshot({ path: path.join(CAPTURE_DIR, `${sanitizePath(route)}.png`) })
 }
 
-async function runNarrowChecks(page: Page, route: string) {
-  if (!(await preparePage(page, route))) return
+async function runNarrowChecks(page: Page, route: string, env: TestEnv) {
+  if (!(await preparePage(page, route, env))) return
 
   await checkViewportMeta(page)
   await checkNoHorizontalOverflow(page)
@@ -269,10 +299,19 @@ async function runNarrowChecks(page: Page, route: string) {
 // the narrow sweep's extra viewports).
 test.use({ ...devices['Pixel 5'], deviceScaleFactor: 1 })
 
+const target = getTarget()
+// Non-local targets reuse the single global-setup login (storageState-staging.json)
+// so all 82 routes share one session instead of 82 individual logins (avoids
+// production rate limits). The file is written to the CWD (frontend/) by
+// global-setup.ts; keep this path plain-relative.
+if (target !== 'local') {
+  test.use({ storageState: 'storageState-staging.json' })
+}
+
 test.describe('Mobile layout audit — full route sweep', { tag: ['@regression', '@mobile'] }, () => {
   for (const route of ROUTES) {
-    test(`${route} — mobile layout invariants + above-the-fold screenshot`, { tag: ['@regression', '@mobile'] }, async ({ page }) => {
-      await runFullSweep(page, route)
+    test(`${route} — mobile layout invariants + above-the-fold screenshot`, { tag: ['@regression', '@mobile'] }, async ({ page, env }) => {
+      await runFullSweep(page, route, env)
     })
   }
 })
@@ -291,8 +330,8 @@ test.describe('Mobile layout audit — narrow viewport bounding sweep', { tag: '
     test.describe(`viewport ${vp.name}`, () => {
       test.use(vp)
       for (const route of NARROW_ROUTES) {
-        test(`${route} — no horizontal overflow / clipped controls`, { tag: '@mobile' }, async ({ page }) => {
-          await runNarrowChecks(page, route)
+        test(`${route} — no horizontal overflow / clipped controls`, { tag: '@mobile' }, async ({ page, env }) => {
+          await runNarrowChecks(page, route, env)
         })
       }
     })
