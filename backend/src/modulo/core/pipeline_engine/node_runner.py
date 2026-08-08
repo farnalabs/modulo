@@ -67,7 +67,7 @@ from modulo.core.cost_controller.breakdown.constants import (
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
-from modulo.core.pipeline_engine.event_broker import RunEventBroker
+from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
@@ -1151,17 +1151,25 @@ def make_sandbox_agent_fn(
                 # from the SDK's event task and may be async or sync.
                 _activity: dict[str, Any] = {"last": time.monotonic()}
 
-                # Live-output streaming (FAR-98): if the run event broker is
-                # seeded in state, buffer stdout/stderr chunks and publish a
-                # throttled node.stdout_chunk / node.stderr_chunk event at most
-                # once per _STREAM_FLUSH_INTERVAL so Run detail can show live
-                # output while the sandbox process runs. No broker -> skip
-                # silently (streaming is best-effort, never fatal).
-                _stream_broker_raw = state.get("_broker")
-                _stream_enabled = isinstance(_stream_broker_raw, RunEventBroker)
+                # Live-output streaming (FAR-98): look the run event broker up in
+                # the process-local registry by run id (the broker is never carried
+                # inside LangGraph state — it is not msgpack-serializable, and
+                # carrying it in state broke checkpoint writes for every run).
+                # Buffer stdout/stderr chunks and publish a throttled
+                # node.stdout_chunk / node.stderr_chunk event at most once per
+                # _STREAM_FLUSH_INTERVAL so Run detail can show live output while
+                # the sandbox process runs. No broker registered -> skip silently
+                # (streaming is best-effort, never fatal).
+                _stream_broker = None
+                if run_id:
+                    try:
+                        _stream_broker = get_registry().get(uuid.UUID(run_id))
+                    except (TypeError, ValueError):
+                        _stream_broker = None
+                _stream_enabled = isinstance(_stream_broker, RunEventBroker)
 
                 def _stream_chunk(chunk: str, stream: str) -> None:
-                    broker = _stream_broker_raw
+                    broker = _stream_broker
                     if not _stream_enabled or not isinstance(broker, RunEventBroker):
                         return
                     now = time.monotonic()
