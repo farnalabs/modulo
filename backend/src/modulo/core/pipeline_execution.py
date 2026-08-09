@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from langgraph.errors import NodeCancelledError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
@@ -621,6 +622,10 @@ async def run_executor_with_watchdog(
             _log.warning("run_executor_with_watchdog: execution cancelled by zombie watchdog for run %s", rid)
         else:
             raise
+    except NodeCancelledError:
+        # Transient node cancellation — execute() already reset the run to
+        # pending and released the E2B fence; re-raise so SAQ retries the job.
+        raise
     except Exception:
         _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
     finally:
