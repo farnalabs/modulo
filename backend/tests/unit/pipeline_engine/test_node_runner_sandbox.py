@@ -27,6 +27,23 @@ _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
 
 
+@pytest.fixture(autouse=True)
+def _disable_e2b_idempotency_fence(monkeypatch):
+    """Short-circuit the E2B dispatch fence so no test constructs Settings().
+
+    Worktrees have no ``backend/.env``; ``e2b_idempotency_enabled()`` calls
+    ``get_settings()`` which builds ``Settings()`` and REQUIRES database_url /
+    secret_key / fernet_key, raising ValidationError before the sandbox path is
+    reached. The fence is incidental to these tests (none exercise it), so a
+    module-scoped autouse fixture returning False makes the file runnable in
+    any environment while leaving fence-specific behaviour untested elsewhere.
+    """
+    monkeypatch.setattr(
+        "modulo.core.pipeline_execution.e2b_idempotency_enabled",
+        lambda: False,
+    )
+
+
 def _read_router(output_json: str, log_content: str = ""):
     """Route sandbox.files.read by path: output.json vs the redirected agent log.
 
