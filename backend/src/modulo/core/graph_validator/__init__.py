@@ -1535,6 +1535,7 @@ class GraphValidator:
         4. context_files source paths start with /.
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.
+        7. stall_timeout_seconds is a positive number, not exceeding timeout_seconds.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -1583,6 +1584,37 @@ class GraphValidator:
                     result.warning(
                         "SANDBOX_TIMEOUT_INVALID",
                         f"Sandbox agent node '{nid}' timeout_seconds is not a valid integer",
+                        node_id=nid,
+                    )
+
+            # 7. stall_timeout_seconds sanity checks.
+            stall_timeout = node.get("stall_timeout_seconds")
+            if stall_timeout is not None:
+                try:
+                    st = float(stall_timeout) if not isinstance(stall_timeout, (int, float)) else stall_timeout
+                    if st <= 0:
+                        result.warning(
+                            "SANDBOX_STALL_TIMEOUT_INVALID",
+                            f"Sandbox agent node '{nid}' stall_timeout_seconds={st} is not a positive number",
+                            node_id=nid,
+                        )
+                    elif timeout is not None:
+                        try:
+                            timeout_seconds = int(timeout) if not isinstance(timeout, int) else timeout
+                        except (ValueError, TypeError):
+                            timeout_seconds = None
+                        if timeout_seconds is not None and st > timeout_seconds:
+                            result.warning(
+                                "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT",
+                                f"Sandbox agent node '{nid}' stall_timeout_seconds={st} exceeds "
+                                f"timeout_seconds={timeout_seconds} — a stall timeout larger than the total "
+                                "timeout is pointless",
+                                node_id=nid,
+                            )
+                except (ValueError, TypeError):
+                    result.warning(
+                        "SANDBOX_STALL_TIMEOUT_INVALID",
+                        f"Sandbox agent node '{nid}' stall_timeout_seconds is not a valid number",
                         node_id=nid,
                     )
 
