@@ -1310,3 +1310,56 @@ every frontend diff (33 reviews). Self-check these before pushing:
   loads. If a new interactive element lacks `data-testid`, `aria-label`,
   focus-visible ring, or keyboard equivalent, the reviewer will request
   changes.
+
+### 7. A mock or hand-built fixture is not coverage of the changed path
+
+Test-quality findings are the largest single CR category (89 reviews). The
+recurring failure: the test exercises a mock or a hand-built fixture that
+bypasses the function under test, so the bug lives in the untested real path.
+Rules:
+- The test must exercise the function under test with the REAL payload shape.
+  If you fix `build_facts_query`, the test must go through
+  `build_facts_query` — not feed a pre-shaped `SimpleNamespace` row that
+  skips the SQL (PR #740). If you fix a percentage conversion, the test
+  fixture must use raw values that round-trip through the conversion (PR
+  #747).
+- "Passes for the wrong reason" check: if you delete the code under test and
+  the test still passes, the test is not testing the code (PR #587, #740).
+  Assert on behaviour that only the real path can produce.
+- Every new behaviour ships with a test that FAILS without the change and
+  PASSES with it. This is the feature analogue of the prove-the-fix rule in
+  check 2: no new behaviour without a regression test (PR #382, #381, #701).
+- When reporting "tests pass", name the actual files run and confirm they are
+  wired into CI. A test excluded by a `-m` marker, or that only runs in a
+  deploy-only job, is not evidence (PR #547, #518). Check the test is in a
+  path CI actually runs.
+- A test that mocks `api.GET`/`api.POST`/`httpx.Response` validates the
+  mock's opinion, not the endpoint — see check 1 (PR #767, #538).
+
+### 8. The error path must survive the error it guards
+
+Error-handling findings are the second-largest CR category (50 reviews). The
+recurring failure: the defensive code itself is broken — the guard raises the
+very error it protects against, or the failure path is dead/silent/fail-open.
+Rules:
+- For every `try/except` you add or touch: is the except reachable? Order
+  specific exceptions BEFORE their bases (`except ProgrammingError` before
+  `except SQLAlchemyError`); a base clause first makes the specific clause
+  dead code (PR #740). Follow the route convention: ProgrammingError->501,
+  SQLAlchemyError->503, IntegrityError->409, HTTPException->re-raise,
+  Exception->500.
+- Does the except do something observable? Log with `_log.exception(...)`,
+  return a status, or set a fallback. A catch that silently swallows (bare
+  `pass` or unreachable code) hides the failure — the semgrep rule
+  `empty-catch-block` and `exception-mro-ordering` enforce this.
+- Fail-open vs fail-closed: security/safety operations (auth, RLS, gate
+  enforcement, permission checks) fail CLOSED — deny on error (PR #436,
+  #470). Best-effort operations (audit, metrics, telemetry) fail open WITH a
+  log (PR #497).
+- Commit-then-error ordering: if a best-effort step fails AFTER the main
+  mutation committed, return the success response and log the failure — do
+  not turn a successful operation into a 500 (PR #497).
+- Guard the guard: the code that checks the error must itself not raise
+  (e.g. `_read_alert_thresholds` overflowed on the very huge ints it guarded
+  against, PR #796). If the guard can throw, the failure path is untested —
+  add a test for the corruption case the guard is meant to handle.
