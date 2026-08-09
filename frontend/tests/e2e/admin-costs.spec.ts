@@ -12,30 +12,30 @@ const sampleCostData = {
 }
 
 test.describe('Admin Cost Breakdown', { tag: "@regression" }, () => {
-  test('page loads with correct heading', { tag: "@regression" }, async ({ page, env }) => {
-if (env.name === 'local') {
-    await page.route('**/api/v1/costs*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleCostData) })
-    })
+  test('renders the Cost Breakdown page', { tag: "@regression" }, async ({ page, env }) => {
+    if (env.name === 'local') {
+      await page.route('**/api/v1/costs*', (route) => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleCostData) })
+      })
     }
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/costs')
 
-    await expect(page.locator('h1')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Cost Breakdown')
   })
 
   test('shows cost summary cards', { tag: "@regression" }, async ({ page, env }) => {
-if (env.name === 'local') {
-    await page.route('**/api/v1/costs*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleCostData) })
-    })
+    if (env.name === 'local') {
+      await page.route('**/api/v1/costs*', (route) => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleCostData) })
+      })
     }
     await loginAsAdmin(page, env)
 
     await page.goto('/admin/costs')
 
-    await expect(page.locator('h1')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Cost Breakdown')
     if (env.name === 'local') {
       await expect(page.getByTestId('cost-total-spend')).toBeVisible()
       await expect(page.getByTestId('cost-avg-per-run')).toBeVisible()
