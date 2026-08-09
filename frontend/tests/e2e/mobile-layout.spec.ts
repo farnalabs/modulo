@@ -198,7 +198,7 @@ const CLIPPED_ALLOWLIST_SELECTOR = '.remy-floating-btn'
 
 // Check 4 — visible interactive elements must not be clipped off-screen.
 async function checkInteractiveNotClipped(page: Page) {
-  const result = await page.evaluate(() => {
+  const result = await page.evaluate((allowlistSelector) => {
     const doc = document.documentElement
     const vw = document.documentElement.clientWidth
     const hasHScroll = doc.scrollWidth > vw + 1
@@ -254,7 +254,7 @@ async function checkInteractiveNotClipped(page: Page) {
         left: Math.round(rect.left),
         right: Math.round(rect.right),
       }
-      if (htmlEl.matches(CLIPPED_ALLOWLIST_SELECTOR)) {
+      if (htmlEl.matches(allowlistSelector)) {
         allowlistedClipped.push(entry)
       } else {
         clipped.push(entry)
@@ -267,9 +267,9 @@ async function checkInteractiveNotClipped(page: Page) {
       // Derived expected-tolerance count: the allowlisted elements actually
       // present on the page (typically the one Remy FAB). Used so the
       // assertion reads against reality instead of a magic literal.
-      allowlistCount: document.querySelectorAll(CLIPPED_ALLOWLIST_SELECTOR).length,
+      allowlistCount: document.querySelectorAll(allowlistSelector).length,
     }
-  })
+  }, CLIPPED_ALLOWLIST_SELECTOR)
   if (result.skip) {
     process.stdout.write(`[mobile-layout] ${page.url()} has horizontal scroll — skipping clipped-interactive check\n`)
     return

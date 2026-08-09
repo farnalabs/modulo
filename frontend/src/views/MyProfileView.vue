@@ -130,6 +130,10 @@ async function changePassword() {
     passError.value = t('views.MyProfileView.passwords_do_not_match')
     return
   }
+  if (newPassword.value === currentPassword.value) {
+    passError.value = t('views.MyProfileView.new_password_must_differ')
+    return
+  }
   if (newPassword.value.length < 8) {
     passError.value = t('views.MyProfileView.password_must_be_at_least_8_characters')
     return
