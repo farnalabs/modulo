@@ -121,6 +121,17 @@ class TestMigrationFlagSync:
             f"down_revision {head_migration.down_revision!r} must reference an existing migration revision"
         )
 
+    def test_migration_is_in_chain_and_revises_existing_revision(self, migration: ModuleType) -> None:
+        script = _script()
+        chain = {rev.revision for rev in script.walk_revisions()}
+        assert migration.revision in chain, (
+            f"migration {migration.revision} must be reachable from the migration graph head "
+            f"(heads: {sorted(script.get_heads())})"
+        )
+        assert migration.down_revision in chain, (
+            f"down_revision {migration.down_revision!r} must reference an existing migration revision"
+        )
+
 
 class TestSeedCatalogFlagSet:
     def test_seed_catalog_contains_the_17_synced_flags(self) -> None:
