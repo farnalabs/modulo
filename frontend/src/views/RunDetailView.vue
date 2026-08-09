@@ -149,7 +149,7 @@
             {{ outputCopied ? $t('views.RunDetailView.copied') : $t('views.RunDetailView.copy') }}
           </button>
         </div>
-        <pre class="bg-muted/30 rounded-lg p-4 text-sm overflow-x-auto whitespace-pre-wrap">{{ formattedOutput }}</pre>
+        <JsonViewer :data="lastNodeOutput" :show-toolbar="false" :max-height="'30rem'" />
       </div>
 
       <!-- Capacity-blocked pending run (queued on sandbox concurrency limit) -->
@@ -166,7 +166,7 @@
 
       <div v-if="run.status === 'failed' && !run.error_detail && runIO?.input_payload" class="rounded-lg border border-border bg-card p-4 mb-4">
         <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.run_input') }}</h3>
-        <pre class="text-xs whitespace-pre-wrap font-mono text-muted-foreground">{{ JSON.stringify(runIO.input_payload, null, 2) }}</pre>
+        <JsonViewer :data="runIO.input_payload" :show-toolbar="true" :max-height="'16rem'" />
       </div>
 
       <!-- Per-Node Execution Trace -->
@@ -286,11 +286,11 @@
               <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.input') }}</h4>
-                  <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.input ? formatJson(node.io.input) : '—' }}</code></pre>
+                  <JsonViewer :data="node.io?.input ?? null" :show-toolbar="false" :max-height="'16rem'" />
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.output') }}</h4>
-                  <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed"><code>{{ node.io?.output ? formatJson(node.io.output) : '—' }}</code></pre>
+                  <JsonViewer :data="node.io?.output ?? null" :show-toolbar="false" :max-height="'16rem'" />
                 </div>
               </td>
             </tr>
@@ -472,6 +472,7 @@ import { useApi } from '../composables/useApi'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import Dialog from '../components/ui/dialog/Dialog.vue'
 import DialogContent from '../components/ui/dialog/DialogContent.vue'
 import DialogHeader from '../components/ui/dialog/DialogHeader.vue'
@@ -696,10 +697,6 @@ async function copyPromptText() {
   } catch (e) {
     console.warn('Failed to copy prompt text', e)
   }
-}
-
-function formatJson(value: unknown): string {
-  return JSON.stringify(value, null, 2)
 }
 
 function getNodeLog(nodeName: string, field: string): string | null {

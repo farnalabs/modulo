@@ -1,0 +1,92 @@
+/* json-viewer overrides — pinned by JsonViewer.override.spec.ts and tests/e2e/json-viewer.spec.ts */
+
+.json-viewer .vjs-tree {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  color: hsl(var(--foreground));
+}
+
+.json-viewer .vjs-key {
+  color: hsl(var(--muted-foreground));
+}
+
+.json-viewer .vjs-value-string {
+  color: hsl(var(--success));
+}
+
+.json-viewer .vjs-value-number,
+.json-viewer .vjs-value-boolean {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-value-null,
+.json-viewer .vjs-value-undefined {
+  color: hsl(var(--warning));
+}
+
+.json-viewer .vjs-comment {
+  color: hsl(var(--muted-foreground));
+}
+
+.json-viewer .vjs-tree-brackets {
+  color: hsl(var(--foreground));
+}
+
+.json-viewer .vjs-tree-brackets:hover {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-carets {
+  color: inherit;
+}
+
+.json-viewer .vjs-carets:hover {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-tree-node:hover,
+.json-viewer .vjs-tree-node.is-highlight,
+.json-viewer .vjs-tree-node.dark:hover,
+.json-viewer .vjs-tree-node.dark.is-highlight {
+  background-color: hsla(var(--primary) / 0.08);
+}
+
+.json-viewer .vjs-tree-node-actions,
+.json-viewer .vjs-tree-node.dark .vjs-tree-node-actions {
+  background-color: hsla(var(--primary) / 0.08);
+}
+
+.json-viewer .vjs-tree-node-actions .vjs-tree-node-actions-item {
+  color: hsl(var(--muted-foreground));
+}
+
+.json-viewer .vjs-tree-node-actions .vjs-tree-node-actions-item:hover {
+  color: hsl(var(--primary));
+}
+
+.json-viewer .vjs-indent-unit.has-line {
+  border-left-color: hsla(var(--border) / 0.6);
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 4px;
+}
+
+.json-viewer .vjs-tree::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+.json-viewer .vjs-tree {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}

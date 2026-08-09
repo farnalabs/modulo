@@ -2495,6 +2495,12 @@ export default {
       "preview": "Preview",
       "dev_preview": "Dev Preview",
       "in_dev": "In Dev"
+    },
+    "JsonViewer": {
+      "copy": "Copy",
+      "copied": "Copied",
+      "expand_all": "Expand all",
+      "collapse_all": "Collapse all"
     }
   },
   "common": {
