@@ -15,6 +15,12 @@ Feature: Password Change
     Then the response status is 400
     And the error mentions "incorrect"
 
+  Scenario: Reusing the current password is rejected
+    Given I am authenticated in org "acme"
+    When I change my password from "correct-horse-battery" to "correct-horse-battery"
+    Then the response status is 400
+    And the error mentions "different"
+
   Scenario: Low-entropy new password is rejected
     Given I am authenticated in org "acme"
     When I change my password from "correct-horse-battery" to "11111111"

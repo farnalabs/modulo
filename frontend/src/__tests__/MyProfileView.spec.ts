@@ -76,6 +76,24 @@ describe('MyProfileView', () => {
     expect(mockPut).not.toHaveBeenCalled()
   })
 
+  it('shows error when new password is the same as the current password', async () => {
+    const wrapper = mount(MyProfileView)
+    await nextTick()
+
+    const currentInput = wrapper.find('[data-testid="my-profile-current-password"]')
+    const newInput = wrapper.find('[data-testid="my-profile-new-password"]')
+    const confirmInput = wrapper.find('[data-testid="my-profile-confirm-password"]')
+
+    await currentInput.setValue('same-password')
+    await newInput.setValue('same-password')
+    await confirmInput.setValue('same-password')
+
+    await wrapper.find('[data-testid="my-profile-update-password"]').trigger('submit')
+
+    expect(wrapper.text()).toContain('New password must be different')
+    expect(mockPut).not.toHaveBeenCalled()
+  })
+
   it('successfully changes password', async () => {
     const wrapper = mount(MyProfileView)
     await nextTick()
