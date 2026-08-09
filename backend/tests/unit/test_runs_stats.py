@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.run import get_run_stats
+from modulo.db.crud.run import _get_dialect_name, _percentile, get_run_stats
 
 
 def _make_session(dialect: str) -> AsyncMock:
@@ -244,3 +244,137 @@ def test_get_run_stats_generic_empty_window_returns_zero_shape() -> None:
     assert result["total_runs"] == 0
     assert result["p50_duration_ms"] == 0
     assert result["runs_by_day"] == []
+
+
+def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() -> None:
+    """Non-complete terminal statuses land in the per-day failed bucket."""
+    session = _make_session("sqlite")
+    now = datetime.now(UTC)
+    runs = [
+        _run(
+            status="cancelled",
+            created_at=now,
+            completed_at=now - timedelta(minutes=1),
+            started_at=now - timedelta(minutes=2),
+        ),
+        _run(
+            status="expired",
+            created_at=now - timedelta(days=1),
+            completed_at=None,
+            started_at=None,
+        ),
+        _run(
+            status="eval_failed",
+            created_at=now - timedelta(days=2),
+            completed_at=None,
+            started_at=None,
+        ),
+        _run(
+            status="failed",
+            created_at=now - timedelta(days=3),
+            completed_at=None,
+            started_at=None,
+            error_code="boom",
+        ),
+    ]
+    res = MagicMock()
+    res.scalars.return_value.all.return_value = runs
+    session.execute = AsyncMock(return_value=res)
+
+    result = asyncio.run(get_run_stats(session, "30d"))
+
+    assert result["total_runs"] == 4
+    assert result["success_rate"] == 0.0
+    assert result["runs_by_day"] == [
+        {"date": str((now - timedelta(days=3)).date()), "count": 1, "success": 0, "failed": 1},
+        {"date": str((now - timedelta(days=2)).date()), "count": 1, "success": 0, "failed": 1},
+        {"date": str((now - timedelta(days=1)).date()), "count": 1, "success": 0, "failed": 1},
+        {"date": str(now.date()), "count": 1, "success": 0, "failed": 1},
+    ]
+    assert result["failure_by_reason"] == [{"reason": "boom", "count": 1}]
+
+
+def test_get_run_stats_generic_period_mapping() -> None:
+    """7d/30d/90d map to the correct cutoffs; unknown periods fall back to 30d."""
+    session = _make_session("sqlite")
+    now = datetime.now(UTC)
+    for period, days in [("7d", 7), ("30d", 30), ("90d", 90), ("bogus", 30)]:
+        captured_cutoff: list[datetime] = []
+
+        async def _fake_python(_session, cutoff, *, _captured=captured_cutoff):
+            _captured.append(cutoff)
+            return _empty_stats()
+
+        with patch("modulo.db.crud.run._get_run_stats_python", side_effect=_fake_python):
+            asyncio.run(get_run_stats(session, period))
+
+        expected_cutoff = now - timedelta(days=days)
+        assert len(captured_cutoff) == 1, f"period {period}"
+        assert abs((captured_cutoff[0] - expected_cutoff).total_seconds()) < 60, f"period {period}"
+
+
+def _empty_stats() -> dict:
+    return {
+        "total_runs": 0,
+        "success_rate": 0.0,
+        "avg_duration_ms": 0,
+        "p50_duration_ms": 0,
+        "p95_duration_ms": 0,
+        "p99_duration_ms": 0,
+        "runs_by_day": [],
+        "failure_by_reason": [],
+        "avg_duration_by_day": [],
+    }
+
+
+def test_get_run_stats_postgres_period_mapping() -> None:
+    """Postgres fast path receives the same cutoff mapping as the generic path."""
+    session = _make_session("postgresql")
+    now = datetime.now(UTC)
+    for period, days in [("7d", 7), ("30d", 30), ("90d", 90), ("bogus", 30)]:
+        captured_cutoff: list[datetime] = []
+
+        async def _fake_postgres(_session, cutoff, *, _captured=captured_cutoff):
+            _captured.append(cutoff)
+            return _empty_stats()
+
+        with patch("modulo.db.crud.run._get_run_stats_postgres", side_effect=_fake_postgres):
+            asyncio.run(get_run_stats(session, period))
+
+        expected_cutoff = now - timedelta(days=days)
+        assert len(captured_cutoff) == 1, f"period {period}"
+        assert abs((captured_cutoff[0] - expected_cutoff).total_seconds()) < 60, f"period {period}"
+
+
+def test_percentile_empty_returns_zero() -> None:
+    assert _percentile([], 50) == 0.0
+
+
+def test_percentile_single_value_returns_that_value() -> None:
+    assert _percentile([42.0], 50) == 42.0
+
+
+def test_percentile_interpolates_between_points() -> None:
+    # Linear interpolation: p50 of [10, 20, 30, 40] is 25.0.
+    assert _percentile([10.0, 20.0, 30.0, 40.0], 50) == 25.0
+    assert _percentile([10.0, 20.0, 30.0, 40.0], 0) == 10.0
+    assert _percentile([10.0, 20.0, 30.0, 40.0], 100) == 40.0
+
+
+def test_percentile_clamps_last_bucket_to_final_value() -> None:
+    # p95 of a two-element list interpolates between both elements.
+    assert _percentile([100.0, 200.0], 95) == 195.0
+
+
+def test_get_dialect_name_awaits_coroutine_bind() -> None:
+    session = _make_session("postgresql")
+    assert asyncio.run(_get_dialect_name(session)) == "postgresql"
+
+
+def test_get_dialect_name_handles_sync_bind() -> None:
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session = AsyncMock(spec=AsyncSession)
+    session.get_bind.return_value = bind
+
+    assert asyncio.run(_get_dialect_name(session)) == "sqlite"
