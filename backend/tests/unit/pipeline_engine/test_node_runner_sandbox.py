@@ -522,7 +522,11 @@ async def test_drain_probe_keeps_silent_live_agent_alive():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
-        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        # Tick must stay above the Windows monotonic-clock quantum (15.6ms): at
+        # 0.01 the per-slice shield timeout fires immediately and loses the
+        # mock's result, so the command appears to time out at the full 30s.
+        # 0.05 keeps the test fast (<2s) while staying above the quantum.
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
     ):
         result = await fn(_run_state())
 
