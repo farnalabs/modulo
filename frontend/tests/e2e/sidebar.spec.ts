@@ -44,6 +44,7 @@ test.describe('Sidebar Navigation', () => {
     }
 
     const sidebarLinks = sidebar.locator('a.sidebar-link')
+    await expect(sidebarLinks.first()).toBeVisible()
     const count = await sidebarLinks.count()
     expect(count).toBeGreaterThan(0)
 

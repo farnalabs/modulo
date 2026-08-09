@@ -54,50 +54,55 @@
 
     <template v-else>
       <div
-        role="tablist"
-        :aria-label="$t('components.remy.RemyOnlyView.sessions_tab')"
         class="flex items-center gap-1.5 overflow-x-auto border-b px-3 py-1.5"
         data-testid="remy-only-tab-bar"
       >
         <div
-          v-for="tab in tabsStore.tabs"
-          :key="tab.tabId"
-          role="presentation"
-          class="flex shrink-0 items-center gap-1"
+          v-if="tabsStore.tabs.length > 0"
+          role="tablist"
+          :aria-label="$t('components.remy.RemyOnlyView.sessions_tab')"
+          class="flex items-center gap-1.5"
         >
-          <button
-            :ref="(el) => setTabButtonRef(tab.tabId, el)"
-            class="remy-only-tab"
-            :class="{ active: tab.sessionId === store.activeSessionId }"
-            :data-testid="`remy-only-tab-${tab.tabId}`"
-            :id="`remy-only-tab-button-${tab.tabId}`"
-            role="tab"
-            :aria-selected="tab.sessionId === store.activeSessionId ? 'true' : 'false'"
-            aria-controls="remy-only-panel-chat"
-            :title="sessionTitle(tab.sessionId)"
-            @click="selectTab(tab)"
-            @keydown.left.prevent="onSessionTablistKeydown($event, tab)"
-            @keydown.right.prevent="onSessionTablistKeydown($event, tab)"
-            @keydown.home.prevent="onSessionTablistKeydown($event, tab)"
-            @keydown.end.prevent="onSessionTablistKeydown($event, tab)"
+          <div
+            v-for="tab in tabsStore.tabs"
+            :key="tab.tabId"
+            role="presentation"
+            class="flex shrink-0 items-center gap-1"
           >
-            <span class="max-w-[180px] truncate">{{ sessionTitle(tab.sessionId) }}</span>
-            <span
-              v-if="tab.sessionId === store.activeSessionId && store.isStreaming"
-              class="remy-live-dot"
-              :title="$t('components.remy.RemyOnlyView.live')"
-              :aria-label="$t('components.remy.RemyOnlyView.live')"
-            />
-          </button>
-          <button
-            class="remy-only-tab-close"
-            :data-testid="`remy-only-tab-close-${tab.tabId}`"
-            :aria-label="$t('components.remy.RemyOnlyView.close_tab')"
-            :title="$t('components.remy.RemyOnlyView.close_tab')"
-            @click="closeTab(tab)"
-          >
-            <X class="h-3 w-3" aria-hidden="true" />
-          </button>
+            <button
+              :ref="(el) => setTabButtonRef(tab.tabId, el)"
+              class="remy-only-tab"
+              :class="{ active: tab.sessionId === store.activeSessionId }"
+              :data-testid="`remy-only-tab-${tab.tabId}`"
+              :id="`remy-only-tab-button-${tab.tabId}`"
+              role="tab"
+              :aria-selected="tab.sessionId === store.activeSessionId ? 'true' : 'false'"
+              :aria-controls="panelsVisible ? 'remy-only-panel-chat' : undefined"
+              :title="sessionTitle(tab.sessionId)"
+              @click="selectTab(tab)"
+              @keydown.left.prevent="onSessionTablistKeydown($event, tab)"
+              @keydown.right.prevent="onSessionTablistKeydown($event, tab)"
+              @keydown.home.prevent="onSessionTablistKeydown($event, tab)"
+              @keydown.end.prevent="onSessionTablistKeydown($event, tab)"
+            >
+              <span class="max-w-[180px] truncate">{{ sessionTitle(tab.sessionId) }}</span>
+              <span
+                v-if="tab.sessionId === store.activeSessionId && store.isStreaming"
+                class="remy-live-dot"
+                :title="$t('components.remy.RemyOnlyView.live')"
+                :aria-label="$t('components.remy.RemyOnlyView.live')"
+              />
+            </button>
+            <button
+              class="remy-only-tab-close"
+              :data-testid="`remy-only-tab-close-${tab.tabId}`"
+              :aria-label="$t('components.remy.RemyOnlyView.close_tab')"
+              :title="$t('components.remy.RemyOnlyView.close_tab')"
+              @click="closeTab(tab)"
+            >
+              <X class="h-3 w-3" aria-hidden="true" />
+            </button>
+          </div>
         </div>
         <button
           class="remy-only-new-tab"
@@ -126,7 +131,7 @@
           :id="`remy-only-subtab-${st.key}`"
           role="tab"
           :aria-selected="subTab === st.key ? 'true' : 'false'"
-          :aria-controls="`remy-only-panel-${st.key}`"
+          :aria-controls="panelsVisible ? `remy-only-panel-${st.key}` : undefined"
           @click="subTab = st.key"
           @keydown.left.prevent="onSubTablistKeydown($event, st.key)"
           @keydown.right.prevent="onSubTablistKeydown($event, st.key)"
@@ -255,6 +260,8 @@ const activeSessionTabId = computed(() => {
   const active = tabsStore.tabs.find(t => t.sessionId === store.activeSessionId)
   return active ? `remy-only-tab-button-${active.tabId}` : 'remy-only-subtab-chat'
 })
+
+const panelsVisible = computed(() => tabsStore.tabs.length > 0 && Boolean(store.activeSessionId))
 
 function onSessionTablistKeydown(event: KeyboardEvent, tab: RemyTab) {
   const tabs = tabsStore.tabs
