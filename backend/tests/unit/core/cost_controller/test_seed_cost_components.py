@@ -16,6 +16,7 @@ default components are seeded. It fails before the fix and passes after.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -116,6 +117,32 @@ async def test_seed_cost_components_no_orgs_emits_warning_diagnostic(
     out = capsys.readouterr().out
     assert "SEED_COST_COMPONENTS: enumerated orgs=0" in out
     assert "SEED_COST_COMPONENTS: NO ORGS" in out
+
+
+async def test_seed_emits_log_records_at_info_level(
+    factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The PRODUCTION logging path emits the seeded / seed_complete records.
+
+    WARNING (the pytest default) suppresses INFO records entirely, so the
+    ``_log.info(...)`` calls are never executed — a reserved LogRecord key in
+    ``extra=`` (FAR-113: ``name``) only raises ``KeyError`` at INFO, the exact
+    level production runs at. Setting the caplog level to INFO for the seed
+    logger exercises the real path and catches that failure class.
+    """
+    caplog.set_level(logging.INFO, logger="modulo.core.seed_data.cost_components")
+    async with factory() as session, session.begin():
+        session.add(Organisation(id=_ORG, name="Seed Org", slug="seed-org"))
+
+    seeded = await seed_cost_components(factory)
+
+    assert seeded == 1
+    messages = [
+        record.getMessage() for record in caplog.records if record.name == "modulo.core.seed_data.cost_components"
+    ]
+    assert "cost_components.seeded" in messages
+    assert "cost_components.seed_complete" in messages
 
 
 async def test_seed_cost_components_for_org_seeds_fresh_org(
