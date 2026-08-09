@@ -1,64 +1,63 @@
 <template>
   <div class="page-wide">
-  <PageHeader :title="$t('views.SettingsHitlReviewView.title')" :subtitle="$t('views.SettingsHitlReviewView.subtitle')" />
-  <FilterBar
-    :search="{ placeholder: $t('views.SettingsHitlReviewView.search_placeholder') }"
-    :search-value="searchQuery"
-    :filters="[
-      { key: 'status', label: $t('views.SettingsHitlReviewView.status_label'), options: [
-        { value: 'pending', label: $t('views.SettingsHitlReviewView.status_pending') },
-        { value: 'claimed', label: $t('views.SettingsHitlReviewView.status_claimed') },
-        { value: 'approved', label: $t('views.SettingsHitlReviewView.status_approved') },
-        { value: 'rejected', label: $t('views.SettingsHitlReviewView.status_rejected') },
-      ]},
-    ]"
-    :filter-values="{ status: statusFilter }"
-    @update:search="searchQuery = $event; loadGates()"
-    @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadGates() } }"
-  >
-    <template #after>
-      <div class="flex items-center gap-2">
-        <Select :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')" v-model="pipelineFilter" @update:model-value="loadGates">
-          <SelectTrigger data-testid="hitl-review-pipeline-select" :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <SelectValue :placeholder="$t('views.SettingsHitlReviewView.all_pipelines')" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
-              {{ p.name }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <input :aria-label="$t('views.SettingsHitlReviewView.date_label')"
-          v-model="dateFrom"
-          type="date"
-          data-testid="hitl-review-date-from"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        />
-        <input :aria-label="$t('views.SettingsHitlReviewView.date_label')"
-          v-model="dateTo"
-          type="date"
-          data-testid="hitl-review-date-to"
-          class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @change="loadGates"
-        />
-      </div>
-    </template>
-  </FilterBar>
-  <div class="flex items-center gap-1 text-xs text-muted-foreground">
+    <PageHeader :title="$t('views.SettingsHitlReviewView.title')" :subtitle="$t('views.SettingsHitlReviewView.subtitle')" />
+    <FilterBar
+      :search="{ placeholder: $t('views.SettingsHitlReviewView.search_placeholder') }"
+      :search-value="searchQuery"
+      :filters="[
+        { key: 'status', label: $t('views.SettingsHitlReviewView.status_label'), options: [
+          { value: 'pending', label: $t('views.SettingsHitlReviewView.status_pending') },
+          { value: 'claimed', label: $t('views.SettingsHitlReviewView.status_claimed') },
+          { value: 'approved', label: $t('views.SettingsHitlReviewView.status_approved') },
+          { value: 'rejected', label: $t('views.SettingsHitlReviewView.status_rejected') },
+        ]},
+      ]"
+      :filter-values="{ status: statusFilter }"
+      @update:search="searchQuery = $event; loadGates()"
+      @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadGates() } }"
+    >
+      <template #after>
+        <div class="flex items-center gap-2">
+          <Select :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')" v-model="pipelineFilter" @update:model-value="loadGates">
+            <SelectTrigger data-testid="hitl-review-pipeline-select" :aria-label="$t('views.SettingsHitlReviewView.pipeline_label')" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <SelectValue :placeholder="$t('views.SettingsHitlReviewView.all_pipelines')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="p in pipelines" :key="p.id" :value="p.id">
+                {{ p.name }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <input :aria-label="$t('views.SettingsHitlReviewView.date_label')"
+            v-model="dateFrom"
+            type="date"
+            data-testid="hitl-review-date-from"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="loadGates"
+          />
+          <input :aria-label="$t('views.SettingsHitlReviewView.date_label')"
+            v-model="dateTo"
+            type="date"
+            data-testid="hitl-review-date-to"
+            class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            @change="loadGates"
+          />
+        </div>
+      </template>
+    </FilterBar>
+    <div class="flex items-center gap-1 text-xs text-muted-foreground">
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       {{ $t('views.SettingsHitlReviewView.auto_refresh', { seconds: refreshCountdown }) }}
     </div>
-  </div>
-  <LoadingSpinner v-if="loading" />
-  <ErrorAlert v-else-if="error" :message="error" />
-  <template v-else>
-    <EmptyState
-      v-if="filteredGates.length === 0"
-      :title="$t('views.SettingsHitlReviewView.empty_title')"
-      :description="$t('views.SettingsHitlReviewView.empty_description')"
-    />
-    <div v-else class="space-y-2">
+    <LoadingSpinner v-if="loading" />
+    <ErrorAlert v-else-if="error" :message="error" />
+    <template v-else>
+      <EmptyState
+        v-if="filteredGates.length === 0"
+        :title="$t('views.SettingsHitlReviewView.empty_title')"
+        :description="$t('views.SettingsHitlReviewView.empty_description')"
+      />
+      <div v-else class="space-y-2">
       <div
         v-for="gate in filteredGates"
         :key="gate.gate_id + gate.run_id"
@@ -216,12 +215,13 @@
             </div>
             <div v-if="actionMessage[expandKey(gate)]" class="mt-4 text-sm" :class="actionMessage[expandKey(gate)]?.type === 'error' ? 'text-destructive' : 'text-success'">
               {{ actionMessage[expandKey(gate)]?.text }}
-            </div>
-          </template>
+              </div>
+            </template>
+          </div>
         </div>
       </div>
-    </div>
-  </template>
+    </template>
+  </div>
 </template>
 
 <script setup lang="ts">
