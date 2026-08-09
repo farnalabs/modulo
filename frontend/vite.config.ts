@@ -58,6 +58,14 @@ export default defineConfig({
     //    over `await flushPromises()` chains, give async setImmediate waits an
     //    adequate timeout, and always tear down timers/mocks in afterEach.
     //    Never use fixed sleeps to make a test pass.
+    // 4. CSS injection: the default `css: false` stubs CSS imports, but the
+    //    JsonViewer override-contract unit spec needs the real stylesheets
+    //    (`json-viewer.css` + `vue-json-pretty`'s styles.css) mounted as
+    //    <style> tags so it can enumerate cssRules. Only these two sheets are
+    //    injected; all other CSS imports in the suite remain stubbed.
+    css: {
+      include: [/json-viewer/, /vue-json-pretty/],
+    },
   },
   css: {
     postcss: {
