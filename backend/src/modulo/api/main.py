@@ -474,7 +474,6 @@ async def _ensure_default_org(settings: Settings) -> None:
         try:
             await seed_cost_components_for_org(session, org.id)
         except Exception:
-            print(f"SEED_COST_COMPONENTS: default-org {org.id} seed FAILED", flush=True)  # noqa: T201
             logger.warning("startup.default_org_cost_components_seed_failed", exc_info=True)
 
 
