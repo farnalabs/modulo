@@ -35,7 +35,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
@@ -1092,6 +1092,20 @@ class PipelineExecutor:
                 if n.get("token_budget") is not None
             }
 
+            # Count this REAL node-execution attempt (post capacity-check,
+            # post compile, pre-stream). The NodeCancelledError retry budget
+            # below is bounded by node_attempt_count, NOT claim_count —
+            # claim_count increments on every SAQ claim including
+            # capacity-deferred / non-executing claims, which would otherwise
+            # consume the retry budget before any real execution attempt
+            # (postmortem FAR-121).
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                await session.execute(
+                    text("UPDATE runs SET node_attempt_count = node_attempt_count + 1 WHERE id = :rid"),
+                    {"rid": str(run_id)},
+                )
+
             if self._checkpointer_conn_string:
                 from modulo.settings import get_settings
 
@@ -1136,8 +1150,10 @@ class PipelineExecutor:
             # cancelled from outside — langgraph wraps the node body's
             # asyncio.CancelledError into NodeCancelledError). Do NOT
             # terminal-fail: the run is still retryable. Bounded by the SAQ
-            # claim count; releases the E2B idempotency fence so the retry
-            # claim can re-dispatch; then re-raises so the SAQ job retries.
+            # node-attempt count (NOT the claim count — capacity-deferred /
+            # non-executing claims must not consume the retry budget); releases
+            # the E2B idempotency fence so the retry claim can re-dispatch;
+            # then re-raises so the SAQ job retries.
             _log.warning("pipeline.node_cancelled_transient", extra={"run_id": str(run_id)})
             from modulo.core.pipeline_execution import (
                 e2b_dispatch_release_fenced,
@@ -1146,16 +1162,16 @@ class PipelineExecutor:
             from modulo.settings import get_settings
 
             retries = int(get_settings().saq_run_retries)
-            claim_count = 0
+            node_attempt_count = 0
             claim_token: str | None = None
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 current_run = await get_run(session, run_id)
                 if current_run is not None:
-                    claim_count = int(current_run.claim_count or 0)
+                    node_attempt_count = int(current_run.node_attempt_count or 0)
                     claim_token = current_run.claim_token
 
-            if claim_count < retries:
+            if node_attempt_count < retries:
                 # Release the E2B dispatch fence held by THIS claim so the
                 # successor claim's e2b_dispatch_acquire SETNX can win.
                 if e2b_idempotency_enabled() and claim_token is not None:
@@ -1178,10 +1194,13 @@ class PipelineExecutor:
                 get_registry().close(run_id)
                 raise
             # Retries exhausted — terminal failure with a MEANINGFUL code
-            # (not the raw langgraph class name).
+            # (not the raw langgraph class name). Publish the run_failed event
+            # so WS subscribers get a live failure notification, consistent
+            # with every other terminal-failure path in this file.
             final_status = "failed"
             error_code = "node_cancelled"
             error_detail = "Sandbox node cancelled (transient) after retries exhausted: " + str(exc)[:500]
+            broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
         except Exception as exc:
             import traceback
 

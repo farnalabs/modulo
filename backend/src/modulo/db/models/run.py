@@ -81,6 +81,12 @@ class Run(OrgScoped):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claim_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # Count of REAL node-execution attempts (post capacity-check, pre-stream in
+    # PipelineExecutor.execute). Bounds the NodeCancelledError retry budget —
+    # distinct from claim_count, which increments on EVERY SAQ claim including
+    # non-executing ones (capacity-deferral demotions, pre-node setup failures)
+    # that would otherwise exhaust the retry budget (postmortem FAR-121).
+    node_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     # Cost breakdown — list of component snapshots (amounts as strings).
