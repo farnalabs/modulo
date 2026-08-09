@@ -247,8 +247,8 @@ routes:
         breadcrumb: Schema Editor
         parent: /schemas
         product_map:
-        sidebar_group: configure
-        sidebar_order: 2
+        sidebar_group:
+        sidebar_order:
         type: form_page
         pattern: /schemas/editor/:id
         dynamic_params:
@@ -261,11 +261,10 @@ routes:
         breadcrumb: Schema Inference
         parent: /schemas
         product_map:
-        sidebar_group: configure
-        sidebar_order: 3
+        sidebar_group:
+        sidebar_order:
         type: form_page
         <<: *community
-        visibility: private_preview
         deprecated: false
 
     /admin/remy:

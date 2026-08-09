@@ -2370,6 +2370,7 @@ export default {
       "item_eval_proposals": "Eval Proposals",
       "item_variants": "Variants",
       "item_ab_test_models": "AB Test Models",
+      "item_schemas": "Schemas",
       "item_browse": "Browse",
       "item_editor": "Editor",
       "item_infer": "Infer",

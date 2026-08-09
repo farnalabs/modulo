@@ -2502,9 +2502,9 @@ Core (default expanded)
     Variants          /variants/compare
     AB Test Models    /variants/ab-test
   Schemas             (subgroup, default collapsed)
-    Browse            /schemas
-    Editor            /schemas/editor
-    Infer             /schemas/infer
+    Schemas           /schemas
+    Editor            /schemas/editor   (form page, reached via Schemas PageTabs — not a sidebar item)
+    Infer             /schemas/infer    (reached via Schemas PageTabs — not a sidebar item; publicly reachable)
 
 Remy (default collapsed, simple mode)
   My Skills           /settings/remy
