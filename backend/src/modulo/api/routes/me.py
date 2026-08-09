@@ -139,6 +139,12 @@ async def change_password(
             if not account.password_hash or not verify_password(req.current_password, account.password_hash):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
 
+            if req.new_password == req.current_password:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="New password must be different from the current password",
+                )
+
             try:
                 validate_password_strength(req.new_password)
             except ValueError as exc:

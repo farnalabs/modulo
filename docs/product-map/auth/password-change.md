@@ -28,6 +28,7 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - [x] Validates current password against stored bcrypt hash
 - [x] Returns 400 if current password is incorrect
 - [x] Returns 400 if user has no local password (SSO/OIDC/SAML user)
+- [x] Returns 400 if `new_password` is identical to `current_password` (no-op change rejected)
 - [x] Returns 422 if new password fails strength validation
 - [x] Returns 422 if new password is too short (< 8 chars)
 - [x] Returns 404 if authenticated user is not found in DB
@@ -40,6 +41,7 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - [x] Change Password form with Current Password, New Password, Confirm New Password fields
 - [x] Client-side validation: passwords must match
 - [x] Client-side validation: new password must be at least 8 characters
+- [x] Client-side validation: new password must differ from current password (blocks no-op submit before the API call)
 - [x] Shows success message on API success
 - [x] Shows error message on API failure
 - [x] Clears password fields after successful change
@@ -67,9 +69,11 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 ## Known Gaps
 
 - Website docs page for password change does not exist — no stub at `Website/modulo-website/src/docs/auth/password-change.md`
-- PUT /api/v1/me/password does not validate that `new_password` differs from `current_password` — no `!=` check between old and new (minor: user can "change" to same password)
 
 ## QA History
+### 2026-08-09 — improve-architecture (product-map walk)
+- **RESOLVED** "PUT /api/v1/me/password does not validate that `new_password` differs from `current_password`" — server: `change_password` now rejects a no-op change (400 `New password must be different from the current password`) after the current-password check and before hashing, so a user can no longer "change" to the same password and burn token families for nothing. Client: `MyProfileView` blocks the no-op submit client-side (`new_password_must_differ` i18n key) before calling the API. Added unit test `test_same_new_password_rejected` (`test_me_password.py`) + a BDD scenario ("Reusing the current password is rejected") in `change_password.feature` + a vitest case in `MyProfileView.spec.ts`. Updated product map (2 behaviours `[ ]`→`[x]`, Known Gap removed, QA History). 10/10 `test_me_password.py` + 7/7 change-password BDD scenarios pass (incl. `test_me_remy_skills`/`test_route_introspection`/`test_metrics` related tests), ruff clean, mypy --strict clean; 8/8 `MyProfileView.spec.ts` vitest + full frontend suite (717 tests) pass, eslint clean. Status: partial (missing website docs page remains).
+
 ### 2026-08-08 — improve-architecture (product-map walk)
 - Fixed the audit-trail gap: `PUT /api/v1/me/password` now appends a fail-open `password_changed` audit event (`resource_type="account"`, actor = the changing user) inside the same transaction, after token families are blacklisted. Follows the `admin_orgs.py` pattern — `set_rls_org` runs in the outer transaction before the append, and any audit write failure is loudly logged without rolling back the password change. Added unit test `test_password_change_records_audit_event` + a BDD scenario ("Password change is recorded in the audit trail"). Updated product map (Security behaviour `[ ]`→`[x]`, Known Gap removed, QA History).
 
