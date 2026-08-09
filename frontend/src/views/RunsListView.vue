@@ -57,14 +57,10 @@
           :rows="runs"
           @row-click="(row: any) => navigateToDetail(row.run_id)"
         >
-          <template #cell-pipeline_name="{ row, value }">
-            <router-link
-              :to="`/runs/${row.run_id}`"
-              class="font-medium hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded"
-              @click.stop
-            >
+          <template #cell-pipeline_name="{ value }">
+            <span class="font-medium hover:underline">
               {{ value || '(deleted pipeline)' }}
-            </router-link>
+            </span>
           </template>
           <template #cell-status="{ value }">
             <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
