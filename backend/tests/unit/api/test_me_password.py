@@ -117,6 +117,25 @@ class TestChangePassword:
         assert resp.json()["detail"] == "Password changed successfully"
         mock_get.assert_called_once()
 
+    def test_same_new_password_rejected(self, client: TestClient) -> None:
+        user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
+
+        with (
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
+            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+        ):
+            resp = client.put(
+                "/api/v1/me/password",
+                json={
+                    "current_password": _STRONG_PW,
+                    "new_password": _STRONG_PW,
+                },
+            )
+
+        assert resp.status_code == 400
+        assert "different" in resp.json()["detail"].lower()
+
     def test_wrong_current_password(self, client: TestClient) -> None:
         user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
 
