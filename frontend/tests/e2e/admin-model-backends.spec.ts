@@ -18,17 +18,17 @@ const sampleBackends = {
 }
 
 test.describe('Admin Model Backends', { tag: "@regression" }, () => {
-  test('page loads with correct heading and add button', { tag: "@regression" }, async ({ page, env }) => {
+  test('renders the Model Backends page', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-if (env.name === 'local') {
-    await page.route('**/api/v1/model-backends*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleBackends) })
-    })
+    if (env.name === 'local') {
+      await page.route('**/api/v1/model-backends*', (route) => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleBackends) })
+      })
     }
 
     await page.goto('/admin/model-backends')
 
-    await expect(page.locator('h1')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Model Backends')
     if (env.name === 'local') {
       await expect(page.getByTestId('admin-model-backends-add')).toBeVisible()
     }
@@ -36,15 +36,15 @@ if (env.name === 'local') {
 
   test('shows existing backends in the list', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
-if (env.name === 'local') {
-    await page.route('**/api/v1/model-backends*', (route) => {
-      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleBackends) })
-    })
+    if (env.name === 'local') {
+      await page.route('**/api/v1/model-backends*', (route) => {
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sampleBackends) })
+      })
     }
 
     await page.goto('/admin/model-backends')
 
-    await expect(page.locator('h1')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Model Backends')
     if (env.name === 'local') {
       await expect(page.locator('text=GPT-4').first()).toBeVisible()
       await expect(page.getByTestId('admin-model-backends-edit').first()).toBeVisible()
