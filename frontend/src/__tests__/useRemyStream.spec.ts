@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useRemyStore } from '../composables/useRemyStore'
 import { useRemyStream } from '../composables/useRemyStream'
+import { executeCommandBatch } from '../composables/useUiCommandExecutor'
 
 vi.mock('@/lib/api/client', () => ({
   getAccessToken: vi.fn(() => 'mock-token'),
@@ -247,5 +248,126 @@ describe('useRemyStream', () => {
 
     const store = useRemyStore()
     expect(store.isStreaming).toBe(false)
+  })
+
+  it('POST body omits exclude_ui_tools by default and drops page_context when opted in', async () => {
+    const store = setupStore()
+    store.pageContext = { route: '/dashboard', params: { id: '1' }, entities: ['pipeline'] }
+    const bodies: any[] = []
+    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
+      if (url.includes('/stream')) {
+        bodies.push(JSON.parse(opts?.body || '{}'))
+        return Promise.resolve({ ok: true, body: createMockSSEStream([{ event: 'done', data: { message_id: 'm1' } }]) })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+    expect(bodies[0].exclude_ui_tools).toBeUndefined()
+    expect(bodies[0].page_context).toContain('Page: /dashboard')
+
+    await connectStream('session-1', { excludeUiTools: true })
+    expect(bodies[1].exclude_ui_tools).toBe(true)
+    expect(bodies[1].page_context).toBeUndefined()
+  })
+
+  it('two sequential sends both complete', async () => {
+    setupStore()
+    const streamCalls: number[] = []
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/stream')) {
+        streamCalls.push(1)
+        return Promise.resolve({ ok: true, body: createMockSSEStream([{ event: 'done', data: { message_id: 'm' } }]) })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1')
+    await connectStream('session-1')
+
+    const store = useRemyStore()
+    expect(streamCalls.length).toBe(2)
+    expect(store.isStreaming).toBe(false)
+  })
+
+  it('abort-then-send is serialized — replacement stream runs cleanly (identity guard)', async () => {
+    const store = setupStore()
+    let releaseFirst!: (value: unknown) => void
+    const firstFetch = new Promise<unknown>((resolve) => { releaseFirst = resolve })
+    let secondStreamCalls = 0
+    global.fetch = vi
+      .fn()
+      .mockReturnValueOnce(firstFetch)
+      .mockImplementationOnce(() => {
+        secondStreamCalls++
+        return Promise.resolve({
+          ok: true,
+          body: createMockSSEStream([
+            { event: 'token', data: { token: 'reply' } },
+            { event: 'done', data: { message_id: 'm2' } },
+          ]),
+        })
+      })
+
+    const { connectStream, disconnectStream } = useRemyStream()
+    const first = connectStream('session-1')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(store.isStreaming).toBe(true)
+
+    const teardown = disconnectStream()
+    releaseFirst({ ok: true, body: createMockSSEStream([{ event: 'done', data: { message_id: 'm1' } }]) })
+    await Promise.all([first, teardown])
+    expect(store.isStreaming).toBe(false)
+
+    await connectStream('session-1')
+    expect(secondStreamCalls).toBe(1)
+    expect(store.isStreaming).toBe(false)
+    expect(store.messages[store.messages.length - 1].content).toBe('reply')
+  })
+
+  it('refuses a second same-session stream while one is in flight', async () => {
+    setupStore()
+    let releaseFirst!: (value: unknown) => void
+    const firstFetch = new Promise<unknown>((resolve) => { releaseFirst = resolve })
+    global.fetch = vi.fn().mockReturnValueOnce(firstFetch)
+
+    const { connectStream } = useRemyStream()
+    const first = connectStream('session-1')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(useRemyStore().isStreaming).toBe(true)
+
+    await connectStream('session-1')
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    releaseFirst({ ok: true, body: createMockSSEStream([{ event: 'done', data: { message_id: 'm1' } }]) })
+    await first
+    expect(useRemyStore().isStreaming).toBe(false)
+  })
+
+  it('remy-only mode does not execute ui_command_batch (defense-in-depth)', async () => {
+    setupStore()
+    const postedBatches: any[] = []
+    global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
+      if (url === '/api/v1/remy/sessions/session-1/stream') {
+        return Promise.resolve({
+          ok: true,
+          body: createMockSSEStream([{ event: 'ui_command_batch', data: { commands: [{ id: 'cmd-1', name: 'click', args: { selector: '.x' } }] } }]),
+        })
+      }
+      if (url.includes('/ui-command-results')) {
+        postedBatches.push(JSON.parse(opts?.body || '{}'))
+        return Promise.resolve({ ok: true })
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+
+    const { connectStream } = useRemyStream()
+    await connectStream('session-1', { excludeUiTools: true })
+
+    expect(executeCommandBatch).not.toHaveBeenCalled()
+    expect(postedBatches.length).toBe(1)
+    expect(postedBatches[0].results).toEqual([])
   })
 })

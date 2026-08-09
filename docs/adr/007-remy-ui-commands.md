@@ -61,6 +61,15 @@ Concretely:
 
 At that point, server-side Playwright remains an option, but the frontend-mediated architecture would still be the primary path  –  Playwright would only supplement capabilities the frontend cannot provide.
 
+## Note  –  Remy-Only Mode (second ingress, 2026-08)
+
+A second Remy ingress exists at the full-screen route `/remy` where the entire UI-driving tool family is excluded **server-side via a per-request flag** (`exclude_ui_tools: true` on the `/stream` request). In this mode:
+
+- UI tools are dropped from the LLM `tools` parameter, the text-mode UI-tools block is omitted from the system prompt, `get_manifest` returns a `success=False` tool result ("UI driving is not available in this view"), and any UI tool call is rejected with the same message before a `ui_command_batch` is ever yielded.
+- The flag is a **client-asserted UX-mode switch**, not an authorisation boundary. The org-level `remy_ui_driving` feature flag (`_is_ui_driving_enabled`) remains the authorisation gate for the permission/execution endpoints (`permission-response`, `ui-command-results`). The per-request flag and the org gate are AND-combined when assembling tools.
+
+Implication for the **LLM tool injection** row in the decision table: injection is now conditional on *both* the org flag *and* the request-level remy-only switch. The frontend belt-and-braces: the `ui_command_batch` SSE handler in `useRemyStream.ts` skips execution entirely when remy-only mode is active, even for text-mode backends or a pre-deploy server that still emits batches.
+
 ## ADR 008  –  Core Shared Manifest
 
 See ADR 008 for the companion decision: a shared `manifest.yaml` that serves as the single source of truth for page routes, `data-testid` selectors, sidebar groups, permissions, feature tiers, product map refs, and i18n keys. Both frontend (Vite build-time import) and backend (startup load) consume it, and a pre-commit validator checks integrity across all five metadata sources.

@@ -2314,6 +2314,25 @@ export default {
         "legend_always_on": "Always-on = injected into every conversation",
         "legend_tool": "Tool = Remy loads on demand",
         "legend_off": "Off = disabled"
+      },
+      "RemyOnlyView": {
+        "remy_title": "Remy",
+        "remy_only_mode": "Remy Only Mode",
+        "banner": "This is a chat-only view — Remy can answer questions and use your skills, but cannot drive the browser here.",
+        "return_home": "Return home",
+        "new_tab": "New tab",
+        "close_tab": "Close tab",
+        "live": "Live",
+        "chat_tab": "Chat",
+        "skills_tab": "Skills",
+        "sources_tab": "Sources",
+        "sessions_tab": "Sessions",
+        "sub_tabs_label": "Views",
+        "no_tabs_yet": "No conversations yet",
+        "start_new": "Start a new conversation",
+        "select_tab_or_new": "Select a tab above or start a new conversation",
+        "remy_unavailable": "Remy is unavailable",
+        "remy_unavailable_desc": "Remy Only mode is not enabled for your workspace. Enable dev mode to use it."
       }
     },
     "SsoProviderForm": {

@@ -12,6 +12,7 @@ unit-tests:
   - backend/tests/unit/connectors/test_github_issues.py
   - backend/tests/unit/connectors/test_github_resilience.py
   - backend/tests/unit/connectors/test_github_errors.py
+  - backend/tests/unit/connectors/test_github_circuit_breaker.py
 code:
   - backend/src/modulo/connectors/github/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -149,7 +150,13 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] On HTTP 429 prefer `X-RateLimit-Reset` (epoch quota-window reset) then `Retry-After` then exponential backoff via `_retry_delay()` — the reset delay is uncapped so a GitHub quota window longer than `_MAX_DELAY` is truly honoured
 - [x] Exhausted 429 errors surface the quota headers as `(quota: X-RateLimit-Limit=…; X-RateLimit-Remaining=…)` in the `ValueError` detail
 - [x] Query the full rate-limit budget directly via `query("rate_limit")` — `GET /rate_limit`, records[0] is the `{"core": …, "search": …, …}` resources map, so an agent can check remaining quota before starting a batch
-- [ ] No circuit breaker — retries are unconditional up to max attempts
+- [x] Circuit breaker trips after `circuit_failure_threshold` (default 5) consecutive service-level failures (5xx, exhausted 429, timeouts, connection errors) — configurable via constructor args
+- [x] Open circuit fails fast — calls raise `GitHubCircuitOpenError` (error_code `circuit_open`, `retry_after_seconds` = remaining cooldown) without contacting the network
+- [x] After `circuit_cooldown_seconds` (default 30s) the circuit allows a single half-open probe — probe success closes the circuit, probe failure re-opens it for a fresh cooldown
+- [x] Client errors (4xx) never count toward the breaker — only service-level failures trip it
+- [x] A successful call resets the consecutive-failure counter (`_record_success` closes an open circuit)
+- [x] Health checks bypass the circuit breaker (`_bypass_circuit`) so the diagnostic path always probes — a healthy probe closes an open circuit, a failing probe re-opens it
+- [x] `circuit_state()` exposes the breaker state (`open`, `half_open`, `consecutive_failures`, `failure_threshold`, `cooldown_seconds`, `remaining_cooldown`) for observability
 
 ### Pagination
 
@@ -195,13 +202,24 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] ~~**Recursive file listing**~~ — **RESOLVED (2026-08-06)**: `query("tree")` lists the full repo tree recursively via the Git Trees API (ref resolved to a commit SHA first), with optional `path`/`recursive` filters
 - [x] ~~**Path traversal protection**~~ — **RESOLVED (2026-08-06)**: local `_validate_path()` blocks absolute paths and `..` segments on `query("file")`, `query("tree")`, and `write("file")` before any request is sent
 - [x] ~~**No machine-parseable error codes**~~ — **RESOLVED (2026-08-08)**: full typed error hierarchy (`GitHubError` → `GitHubAPIError`/`GitHubNetworkError` → `GitHubRateLimitError`/`GitHubAuthError`/`GitHubNotFoundError`), each exposing a stable `error_code`; all subclass `ValueError` for backward compatibility
-- [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
+- [x] ~~**No circuit breaker**~~ — **RESOLVED (2026-08-08)**: sustained service-level failures trip an open circuit; `GitHubCircuitOpenError` (code `circuit_open`) fails fast with `retry_after_seconds`; a half-open probe after `circuit_cooldown_seconds` closes the circuit on success or re-opens on failure; 4xx client errors never count; `circuit_state()` exposes the breaker state
 - [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
 - [ ] **`test_github_issues.py` (550 lines)** and **`test_github_scopes.py` (89 lines)** now in `unit-tests:` frontmatter — were previously missing
 - [ ] **`github.feature` (5 scenarios)** and **`github_issues.feature` (15 scenarios)** now in `bdd:` frontmatter — were previously missing
 - [x] ~~**Batch file operations**~~ — **RESOLVED (2026-08-06)**: `write("commit")`/`write("files")` applies create/update/delete/move actions in one commit via the Git Database API
 
 ## QA History
+
+### 2026-08-08 — improve-architecture: circuit breaker for sustained failures RESOLVED
+
+**RESOLVED the "No circuit breaker" known gap** (`connectors/github/__init__.py`). The connector previously retried unconditionally up to max attempts, so a sustained upstream outage caused every call in a batch to hammer the API. Added a stateful circuit breaker alongside the existing retry/backoff layer:
+
+1. **Trip** — `_record_failure()` counts each service-level failure (5xx, exhausted 429s, timeouts, connection errors) and opens the circuit once `circuit_failure_threshold` (default 5, constructor-configurable) consecutive failures are reached. Client errors (4xx) and 304 never count.
+2. **Fail fast** — `_check_circuit()` runs before every `_call_api`; while the circuit is open it raises `GitHubCircuitOpenError` (error_code `circuit_open`, `retry_after_seconds` = remaining cooldown) without any network request.
+3. **Recovery** — after `circuit_cooldown_seconds` (default 30s, constructor-configurable) exactly one half-open probe is admitted; a probe success closes the circuit (`_record_success` resets the counter), a probe failure re-opens it for a fresh cooldown.
+4. **Diagnostics** — health checks bypass the breaker (`_bypass_circuit`) so the diagnostic path always probes: a healthy probe closes an open circuit, a failing probe re-opens it. `circuit_state()` exposes `open`/`half_open`/`consecutive_failures`/`failure_threshold`/`cooldown_seconds`/`remaining_cooldown` for observability.
+
+**Tests:** 13 new unit tests in `test_github_circuit_breaker.py` (open-after-threshold, fail-fast-no-network, state observability, cooldown-probe success closes, probe-failure re-opens, single-probe admission, client-errors-don't-trip, success-resets-counter, retry-exhaustion-counts-once, health-bypass-closes/open-reopens, transport-failure trip, constructor validation) + 1 BDD scenario in `github_connector.feature` (open circuit fails fast with code `circuit_open` + reports open state) with 2 new step definitions. Updated product map (8 behaviours `[ ]`→`[x]`, Known Gap → RESOLVED, QA History). 220/220 github connector unit tests (117 `test_github.py` + 23 `test_github_resilience.py` + 10 `test_github_scopes.py` + 39 `test_github_issues.py` + 18 `test_github_errors.py` + 13 `test_github_circuit_breaker.py`) + 32/32 `github_connector.feature` BDD scenarios pass (8 pre-existing connector-suite BDD failures unchanged), ruff check + format clean. Status: partial (OAuth flow, fine-grained PAT, per-operation scope verification remain).
 
 ### 2026-08-08 — improve-architecture: structured error hierarchy + failure-mode distinction RESOLVED
 

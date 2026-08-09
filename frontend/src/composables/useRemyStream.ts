@@ -13,35 +13,60 @@ export interface ToolCallEvent {
   error?: string
 }
 
+export interface StreamOptions {
+  excludeUiTools?: boolean
+}
+
 const FETCH_TIMEOUT_MS = 30000
 
 export function useRemyStream() {
   const store = useRemyStore()
   const connected = ref(false)
   let abortController: AbortController | null = null
+  let streamId = 0
+  let activeStream: Promise<void> | null = null
 
-  async function connectStream(sessionId: string) {
-    disconnectStream()
-    abortController = new AbortController()
-    const timeoutId = setTimeout(() => abortController?.abort(), FETCH_TIMEOUT_MS)
+  async function connectStream(sessionId: string, options: StreamOptions = {}) {
+    if (store.isStreaming && store.activeSessionId === sessionId) return
+    await disconnectStream()
+    const seq = ++streamId
+    const controller = new AbortController()
+    abortController = controller
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
     connected.value = true
     store.isStreaming = true
 
+    const run = runStream(sessionId, options, seq, controller, timeoutId)
+    activeStream = run
+    return run
+  }
+
+  async function runStream(
+    sessionId: string,
+    options: StreamOptions,
+    seq: number,
+    controller: AbortController,
+    timeoutId: ReturnType<typeof setTimeout>,
+  ): Promise<void> {
     const session = store.sessions.find(s => s.id === sessionId)
     if (!session) {
       store.error = 'Session not found'
-      store.isStreaming = false
-      connected.value = false
       clearTimeout(timeoutId)
+      if (seq === streamId) {
+        store.isStreaming = false
+        connected.value = false
+      }
       return
     }
 
     const lastMsg = store.messages[store.messages.length - 1]
     if (!lastMsg || !lastMsg.content) {
       store.removeLastUserMessage()
-      store.isStreaming = false
-      connected.value = false
       clearTimeout(timeoutId)
+      if (seq === streamId) {
+        store.isStreaming = false
+        connected.value = false
+      }
       return
     }
 
@@ -63,15 +88,18 @@ export function useRemyStream() {
           context_window_tokens: session.context_window_tokens,
           api_key: '',
           mcp_api_key: headers.Authorization?.replace('Bearer ', '') || '',
-          page_context: (() => {
-            if (!pageCtx.route) return undefined
-            let ctx = `Page: ${pageCtx.route}`
-            if (pageCtx.params.id) ctx += ` / ${pageCtx.params.id}`
-            if (pageCtx.entities.length) ctx += `\nEntities: ${pageCtx.entities.join(', ')}`
-            return ctx
-          })(),
+          page_context: options.excludeUiTools
+            ? undefined
+            : (() => {
+                if (!pageCtx.route) return undefined
+                let ctx = `Page: ${pageCtx.route}`
+                if (pageCtx.params.id) ctx += ` / ${pageCtx.params.id}`
+                if (pageCtx.entities.length) ctx += `\nEntities: ${pageCtx.entities.join(', ')}`
+                return ctx
+              })(),
+          exclude_ui_tools: options.excludeUiTools || undefined,
         }),
-        signal: abortController.signal,
+        signal: controller.signal,
       })
       clearTimeout(timeoutId)
 
@@ -79,8 +107,6 @@ export function useRemyStream() {
         const errorDetail = response.status === 403 ? 'Access denied. Contact your admin.' : (response.statusText || 'Stream connection failed')
         store.error = errorDetail
         store.removeLastUserMessage()
-        store.isStreaming = false
-        connected.value = false
         return
       }
 
@@ -102,7 +128,10 @@ export function useRemyStream() {
             store.setPendingPermission(parsed)
           } else if (currentEvent === 'ui_command_batch') {
             const planStore = usePlanStore()
-            if (!planStore.featureEnabled('remy_ui_driving')) {
+            // Belt-and-braces: remy-only mode never executes UI command batches,
+            // and never submits them even if the server (or a text-mode backend
+            // path) somehow emits one.
+            if (options.excludeUiTools || !planStore.featureEnabled('remy_ui_driving')) {
               console.warn('[RemyStream] UI driving disabled — skipping command batch')
               const body = JSON.stringify({ results: [] })
               await fetch(`/api/v1/remy/sessions/${sessionId}/ui-command-results`, {
@@ -118,7 +147,7 @@ export function useRemyStream() {
             try {
               const results = await executeCommandBatch(commands)
               store.isExecutingUi = false
-              const streamSignal = abortController?.signal
+              const streamSignal = controller?.signal
               const pauseDeadline = Date.now() + 60000
               while (isExecutorPaused()) {
                 if (Date.now() > pauseDeadline) break
@@ -168,18 +197,33 @@ export function useRemyStream() {
       store.removeLastUserMessage()
     } finally {
       reader?.cancel().catch(() => {})
-      store.isStreaming = false
-      connected.value = false
+      if (seq === streamId) {
+        store.isStreaming = false
+        connected.value = false
+      }
     }
   }
 
-  function disconnectStream() {
+  async function disconnectStream() {
+    const pendingId = streamId
     if (abortController) {
       abortController.abort()
       abortController = null
     }
-    connected.value = false
-    store.isStreaming = false
+    const pending = activeStream
+    activeStream = null
+    if (pending) {
+      try {
+        await pending
+      } catch (e) {
+        // runStream handles its own errors
+        console.warn('[RemyStream] disconnect error while awaiting stream', e)
+      }
+    }
+    if (streamId === pendingId) {
+      connected.value = false
+      store.isStreaming = false
+    }
   }
 
   if (getCurrentInstance()) {

@@ -322,7 +322,10 @@ async def _probe_org(session_factory: Callable[[], Any], org_id: uuid.UUID) -> N
     """Sample ONE org (per-org exception isolation; per-org query timeout)."""
     async with session_factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        await session.execute(text("SET LOCAL statement_timeout = :t"), {"t": _ORG_STATEMENT_TIMEOUT_MS})
+        await session.execute(
+            text("SELECT set_config('statement_timeout', :ms, true)"),
+            {"ms": str(int(_ORG_STATEMENT_TIMEOUT_MS))},
+        )
         await _assert_sample_query_index(session, org_id)
         runs = await _sample_runs(session, org_id)
 

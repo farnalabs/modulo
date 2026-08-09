@@ -805,6 +805,19 @@ routes:
         dynamic_params:
         -   id
 
+    /remy:
+        name: remy-only
+        breadcrumb: Remy
+        parent: /
+        product_map:
+        sidebar_group:
+        sidebar_order:
+        type: page
+        <<: *community
+        visibility: private_preview
+        deprecated: false
+        exact: true
+
 elements:
     /admin/remy:
     -   testid: remy-access-save
