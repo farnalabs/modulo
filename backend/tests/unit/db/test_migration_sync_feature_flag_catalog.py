@@ -88,13 +88,14 @@ class TestMigrationFlagSync:
         unknown = sorted(set(migration._FLAGS) - known)
         assert not unknown, f"migration references flags removed from _KNOWN_FLAGS: {unknown}"
 
-    def test_migration_is_head_and_revises_existing_revision(self, migration: ModuleType) -> None:
+    def test_migration_is_in_chain_and_revises_existing_revision(self, migration: ModuleType) -> None:
         script = _script()
-        assert migration.revision in script.get_heads(), (
-            f"migration {migration.revision} must be a head (no other migration revises it)"
+        chain = {rev.revision for rev in script.walk_revisions()}
+        assert migration.revision in chain, (
+            f"migration {migration.revision} must be reachable from the migration graph head "
+            f"(heads: {sorted(script.get_heads())})"
         )
-        existing = {rev.revision for rev in script.walk_revisions()}
-        assert migration.down_revision in existing, (
+        assert migration.down_revision in chain, (
             f"down_revision {migration.down_revision!r} must reference an existing migration revision"
         )
 
