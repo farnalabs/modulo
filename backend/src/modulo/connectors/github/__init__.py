@@ -34,6 +34,12 @@ _MAX_RETRIES = 3
 _BASE_DELAY = 1.0
 _MAX_DELAY = 30.0
 
+# Circuit breaker configuration — a sustained run of service-level failures
+# (server errors, exhausted rate limits, transport failures) opens the circuit
+# so the connector fails fast instead of hammering an unhealthy API.
+_CIRCUIT_FAILURE_THRESHOLD = 5
+_CIRCUIT_COOLDOWN_SECONDS = 30.0
+
 # Link header regex for pagination
 _LINK_HEADER_RE = re.compile(r'<([^>]+)>\s*;\s*rel="(\w+)"')
 
@@ -105,6 +111,23 @@ class GitHubNetworkError(GitHubError):
     """Raised on transport-level failures (timeout, connection error)."""
 
     error_code = "network_error"
+
+
+class GitHubCircuitOpenError(GitHubError):
+    """Raised when the circuit breaker is open and the call fails fast.
+
+    Indicates the upstream API is in a sustained failure state (>= the
+    configured failure threshold of consecutive service-level errors) and the
+    connector refuses to keep contacting it until the cooldown elapses.
+    ``retry_after_seconds`` is the remaining cooldown before a half-open probe
+    is allowed (``None`` when unknown).
+    """
+
+    error_code = "circuit_open"
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message, error_code="circuit_open")
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _error_for_status(status_code: int, detail: str) -> GitHubError:
@@ -300,13 +323,94 @@ class GitHubConnector(ConnectorBase):
       "issue_assign"    — assign an issue; data: {"repo": ..., "issue_number": ..., "assignees": [...]}
     """
 
-    def __init__(self, token: str, base_url: str = _GITHUB_API) -> None:
+    def __init__(
+        self,
+        token: str,
+        base_url: str = _GITHUB_API,
+        *,
+        circuit_failure_threshold: int = _CIRCUIT_FAILURE_THRESHOLD,
+        circuit_cooldown_seconds: float = _CIRCUIT_COOLDOWN_SECONDS,
+    ) -> None:
         self._token = token
         self._base_url = base_url
+        if circuit_failure_threshold < 1:
+            raise ValueError("circuit_failure_threshold must be >= 1")
+        if circuit_cooldown_seconds <= 0:
+            raise ValueError("circuit_cooldown_seconds must be > 0")
+        self._circuit_failure_threshold = circuit_failure_threshold
+        self._circuit_cooldown_seconds = circuit_cooldown_seconds
+        self._consecutive_failures = 0
+        self._circuit_open = False
+        self._circuit_open_until = 0.0
+        self._circuit_half_open = False
 
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.GITHUB
+
+    def circuit_state(self) -> dict[str, Any]:
+        """Expose the circuit breaker state for observability.
+
+        Lets agents and the health UI see whether the connector is currently
+        failing fast (``open``), how many consecutive service-level failures led
+        there, and how long until a half-open probe is allowed.
+        """
+        remaining = max(0.0, self._circuit_open_until - time.monotonic()) if self._circuit_open else 0.0
+        return {
+            "open": self._circuit_open,
+            "half_open": self._circuit_half_open,
+            "consecutive_failures": self._consecutive_failures,
+            "failure_threshold": self._circuit_failure_threshold,
+            "cooldown_seconds": self._circuit_cooldown_seconds,
+            "remaining_cooldown": round(remaining, 2),
+        }
+
+    def _record_success(self) -> None:
+        """Record a successful API call, closing the circuit if it was open."""
+        self._consecutive_failures = 0
+        self._circuit_open = False
+        self._circuit_half_open = False
+        self._circuit_open_until = 0.0
+
+    def _record_failure(self) -> None:
+        """Record a service-level failure, tripping the breaker at the threshold.
+
+        Only service-level failures (server errors, exhausted rate limits,
+        transport failures) count — client errors (4xx) never open the circuit
+        from the closed state. A half-open recovery probe is the exception: any
+        terminal error on the probe (including 4xx) is recorded so the breaker
+        re-trips with a fresh cooldown and the half-open flag is always cleared
+        — a probe can never wedge the circuit half-open forever.
+        """
+        self._consecutive_failures += 1
+        self._circuit_half_open = False
+        if self._consecutive_failures >= self._circuit_failure_threshold:
+            self._circuit_open = True
+            self._circuit_open_until = time.monotonic() + self._circuit_cooldown_seconds
+
+    def _check_circuit(self) -> None:
+        """Fail fast while the circuit is open; allow a half-open probe on cooldown expiry.
+
+        While open, every API call raises ``GitHubCircuitOpenError`` without
+        contacting the network. When the cooldown window has elapsed, exactly
+        one half-open probe is admitted: a probe success closes the circuit,
+        a probe failure re-opens it for another cooldown period.
+        """
+        if not self._circuit_open:
+            return
+        if time.monotonic() < self._circuit_open_until:
+            remaining = self._circuit_open_until - time.monotonic()
+            raise GitHubCircuitOpenError(
+                f"GitHub circuit is open after {self._consecutive_failures} consecutive failures; "
+                f"retry after circuit cooldown ({remaining:.1f}s remaining)",
+                retry_after_seconds=remaining,
+            )
+        if self._circuit_half_open:
+            raise GitHubCircuitOpenError(
+                "GitHub circuit is half-open — a recovery probe is already in flight",
+                retry_after_seconds=0.0,
+            )
+        self._circuit_half_open = True
 
     @staticmethod
     def _ref_to_git_ref(ref: str) -> str:
@@ -462,20 +566,37 @@ class GitHubConnector(ConnectorBase):
             return min(retry_after, _MAX_DELAY)
         return min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)
 
-    async def _call_api(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    async def _call_api(
+        self,
+        method: str,
+        path: str,
+        *,
+        _bypass_circuit: bool = False,
+        **kwargs: Any,
+    ) -> httpx.Response:
         """Call GitHub API with retry/backoff for retryable statuses.
 
         Retries on 429, 502, 503, 504 with exponential backoff + jitter.
         On 429 responses, prefers ``X-RateLimit-Reset`` (the quota window) then
         ``Retry-After`` to compute the wait instead of blind backoff.
         Wraps HTTP/network/parse errors as ValueError.
+
+        A circuit breaker fails fast while the upstream is in a sustained
+        failure state (``_bypass_circuit`` skips the gate, used by health
+        checks so the diagnostic path can always probe recovery).
         """
+        if not _bypass_circuit:
+            self._check_circuit()
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 async with self._client() as client:
                     r = await client.request(method, path, **kwargs)
                     if r.status_code == 304:
+                        # 304 is a healthy service response (the resource is
+                        # unchanged) — record it as a success so a half-open
+                        # probe closes the circuit instead of wedging it.
+                        self._record_success()
                         raise GitHubAPIError(
                             "GitHub API returned 304 Not Modified — resource unchanged",
                             error_code="not_modified",
@@ -485,6 +606,7 @@ class GitHubConnector(ConnectorBase):
                         await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
                     r.raise_for_status()
+                    self._record_success()
                     return r
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
@@ -492,6 +614,12 @@ class GitHubConnector(ConnectorBase):
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
                 status_code = exc.response.status_code
+                # A 4xx never counts toward the breaker from the closed state,
+                # but a client error on a half-open recovery probe means the
+                # probe did not confirm recovery — re-trip so a fresh probe is
+                # admitted after the next cooldown instead of wedging half-open.
+                if status_code in _RETRYABLE_STATUSES or status_code >= 500 or self._circuit_half_open:
+                    self._record_failure()
                 detail = f"GitHub API HTTP {status_code}: {exc.response.text[:200]}"
                 if status_code == 429:
                     quota = _rate_limit_detail(exc.response)
@@ -504,6 +632,7 @@ class GitHubConnector(ConnectorBase):
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
+                self._record_failure()
                 raise GitHubNetworkError("GitHub API timeout", error_code="network_timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
@@ -511,7 +640,9 @@ class GitHubConnector(ConnectorBase):
                     delay = min(_BASE_DELAY * (2**attempt), _MAX_DELAY)
                     await asyncio.sleep(self._jitter(delay))
                     continue
+                self._record_failure()
                 raise GitHubNetworkError("GitHub API connection error", error_code="network_connection") from exc
+        self._record_failure()
         raise GitHubNetworkError("GitHub API request failed after retries") from last_exc
 
     async def _parse_json(self, response: httpx.Response) -> Any:
@@ -555,9 +686,13 @@ class GitHubConnector(ConnectorBase):
         Required scopes: ``repo``, ``read:org``. Distinguishes expired/invalid
         tokens (HTTP 401), missing scopes (HTTP 403), rate-limit exhaustion
         (HTTP 429), and transport failures so the failure mode is actionable.
+
+        Health checks bypass the circuit breaker so the diagnostic path always
+        probes the API — a healthy probe closes an open circuit, a failing
+        probe re-opens it.
         """
         try:
-            r = await self._call_api("GET", "/user")
+            r = await self._call_api("GET", "/user", _bypass_circuit=True)
         except GitHubAuthError as exc:
             if exc.status_code == 401:
                 return HealthResult(ok=False, detail="Invalid or expired GitHub token (HTTP 401)")
