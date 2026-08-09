@@ -958,6 +958,16 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 
 - **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
 
+### Deploy throttle: anchor on last real deployment, never the most recent triggered run
+
+On 2026-08-08 the deploy throttle in `.github/workflows/deploy.yml` anchored on the MOST RECENT TRIGGERED run — even one that was itself throttled/skipped/failed. Every new run then skipped itself against the previous skipped run, a self-perpetuating cascade: prod was stuck on a 10:52 build for 4+ hours, and even the merged production-incident fix did not deploy.
+
+Rules:
+- A throttled/skipped/failed/cancelled run must NOT push the throttle window forward. Anchoring on it creates the skip cascade above — the throttle must anchor on real completed deployments only.
+- The anchor is the most recent run whose deploy-to-prod job ("Deploy to app.modulo.run") actually concluded `success`. The `deploy-throttle` job in `.github/workflows/deploy.yml` now walks the workflow runs and checks that job's conclusion before updating the window.
+- This is the same "self-referencing measurements" trap as in Reviewer check 2 (see the "Self-referencing measurements" bullet): a throttle/measurement must exclude its own in-progress run and count only real completed outcomes.
+- See PR #901 for the fix.
+
 ### entrypoint.sh: migration revision IDs must match actual Alembic filenames
 
 `backend/entrypoint.sh` referenced `alembic upgrade 0001_initial_schema` but the actual revision ID is `0001_v2_identity_org` (post-squash). Alembic hangs (doesn't error) when it can't find the target revision, causing the Docker backend container to never start. When renaming or squashing migrations, update `entrypoint.sh` to match.
@@ -1025,6 +1035,20 @@ This destroys all machines and creates fresh ones that register correctly with t
 - \[deploy] strategy = 'rolling'\ is set in \ly.toml\ and \ly.staging.toml\
 - Always use the deploy pipeline or \deploy.ps1\ — never \lyctl deploy\ directly
 - Never pass \--strategy immediate\ — rolling/canary/bluegreen are the safe options
+
+### Fly restart policies: `on-failure` does NOT restart cleanly-stopped machines; health checks don't self-heal
+
+On 2026-08-08 a rolling deploy left both SAQ worker machines `stopped` for ~3h. The worker restart policy was `on-failure`, and Fly's `on-failure` policy does NOT restart a machine that exits cleanly or is left `stopped` by a rolling deploy — it only restarts on a non-zero exit code. The worker group also had NO health check, so nothing even observed the outage.
+
+Fly restart policy semantics (PR #907 / ADR 021):
+- `policy = "always"` — restart no matter the exit code, including a clean exit / `stopped` state.
+- `policy = "on-failure"` — restart ONLY when the process exits with a non-zero code. A clean exit or a machine left `stopped` by a rolling deploy is NOT restarted.
+- Health checks (`[checks]` / top-level checks) are observability-only — they report status but do NOT restart machines. The restart policy is the self-healing mechanism; a health check alone can never bring a machine back.
+
+Rules:
+- Background worker groups (e.g. SAQ workers) must use `policy = "always"` (as in `fly.toml` / `fly.staging.toml` after PR #907) — a worker that exits cleanly must come back.
+- Give background workers a liveness check — the SAQ workers expose port 8082 in `deploy/fly/entrypoint.sh` for exactly this reason. A health check that observes the machine is useless without a restart policy that acts on it.
+- See `docs/adr/021-worker-resilience.md` and PR #907 for the full postmortem.
 
 ### Playwright E2E: use `storageState` for shared login on staging
 
