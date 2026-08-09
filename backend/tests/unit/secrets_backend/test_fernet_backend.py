@@ -69,6 +69,12 @@ class TestGetSecret:
         with pytest.raises(RuntimeError, match="no DB session"):
             await backend.get_secret("some-key")
 
+    async def test_empty_key_raises_value_error(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.get_secret("")
+
     async def test_corrupted_data_raises_value_error(self):
         row = MagicMock(spec=Secret)
         row.encrypted_value = b"\x00\x00\x00\x00"
@@ -175,26 +181,35 @@ class TestSetSecret:
 
 
 class TestDeleteSecret:
-    async def test_removes_row(self, mock_session):
+    async def test_executes_delete_scoped_to_key_and_org(self, mock_session):
+        """delete_secret is a bulk delete scoped by key and org — independent of row existence."""
         backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
 
         await backend.delete_secret("existing-key")
 
-        mock_session.flush.assert_called_once()
-
-    async def test_noop_when_missing(self):
-        session = _make_session()
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
-
-        await backend.delete_secret("missing-key")
-
-        session.flush.assert_called_once()
+        delete_stmt = next(
+            (
+                call.args[0]
+                for call in mock_session.execute.await_args_list
+                if "DELETE FROM secrets" in str(call.args[0])
+            ),
+            None,
+        )
+        assert delete_stmt is not None, "Expected a DELETE statement against the secrets table"
+        assert "organisation_id" in str(delete_stmt), "Expected the delete to be scoped by organisation_id"
+        mock_session.flush.assert_awaited_once()
 
     async def test_no_session_raises_runtime_error(self):
         backend = FernetSecretsBackend(fernet_key=_KEY)
 
         with pytest.raises(RuntimeError, match="no DB session"):
             await backend.delete_secret("some-key")
+
+    async def test_empty_key_raises_value_error(self, mock_session):
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=mock_session)
+
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.delete_secret("")
 
 
 class TestSetSession:
