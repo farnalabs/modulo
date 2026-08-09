@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from tests.unit.rate_limiter.helpers import make_settings
+from tests.unit.rate_limiter.helpers import make_mock_request, make_settings
 
 from modulo.api.middleware.rate_limiter import (
     RATELIMIT_BYPASS_HEADER,
@@ -61,14 +61,7 @@ class TestGetAuthRateLimiter:
 
     def test_returns_none_when_no_redis(self):
         """get_auth_rate_limiter returns None when REDIS_URL is empty (graceful fallback)."""
-        settings = Settings(
-            database_url="postgresql+asyncpg://localhost/test",
-            secret_key="a" * 32,
-            fernet_key="a" * 32,
-            modulo_admin_password="testpass",
-            modulo_auth_rate_limit_enabled=True,
-            redis_url="",
-        )
+        settings = make_settings(modulo_auth_rate_limit_enabled=True, redis_url="")
         limiter = get_auth_rate_limiter(settings)
         assert limiter is None
 
@@ -278,11 +271,7 @@ class TestAuthRateLimitMiddlewareEnabled:
             settings=make_settings(modulo_auth_rate_limit_enabled=True),
             rate_limiter=limiter,
         )
-        request = MagicMock()
-        request.method = "POST"
-        request.url.path = "/api/v1/auth/login"
-        request.headers.get = MagicMock(return_value="")
-        request.client = None
+        request = make_mock_request(path="/api/v1/auth/login", headers={}, client=None)
         call_next = AsyncMock()
         with pytest.raises(asyncio.CancelledError):
             await mw.dispatch(request, call_next)
@@ -292,67 +281,49 @@ class TestAuthRateLimitMiddlewareEnabled:
 class TestClientKeyEdgeCases:
     def test_x_forwarded_for_is_used_when_present(self):
         """_client_ip should prefer X-Forwarded-For header when present."""
-        from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
-
-        mock_request = MagicMock()
-        mock_request.method = "POST"
-        mock_request.url.path = "/api/v1/auth/login"
-        mock_request.headers.get = MagicMock(return_value="203.0.113.42")
-        mock_request.client = None
-
-        ip = AuthRateLimitMiddleware._client_ip(mock_request)
+        request = make_mock_request(
+            path="/api/v1/auth/login",
+            headers={"X-Forwarded-For": "203.0.113.42"},
+            client=MagicMock(host="192.0.2.1"),
+        )
+        ip = AuthRateLimitMiddleware._client_ip(request)
         assert ip == "203.0.113.42"
 
     def test_x_forwarded_for_uses_first_hop_ip(self):
         """_client_ip should take the first entry of a comma-separated XFF list."""
-        from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
-
-        mock_request = MagicMock()
-        mock_request.method = "POST"
-        mock_request.url.path = "/api/v1/auth/login"
-        mock_request.headers.get = MagicMock(return_value="198.51.100.7, 10.0.0.1, 172.16.0.9")
-        mock_request.client = None
-
-        ip = AuthRateLimitMiddleware._client_ip(mock_request)
+        request = make_mock_request(
+            path="/api/v1/auth/login",
+            headers={"X-Forwarded-For": "198.51.100.7, 10.0.0.1, 172.16.0.9"},
+        )
+        ip = AuthRateLimitMiddleware._client_ip(request)
         assert ip == "198.51.100.7"
+
+    def test_client_host_falls_back_when_no_xff(self):
+        """_client_ip should use request.client.host when no XFF header is present."""
+        request = make_mock_request(path="/api/v1/auth/login", client=MagicMock(host="192.0.2.1"))
+        ip = AuthRateLimitMiddleware._client_ip(request)
+        assert ip == "192.0.2.1"
 
     def test_no_client_host_falls_back_to_unknown(self):
         """_client_ip should handle request.client being truthy but host being None."""
-        from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
-
-        mock_request = MagicMock()
-        mock_request.method = "POST"
-        mock_request.url.path = "/api/v1/auth/login"
-        mock_request.headers.get = MagicMock(return_value="")
-        mock_request.client = MagicMock()
-        mock_request.client.host = None
-
-        ip = AuthRateLimitMiddleware._client_ip(mock_request)
+        client = MagicMock()
+        client.host = None
+        request = make_mock_request(path="/api/v1/auth/login", client=client)
+        ip = AuthRateLimitMiddleware._client_ip(request)
         assert ip == "unknown"
 
     def test_no_client_falls_back_to_unknown(self):
-        from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
-
-        mock_request = MagicMock()
-        mock_request.method = "POST"
-        mock_request.url.path = "/api/v1/auth/login"
-        mock_request.headers.get = MagicMock(return_value="")
-        mock_request.client = None
-
-        ip = AuthRateLimitMiddleware._client_ip(mock_request)
+        request = make_mock_request(path="/api/v1/auth/login", client=None)
+        ip = AuthRateLimitMiddleware._client_ip(request)
         assert ip == "unknown"
 
     def test_x_forwarded_for_first_hop_is_stripped(self):
         """The first XFF hop must have surrounding whitespace stripped."""
-        from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware
-
-        mock_request = MagicMock()
-        mock_request.method = "POST"
-        mock_request.url.path = "/api/v1/auth/login"
-        mock_request.headers.get = MagicMock(return_value=" 198.51.100.7 , 10.0.0.1")
-        mock_request.client = None
-
-        ip = AuthRateLimitMiddleware._client_ip(mock_request)
+        request = make_mock_request(
+            path="/api/v1/auth/login",
+            headers={"X-Forwarded-For": " 198.51.100.7 , 10.0.0.1"},
+        )
+        ip = AuthRateLimitMiddleware._client_ip(request)
         assert ip == "198.51.100.7"
 
 
@@ -466,7 +437,7 @@ class TestAuthRateLimiterCore:
             AuthRateLimiterCls(redis_client=None)
 
     @pytest.mark.parametrize(
-        "count,expected",
+        ("count", "expected"),
         [
             (10, 60),
             (20, 120),

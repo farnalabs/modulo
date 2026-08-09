@@ -11,7 +11,7 @@ TOKEN = "n8n_test_token"
 BASE_URL = "http://localhost:5678"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> N8NConnector:
     return N8NConnector(token=TOKEN, base_url=BASE_URL)
 

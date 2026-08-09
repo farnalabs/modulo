@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.openrouter import OpenRouterBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return OpenRouterBackend(api_key="sk-test", model_id="gpt-4o")

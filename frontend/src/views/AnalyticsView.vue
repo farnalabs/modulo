@@ -117,6 +117,7 @@ import {
   formatMeasureValue,
   isDimensioned,
   aggregateByKey,
+  formatBucketDate,
   measureValue,
   type AnalyticsFilters,
   type AnalyticsMeasure,
@@ -163,7 +164,7 @@ const tableRows = computed<TableRow[]>(() => {
   const previous = dimensioned ? aggregateByKey(previousBuckets) : previousBuckets;
   const measure = store.measure;
   return current.map((bucket, index) => {
-    const label = bucket.key ?? bucket.date;
+    const label = bucket.key ?? formatBucketDate(bucket.date);
     // Windows are equal-length: match dimensioned buckets by key and
     // undimensioned buckets by offset within the window.
     const prev =

@@ -84,7 +84,7 @@ def _configure_auth(app_under_test: object, *, session: AsyncMock, principal: Au
     app_under_test.dependency_overrides[get_current_user] = override_user
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[_get_engine] = lambda: MagicMock()

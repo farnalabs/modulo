@@ -18,12 +18,12 @@ _last_error = None
 _connection_failure = False
 
 
-@pytest.fixture()
+@pytest.fixture
 def trivy_connector():
     return TrivyConnector(token="test_token", base_url="http://localhost:8080")
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(trivy_connector):
     return trivy_connector
 

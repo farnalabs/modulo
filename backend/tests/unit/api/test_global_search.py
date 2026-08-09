@@ -60,12 +60,12 @@ def _mock_session() -> _FakeAsyncSession:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_db() -> AsyncMock:
     return _mock_session()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
     app = _make_app(mock_db)
     mock_plan = MagicMock()
@@ -77,7 +77,7 @@ def client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def viewer_client(mock_db: AsyncMock) -> Generator[TestClient, None, None]:
     app = _make_app(mock_db)
     mock_plan = MagicMock()

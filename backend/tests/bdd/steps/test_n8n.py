@@ -29,14 +29,14 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-@pytest.fixture()
+@pytest.fixture
 def n8n_connector():
     if _given_invalid:
         return N8NConnector(token="bad_token", base_url=BASE_URL)
     return N8NConnector(token=TOKEN, base_url=BASE_URL)
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(n8n_connector):
     return n8n_connector
 

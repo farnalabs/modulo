@@ -130,7 +130,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
         </div>
         <div class="space-y-1">
           <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.type') }}</span>
-          <Select :model-value="evalDef.type" @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})">
+          <Select aria-label="Eval type" :model-value="evalDef.type" @update:model-value="(val) => updateEval(evalDef.id, {type: val as EvalConfig['type']})">
             <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Eval type">
               <SelectValue placeholder="Select type" />
             </SelectTrigger>
@@ -145,7 +145,7 @@ const evalCount = computed(() => props.evalDefinitions.length);
 
       <div class="space-y-1">
         <span class="text-xs text-muted-foreground">{{ $t('components.pipeline.composite.OutputValidationTab.failure_behaviour') }}</span>
-        <Select :model-value="evalDef.failure_behaviour" @update:model-value="(val) => updateEval(evalDef.id, {failure_behaviour: val as EvalConfig['failure_behaviour']})">
+        <Select aria-label="Failure behaviour" :model-value="evalDef.failure_behaviour" @update:model-value="(val) => updateEval(evalDef.id, {failure_behaviour: val as EvalConfig['failure_behaviour']})">
           <SelectTrigger class="bg-background border-input focus-visible:border-ring h-8 w-full rounded-lg border px-2.5 py-1 text-sm" aria-label="Failure behaviour">
             <SelectValue placeholder="Select behaviour" />
           </SelectTrigger>

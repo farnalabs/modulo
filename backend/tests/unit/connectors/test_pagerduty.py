@@ -11,7 +11,7 @@ TOKEN = "pd_test_token"
 _BASE = "https://api.pagerduty.com"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> PagerDutyConnector:
     return PagerDutyConnector(token=TOKEN)
 

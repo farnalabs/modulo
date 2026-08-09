@@ -828,18 +828,21 @@ export default {
       "duration": "Duration",
       "cost": "Cost",
       "cost_includes_child_runs": "(+child)",
+      "cost_includes_child_runs_count": "(+{count} child) | (+{count} children)",
       "no_runs_found": "No runs found",
     },
     "AnalyticsView": {
       "analytics": "Analytics",
       "subtitle": "Run volume, cost, token, duration and success trends for your pipelines",
       "timespan": "Timespan",
+      "timespan_1h": "1h",
       "timespan_24h": "Last 24h",
       "timespan_3d": "3d",
       "timespan_7d": "Last 7d",
       "timespan_30d": "Last 30d",
       "timespan_90d": "Last 90d",
       "group_by": "Granularity",
+      "group_by_hour": "Hour",
       "group_by_day": "Day",
       "group_by_week": "Week",
       "dimension": "Break down by",
@@ -917,6 +920,7 @@ export default {
       "trend_7d": "7d",
       "trend_30d": "30d",
       "trend_90d": "90d",
+      "trend_all_time": "All time",
       "run_a_pipeline": "Run a Pipeline",
       "select_a_pipeline_and_run_it_with_a_prompt": "Choose a pipeline and configure its parameters before running it.",
       "invalid_dashboard_data": "Received invalid dashboard data from server.",
@@ -1079,6 +1083,7 @@ export default {
       "cost_accounting_migrated": "Cost accounting migrated; totals reflect component rates.",
       "total_clamped_to_column_capacity": "Total clamped to column capacity — true spend is higher. See per-run amounts.",
       "total_including_child_runs": "Total including child runs:",
+      "total_including_child_runs_count": "Total including {count} child run: | Total including {count} child runs:",
       "includes_child_run_cost": "includes {amount} child-run cost"
     },
     "AdminRunRetentionView": {
@@ -2041,13 +2046,6 @@ export default {
     "AdminHousekeepingView": {
       "confirm_cleanup": "Confirm Cleanup"
     },
-    "LifecycleMapsView": {
-      "lifecycle_maps": "Lifecycle Maps",
-      "no_lifecycle_maps_yet": "No lifecycle maps yet",
-      "create_lifecycle_map": "Create Lifecycle Map",
-      "name": "Name",
-      "description": "Description"
-    },
     "LifecycleMapList": {
       "create_lifecycle_map": "Create Lifecycle Map",
       "name": "Name",
@@ -2122,16 +2120,6 @@ export default {
         "no_parent_root_level": "No parent (root level)"
       }
     },
-    "environment-profiles": {
-      "EnvironmentProfilePicker": {
-        "environment_profile": "Environment Profile",
-        "provider": "Provider:",
-        "image": "Image:",
-        "capabilities": "Capabilities:",
-        "loading_profiles": "Loading profiles...",
-        "settings": "Settings"
-      }
-    },
     "onboarding": {
       "OnboardingBanner": {
         "set_up_modulo": "Set up Modulo",
@@ -2200,15 +2188,6 @@ export default {
           "multiline": "Multiline",
           "formtype_number_07_default_value": "0.7",
           "default_value_placeholder": "default value"
-        },
-        "CompositeLibraryPicker": {
-          "composite_library": "Composite Library",
-          "no_composites_in_library_yet": "No composites in library yet.",
-          "loading_composites": "Loading composites..."
-        },
-        "CompositeConfigPanel": {
-          "schema_mapping_coming_soon": "Schema mapping coming soon",
-          "no_composite_selected": "No composite selected."
         },
         "SchemaMappingPanel": {
           "schema_mapping": "Schema Mapping",
@@ -2392,6 +2371,7 @@ export default {
       "item_eval_proposals": "Eval Proposals",
       "item_variants": "Variants",
       "item_ab_test_models": "AB Test Models",
+      "item_schemas": "Schemas",
       "item_browse": "Browse",
       "item_editor": "Editor",
       "item_infer": "Infer",
@@ -2413,7 +2393,7 @@ export default {
       "item_users": "Users",
       "item_org_settings": "Org Settings",
       "item_audit_log": "Audit Log",
-      "item_overview": "Overview",
+      "item_costs": "Costs",
       "item_spend_limits": "Spend Limits",
       "item_cost_controls": "Cost Controls",
       "item_connectors": "Connectors",

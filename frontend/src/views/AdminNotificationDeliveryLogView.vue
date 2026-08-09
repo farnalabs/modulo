@@ -6,7 +6,7 @@
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div>
           <label for="adminnotificationdeliverylogview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground capitalize">{{ $t('views.AdminNotificationDeliveryLogView.status') }}</label>
-          <Select v-model="filterStatus">
+          <Select aria-label="Status" v-model="filterStatus">
             <SelectTrigger data-testid="admin-notification-log-status" aria-label="Status" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
               <SelectValue :placeholder="$t('views.AdminErrorsView.all_statuses')" />
             </SelectTrigger>
@@ -21,7 +21,7 @@
         </div>
         <div>
           <label for="adminnotificationdeliverylogview-field-3" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminAuditView.event_type') }}</label>
-          <Select v-model="filterEventType">
+          <Select aria-label="Event Type" v-model="filterEventType">
             <SelectTrigger data-testid="admin-notification-log-event-type" aria-label="Event Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
               <SelectValue :placeholder="$t('views.AdminNotificationDeliveryLogView.all_types')" />
             </SelectTrigger>

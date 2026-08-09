@@ -12,7 +12,7 @@ TOKEN = "trello_token"
 _BASE = "https://api.trello.com/1"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return TrelloConnector(api_key=API_KEY, token=TOKEN)
 

@@ -19,7 +19,7 @@ from modulo.connectors.github import (
 TOKEN = "ghp_test_token"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return GitHubConnector(token=TOKEN)
 
@@ -30,7 +30,7 @@ def connector():
 
 
 @pytest.mark.parametrize(
-    "status,json_body,text,headers,expected_ok,expected_detail",
+    ("status", "json_body", "text", "headers", "expected_ok", "expected_detail"),
     [
         (200, {"login": "octocat"}, None, {"X-OAuth-Scopes": "repo, read:org"}, True, "octocat"),
         (200, {"login": "octocat"}, None, {"X-OAuth-Scopes": "repo"}, False, "Missing scopes"),
@@ -249,7 +249,7 @@ async def test_query_single_issue(connector):
 
 
 @pytest.mark.parametrize(
-    "resource,data,http_method,url,response_json,assert_key,assert_value",
+    ("resource", "data", "http_method", "url", "response_json", "assert_key", "assert_value"),
     [
         (
             "issue",
@@ -318,7 +318,7 @@ async def test_write_issue_operations(
 
 
 @pytest.mark.parametrize(
-    "resource,filters,match_text",
+    ("resource", "filters", "match_text"),
     [
         ("issues", {}, "requires 'repo' filter"),
         ("file", {"repo": "owner/repo"}, "requires 'path' filter"),
@@ -334,7 +334,7 @@ async def test_query_missing_filters(connector, resource, filters, match_text):
 
 
 @pytest.mark.parametrize(
-    "resource,data,match_text",
+    ("resource", "data", "match_text"),
     [
         ("issue", {"repo": "owner/repo"}, "requires 'title' in data"),
         ("file", {"repo": "owner/repo", "path": "x"}, r"requires 'content' \(raw text\) or 'content_base64'"),
@@ -357,7 +357,7 @@ async def test_write_missing_data(connector, resource, data, match_text):
 
 
 @pytest.mark.parametrize(
-    "resource,filters,data,url_method,url_pattern,status_code",
+    ("resource", "filters", "data", "url_method", "url_pattern", "status_code"),
     [
         ("repos", {}, None, "get", "https://api.github.com/user/repos", 403),
         (
@@ -403,7 +403,7 @@ async def test_query_repos_passes_limit(connector):
 
 
 @pytest.mark.parametrize(
-    "resource,data,http_method,url,response_json,assert_key,assert_value,sent_checks",
+    ("resource", "data", "http_method", "url", "response_json", "assert_key", "assert_value", "sent_checks"),
     [
         (
             "pr",
@@ -667,7 +667,7 @@ async def test_query_search_issues_passes_optional_params(connector):
 
 
 @pytest.mark.parametrize(
-    "data,expected_body",
+    ("data", "expected_body"),
     [
         ({"repo": "owner/repo", "pull_number": "1"}, {}),
         (

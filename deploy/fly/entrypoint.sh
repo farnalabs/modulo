@@ -108,21 +108,55 @@ echo "=== Bootstrapping modulo_app role ==="
 python3 -m modulo.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 echo "=== Running DB migrations ==="
-# Serialised across machines/processes by the advisory lock in env.py (shared
-# with the app lifespan runner). Retry on failure: both process groups fire this
-# on a fresh deploy, and a transient lock/connection error should not abort the
-# boot. The worker group has no app lifespan to retry migrations later, so it
-# FAILS CLOSED here rather than start SAQ workers against a half-migrated schema.
+# The Fly [release] command (release.sh) now owns migrations (ONCE per deploy BEFORE machines
+# roll out). This boot path is a FAST-PATH SKIP + FALLBACK: when the DB is already at head,
+# skip the advisory-lock migration loop entirely (no lock, no alembic run) — machines previously
+# queued on the lock for up to 240s before FATALing even when the schema was current.
+# The check is fail-safe: any error falls through to the 10-attempt loop below. The worker group
+# has no app lifespan to retry later, so it FAILS CLOSED rather than start SAQ workers on a half-migrated schema.
 MIGRATIONS_OK=0
-for attempt in $(seq 1 10); do
-    if alembic upgrade heads; then
-        echo "  Migrations complete (attempt $attempt)"
-        MIGRATIONS_OK=1
-        break
-    fi
-    echo "  WARNING: migrations failed (attempt $attempt/10) -- retrying in 5s"
-    sleep 5
-done
+if python3 - <<'PY'
+import os
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, text
+
+from modulo.db.migrations.env import _to_sync_url
+
+cfg = Config("/app/alembic.ini")
+cfg.set_main_option("script_location", "/app/src/modulo/db/migrations")
+try:
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    if not head:
+        raise SystemExit(1)
+    url = _to_sync_url(os.environ.get("DATABASE_ADMIN_URL") or os.environ.get("DATABASE_URL") or "")
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text("SELECT version_num FROM alembic_version"))
+            versions = {row[0] for row in rows.fetchall()}
+    finally:
+        engine.dispose()
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if versions == {head} else 1)
+PY
+then
+    echo "  Migrations already at head (release command handled) -- skipping migration loop"
+    MIGRATIONS_OK=1
+else
+    echo "  Migrations NOT at head (or check failed) -- running migration loop"
+    for attempt in $(seq 1 10); do
+        if alembic upgrade heads; then
+            echo "  Migrations complete (attempt $attempt)"
+            MIGRATIONS_OK=1
+            break
+        fi
+        echo "  WARNING: migrations failed (attempt $attempt/10) -- retrying in 5s"
+        sleep 5
+    done
+fi
 if [ "$MIGRATIONS_OK" -ne 1 ]; then
     if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
         echo "FATAL: DB migrations failed after 10 attempts -- not starting SAQ workers." >&2
@@ -245,6 +279,67 @@ if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
     }
     start_saq_system &
     SAQ_SYSTEM_WRAPPER_PID=$!
+
+    # -----------------------------------------------------------------------
+    # Worker health liveness server (ADR 021): binds 0.0.0.0:8082 and returns
+    # 200 only while BOTH SAQ worker subprocesses are alive (tracked via the PID
+    # files the wrappers above write). Backs the top-level [checks.worker_health]
+    # in fly.toml — the worker process group has no service/health check today,
+    # so a machine that is "up" but running no SAQ workers is invisible to
+    # `fly checks list` and to rolling-deploy readiness.
+    # The subshell exits 0 on failure (|| true) and is `disown`ed so a health-
+    # server crash can never fail the container through `set -e`/`wait`, and so
+    # the main `wait` below still returns the SAQ wrappers' exit status alone
+    # (fail-closed on crash-limit preserved). `kill 0` in the SIGTERM/SIGINT
+    # trap still tears it down on deploy.
+    # -----------------------------------------------------------------------
+    echo "=== Starting worker health liveness server (0.0.0.0:${WORKER_HEALTH_PORT:-8082}) ==="
+    (
+        python3 - <<'PY' || echo "worker health server exited (non-fatal)"
+import os
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+_PID_FILES = ("/tmp/run-worker.pid", "/tmp/system-worker.pid")
+_PORT = int(os.environ.get("WORKER_HEALTH_PORT", "8082"))
+
+
+def _saq_workers_alive():
+    pids = []
+    for path in _PID_FILES:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                pids.append(int(fh.read().strip()))
+        except (OSError, ValueError):
+            return False
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+    return True
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        alive = _saq_workers_alive()
+        body = b"worker-health ok" if alive else b"worker-health degraded"
+        self.send_response(200 if alive else 503)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write("health:%s - %s\n" % (self.address_string(), fmt % args))
+
+
+ThreadingHTTPServer(("0.0.0.0", _PORT), _Handler).serve_forever()
+PY
+    ) &
+    WORKER_HEALTH_PID=$!
+    disown "$WORKER_HEALTH_PID" || true
+    echo "Worker health server PID: $WORKER_HEALTH_PID"
 
     trap 'kill 0; wait' SIGTERM SIGINT
     wait

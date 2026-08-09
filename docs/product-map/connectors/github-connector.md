@@ -11,6 +11,7 @@ unit-tests:
   - backend/tests/unit/connectors/test_github_scopes.py
   - backend/tests/unit/connectors/test_github_issues.py
   - backend/tests/unit/connectors/test_github_resilience.py
+  - backend/tests/unit/connectors/test_github_errors.py
 code:
   - backend/src/modulo/connectors/github/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -41,9 +42,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Declare required scopes via `REQUIRED_SCOPES` constant: `{"repo", "read:org"}` (classic PAT scopes from `X-OAuth-Scopes` header)
 - [x] Verify scopes by reading `X-OAuth-Scopes` response header from `GET /user` during health check
 - [x] Report missing scopes in health check detail with scope names (e.g. `Missing scopes: read:org`)
+- [x] Report missing scopes as machine-parseable error codes (e.g. `missing_scope:repo`) — health check detail lists each missing scope as `missing_scope:<name>` so callers can branch programmatically
+- [x] Structured error hierarchy — `GitHubError(ValueError)` base with `GitHubAPIError`, `GitHubRateLimitError` (`rate_limited`), `GitHubAuthError` (`token_expired` on 401 / `insufficient_scope` on 403), `GitHubNotFoundError` (`not_found`), `GitHubNetworkError` (`network_error`, `network_timeout`, `network_connection`); every typed error carries a machine-parseable `error_code` attribute and the originating `status_code`
 - [ ] Verify `pull_requests:write` scope — not in `REQUIRED_SCOPES`; classic PAT `repo` scope encompasses PR access, but fine-grained PAT would need explicit `pull_requests:write`
 - [ ] **Scope mismatch with PRD**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`). These are different scope systems — fine-grained PATs are more restrictive and granular. The `repo` classic scope is broadly equivalent to `contents:read` + `contents:write` + `pull_requests:write` combined.
-- [ ] Report missing scopes as individually named errors (e.g. `missing_scope:repo`) — health check mentions scope names in prose but no machine-parseable error codes
 - [ ] Block run start when scopes are insufficient (pre-run health check in ConnectorHub)
 
 ### PR Operations — listing, creating, commenting, and file inspection
@@ -104,8 +106,8 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Probe scopes via `X-OAuth-Scopes` response header from `GET /user` — fail if `REQUIRED_SCOPES` not satisfied
 - [x] Return authenticated user login in `detail` on success
 - [x] Return HTTP status and truncated body on failure
+- [x] Distinguish expired/invalid tokens (HTTP 401 → "Invalid or expired GitHub token (HTTP 401)"), missing scopes (HTTP 403), rate-limit exhaustion (HTTP 429), and network/transport failures in health check detail
 - [ ] Full scope check — only `repo` and `read:org` are verified; `pull_requests:write` not probed
-- [ ] Detect expired tokens vs insufficient scopes vs network errors — all collapsed to generic "HTTP {code}: {body}"
 - [ ] Per-operation scope verification — no granular check before `write()` calls
 
 ### ConnectorType Capability Declaration
@@ -119,14 +121,17 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 
 ### API & Network Resilience
 
-- [x] HTTP 429 rate limit raises `ValueError` with status code — tested
-- [x] HTTP 500 server error raises `ValueError` with status code — tested
-- [x] HTTP 422 unprocessable on write raises `ValueError` with status code — tested
-- [x] HTTP 403 forbidden raises `ValueError` with status code — tested
-- [x] Connection error raises `ValueError` with "connection error" message — tested
-- [x] Invalid JSON response raises `ValueError` with "invalid JSON" message — tested
+- [x] HTTP 429 rate limit raises `GitHubRateLimitError` with `error_code="rate_limited"` and the quota headers appended — tested
+- [x] HTTP 401 raises `GitHubAuthError` with `error_code="token_expired"` — tested
+- [x] HTTP 403 raises `GitHubAuthError` with `error_code="insufficient_scope"` — tested
+- [x] HTTP 404 raises `GitHubNotFoundError` with `error_code="not_found"` — tested
+- [x] Other HTTP errors raise `GitHubAPIError` with `error_code="api_error"` and status code — tested
+- [x] Connection error raises `GitHubNetworkError` with `error_code="network_connection"` and "connection error" message — tested
+- [x] Timeout raises `GitHubNetworkError` with `error_code="network_timeout"` — tested
+- [x] Invalid JSON response raises `GitHubAPIError` with `error_code="invalid_response"` and "invalid JSON" message — tested
 - [x] Health check catches all exceptions returning `HealthResult(ok=False)` with truncated detail — tested
 - [x] Health check returns `HealthResult(ok=False)` with status detail on non-200 — tested
+- [x] All structured errors subclass `ValueError` so existing `except ValueError` callers are unaffected — tested
 
 ## Resilience & Integration Robustness
 
@@ -170,12 +175,12 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 
 ### HTTP Error Mapping
 
-- [x] HTTP 304 (Not Modified) raises `ValueError` with explanatory message
-- [x] HTTP 4xx errors raise `ValueError` with status code and truncated response body (200 chars)
-- [x] HTTP 5xx errors raise `ValueError` with status code — retried before raising
-- [x] Connection-level failures (`ConnectError`) raise `ValueError` — retried before raising
-- [x] Timeout failures raise `ValueError` — retried before raising
-- [x] JSON decode failures raise `ValueError` with "invalid JSON" message and truncated body (200 chars)
+- [x] HTTP 304 (Not Modified) raises `GitHubAPIError` with `error_code="not_modified"` and explanatory message
+- [x] HTTP 4xx errors raise typed `GitHubAPIError` subclasses with status code and truncated response body (200 chars)
+- [x] HTTP 5xx errors raise `GitHubAPIError` with status code — retried before raising
+- [x] Connection-level failures (`ConnectError`) raise `GitHubNetworkError` — retried before raising
+- [x] Timeout failures raise `GitHubNetworkError` — retried before raising
+- [x] JSON decode failures raise `GitHubAPIError` with "invalid JSON" message and truncated body (200 chars)
 
 ## Known Gaps
 
@@ -183,13 +188,13 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
 - [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
 - [x] ~~**No rate-limit budget awareness**~~ — **RESOLVED (2026-08-06)**: `_call_api` prefers `X-RateLimit-Reset` (epoch) on HTTP 429 over blind backoff via new `_retry_delay()`; exhausted 429 errors surface quota headers; every query result carries `metadata["rate_limit"]` with the `X-RateLimit-*` headers; new `query("rate_limit")` resource exposes the full per-resource budget via `GET /rate_limit`
-- [ ] **Token expiry not distinguished from other errors**: expired PAT, insufficient scopes, and network errors all raise `ValueError` — no distinct structured error types
+- [x] ~~**Token expiry not distinguished from other errors**~~ — **RESOLVED (2026-08-08)**: structured `GitHubError` hierarchy with machine-parseable `error_code` — `token_expired` (401), `insufficient_scope` (403), `rate_limited` (429), `network_error`/`network_timeout`/`network_connection`, `not_found` (404), `invalid_response`; health check and `verify_scopes()` surface the distinct failure modes
 - [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
 - [ ] **File content encoding** — ~~caller must base64-encode file content; no encode/decode helper in connector~~ — **RESOLVED (2026-08-06)**: `query("file")` decodes base64 content to UTF-8 text; `write("file")` accepts raw text `content` (encoded internally) or `content_base64` (passed through for binary files), requiring exactly one
 - [x] ~~**Recursive file listing**~~ — **RESOLVED (2026-08-06)**: `query("tree")` lists the full repo tree recursively via the Git Trees API (ref resolved to a commit SHA first), with optional `path`/`recursive` filters
 - [x] ~~**Path traversal protection**~~ — **RESOLVED (2026-08-06)**: local `_validate_path()` blocks absolute paths and `..` segments on `query("file")`, `query("tree")`, and `write("file")` before any request is sent
-- [ ] **No machine-parseable error codes**: all errors raise `ValueError` with human-readable messages; no structured error type hierarchy
+- [x] ~~**No machine-parseable error codes**~~ — **RESOLVED (2026-08-08)**: full typed error hierarchy (`GitHubError` → `GitHubAPIError`/`GitHubNetworkError` → `GitHubRateLimitError`/`GitHubAuthError`/`GitHubNotFoundError`), each exposing a stable `error_code`; all subclass `ValueError` for backward compatibility
 - [ ] **No circuit breaker**: retries are unconditional up to max attempts; no circuit breaker pattern for sustained failures
 - [ ] **BDD coverage**: 8 scenarios exist covering basic CRUD + error paths; no BDD for PR operations, retry/backoff, pagination, or configurable base URL
 - [ ] **`test_github_issues.py` (550 lines)** and **`test_github_scopes.py` (89 lines)** now in `unit-tests:` frontmatter — were previously missing
@@ -197,6 +202,16 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] ~~**Batch file operations**~~ — **RESOLVED (2026-08-06)**: `write("commit")`/`write("files")` applies create/update/delete/move actions in one commit via the Git Database API
 
 ## QA History
+
+### 2026-08-08 — improve-architecture: structured error hierarchy + failure-mode distinction RESOLVED
+
+**RESOLVED 2 known gaps** — "Token expiry not distinguished from other errors" and "No machine-parseable error codes" (`connectors/github/__init__.py`) — mirroring the Slack connector's typed-exception programme so GitHub failures can be branched on programmatically instead of by parsing human-readable messages.
+
+1. **Typed error hierarchy** — new `GitHubError(ValueError)` base with `GitHubAPIError` (business HTTP errors), `GitHubRateLimitError` (`rate_limited`), `GitHubAuthError` (`token_expired` on HTTP 401 / `insufficient_scope` on HTTP 403), `GitHubNotFoundError` (`not_found`), and `GitHubNetworkError` (`network_timeout` / `network_connection`). Every typed error carries a stable machine-parseable `error_code` attribute plus the originating `status_code`. New `_error_for_status()` maps HTTP statuses → types in one place.
+2. **`_call_api` / `_parse_json`** — non-retryable HTTP errors, exhausted 429s, timeouts, connection failures, 304, and invalid JSON now raise the typed subclasses (all `ValueError`-compatible, so existing `except ValueError` callers are unaffected).
+3. **Health-check distinction** — `health_check()` now reports expired/invalid tokens (401), missing permissions (403), rate-limit exhaustion (429), and network/transport failures as distinct, actionable details; missing scopes are listed as machine-parseable `missing_scope:<name>` codes (e.g. `Missing scopes: missing_scope:repo (repo). Required: repo, read:org`). `verify_scopes()` propagates the typed `GitHubAuthError` (401 → `token_expired`, 403 → `insufficient_scope`) and `GitHubNetworkError` instead of a generic wrapper.
+
+**Tests:** 18 new unit tests in `test_github_errors.py` (error-hierarchy + default `error_code` matrix, `_error_for_status` mapping matrix, 401/403/404/500/429-exhausted/timeout/connection/invalid-JSON typed errors on the query path, health-check expired-token/missing-permission/rate-limited/network-error/missing-scope-codes/ok) + `test_github_scopes.py` updated (`verify_scopes` 401 → `GitHubAuthError token_expired`, new 403 → `insufficient_scope`, new connection → `GitHubNetworkError`) + 4 BDD scenarios in `github_connector.feature` (health detects expired token, health reports `missing_scope:repo`, typed auth error with code `token_expired`, typed rate-limit error with code `rate_limited`) with 7 new step definitions. Updated product map (6 behaviours `[ ]`→`[x]`, 2 Known Gaps → RESOLVED, QA History). 207/207 github connector unit tests (117 `test_github.py` + 23 `test_github_resilience.py` + 10 `test_github_scopes.py` + 39 `test_github_issues.py` + 18 `test_github_errors.py`) + 31/31 `github_connector.feature` BDD scenarios pass (18 pre-existing connector-suite BDD failures unchanged), ruff check + format clean. Status: partial (OAuth flow, fine-grained PAT, circuit breaker, per-operation scope verification remain).
 
 ### 2026-08-06 — improve-architecture: rate-limit budget awareness RESOLVED
 

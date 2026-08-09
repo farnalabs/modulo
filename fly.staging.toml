@@ -4,6 +4,9 @@ primary_region = 'lhr'
 [deploy]
   strategy = 'rolling'
 
+[release]
+  command = "/release.sh"
+
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
@@ -34,7 +37,7 @@ primary_region = 'lhr'
   [[http_service.checks]]
     interval = "15s"
     timeout = "5s"
-    grace_period = "30s"
+    grace_period = "240s"
     method = "GET"
     path = "/healthz/ready"
     protocol = "http"
@@ -43,16 +46,40 @@ primary_region = 'lhr'
   MODULO_DB = "postgres"
   MODULO_PUBLIC_URL = "https://staging.modulo.run"
   MODULO_PLUGIN_DISCOVERY = "false"
+  # Demo mode seeds the default org with plan_id="team", so staging E2E can
+  # exercise team-gated features (retention, cost-controls, etc.) — matches prod.
+  MODULO_DEMO_MODE = "true"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  SAQ_WORKER_CONCURRENCY = "20"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-staging-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
   CORS_ORIGINS = "https://modulo.run,https://staging.modulo.run"
 
-# Worker process group — SAQ workers only, auto-restart on failure
+# Worker process-group health check (ADR 021). Top-level [checks], not a service
+# check — it does not affect routing. The worker container exposes a liveness
+# server on 8082 (entrypoint.sh worker branch) that returns 200 only while BOTH
+# SAQ worker subprocesses (runs + system) are alive.
+[checks]
+  [checks.worker_health]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    path = "/"
+    port = 8082
+    type = "http"
+    processes = ['worker']
+
+# Worker process group — SAQ workers only, ALWAYS restart (ADR 021).
+# policy = "always" restarts the machine no matter the exit code. "on-failure"
+# only restarts a non-zero exit, so a worker machine a rolling deploy leaves
+# `stopped` (clean exit / SIGTERM teardown) stays down — the 2026-08-08 prod
+# outage. "always" is the Fly-documented policy for long-running background
+# workers: crash, clean exit, or deploy replacement all self-heal.
 [[restart]]
   processes = ['worker']
-  policy = "on-failure"
+  policy = "always"
 
 [[vm]]
   processes = ['app']
@@ -62,6 +89,6 @@ primary_region = 'lhr'
 
 [[vm]]
   processes = ['worker']
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1

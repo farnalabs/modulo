@@ -8,12 +8,12 @@ from modulo.connectors.base import CIRunStatus, ConnectorPayload, ConnectorQuery
 from modulo.connectors.circleci import CircleCIConnector, _CircleCITestDouble
 
 
-@pytest.fixture()
+@pytest.fixture
 def cc_runner():
     return CircleCIConnector(token="cct_test")
 
 
-@pytest.fixture()
+@pytest.fixture
 def cc_double():
     return _CircleCITestDouble()
 

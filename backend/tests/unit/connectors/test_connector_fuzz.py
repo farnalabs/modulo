@@ -24,27 +24,27 @@ from modulo.connectors.slack import SlackConnector
 # ── Connector fixtures ───────────────────────────────────────────────────
 
 
-@pytest.fixture()
+@pytest.fixture
 def gh_connector():
     return GitHubConnector(token="ghp_test_fuzz")
 
 
-@pytest.fixture()
+@pytest.fixture
 def linear_connector():
     return LinearConnector(api_key="lin-api-key-fuzz")
 
 
-@pytest.fixture()
+@pytest.fixture
 def notion_connector():
     return NotionConnector(token="ntn_token_fuzz")
 
 
-@pytest.fixture()
+@pytest.fixture
 def slack_connector():
     return SlackConnector(bot_token="xoxb-fuzz-test")
 
 
-@pytest.fixture()
+@pytest.fixture
 def jira_connector():
     return JiraConnector(
         instance="fuzz-test.atlassian.net",

@@ -1,6 +1,6 @@
 <template>
   <FeatureGate feature-name="plugin_management" show-disabled>
-    <div class="page-narrow">
+    <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader title="Plugins" :subtitle="$t('views.AdminPluginsView.manage_installed_modulo_plugins_and_extensions')" />
         <Button

@@ -288,7 +288,7 @@ async function detectPlaceholders() {
           <label for="portdefinitionpanel-field-3" class="mb-1 block text-xs font-medium text-muted-foreground"
             >{{ $t('components.pipeline.composite.PortDefinitionPanel.type') }}</label
           >
-          <Select v-model="form.type">
+          <Select aria-label="Port type" v-model="form.type">
             <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" aria-label="Port type">
               <SelectValue placeholder="Select type" />
             </SelectTrigger>

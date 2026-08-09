@@ -6,7 +6,7 @@ Full PRD: `docs/prd.md`. This file covers how to build. Conflicts between files 
 
 When encountering ANY database connection error (`ConnectionResetError`, `ConnectionDoesNotExistError`, timeout, 503), follow this order BEFORE making code changes:
 
-1. **Check DB health** — `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --command "su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task — check its log first.
+1. **Check DB health** — `fly checks list --app modulo-app-db` (or the relevant DB app). If `pg` or `role` checks are critical/passing, the DB is fine. If critical, SSH in and restart: `fly ssh console --app <db-app> --machine <id> --user postgres --command "/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql"`. The `check-db-health.ps1` watchdog runs every 5 minutes as a scheduled task — check its log first.
 
 2. **Check app health** — `fly status --app app-modulo`. Look at VERSION and CHECKS columns. Machines on the latest version with "passing" are healthy. Machines on old versions are stale and can be cleaned up.
 
@@ -112,8 +112,16 @@ The root `AGENTS.md` has the full non-negotiable rule under **Agent Isolation: A
 
 ## Definition of Done
 
-### Manifest updated
+The full Definition of Done lives in `docs/definition-of-done.md`. It is the
+checklist every implementer applies before reporting a task done AND the checklist
+the PR reviewer applies to every PR. It contains the test suite inventory and the
+test-impact consideration step ("consider all suites, guess which files are affected,
+run the high-confidence subset, defer honestly").
+
+At minimum, before a task is done:
 - [ ] **Manifest updated** — if the delivery adds or modifies a page route, the corresponding entry in `frontend/src/manifest.yaml` was created or updated
+- [ ] **Test impact considered** — per `docs/definition-of-done.md` §2: all suites considered, affected files guessed and run where the environment allows, deferred items listed
+- [ ] **Self-review passed** — per `docs/definition-of-done.md` §3: files exist, footprint within scope, lint clean, no secrets, PRD accurate
 
 ---
 
@@ -274,6 +282,8 @@ Architecture decision record: `docs/adr/002-database-abstraction-strategy.md`.
 **Unit** (`tests/unit/`): no DB, no Docker, `StubModelBackend` for all LLM calls, run in < 30s.
 **Integration** (`tests/integration/`): real Postgres via testcontainers, Alembic migrations applied first, Factory Boy for entities. Cross-tenant isolation test is mandatory.
 **BDD/E2E** (`tests/bdd/features/`, `tests/bdd/steps/`): pytest-bdd + Playwright. All Playwright against `?theme=agent`. Use `waitForSelector('[data-loading="false"]')` — never `waitForTimeout()`. Every interactive element needs `data-testid`.
+
+The full suite inventory (root paths, coverage, and run commands) lives in `docs/definition-of-done.md` §1.
 
 Coverage minimums: `modulo.auth` 90%, `pipeline_engine` 85%, `db.rls` 95%, overall 80%.
 
@@ -553,7 +563,7 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 | Test | File/Command | What it catches |
 |---|---|---|
-| Unit | `tests/unit/app-bootstrap.spec.ts` | Missing route component files, module-level import errors |
+| Unit | `src/__tests__/app-bootstrap.spec.ts` | Missing route component files, module-level import errors |
 | Playwright @smoke | `--grep "@smoke"` across all `tests/e2e/` | Login, auth, navigation, golden path — critical browser flows |
 | Route file check | Part of `smoke-test.ps1` | Every `.vue` imported by the router exists on disk |
 
@@ -577,13 +587,47 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Reserved LogRecord keys in `logging.extra={...}` crash at INFO level
+
+Keys like `name`, `msg`, `args`, `exc_info`, `filename`, `module`,
+`funcName`, `created`, `msecs`, `relativeCreated`, `thread`, `process`,
+`levelname`, `lineno`, `pathname`, `stack_info`, `taskName`, `asctime`,
+`message` are reserved attributes on `logging.LogRecord`. Passing one in
+`extra={...}` raises `KeyError: Attempt to overwrite 'name'` the moment the
+record is actually built. At WARNING (the pytest default) the INFO path is
+never exercised, so unit tests stay green while production (INFO) crashes —
+FAR-113: `_log.info("cost_components.seeded", extra={"name": ...})` silently
+skipped every org's seed for weeks, yielding $0 runs. Enforced by the
+`.semgrep/logging_reserved_extra_key.yml` rule.
+
+Rules:
+1. Use a non-reserved key in `extra=` (e.g. `component_name`, `schema_name`).
+2. Unit tests that assert log records must `caplog.set_level(logging.INFO,
+   logger="<module>")` so the production INFO path actually executes — WARNING
+   masks INFO-path crashes.
+3. Boot-time seeds emit `[boot] seed <name>: ok/FAILED` to stdout via
+   `_boot_seed` in `main.py` — the structured JsonFormatter logger lines do
+   not render in `fly logs`, so stdout is the only reliable boot signal.
+
 ### Multi-PR delivery: merge the first PR manually, then branch the next PR off main
 
 When delivering a feature as multiple PRs (e.g. PR A -> PR B -> PR C), once PR N is green on CI and APPROVED by the reviewer, MERGE IT MANUALLY (`gh pr merge --squash`) rather than waiting for the merge queue. Then branch PR N+1 off the updated main. Waiting for the merge queue on a fast-moving main means the next PR's branch base goes stale while it waits, forcing repeated rebases. Manual merge after approval is the single biggest accelerator for multi-PR delivery. Only wait for the merge queue when you are NOT chaining PRs (single independent PR).
 
-### Once a PR exists, ALWAYS merge main in with a merge commit - never rebase
+### Once a PR exists, stop chasing main - merge in only when required, never rebase
 
-Once a PR branch exists, keep it current with main by running `git merge origin/main --no-edit` (a MERGE COMMIT). NEVER rebase the branch onto main and NEVER rewrite its history with force-push while the branch is shared or being reviewed. Rationale: (a) rebase re-applies the whole diff and re-conflicts on every main movement; (b) merge composes with concurrent agents (Branch Fixer, other pipelines) instead of force-push-warring with them; (c) git records conflict resolutions in the merge commit so they don't re-conflict. If a push is rejected, fetch + merge + push again - do NOT force-push over a branch another agent may be touching.
+Once a PR branch exists, do NOT chase main — merge main in with a merge commit (`git merge origin/main --no-edit`) only when actually required (merge-queue conflict, rejected push, or a chained PR that needs latest main). NEVER rebase the branch onto main and NEVER rewrite its history with force-push while the branch is shared or being reviewed. Rationale: (a) rebase re-applies the whole diff and re-conflicts on every main movement; (b) merge composes with concurrent agents (Branch Fixer, other pipelines) instead of force-push-warring with them; (c) git records conflict resolutions in the merge commit so they don't re-conflict. If a push is rejected, fetch + merge + push again - do NOT force-push over a branch another agent may be touching. Before the first push, rebase against main ONCE — the branch is exclusively yours at that point (see the 'Rebase against main ONCE' lesson below).
+
+### Rebase against main ONCE before first push — don't chase a fast-moving main
+
+Main moves fast (25+ commits in a couple of hours is normal). Guidance that says "keep your branch current with main by merging main in" becomes a treadmill on that cadence — a merge every hour forever, and CI runs the merge ref anyway, so the final state is always validated against latest main regardless.
+
+The rule:
+
+1. **Before the first push** (branch is exclusively yours — never left the machine): `git fetch origin main` + `git rebase origin/main` **once**. Clean linear history, no force-push risk, one conflict-resolution session. After the rebase, run the FULL test package of every module you touched — main may have added tests while you worked, and those are the files most likely to expose your breaking change.
+2. **After the push / once a PR exists**: **stop chasing main.** Don't merge main in on a schedule. Merge main in with a merge commit (`git merge origin/main --no-edit`) *only when actually required* — merge-queue conflict, rejected push, or a chained PR that needs latest main.
+3. **Never** rebase or force-push a branch that is shared or being reviewed — merge commits compose with concurrent agents (Branch Fixer, other pipelines); rebases force-push-war with them.
+
+Post-mortem (FAR-102, 2026-08-07): the analytics PR branched before main added `test_analytics_facts.py` (PR #815). CI runs the merge ref, so main's newest test ran against the branch — and failed — in a file none of the four sprint agents had ever seen. A pre-push rebase would have pulled that test into the branch so local runs caught it; the full-package corollary is what converts "CI surprise" into "caught locally".
 
 ### Use Python for file writes, not PowerShell string ops
 
@@ -668,9 +712,9 @@ sequential number and fix its `down_revision` to point at the current head.
 
 ### Rebasing: only when another branch merged first — and how to resolve conflicts
 
-**PREFERRED: merge main in with a merge commit (`git merge origin/main --no-edit`).**
-Only use rebase when you exclusively own the branch and need a clean linear
-history for a single PR.
+Note: this applies to the LOCAL gate.ps1 merge path and to already-pushed branches. For a branch's FIRST push in PR-based delivery, rebase against main ONCE instead (see the 'Rebase against main ONCE' lesson).
+
+**PREFERRED: rebase against main ONCE before the first push (`git fetch origin main && git rebase origin/main` — the branch is exclusively yours). After the PR exists, only merge main in with a merge commit when actually required (merge-queue conflict, rejected push, chained PR); never rebase or force-push a shared/reviewed branch.**
 
 In general, **no pre-merge is needed** — the worktree branch is based on
 main and the PR flow handles merging. If another PR merged first (changing
@@ -706,12 +750,39 @@ npm run test:unit
 ```
 (478 tests, ~4 min). Both must pass before reporting "tests pass" or proceeding with any merge.
 
+The full inventory of suites and their root paths lives in `docs/definition-of-done.md` §1.
+Agents run targeted files only (see §2 impact consideration) — never the full 35-40 min suite in a worktree.
+
 ### Frontend worktrees and node_modules
 
 `git worktree add` creates a new working tree with no installed dependencies.
-Frontend Workers cannot reliably run `npm run lint`, `npx vue-tsc`, or `npm test`
-inside worktrees. Workers implement and commit without frontend tooling;
+Fast path on Windows — junction the main repo's `frontend/node_modules` into the
+worktree (validated FAR-115/117/118/119, 2026-08-08). If the main repo's
+node_modules is current (lockfiles match):
+
+```powershell
+Test-Path "<worktree>\frontend\node_modules"   # expect False
+cmd /c mklink /J "<worktree>\frontend\node_modules" "<main-repo>\frontend\node_modules"
+```
+
+The junction is gitignored and harmless. With it, Workers can run `npm run lint`,
+`npx vue-tsc --noEmit`, and `npx vitest run <spec> --pool=threads --maxWorkers=2`
+in the worktree — and the pre-commit `eslint` hook passes on commit (without it,
+`git commit` fails at eslint with `'eslint' is not recognized`, even for
+CSS-only changes). Remove the junction before `git worktree remove` if desired
+(leftover is harmless). If lockfiles differ, `npm install --force` in the
+worktree instead.
+
+Without a junction, Workers implement and commit without frontend tooling;
 verification happens via GitHub CI on the PR.
+
+**Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
+admin-view gaps whenever an `Admin*.vue` file is touched — every
+`frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your
+change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
+FAR-117), the commit is blocked — add the wrapper with the correct feature name
+(match sibling views) rather than bypassing the hook.
+- **`npm install --force` in a worktree can yield node_modules WITHOUT the `.bin` shims** (2026-08-08) — `npm run test:unit` then fails with 'vitest is not recognized' (and `npx` fails too, and `node node_modules/vitest/vitest.mjs` fails with `ERR_MODULE_NOT_FOUND`). Worktree frontend tooling is therefore unreliable even when node_modules appears present. Don't burn time reinstalling in the worktree: use the main tree's node_modules junction (see the junction lesson) when it exists, otherwise skip worktree frontend checks and let GitHub CI (PR) + `gate.ps1`/`smoke-test.ps1` (post-merge, main tree) be the verification gates.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
@@ -909,7 +980,7 @@ The fix/pipelines-copy Worker touched files that were already modified by other 
 
 ### Ops / Database (Fly Postgres)
 
-- **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `su - postgres -c '/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql'`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`).
+- **Unmanaged Fly Postgres (`fly postgres create`) does NOT auto-restart on crash.** When PostgreSQL on a Flex Postgres machine crashes (e.g. OOM, disk full, segfault), the monitoring agent and `repmgrd` keep running but the `postgres` process stays down. There is no systemd unit to restart it. To recover: SSH into the DB machine (`fly ssh console --app <db-app>`) and run `fly ssh console --app <db-app> --machine <id> --user postgres --command "/usr/lib/postgresql/17/bin/pg_ctl start -D /data/postgresql"`. Consider adding a cron job or health check that restarts PostgreSQL if the process is missing. For production-critical DBs, migrate to Managed Postgres (`fly mpg create`). Note: the server listens on port 5433 internally, not 5432.
 
 ### ADR 003 supersedes ADR 001 — Modulo dispatches, it doesn't run agents
 
@@ -1011,7 +1082,7 @@ When creating or updating a Modulo pipeline with a `sandbox_agent` node, use the
 
 | Setting | Value | Reason |
 |---|---|---|
-| `template_id` | `"opencode"` | The "base" template lacks opencode CLI. The "opencode" template has it pre-installed. |
+| `template_id` | `"opencode"` (default, has opencode CLI) or `"modulo-opencode"` (managed cache-warmed template) | The "base" template lacks opencode CLI. "opencode" has it pre-installed; "modulo-opencode" adds dependency caches (faster starts). |
 | `agent_command` | `OPENCODE_API_KEY="$APP_MODULO_OPENCODE_API_KEY" GITHUB_TOKEN="$GITHUB_REVIEWBOT_PAT" opencode run --model opencode/deepseek-v4-flash --auto --format json < /home/user/prompt.md` | `opencode run` reads the rendered prompt from stdin. `--auto` skips interactive prompts. `--format json` produces structured output. |
 | `timeout_seconds` | `1200` (20 min) | 600s (10 min) is insufficient for complex tasks like rebase + lint fix + push. |
 | `env_vars` | `{"GITHUB_REVIEWBOT_PAT":"ghp_..."}` | Needed for git push and gh pr create. Stored in vault as `github-reviewbot-pat`. |
@@ -1049,6 +1120,8 @@ The sandbox has Python 3.11 but the project requires Python 3.12+. Tell uv to in
 ```bash
 uv python install 3.12 2>&1 | tail -3
 ```
+
+The `modulo-opencode` template bakes Python 3.12 + dependency caches, so this is a fast no-op on managed sandboxes. It is still needed on the default `opencode` template.
 
 After this, uv run works normally — it uses Python 3.12 instead of downloading CPython 3.14. Pre-commit hooks (which use uv run for ruff, semgrep, etc.) fire correctly on git commit:
 
@@ -1125,3 +1198,137 @@ The Conductor MUST verify footprint at commit time, not trust the report. After 
 If the footprint exceeds the allowlist or deletes anything, the branch is DISCARDED (worktree removed, branch deleted) and the task is respawned with a tighter contract. Never merge a branch whose footprint was not verified.
 
 Learned on 2026-08-03 when the first Worker attempt at the break-glass deliverable A catastrophically exceeded scope: it deleted ~2736 lines of unrelated tests (test_trigger_crud_tools.py -488, test_executor.py -205, test_linear.py -195), deleted PRD product features (get/update/delete_trigger sections), and modified files across Linear, determination, rate_limiter, and MCP subsystems - all invisible from its commit message. The entire branch was discarded and the work redone by a Worker given a strict scope contract (18-file allowlist), which stayed clean and merged as PR #591. Skipping this contract silently deletes thousands of lines of tests and features, wastes hours, and ends in a discarded branch.
+
+
+## Reviewer first-pass quality: contract round-trip, prove-the-fix, scope-diff
+
+Analysis of 180 CHANGES_REQUESTED review bodies across 792 merged PRs
+(2026-08-08) shows three recurring agent mistakes that cost a review cycle.
+First-pass approval is ~82% in August; these three checks are the highest-value
+ways to push it higher. Apply all three before pushing a branch.
+
+### 1. Verify the frontend-backend contract round-trip, not just mocked tests
+
+The costliest recurring bug: frontend sends camelCase keys the backend Pydantic
+model silently ignores (snake_case), so the setting never persists — found
+twice independently (PR #784, #796: `circuitBreakerEnabled` vs
+`circuit_breaker_enabled`). CI stayed green because backend tests sent
+snake_case and frontend tests mocked `api.GET`.
+
+Rules:
+- When a PR touches both frontend and backend (or changes any API
+  request/response shape), verify the wire shape against the generated OpenAPI
+  types (`frontend/src/lib/api/schema.ts`; regenerate with `npm run
+  generate:api`). Frontend keys must match backend field names unless the
+  Pydantic model has aliases / `populate_by_name`.
+- A test that mocks `api.GET` / `api.POST` / `httpx.Response` does NOT
+  validate the contract. Add at least one test that round-trips through the
+  real endpoint with the real payload shape (integration or BDD scenario).
+- When adding a frontend param/query value, confirm the backend accepts that
+  exact value (enum, range, type) in the same PR (PR #767 sent `days=3` and
+  `group_by=hour` the backend rejected → 422 at runtime; CI passed only
+  because tests mocked `api.GET`).
+- Backend tests must exercise the same payload shape the frontend actually
+  sends — not an idealized snake_case-only shape.
+
+### 2. Prove the fix actually fixes it — trace the code path, no no-op fixes
+
+The most common single finding: the change does not change behaviour. Trace
+the exact code path your change affects and verify observable effect before
+pushing. Recurring no-op traps the reviewer has caught:
+- Exit-code capture order: `RUNS_EXIT=$?` after a command substitution
+  captures the substitution's status (0), not the command's (PR #729).
+- Exception MRO ordering: `except ProgrammingError` after `except
+  DBAPIError` is unreachable (ProgrammingError subclasses DatabaseError →
+  DBAPIError) — order specific exceptions before their bases (PR #740).
+- Self-referencing measurements: a throttle measuring against its own
+  in-progress run is always "just ran" — exclude the current run (PR #865,
+  #570).
+- Cache keys must include every input that changes the cached value:
+  `(pipeline_id, snapshot_id, node_timeout_seconds)`, not just the first two
+  (PR #382).
+- Boundary clamps must preserve the invariant they guard: `max(pool_size - 5,
+  5)` exceeds a pool of size < 5, reintroducing the exact bug (PR #701).
+- Grep patterns must match what the CLI actually emits — `grep -q
+  "PreconditionError"` never matches when the CLI prints `error: ...` (PR
+  #668).
+- The thing being compared must be the thing that runs: jq comparing a number
+  field to a quoted string literal is always unequal (PR #865).
+
+Write the test that fails without your fix and passes with it. If you cannot
+write such a test, the fix may be a no-op — reconsider.
+
+### 3. Scope-diff before pushing — no silent reverts or deleted tests
+
+"tests:" and "improve:" PRs repeatedly ship silent reverts of production
+hardening and deletions of passing coverage (PR #792, #775, #759, #391,
+#518). Before pushing any PR whose title scopes it to tests/docs/improve:
+- Run `git diff main...HEAD --stat` and confirm every changed file is within
+  the stated scope.
+- After resolving any merge/rebase conflict, re-check the diff — never let a
+  conflict resolution drop the other side's production work. A botched merge
+  that reverts a security advisory fix or a production guard is a CRITICAL
+  review finding even when CI is green.
+- Never delete passing tests or gut behavioural assertions as part of a
+  stylistic refactor. If a test conflicts, fix it in place; if a deletion is
+  genuinely required, justify it in the PR description.
+
+### 4. Migration heads: branch off the current head, never edit shipped migrations
+
+Migration problems appear in 15 PRs (divergent Alembic heads, editing shipped
+migrations in place, deleting applied migrations). Rules:
+- Before creating a migration, verify `down_revision` points at the CURRENT
+  head — not a mid-chain revision. A migration branching off an old revision
+  creates a second Alembic head and a permanent fork every future migration
+  must merge around (PR #381). Run `alembic heads` (or the `check-migration-heads`
+  pre-commit hook, which fires when migration files are staged) before committing.
+- NEVER edit a migration that has already shipped/merged. Alembic records it
+  as applied, so the change only lands on fresh DBs — existing deployments
+  never execute it (PR #367 edited migration 0022 in place). Add a NEW
+  migration on top instead.
+- NEVER delete a migration file that has been applied. `alembic_version`
+  points at a now-missing revision, breaking the next `alembic upgrade` on
+  every existing environment (PR #518).
+- If `check-migration-heads.ps1` blocks you: renumber your migration to the
+  next free sequential number and fix its `down_revision` to point at the
+  current head.
+
+### 5. i18n: no hardcoded user-facing strings in frontend views
+
+The reviewer flags hardcoded English in `.vue` views that otherwise use
+`$t()` (16 reviews). Rules:
+- Every new user-facing string in a view that already uses
+  `$t()`/`t()`/`useI18n` must use a locale key — a hardcoded string is a
+  major finding (PR #816, #775, #784, #371).
+- Add the key in the CORRECT namespace. A key under the wrong namespace
+  silently fails to resolve (PR #438). Keys live in
+  `frontend/src/locales/en-US.js` under the view's namespace
+  (`views.<ViewName>...`) unless a shared namespace already exists.
+- Add the key to ALL locale files, not just `en-US` — a missing key in a
+  secondary locale is a silent UI gap.
+- Never put JS expressions inside translation values — the vue-i18n message
+  compiler cannot parse ternaries; use pluralization syntax
+  (`"key | key_plural"`) or simplify the message.
+- If the change removes a `$t(w.labelKey)` pattern, re-add the keys to the
+  locale file — deleting keys orphans every other locale that references them.
+
+### 6. A11y: dynamic status needs aria-live, icon buttons need labels, keyboards stay usable
+
+The reviewer applies the ux-conformance criteria (A11Y-1/2/4, STATE-1/2/6) to
+every frontend diff (33 reviews). Self-check these before pushing:
+- Dynamic status messages that appear/disappear (banners, toggle labels
+  swapping between "Pause all"/"Resume") need `role="status"` /
+  `aria-live="polite"` — WCAG 4.1.3 Status Messages, Level AA (PR #674).
+- Error feedback regions need `aria-live="assertive"` (or `role="alert"`) and
+  should be wired via `aria-describedby` to the controls they describe (PR
+  #784).
+- Icon-only buttons need `aria-label` (or visible text). Check every new icon
+  button in the diff.
+- Keyboard handlers on a container must not break editable children:
+  `@keydown.left/right.prevent` on a titlebar fires on bubbled events from a
+  child `<input>`, breaking text-cursor movement — ignore events originating
+  from `INPUT`/`TEXTAREA` (PR #634).
+- Follow `ux-conformance/criteria.yaml` — the same criteria the reviewer
+  loads. If a new interactive element lacks `data-testid`, `aria-label`,
+  focus-visible ring, or keyboard equivalent, the reviewer will request
+  changes.

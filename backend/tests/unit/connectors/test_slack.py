@@ -18,7 +18,7 @@ from modulo.connectors.slack import (
 TOKEN = "xoxb-test-token"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return SlackConnector(bot_token=TOKEN)
 

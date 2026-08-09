@@ -16,12 +16,48 @@ env:
 jobs:
   queue:
     name: Merge queue -> main
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
       actions: write
     runs-on: ubicloud-standard-2
     steps:
+      - name: Cancel stale stuck runs (self-healing)
+        # A run that is in_progress with a job that never got picked up by a
+        # runner (startedAt: null) holds the merge-queue concurrency group lock
+        # (cancel-in-progress: false), blocking every later queue run. This sweep
+        # cancels such runs once they exceed ~10 minutes so THIS run can proceed.
+        # Best-effort: every subcommand below is guarded (2>/dev/null || echo/true)
+        # so the script always exits 0 and can never fail the queue run itself.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          echo "Sweeping for stale in-progress 'Merge: Queue' runs stuck with no started job..."
+          NOW=$(date -u +%s)
+          CUTOFF=$((NOW - 600))
+          IN_PROGRESS=$(gh run list --workflow merge-queue.yml --status in_progress --limit 50 --json databaseId,createdAt 2>/dev/null || echo "[]")
+          CANDIDATES=$(echo "$IN_PROGRESS" | jq -r --argjson me "${{ github.run_id }}" '.[] | select(.databaseId != $me) | select(.createdAt != null) | @base64' 2>/dev/null || true)
+          for CAND in $CANDIDATES; do
+            RUN_ID=$(echo "$CAND" | base64 -d | jq -r '.databaseId' 2>/dev/null || echo "0")
+            CREATED=$(echo "$CAND" | base64 -d | jq -r '.createdAt' 2>/dev/null || echo "")
+            CREATED_TS=$(date -u -d "$CREATED" +%s 2>/dev/null || echo "$NOW")
+            echo "  Checking run #$RUN_ID (created $CREATED)..."
+            if [ "$CREATED_TS" -ge "$CUTOFF" ]; then
+              echo "    Run #$RUN_ID is younger than 10 min - leaving it."
+              continue
+            fi
+            # Only cancel if at least one job is queued but never started
+            UNSTARTED=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs --jq '[.jobs[] | select(.started_at == null)] | length' 2>/dev/null || echo "0")
+            if [ "$UNSTARTED" -gt 0 ]; then
+              echo "    Run #$RUN_ID has $UNSTARTED queued job(s) never started for >10 min - cancelling."
+              gh run cancel "$RUN_ID" --repo ${{ github.repository }} 2>/dev/null && echo "    Cancelled run #$RUN_ID." || echo "    Cancel of #$RUN_ID failed (ignoring)."
+            else
+              echo "    Run #$RUN_ID has no unstarted jobs - leaving it."
+            fi
+          done
+          echo "Stuck-run sweep complete."
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -45,7 +81,6 @@ jobs:
 
       - name: Check main CI status
         id: check-ci
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -385,8 +420,15 @@ jobs:
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1
-          echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
+          # Best-effort: GITHUB_TOKEN cannot carry the `workflows` permission, so
+          # pushing a merged branch that modifies .github/workflows/* is rejected.
+          # The reference branch is a debug aid only - a rejection must not abort
+          # the queue before the real gates (migration heads, backend, frontend) run.
+          if git push origin merge-queue:refs/heads/merge-queue/active-$TIMESTAMP 2>&1; then
+            echo "branch_ref=merge-queue/active-$TIMESTAMP" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Reference push rejected (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission). Queue continues without a reference branch."
+          fi
 
       - name: Initialize failure tracking
         if: steps.merge.outputs.merged_count != '0'
@@ -429,6 +471,8 @@ jobs:
           MYPY_PID=$!
           uv run --no-sync bandit -r src/modulo/ -ll &
           BANDIT_PID=$!
+          uv run --no-sync ruff format --check . &
+          RUFF_FORMAT_PID=$!
 
           uv run --no-sync pytest tests/unit/ -x -q --timeout=120 --dist worksteal
           TEST_EXIT=$?
@@ -438,6 +482,7 @@ jobs:
           wait $RUFF_PID || LINT_FAIL=1
           wait $MYPY_PID || LINT_FAIL=1
           wait $BANDIT_PID || LINT_FAIL=1
+          wait $RUFF_FORMAT_PID || LINT_FAIL=1
 
           # Report failures
           if [ $LINT_FAIL -ne 0 ]; then
@@ -528,9 +573,16 @@ jobs:
         shell: bash
         run: |
           TIMESTAMP=$(date +%s)
-          git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1
-          echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
-          echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
+          # Best-effort: same limitation as the reference push - GITHUB_TOKEN cannot
+          # push branches that modify .github/workflows/*. If the preserve push fails,
+          # the fixer still receives the notification (with the merged PRs), so the
+          # branch is a convenience, not a hard requirement.
+          if git push origin merge-queue:refs/heads/merge-queue/failed-$TIMESTAMP 2>&1; then
+            echo "branch_ref=merge-queue/failed-$TIMESTAMP" >> "$GITHUB_ENV"
+            echo "Preserved merge-queue branch at merge-queue/failed-$TIMESTAMP"
+          else
+            echo "::warning::Could not preserve merge-queue branch (merged PRs likely modify .github/workflows/*; GITHUB_TOKEN lacks workflows permission)."
+          fi
 
       - name: Notify branch-fixer on CI failure
         if: failure() && steps.merge.outputs.merged_count != '0'

@@ -32,6 +32,26 @@ def _settings(**overrides: object) -> MagicMock:
     return MagicMock(**base)
 
 
+def _make_retention_factory() -> tuple[MagicMock, MagicMock]:
+    """Return a sessionmaker mock usable as ``async with factory() as session,
+    session.begin():`` plus its session.
+
+    ``retention_cleanup`` enters a system session (no ``set_rls_org``) and a
+    ``session.begin()`` transaction, then calls both batch deletes against it.
+    """
+    session = MagicMock()
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=session)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin.return_value = begin_cm
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock()
+    factory.return_value = session_cm
+    return factory, session
+
+
 class TestFunctionsWiring:
     def test_runs_functions_registered_under_dispatch_names(self) -> None:
         names = [f[0] for f in sw._runs_functions()]
@@ -399,3 +419,93 @@ class TestFireWrappersDispatchRuns:
             )
         assert result["status"] == "skipped"
         dispatch.assert_not_awaited()
+
+
+class TestRetentionCleanup:
+    @pytest.mark.asyncio
+    async def test_purges_terminal_runs_and_langgraph_checkpoints(self) -> None:
+        """retention_cleanup deletes old terminal runs AND old checkpoint rows,
+        reporting both counts in its return dict."""
+        factory, session = _make_retention_factory()
+
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch(
+                "modulo.db.crud.run.batch_delete_old_terminal_runs",
+                new_callable=AsyncMock,
+                return_value=7,
+            ) as runs_delete,
+            patch(
+                "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+                new_callable=AsyncMock,
+                return_value=12,
+            ) as ckpt_delete,
+        ):
+            result = await sw.retention_cleanup({})
+
+        assert result == {"deleted": 7, "checkpoints_deleted": 12}
+        runs_delete.assert_awaited_once()
+        ckpt_delete.assert_awaited_once()
+        assert runs_delete.await_args.args[0] is session
+        assert ckpt_delete.await_args.args[0] is session
+
+    @pytest.mark.asyncio
+    async def test_zero_deletions_returns_zero_counts(self) -> None:
+        """A clean pass must still report both zero counts (no log line)."""
+        factory, session = _make_retention_factory()
+
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch(
+                "modulo.db.crud.run.batch_delete_old_terminal_runs",
+                new_callable=AsyncMock,
+                return_value=0,
+            ) as runs_delete,
+            patch(
+                "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+                new_callable=AsyncMock,
+                return_value=0,
+            ) as ckpt_delete,
+        ):
+            result = await sw.retention_cleanup({})
+
+        assert result == {"deleted": 0, "checkpoints_deleted": 0}
+        runs_delete.assert_awaited_once()
+        ckpt_delete.assert_awaited_once()
+        assert runs_delete.await_args.args[0] is session
+        assert ckpt_delete.await_args.args[0] is session
+
+    @pytest.mark.asyncio
+    async def test_missing_checkpoint_schema_does_not_fail_job(self) -> None:
+        """Major 1: a missing saver schema must not roll back the runs purge.
+
+        The system worker's cron can fire before the app boot creates the
+        checkpoint tables / ``created_at`` columns. The checkpoint purge then
+        raises ``ProgrammingError`` (the SQLAlchemy wrapper for the DBAPI's
+        missing-table/column errors); the job must catch it, log a warning,
+        and still report the runs purge (``checkpoints_deleted`` = 0) — the
+        runs purge already committed in its own transaction.
+        """
+        from sqlalchemy.exc import ProgrammingError
+
+        factory, session = _make_retention_factory()
+
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch(
+                "modulo.db.crud.run.batch_delete_old_terminal_runs",
+                new_callable=AsyncMock,
+                return_value=7,
+            ) as runs_delete,
+            patch(
+                "modulo.db.crud.org_deletion.batch_delete_langgraph_checkpoints",
+                new_callable=AsyncMock,
+                side_effect=ProgrammingError("statement", {}, Exception("checkpoints does not exist")),
+            ) as ckpt_delete,
+        ):
+            result = await sw.retention_cleanup({})
+
+        assert result == {"deleted": 7, "checkpoints_deleted": 0}
+        runs_delete.assert_awaited_once()
+        ckpt_delete.assert_awaited_once()
+        assert runs_delete.await_args.args[0] is session

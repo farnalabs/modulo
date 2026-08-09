@@ -55,7 +55,7 @@ class _FakeMeter:
         return next((g for g in self.gauges if g.name == name), None)
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_meter() -> _FakeMeter:
     return _FakeMeter()
 

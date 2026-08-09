@@ -11,7 +11,7 @@ TOKEN = "shortcut_token"
 _BASE = "https://api.app.shortcut.com/api/v3"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return ShortcutConnector(token=TOKEN)
 

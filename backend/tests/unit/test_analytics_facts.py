@@ -195,6 +195,20 @@ class TestRecordRunFacts:
                 "run_date",
                 "created_at",
                 "duration_ms",
+                "error_code",
+                "claim_count",
+                "queue_wait_ms",
+                "final_idle_ms",
+                "cancellation_requested",
+                "dispatcher",
+                "node_count",
+                "sandbox_agent_node_count",
+                "max_node_timeout_seconds",
+                "parent_run_id",
+                "snapshot_id",
+                "run_number",
+                "output_bytes",
+                "rate_limited",
             )
 
             def __init__(self, model) -> None:
@@ -471,9 +485,7 @@ class TestReconcileFacts:
     def _ledger_row(org: str, run_date: date, spend) -> tuple:
         return (org, run_date, spend)
 
-    async def test_repairs_when_ledger_exceeds_facts_within_retention(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_repairs_when_ledger_exceeds_facts_within_retention(self, monkeypatch: pytest.MonkeyPatch) -> None:
         maintenance_mod._reconcile_cooldown.clear()
         today = date(2026, 8, 7)
         ledger = [self._ledger_row("org-1", today - timedelta(days=1), Decimal(100))]

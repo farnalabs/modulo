@@ -15,6 +15,7 @@ export interface RunListItem extends Record<string, unknown> {
   total_cost_usd: number | null
   account_id: string | null
   child_runs_cost_usd?: string | null
+  child_runs_count?: number
   aggregate_cost_usd?: string | null
 }
 

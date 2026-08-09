@@ -9,7 +9,7 @@
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Run A</span>
           <div class="flex gap-2">
-            <Select v-model="runIdA">
+            <Select aria-label="Select run A" v-model="runIdA">
               <SelectTrigger data-testid="diff-recent-runs-a" aria-label="Select run A" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
               </SelectTrigger>
@@ -41,7 +41,7 @@
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Run B</span>
           <div class="flex gap-2">
-            <Select v-model="runIdB">
+            <Select aria-label="Select run B" v-model="runIdB">
               <SelectTrigger data-testid="diff-recent-runs-b" aria-label="Select run B" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
               </SelectTrigger>

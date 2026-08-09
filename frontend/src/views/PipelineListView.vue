@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen bg-background flex flex-col">
     <header class="bg-card border-b border-border px-6 py-4">
-      <div class="mx-auto flex items-center justify-between gap-3 max-w-6xl">
+      <div class="mx-auto flex flex-wrap items-center justify-between gap-3 max-w-6xl">
         <PageHeader :title="$t('views.PipelineListView.title')" />
         <FilterBar
           :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
@@ -55,7 +55,7 @@
         Failed to load folders: {{ folderError }}
       </p>
 
-      <main class="flex-1 page-wide">
+      <main class="flex-1 page-wide min-w-0">
         <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
           <span>{{ moveError }}</span>
           <button class="shrink-0 text-destructive/70 hover:text-destructive" aria-label="Dismiss" @click="moveError = null">
@@ -106,6 +106,21 @@
         </div>
 
         <div v-else>
+          <!-- Mobile folder filter — the FolderTree is hidden below md, so offer folder selection here -->
+          <div v-if="foldersList.length > 0" class="md:hidden mb-4">
+            <Select
+              v-model="mobileFolderSelectValue"
+              :aria-label="$t('views.PipelineListView.folders')"
+            >
+              <SelectTrigger class="w-full" :aria-label="$t('views.PipelineListView.folders')" data-testid="pipeline-list-mobile-folder-select">
+                <SelectValue :placeholder="$t('views.PipelineListView.all_pipelines')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{{ $t('views.PipelineListView.all_pipelines') }}</SelectItem>
+                <SelectItem v-for="f in foldersList" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <!-- Breadcrumb navigation -->
           <div class="mb-4 flex items-center gap-2 text-sm">
             <template v-if="selectedFolderId && selectedFolderName">
@@ -196,7 +211,8 @@
 
           <!-- Table / Tree view -->
           <div v-else class="card rounded-lg border border-border overflow-hidden">
-            <table class="w-full text-left text-sm">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
               <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
                 <tr>
                   <th class="px-4 py-3">{{ $t('views.PipelineListView.name') }}</th>
@@ -310,7 +326,8 @@
                   </tr>
                 </template>
               </tbody>
-            </table>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -568,6 +585,7 @@ import { usePlanStore } from '../stores/planStore'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
@@ -735,6 +753,11 @@ const folderNameMap = computed(() => {
 const selectedFolderName = computed(() => {
   if (!selectedFolderId.value) return ''
   return folderNameMap.value.get(selectedFolderId.value) || ''
+})
+
+const mobileFolderSelectValue = computed<string>({
+  get: () => selectedFolderId.value ?? '__all__',
+  set: (val: string) => onSelectFolder(val === '__all__' ? null : val),
 })
 
 function onPipelineDragStart(pipeline: PipelineItem, event: DragEvent) {

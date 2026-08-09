@@ -15,7 +15,7 @@ _BASE = "https://dev.azure.com/myorg"
 _PROFILE_URL = "https://app.vssps.visualstudio.com/_apis/profile/profiles/me"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return AzureReposConnector(token=TOKEN, organization=ORG)
 

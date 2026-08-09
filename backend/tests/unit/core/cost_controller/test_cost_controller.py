@@ -26,7 +26,7 @@ _TODAY = date(2026, 6, 24)
 _FROZEN = datetime(2026, 6, 24, 12, 0, 0, tzinfo=UTC)
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_session() -> AsyncMock:
     s = AsyncMock()
     s.add = MagicMock()

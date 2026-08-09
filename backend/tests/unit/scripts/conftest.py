@@ -20,4 +20,3 @@ if str(PROJECT_ROOT) not in sys.path:
 @pytest.fixture(autouse=True)
 def _patch_verify_identity() -> None:
     """No-op stand-in: the scripts under test never touch the database."""
-    yield

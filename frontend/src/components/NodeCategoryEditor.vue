@@ -40,7 +40,7 @@
 
     <div>
       <label for="nodecategoryeditor-field-2" class="mb-1 block text-sm font-medium">{{ $t('components.NodeCategoryEditor.icon') }}</label>
-      <Select v-model="form.icon">
+      <Select aria-label="Icon" v-model="form.icon">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Icon">
           <SelectValue :placeholder="$t('components.NodeCategoryEditor.none')" />
         </SelectTrigger>

@@ -102,8 +102,10 @@ def test_detail_joins_multiple_mismatches() -> None:
     )
     detail = connector_team_mismatch_detail([m1, m2])
     assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
-    assert "db-a" in detail and "db-b" in detail
-    assert str(_TEAM_A) in detail and str(_TEAM_B) in detail
+    assert "db-a" in detail
+    assert "db-b" in detail
+    assert str(_TEAM_A) in detail
+    assert str(_TEAM_B) in detail
     assert detail.count("is team-private") == 2
     assert "; " in detail
 

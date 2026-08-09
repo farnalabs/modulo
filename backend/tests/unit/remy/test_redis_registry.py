@@ -330,6 +330,11 @@ async def test_is_session_approved_invalid_json(registry: RemyRedisRegistry, red
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
 
 
+async def test_is_session_approved_non_object_json(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
+    redis_client.hget.return_value = '["not", "a", "dict"]'
+    assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False
+
+
 async def test_is_session_approved_missing_expires_at(registry: RemyRedisRegistry, redis_client: MagicMock) -> None:
     redis_client.hget.return_value = json.dumps({"page_path": "/pipelines"})
     assert await registry.is_session_approved("sess-1", "run_pipeline", "/pipelines") is False

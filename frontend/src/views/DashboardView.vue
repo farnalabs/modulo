@@ -21,13 +21,13 @@
 
     <template v-else-if="summary">
 
-      <!-- Rolling-window toggle (FAR-92): period-scopes the stat cards below -->
+      <!-- Rolling-window toggle (FAR-92/FAR-115): period-scopes the stat cards below -->
       <div class="flex justify-end mb-4">
-        <div class="flex gap-1">
+        <div class="flex flex-wrap justify-end gap-1">
           <button
             v-for="w in trendWindows"
-            :key="w.value"
-            :data-testid="'trend-toggle-' + w.value"
+            :key="w.value ?? 'all'"
+            :data-testid="'trend-toggle-' + (w.value ?? 'all')"
             :class="[
               'px-3 py-1 text-xs font-medium rounded transition-colors',
               selectedWindow === w.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80',
@@ -40,26 +40,26 @@
       </div>
 
       <!-- Row 1: Summary stat cards -->
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard :label="$t('views.DashboardView.pipelines')" :value="summary.period?.metrics?.active_pipelines?.current ?? summary.active_pipelines" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null">
+      <div :class="['grid gap-4 sm:grid-cols-2 lg:grid-cols-4 transition-opacity duration-200', periodRefreshing ? 'opacity-60' : 'opacity-100']">
+        <StatCard :label="$t('views.DashboardView.pipelines')" :value="cardValue(summary.period?.metrics?.active_pipelines?.current, summary.active_pipelines)" color="primary" to="/pipelines" :delta="periodMetrics?.active_pipelines ?? null">
           <template #icon><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.total_runs')" :value="summary.period?.metrics?.total_runs?.current ?? summary.total_runs" color="primary" to="/runs" :delta="periodMetrics?.total_runs ?? null">
+        <StatCard :label="$t('views.DashboardView.total_runs')" :value="cardValue(summary.period?.metrics?.total_runs?.current, summary.total_runs)" color="primary" to="/runs" :delta="periodMetrics?.total_runs ?? null">
           <template #icon><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.running')" :value="summary.period?.metrics?.run_counts_by_status?.running?.current ?? summary.run_counts_by_status?.running ?? 0" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`" :delta="periodMetrics?.run_counts_by_status?.running ?? null">
+        <StatCard :label="$t('views.DashboardView.running')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.running?.current, summary.run_counts_by_status?.running ?? 0)" color="success" :to="`/runs?status=${RUN_STATUS.RUNNING}`" :delta="periodMetrics?.run_counts_by_status?.running ?? null">
           <template #icon><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="summary.period?.metrics?.run_counts_by_status?.awaiting_human?.current ?? summary.run_counts_by_status?.awaiting_human ?? 0" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`" :delta="periodMetrics?.run_counts_by_status?.awaiting_human ?? null">
+        <StatCard :label="$t('views.DashboardView.awaiting_human')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.awaiting_human?.current, summary.run_counts_by_status?.awaiting_human ?? 0)" color="warning" :to="`/runs?status=${RUN_STATUS.AWAITING_HUMAN}`" :delta="periodMetrics?.run_counts_by_status?.awaiting_human ?? null">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></template>
         </StatCard>
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <StatCard :label="$t('views.DashboardView.failed')" :value="summary.period?.metrics?.run_counts_by_status?.failed?.current ?? summary.run_counts_by_status?.failed ?? 0" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`" :delta="periodMetrics?.run_counts_by_status?.failed ?? null">
+        <StatCard :label="$t('views.DashboardView.failed')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.failed?.current, summary.run_counts_by_status?.failed ?? 0)" color="destructive" :to="`/runs?status=${RUN_STATUS.FAILED}`" :delta="periodMetrics?.run_counts_by_status?.failed ?? null">
           <template #icon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></template>
         </StatCard>
-        <StatCard :label="$t('views.DashboardView.idle')" :value="summary.period?.metrics?.run_counts_by_status?.idle?.current ?? summary.run_counts_by_status?.idle ?? 0" color="muted" to="/pipelines" :delta="periodMetrics?.run_counts_by_status?.idle ?? null">
+        <StatCard :label="$t('views.DashboardView.idle')" :value="cardValue(summary.period?.metrics?.run_counts_by_status?.idle?.current, summary.run_counts_by_status?.idle ?? 0)" color="muted" to="/pipelines" :delta="periodMetrics?.run_counts_by_status?.idle ?? null">
           <template #icon><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></template>
         </StatCard>
       </div>
@@ -259,6 +259,7 @@ const loading = computed(() => dashboardStore.loading)
 const error = computed(() => dashboardStore.error)
 const summary = computed(() => dashboardStore.summary)
 const totalSpend = computed(() => dashboardStore.totalSpend)
+const periodRefreshing = computed(() => dashboardStore.periodRefreshing)
 
 const isTeam = computed(() => planStore.isTeam)
 
@@ -314,20 +315,64 @@ const spendSparklineData = computed(() => {
   return summary.value.trend.map(d => d.token_spend_usd)
 })
 
-// --- Rolling-window toggle (FAR-92) ---
-const trendWindows = [
+// --- Rolling-window toggle (FAR-92 / FAR-115) ---
+const trendWindows: Array<{ labelKey: string; value: number | null }> = [
   { labelKey: 'views.DashboardView.trend_24h', value: 1 },
   { labelKey: 'views.DashboardView.trend_3d', value: 3 },
   { labelKey: 'views.DashboardView.trend_7d', value: 7 },
   { labelKey: 'views.DashboardView.trend_30d', value: 30 },
   { labelKey: 'views.DashboardView.trend_90d', value: 90 },
+  { labelKey: 'views.DashboardView.trend_all_time', value: null },
 ]
+
+const TREND_WINDOW_STORAGE_KEY = 'modulo.dashboard.trendWindow'
+const TREND_WINDOW_ALLOWED = new Set([1, 3, 7, 30, 90])
+
+function loadTrendWindow(): number | null {
+  try {
+    const raw = localStorage.getItem(TREND_WINDOW_STORAGE_KEY)
+    if (raw === 'all') return null
+    const parsed = Number(raw)
+    if (TREND_WINDOW_ALLOWED.has(parsed)) return parsed
+  } catch {
+    // localStorage unavailable (private mode / SSR) — fall through to default.
+  }
+  return 3
+}
+
+function persistTrendWindow(days: number | null) {
+  try {
+    localStorage.setItem(TREND_WINDOW_STORAGE_KEY, days == null ? 'all' : String(days))
+  } catch {
+    // localStorage unavailable — persistence is best-effort.
+  }
+}
 
 const selectedWindow = ref<number | null>(null)
 
-function selectWindow(days: number) {
+function selectWindow(days: number | null) {
   selectedWindow.value = days
-  void dashboardStore.fetchSummary(days)
+  persistTrendWindow(days)
+  if (days == null) {
+    // All-time: full reload is fine here — the all-time scalars aren't part
+    // of the period block.
+    void dashboardStore.fetchSummary()
+  } else {
+    // Period windows refresh ONLY the period block — no full-page skeleton.
+    void dashboardStore.fetchPeriodMetrics(days)
+  }
+}
+
+// Bug A: `??` only falls back on null/undefined, so a period window with zero
+// runs shows 0 instead of the all-time figure. Show the period current only
+// when it's a meaningful number (non-zero, or the all-time figure is also
+// zero/absent); otherwise fall back to the all-time value.
+function cardValue(periodCurrent: number | null | undefined, allTime: number | undefined): number {
+  if (typeof periodCurrent === 'number') {
+    const allTimeVal = allTime ?? 0
+    if (periodCurrent !== 0 || allTimeVal === 0) return periodCurrent
+  }
+  return allTime ?? 0
 }
 
 // --- Period-scoped metrics (same-source/same-window value AND arrow) ---
@@ -335,8 +380,9 @@ const periodMetrics = computed(() => summary.value?.period?.metrics ?? null)
 
 const evalPeriodDelta = computed(() => periodMetrics.value?.eval_pass_rate ?? null)
 const evalRateDisplay = computed(() => {
-  if (selectedWindow.value != null) {
-    const current = evalPeriodDelta.value?.current
+  const period = evalPeriodDelta.value
+  if (selectedWindow.value != null && period) {
+    const current = period.current
     return current == null ? '—' : `${current}%`
   }
   const allTime = summary.value?.eval_pass_rate?.overall_pass_rate
@@ -411,8 +457,10 @@ const trendEvalRates = computed(() => trendData.value.map(d => d.eval_pass_rate 
 const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd))
 
 onMounted(async () => {
+  // Restore the persisted window (FAR-115); default to 3d when nothing is stored.
+  selectedWindow.value = loadTrendWindow();
   const promises: Promise<unknown>[] = [
-    dashboardStore.fetchSummary(),
+    dashboardStore.fetchSummary(selectedWindow.value ?? undefined),
     dashboardStore.fetchTrends(7),
     loadCurrency(),
   ];

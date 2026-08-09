@@ -45,7 +45,7 @@
               </div>
               <div>
                 <label for="adminenvironmentprofilesview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminEnvironmentProfilesView.provider_type') }}</label>
-                <Select v-model="formData.provider_type">
+                <Select aria-label="Provider type" v-model="formData.provider_type">
                   <SelectTrigger data-testid="admin-envprofiles-provider-select" aria-label="Provider type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="E2B" />
                   </SelectTrigger>
@@ -176,7 +176,7 @@
           </p>
         </div>
 
-      <div class="table-wrapper">
+      <div class="table-wrapper overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead>
             <tr>

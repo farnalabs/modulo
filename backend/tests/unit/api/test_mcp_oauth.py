@@ -57,7 +57,7 @@ def _make_runner_principal() -> AuthenticatedPrincipal:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -75,7 +75,7 @@ def admin_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def runner_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

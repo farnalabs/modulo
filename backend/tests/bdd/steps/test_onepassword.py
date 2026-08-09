@@ -28,12 +28,12 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-@pytest.fixture()
+@pytest.fixture
 def op_connector():
     return OnePasswordConnector(token=TOKEN, base_url=BASE_URL)
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(op_connector):
     return op_connector
 

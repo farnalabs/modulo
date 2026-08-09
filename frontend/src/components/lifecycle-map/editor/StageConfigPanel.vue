@@ -37,7 +37,7 @@
 
     <div v-if="form.stage_type === 'modulo'">
       <span class="mb-1 block text-sm font-medium">{{ $t('components.lifecycle-map.editor.StageConfigPanel.pipeline') }}</span>
-      <Select v-model="form.pipeline_id">
+      <Select aria-label="Pipeline" v-model="form.pipeline_id">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Pipeline">
           <SelectValue placeholder="Select a pipeline..." />
         </SelectTrigger>

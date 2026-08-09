@@ -11,7 +11,7 @@ TOKEN = "ntn_test_token"
 _BASE = "https://api.notion.com/v1"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return NotionConnector(token=TOKEN)
 

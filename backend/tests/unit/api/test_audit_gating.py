@@ -75,7 +75,7 @@ def _build_client(settings_fn) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client_no_audit() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -101,7 +101,7 @@ def client_no_audit() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client_with_audit() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

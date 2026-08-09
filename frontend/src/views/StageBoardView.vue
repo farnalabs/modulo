@@ -41,7 +41,7 @@
       <div class="flex flex-wrap items-center gap-4">
         <div class="flex items-center gap-2">
           <label for="stageboardview-field-8" class="text-sm font-medium text-muted-foreground">{{ $t('views.StageBoardView.team') }}</label>
-          <Select :model-value="teamFilter" @update:model-value="teamFilter = String($event); applyFilters()">
+          <Select aria-label="Team" :model-value="teamFilter" @update:model-value="teamFilter = String($event); applyFilters()">
             <SelectTrigger class="w-auto min-w-[140px]" aria-label="Team" data-testid="stage-board-team-filter">
               <SelectValue placeholder="All Teams" />
             </SelectTrigger>
@@ -53,7 +53,7 @@
         </div>
         <div class="flex items-center gap-2">
           <label for="stageboardview-field-7" class="text-sm font-medium text-muted-foreground capitalize">{{ $t('views.StageBoardView.status') }}</label>
-          <Select :model-value="statusFilter" @update:model-value="statusFilter = String($event); applyFilters()">
+          <Select aria-label="Status" :model-value="statusFilter" @update:model-value="statusFilter = String($event); applyFilters()">
             <SelectTrigger class="w-auto min-w-[140px]" aria-label="Status" data-testid="stage-board-status-filter">
               <SelectValue placeholder="All Statuses" />
             </SelectTrigger>
@@ -126,13 +126,7 @@
                   </template>
                   <h3
                     v-else
-                    role="button"
-                    tabindex="0"
-                    class="truncate cursor-pointer font-semibold hover:text-primary"
-                    @click.stop="startEditingName(stage)"
-                    @keydown.enter.prevent="startEditingName(stage)"
-                    @keydown.space.prevent="startEditingName(stage)"
-                    :title="'Click to rename'"
+                    class="truncate font-semibold"
                   >{{ stage.name }}</h3>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
@@ -356,7 +350,7 @@
         </div>
         <div>
           <label for="stageboardview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.StageBoardView.visibility') }}</label>
-          <Select :model-value="createVisibility" @update:model-value="createVisibility = String($event)">
+          <Select aria-label="Visibility" :model-value="createVisibility" @update:model-value="createVisibility = String($event)">
             <SelectTrigger class="w-full" aria-label="Visibility" data-testid="stage-board-create-visibility">
               <SelectValue placeholder="Select visibility" />
             </SelectTrigger>

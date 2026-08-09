@@ -9,7 +9,7 @@
     <PageHeader :title="$t('views.AdminCostBreakdownView.cost_controls')" :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')" />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
-
+      <div class="space-y-6">
       <LoadingSpinner v-if="loading" />
       <template v-else>
         <Card>
@@ -152,7 +152,7 @@
                 </p>
               </div>
               <label for="admincostcontrolsview-field-3" class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
-                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
+                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :aria-label="$t('views.AdminCostControlsView.auto_stop_on_budget_exceeded')" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
                 <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full" />
               </label>
             </div>
@@ -169,7 +169,7 @@
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <Select :model-value="settings.currency" @update:model-value="onCurrencyChange">
+                <Select aria-label="Currency" :model-value="settings.currency" @update:model-value="onCurrencyChange">
                   <SelectTrigger data-testid="cc-currency" aria-label="Currency" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="USD ($)" />
                   </SelectTrigger>
@@ -183,7 +183,7 @@
               </div>
               <div>
                 <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
-                <Select :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
+                <Select :aria-label="$t('views.AdminCostControlsView.billing_period')" :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
                   <SelectTrigger data-testid="cc-billing-period" :aria-label="$t('views.AdminCostControlsView.billing_period')" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
                     <SelectValue :placeholder="$t('views.AdminCostControlsView.monthly')" />
                   </SelectTrigger>
@@ -220,6 +220,7 @@
           </CardContent>
         </Card>
       </template>
+      </div>
     </FeatureGate>
   </div>
 </template>

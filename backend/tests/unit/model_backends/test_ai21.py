@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.ai21 import AI21_BASE_URL, Ai21Backend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return Ai21Backend(api_key="test-key", model_id="jamba-1.5-mini")

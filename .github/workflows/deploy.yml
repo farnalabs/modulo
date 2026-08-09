@@ -28,7 +28,7 @@ jobs:
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
     steps:
-      - name: Check last successful deploy time
+      - name: Check last deploy attempt time
         id: check
         shell: bash
         env:
@@ -40,14 +40,39 @@ jobs:
             echo "Force deploy requested — bypassing throttle."
             exit 0
           fi
-          LAST=$(gh run list --repo "${{ github.repository }}" \
+          # Always deploy for deployment/CI-fix commits so the fix is validated end-to-end
+          COMMIT_MSG="$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.message' 2>/dev/null || echo '')"
+          if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy/CI-fix commit — bypassing throttle."
+            exit 0
+          fi
+          # Anchor the throttle on the most recent run that ACTUALLY deployed to
+          # production — the "Deploy to app.modulo.run" job concluded with success.
+          # A run that was itself throttled (all jobs skipped), failed pre-deploy or
+          # staging E2E, was cancelled, or is still in progress must NOT count as an
+          # attempt; using it as the anchor would push the window forward on every
+          # push and starve real deploys (observed 2026-08-08: prod stuck on the
+          # 10:52 build for 4h while every later run skipped against the previous
+          # skipped run).
+          LAST=""
+          for RID in $(gh run list --repo "${{ github.repository }}" \
             --workflow "Deploy: Staging + Prod" \
-            --status success --limit 1 \
-            --json createdAt --jq '.[0].createdAt' 2>/dev/null || echo "")
-          echo "last_successful_deploy=${LAST:-none}"
+            --limit 50 \
+            --json databaseId --jq '.[].databaseId' 2>/dev/null || echo ""); do
+            [ "$RID" = "${{ github.run_id }}" ] && continue
+            DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs" \
+              --jq '[.jobs[] | select(.name == "Deploy to app.modulo.run") | .conclusion] | .[0] // empty' 2>/dev/null || echo "")"
+            if [ "$DEPLOY_JOB_CONCLUSION" = "success" ]; then
+              LAST="$(gh api "repos/${{ github.repository }}/actions/runs/$RID" \
+                --jq '.created_at' 2>/dev/null || echo "")"
+              break
+            fi
+          done
+          echo "last_deploy_attempt=${LAST:-none}"
           if [ -z "$LAST" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-            echo "No previous successful deploy - deploying."
+            echo "No previous deploy attempt - deploying."
           else
             LAST_TS=$(date -u -d "$LAST" +%s)
             NOW_TS=$(date -u +%s)
@@ -55,10 +80,10 @@ jobs:
             echo "hours_since_deploy=${DIFF_H}"
             if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]; then
               echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::Deployed ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. Use workflow_dispatch to force."
+              echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. Use workflow_dispatch to force."
             else
               echo "should_deploy=true" >> "$GITHUB_OUTPUT"
-              echo "Deploying (${DIFF_H}h since last deploy)."
+              echo "Deploying (${DIFF_H}h since last deploy attempt)."
             fi
           fi
 
@@ -239,7 +264,11 @@ jobs:
           # fail the whole deploy job. Only machines in the 'started' state
           # count -- a stopped/crash-looping worker does not satisfy the check.
           fly machine list --app staging-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
-          read -r WORKER_COUNT IMAGE <<< "$(python3 -c '
+          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
+          # worker does not satisfy the check. WORKER_ID is the first worker
+          # machine in ANY state, used to clone the process group without the
+          # --process-group flag that flyctl v0.4.x removed from `machine run`.
+          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
           import json
           try:
               with open("/tmp/worker-machines.json") as f:
@@ -247,21 +276,34 @@ jobs:
           except Exception:
               machines = []
           started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          worker_id = ""
+          for m in machines:
+              if m.get("process_group") == "worker":
+                  worker_id = m.get("id") or ""
+                  break
           image = ""
           for m in machines:
               if m.get("process_group") == "app" and m.get("state") == "started":
                   image = (m.get("config") or {}).get("image") or m.get("image") or ""
                   break
-          print(len(started), image)
-          ' || echo '0 ')"
+          print(len(started), worker_id, image)
+          ' || echo '0  ')"
           WORKER_COUNT=${WORKER_COUNT:-0}
           if [ "$WORKER_COUNT" -eq 0 ]; then
-            if [ -n "$IMAGE" ]; then
-              echo "No started worker machine -- creating one from the deployed image: $IMAGE"
-              fly machine run "$IMAGE" --app staging-modulo --process-group worker --region lhr
+            # Clone an existing (non-started) worker machine -- it already carries
+            # the correct process_group, so no --process-group flag is needed.
+            if [ -n "$WORKER_ID" ]; then
+              echo "No started worker machine -- cloning existing worker machine: $WORKER_ID"
+              fly machine clone "$WORKER_ID" --app staging-modulo --region lhr
+            elif [ -n "$IMAGE" ]; then
+              # No worker machine exists at all -- create one from the deployed
+              # image. The [processes] section of fly.staging.toml assigns the group.
+              echo "No worker machine exists -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app staging-modulo --region lhr -c fly.staging.toml
             else
-              echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
-              fly machine run . --app staging-modulo --process-group worker --region lhr
+              # Last resort: fresh build, still using the config for the worker group.
+              echo "No worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app staging-modulo --region lhr -c fly.staging.toml
             fi
           else
             echo "Started worker machine(s) already exist: $WORKER_COUNT"
@@ -270,7 +312,7 @@ jobs:
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [deploy-staging]
-    if: inputs.skip_staging_e2e != 'true'
+    if: github.event.inputs.skip_staging_e2e != 'true'
     timeout-minutes: 90
     runs-on: ubicloud-standard-2
     defaults:
@@ -334,7 +376,7 @@ jobs:
   deploy-production:
     name: Deploy to app.modulo.run
     needs: [pre-deploy-tests, staging-e2e]
-    if: always() && (needs.staging-e2e.result == 'success' || inputs.skip_staging_e2e == 'true')
+    if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v4
@@ -410,7 +452,11 @@ jobs:
           # fail the whole deploy job. Only machines in the 'started' state
           # count -- a stopped/crash-looping worker does not satisfy the check.
           fly machine list --app app-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
-          read -r WORKER_COUNT IMAGE <<< "$(python3 -c '
+          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
+          # worker does not satisfy the check. WORKER_ID is the first worker
+          # machine in ANY state, used to clone the process group without the
+          # --process-group flag that flyctl v0.4.x removed from `machine run`.
+          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
           import json
           try:
               with open("/tmp/worker-machines.json") as f:
@@ -418,21 +464,34 @@ jobs:
           except Exception:
               machines = []
           started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          worker_id = ""
+          for m in machines:
+              if m.get("process_group") == "worker":
+                  worker_id = m.get("id") or ""
+                  break
           image = ""
           for m in machines:
               if m.get("process_group") == "app" and m.get("state") == "started":
                   image = (m.get("config") or {}).get("image") or m.get("image") or ""
                   break
-          print(len(started), image)
-          ' || echo '0 ')"
+          print(len(started), worker_id, image)
+          ' || echo '0  ')"
           WORKER_COUNT=${WORKER_COUNT:-0}
           if [ "$WORKER_COUNT" -eq 0 ]; then
-            if [ -n "$IMAGE" ]; then
-              echo "No started worker machine -- creating one from the deployed image: $IMAGE"
-              fly machine run "$IMAGE" --app app-modulo --process-group worker --region lhr
+            # Clone an existing (non-started) worker machine -- it already carries
+            # the correct process_group, so no --process-group flag is needed.
+            if [ -n "$WORKER_ID" ]; then
+              echo "No started worker machine -- cloning existing worker machine: $WORKER_ID"
+              fly machine clone "$WORKER_ID" --app app-modulo --region lhr
+            elif [ -n "$IMAGE" ]; then
+              # No worker machine exists at all -- create one from the deployed
+              # image. The [processes] section of fly.toml assigns the group.
+              echo "No worker machine exists -- creating one from the deployed image: $IMAGE"
+              fly machine run "$IMAGE" --app app-modulo --region lhr -c fly.toml
             else
-              echo "No started worker machine and no deployed image resolvable -- creating one from a fresh build"
-              fly machine run . --app app-modulo --process-group worker --region lhr
+              # Last resort: fresh build, still using the config for the worker group.
+              echo "No worker machine and no deployed image resolvable -- creating one from a fresh build"
+              fly machine run . --app app-modulo --region lhr -c fly.toml
             fi
           else
             echo "Started worker machine(s) already exist: $WORKER_COUNT"

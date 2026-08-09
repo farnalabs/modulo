@@ -2,11 +2,11 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 import anyio
 from fastapi import FastAPI
@@ -162,8 +162,8 @@ async def _verify_db_connectivity(settings: Settings) -> None:
 # machines/processes so _run_migrations never interleaves with the entrypoint's
 # `alembic upgrade heads`.
 _MIGRATION_LOCK_KEY = (72001, 1)
-_MIGRATION_LOCK_POLL_ATTEMPTS = 60
-_MIGRATION_LOCK_POLL_INTERVAL = 0.5
+_MIGRATION_LOCK_POLL_ATTEMPTS = 240
+_MIGRATION_LOCK_POLL_INTERVAL = 1.0
 _MIGRATION_MAX_ATTEMPTS = 5
 _MIGRATION_BACKOFF_SECONDS = 3
 
@@ -286,6 +286,44 @@ async def _run_break_glass_watchdog(settings: Settings) -> None:
     logger.info("startup.break_glass_watchdog_ok")
 
 
+async def _db_is_at_migration_head(settings: Settings) -> bool:
+    """Return True when the DB's ``alembic_version`` already equals the head.
+
+    Boot fast-path: multiple machines boot simultaneously on a fresh deploy and
+    every process group runs migrations serialised by the advisory lock —
+    machines that did not win the lock waited up to ``_MIGRATION_LOCK_POLL_ATTEMPTS``
+    before FATALing, even when the schema was already up to date. When the DB is
+    already at head there is no work to do, so the advisory lock acquisition and
+    the alembic run are pure contention and are skipped entirely.
+
+    Fail-safe: any failure (missing table, multiple heads, connection error)
+    returns False so the caller proceeds through the normal retry/lock path.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    alembic_ini = _resolve_alembic_ini()
+    config = Config(str(alembic_ini))
+    config.set_main_option(
+        "script_location",
+        str(alembic_ini.parent / "src" / "modulo" / "db" / "migrations"),
+    )
+    try:
+        head = ScriptDirectory.from_config(config).get_current_head()
+    except Exception:
+        return False
+    if not head:
+        return False
+    engine = get_or_create_engine(settings)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            versions = {row[0] for row in result.fetchall()}
+    except Exception:
+        return False
+    return versions == {head}
+
+
 async def _run_migrations(settings: Settings) -> None:
     """Run Alembic migrations to head, with a bounded retry loop and FATAL exhaustion.
 
@@ -295,6 +333,10 @@ async def _run_migrations(settings: Settings) -> None:
     DB errors are retried; on exhaustion this raises — it is called bare from
     the lifespan, so a persistent failure fails uvicorn boot and logs the
     ``infra_blocked=migration_failed`` key for the deploy-pipeline consumer.
+
+    Fast-path: when the DB is already at the head revision the migration run is
+    skipped entirely (no advisory lock, no alembic run) so boot is instant and
+    machines never contend for the lock.
     """
     from alembic import command
     from alembic.config import Config
@@ -303,6 +345,10 @@ async def _run_migrations(settings: Settings) -> None:
 
     alembic_ini = _resolve_alembic_ini()
     last_error: Exception | None = None
+
+    if await _db_is_at_migration_head(settings):
+        logger.info("startup.migrations_already_at_head -- skipping migration run")
+        return
 
     # Bootstrap BEFORE migrations so the roles 0036 re-owns to / grants on exist.
     await _run_bootstrap(settings)
@@ -401,6 +447,7 @@ async def _ensure_default_org(settings: Settings) -> None:
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.core.seed_data.cost_components import seed_cost_components_for_org
     from modulo.db.models.organisation import Organisation
 
     engine = get_or_create_engine(settings)
@@ -419,6 +466,32 @@ async def _ensure_default_org(settings: Settings) -> None:
         session.add(org)
         await session.flush()
         logger.info("startup.default_org_created", extra={"org_id": str(org.id)})
+
+        # Seed default cost components for the new org in the SAME transaction
+        # (idempotent; the per-boot _seed_cost_components also covers it, but a
+        # fresh org gets its components here immediately). Fail-open: a seed
+        # failure must never block default-org creation.
+        try:
+            await seed_cost_components_for_org(session, org.id)
+        except Exception:
+            logger.warning("startup.default_org_cost_components_seed_failed", exc_info=True)
+
+
+async def _boot_seed(name: str, coro: Awaitable[Any]) -> None:
+    """Await a startup seed and print a permanent boot summary to stdout.
+
+    The structured JsonFormatter logger lines do not render in ``fly logs``, so
+    a seed that silently failed at boot was invisible for weeks (FAR-113). This
+    helper always prints an ok/FAILED line so every boot records each seed's
+    outcome. Failures remain non-fatal (the seed never blocks startup).
+    """
+    try:
+        result = await coro
+        detail = f" ({result})" if result is not None else ""
+        print(f"[boot] seed {name}: ok{detail}", flush=True)  # noqa: T201
+    except Exception as exc:
+        print(f"[boot] seed {name}: FAILED ({exc!r})", flush=True)  # noqa: T201
+        logger.exception("startup.seed_failed", extra={"seed": name})
 
 
 async def _seed_modulo_users(settings: Settings) -> None:
@@ -517,13 +590,16 @@ async def _seed_modulo_users(settings: Settings) -> None:
 
 
 async def _seed_demo_data(settings: Settings) -> None:
-    """Seed rich demo data when MODULO_DEMO_MODE is enabled.
+    """Seed rich demo data when MODULO_SEED_DEMO_DATA is enabled.
 
     Creates a demo account with admin role, sample pipelines,
     schemas, model backends, connectors, library primitives,
     stages, and other resources for find-and-fix exploration.
+    Seeding NEVER changes the org's plan/tier — a valid signed license
+    (org-level, system in-memory, or MODULO_LICENSE_KEY) is the only way
+    team-tier features activate.
     """
-    if not settings.modulo_demo_mode:
+    if not settings.modulo_seed_demo_data:
         return
 
     from sqlalchemy import select
@@ -550,11 +626,6 @@ async def _seed_demo_data(settings: Settings) -> None:
             return
 
         org_id = org.id
-
-        # Set org to Team Plan so all team-tier features are active
-        if org.plan_id != "team":
-            org.plan_id = "team"
-            logger.info("startup.demo_org_plan_set_to_team")
 
         # Seed or update demo account with admin role
         demo_email = "demo"
@@ -945,47 +1016,26 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Seed MODULO_USERS env var entries into the user table (idempotent).
     # Non-fatal: if tables are missing, seeding is retried on next restart.
-    try:
-        await _seed_modulo_users(settings)
-    except Exception:
-        logger.warning("startup.user_seed_failed", exc_info=True)
+    await _boot_seed("modulo_users", _seed_modulo_users(settings))
 
-    # Seed demo data if MODULO_DEMO_MODE is enabled.
-    try:
-        await _seed_demo_data(settings)
-    except Exception:
-        logger.warning("startup.demo_seed_failed", exc_info=True)
+    # Seed demo data if MODULO_SEED_DEMO_DATA is enabled.
+    await _boot_seed("demo_data", _seed_demo_data(settings))
 
     # Seed SSO providers from deprecated env vars into the DB table (idempotent).
-    try:
-        await _seed_sso_providers(settings)
-    except Exception:
-        logger.warning("startup.sso_providers_seed_failed", exc_info=True)
+    await _boot_seed("sso_providers", _seed_sso_providers(settings))
 
     # Seed system schemas for all existing organisations (idempotent).
-    try:
-        await _seed_system_schemas(settings)
-    except Exception:
-        logger.warning("startup.system_schemas_seed_failed", exc_info=True)
+    await _boot_seed("system_schemas", _seed_system_schemas(settings))
 
     # Seed the default modulo-dev EnvironmentProfile for the dogfood pipeline.
-    try:
-        await _seed_environment_profiles(settings)
-    except Exception:
-        logger.warning("startup.env_profile_seed_failed", exc_info=True)
+    await _boot_seed("environment_profiles", _seed_environment_profiles(settings))
 
     # Seed the tier catalog and feature flag definitions (idempotent).
-    try:
-        await _seed_tier_catalog()
-    except Exception:
-        logger.warning("startup.tier_catalog_seed_failed", exc_info=True)
+    await _boot_seed("tier_catalog", _seed_tier_catalog())
 
     # Seed the default cost components for every org (idempotent; system-
     # context org enumeration, per-org set_rls_org on the inserts).
-    try:
-        await _seed_cost_components(settings)
-    except Exception:
-        logger.warning("startup.cost_components_seed_failed", exc_info=True)
+    await _boot_seed("cost_components", _seed_cost_components(settings))
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     try:

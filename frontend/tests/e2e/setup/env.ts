@@ -26,7 +26,9 @@ const ENVS: Record<string, TestEnv> = {
   staging: {
     name: 'staging',
     credentials: {
-      admin: { email: process.env.E2E_ADMIN_EMAIL || 'admin@demo.modulo', password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
+      // Staging uses the demo account by default (admin@demo.modulo is invalid there and returns 401).
+      // The app block below keeps admin@modulo.run.
+      admin: { email: process.env.E2E_ADMIN_EMAIL || 'demo', password: process.env.E2E_ADMIN_PASSWORD || 'demo' },
       demo: { email: 'demo', password: 'demo' },
       loginFormEmailSelector: FORM_SELECTORS.email,
       loginFormPasswordSelector: FORM_SELECTORS.password,
@@ -35,7 +37,7 @@ const ENVS: Record<string, TestEnv> = {
   app: {
     name: 'app',
     credentials: {
-      admin: { email: 'admin@modulo.run', password: 'admin123' },
+      admin: { email: process.env.E2E_ADMIN_EMAIL || 'admin@modulo.run', password: process.env.E2E_ADMIN_PASSWORD || 'admin123' },
       demo: { email: 'demo', password: 'demo' },
       loginFormEmailSelector: FORM_SELECTORS.email,
       loginFormPasswordSelector: FORM_SELECTORS.password,

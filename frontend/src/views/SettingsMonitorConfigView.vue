@@ -6,7 +6,7 @@
       </div>
     </template>
     <template #default>
-      <div class="page-narrow">
+      <div class="page-wide">
         <PageHeader :title="$t('views.SettingsMonitorConfigView.browser_monitoring')" :subtitle="$t('views.SettingsMonitorConfigView.description')" />
 
         <div v-if="loading" class="flex items-center justify-center h-32">
@@ -28,12 +28,12 @@
             >
               <div class="flex items-center justify-between">
                 <div>
-                  <h3 class="font-medium">{{ b.label }}</h3>
+                  <h3 :id="`settingsmonitorconfigview-backend-label-${b.key}`" class="font-medium">{{ b.label }}</h3>
                   <p class="text-xs text-muted-foreground">{{ b.description }}</p>
                   <p v-if="!b.enabled" class="text-xs text-muted-foreground/60 mt-1">{{ b.hint }}</p>
                 </div>
-                <label for="settingsmonitorconfigview-field-2" class="relative inline-flex items-center cursor-pointer">
-                  <input id="settingsmonitorconfigview-field-2" type="checkbox" v-model="b.enabled" class="sr-only peer" @change="onDirty" />
+                <label :for="`settingsmonitorconfigview-toggle-${b.key}`" class="relative inline-flex items-center cursor-pointer">
+                  <input :id="`settingsmonitorconfigview-toggle-${b.key}`" type="checkbox" v-model="b.enabled" class="sr-only peer" :aria-labelledby="`settingsmonitorconfigview-backend-label-${b.key}`" @change="onDirty" />
                   <div class="w-9 h-5 bg-muted rounded-full peer peer-checked:bg-primary peer-focus:ring-2 peer-focus:ring-primary/20 after:content-[''] after:absolute after:top-0.5 after:start-0.5 after:bg-background after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full" />
                 </label>
               </div>

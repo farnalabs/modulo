@@ -101,7 +101,7 @@ async def seed_cost_components_for_org(session: AsyncSession, org_id: uuid.UUID 
                 sort_order=spec["sort_order"],
             )
         )
-        _log.info("cost_components.seeded", extra={"org_id": str(org_id), "name": spec["name"]})
+        _log.info("cost_components.seeded", extra={"org_id": str(org_id), "component_name": spec["name"]})
 
 
 async def seed_cost_components(factory: async_sessionmaker[AsyncSession]) -> int:

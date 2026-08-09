@@ -44,7 +44,7 @@ from sqlalchemy import text
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_or_create_engine, pg_connection_string
-from modulo.core.cron_helpers import get_dispatcher_reconcile_stats
+from modulo.core.cron_helpers import read_dispatcher_reconcile_stats
 from modulo.settings import Settings, break_glass_boot_findings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -454,15 +454,34 @@ async def _check_saq_workers() -> CheckResult:
     )
 
 
-def _check_dispatcher_reconcile() -> CheckResult:
+async def _check_dispatcher_reconcile() -> CheckResult:
     """ADVISORY — last dispatcher_reconcile outcome (never gates readiness).
 
-    Reports the scanned/repaired/skipped counters from the most recent
-    reconciliation sweep. Stale-while-running: if the last run was >60s ago,
-    the check reports "stale" (degraded) to alert operators while the app
-    remains healthy — a stale reconcile does not block bluegreen.
+    The dispatcher_reconcile system cron runs in the SYSTEM WORKER process
+    (PR dist/separate-workers: workers on ``worker`` machines, uvicorn on
+    ``app`` machines), so the cron_helpers in-process stats dict is invisible
+    here. This check reads the shared Redis key the cron persists every tick —
+    "never run" now means the cron genuinely has not run (or its persistence
+    failed). Fail-open on Redis read errors (never degrade a healthy machine on
+    a transient read). Stale-while-running: a last_run_at older than the 60s
+    cadence reports "stale" (degraded) to alert operators while the app remains
+    healthy — a stale reconcile does not block bluegreen.
     """
-    stats = get_dispatcher_reconcile_stats()
+    settings = get_settings()
+    r: aioredis.Redis | None = None
+    try:
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+        stats = await read_dispatcher_reconcile_stats(r)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("health._check_dispatcher_reconcile redis read failed: %s", exc)
+        return CheckResult(status="ok", detail="dispatcher_reconcile check unavailable (redis read failed)")
+    finally:
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+
     if not stats or stats.get("last_run_at") is None:
         return CheckResult(status="degraded", detail="dispatcher_reconcile has never run")
     try:
@@ -476,18 +495,18 @@ def _check_dispatcher_reconcile() -> CheckResult:
             detail=(
                 f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run); "
                 f"last_run_at={stats['last_run_at']}, "
-                f"scanned={stats['scanned']}, repaired={stats['repaired']}, "
-                f"skipped={stats['skipped']}, redis_errors={stats['redis_errors']}, "
-                f"deduped={stats['deduped']}"
+                f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
+                f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
+                f"deduped={stats.get('deduped', 0)}"
             ),
         )
     return CheckResult(
         status="ok",
         detail=(
             f"last_run_at={stats['last_run_at']}, "
-            f"scanned={stats['scanned']}, repaired={stats['repaired']}, "
-            f"skipped={stats['skipped']}, redis_errors={stats['redis_errors']}, "
-            f"deduped={stats['deduped']}"
+            f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
+            f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
+            f"deduped={stats.get('deduped', 0)}"
         ),
     )
 
@@ -554,6 +573,9 @@ async def _check_system_crons() -> CheckResult:
     healthy machine on a transient read). ``SAQ_HARD_GATE=false`` relaxes to
     alert-only, matching the SAQ worker gate.
     """
+    if os.environ.get("FLY_PROCESS_GROUP") == "app":
+        return await _check_fleet_system_crons()
+
     settings = get_settings()
     this_host = os.environ.get("FLY_MACHINE_ID") or os.environ.get("HOSTNAME") or "unknown"
     r: aioredis.Redis | None = None
@@ -612,16 +634,16 @@ async def liveness() -> dict[str, str]:
 @handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
 async def readiness(response: Response) -> ReadinessResponse:
-    db_check, redis_check, cp_check, mig_check, saq_check, cron_check = await asyncio.gather(
+    db_check, redis_check, cp_check, mig_check, saq_check, cron_check, dr_check = await asyncio.gather(
         _check_database(),
         _check_redis(),
         _check_checkpointer(),
         _check_migrations(),
         _check_saq_workers(),
         _check_system_crons(),
+        _check_dispatcher_reconcile(),
     )
     bg_check = _check_break_glass()
-    dr_check = _check_dispatcher_reconcile()
 
     checks: dict[str, CheckResult] = {
         "database": db_check,

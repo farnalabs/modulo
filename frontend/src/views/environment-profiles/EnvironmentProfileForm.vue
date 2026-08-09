@@ -44,7 +44,7 @@
 
       <div>
         <label for="environmentprofileform-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.provider_type') }} <span class="text-destructive">*</span></label>
-        <Select v-model="form.provider_type">
+        <Select aria-label="Provider type" v-model="form.provider_type">
           <SelectTrigger aria-label="Provider type" data-testid="envprofile-form-provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" :class="{ 'border-destructive': submitted && !form.provider_type }">
             <SelectValue placeholder="Select provider type" />
           </SelectTrigger>
@@ -90,7 +90,7 @@
 
       <div>
         <label for="environmentprofileform-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.network_policy') }}</label>
-        <Select v-model="form.network_policy">
+        <Select aria-label="Network policy" v-model="form.network_policy">
           <SelectTrigger aria-label="Network policy" data-testid="envprofile-form-network" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
             <SelectValue placeholder="Select network policy" />
           </SelectTrigger>
@@ -104,7 +104,7 @@
 
       <div>
         <label for="environmentprofileform-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.initialisation_strategy') }}</label>
-        <Select v-model="form.initialisation_strategy">
+        <Select aria-label="Initialisation strategy" v-model="form.initialisation_strategy">
           <SelectTrigger aria-label="Initialisation strategy" data-testid="envprofile-form-init" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
             <SelectValue placeholder="Select strategy" />
           </SelectTrigger>
@@ -118,7 +118,7 @@
 
       <div>
         <label for="environmentprofileform-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.persistence_policy') }}</label>
-        <Select v-model="form.persistence_policy">
+        <Select aria-label="Persistence policy" v-model="form.persistence_policy">
           <SelectTrigger aria-label="Persistence policy" data-testid="envprofile-form-persistence" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
             <SelectValue placeholder="Select policy" />
           </SelectTrigger>

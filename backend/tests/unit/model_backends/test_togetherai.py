@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.togetherai import TOGETHERAI_BASE_URL, TogetherAIBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.module.ChatOpenAI"):
         return TogetherAIBackend(

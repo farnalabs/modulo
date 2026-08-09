@@ -7,6 +7,9 @@ primary_region = 'lhr'
 [deploy]
   strategy = 'rolling'
 
+[release]
+  command = "/release.sh"
+
 [build]
   dockerfile = "backend/Dockerfile.fly"
 
@@ -47,15 +50,38 @@ primary_region = 'lhr'
   [[http_service.checks]]
     interval = "15s"
     timeout = "5s"
-    grace_period = "120s"
+    grace_period = "240s"
     method = "GET"
     path = "/healthz/ready"
     protocol = "http"
 
-# Worker process group — SAQ workers only, auto-restart on failure
+# Worker process-group health check (ADR 021). Top-level [checks], not a service
+# check — it does not affect routing. The worker container exposes a liveness
+# server on 8082 (entrypoint.sh worker branch) that returns 200 only while BOTH
+# SAQ worker subprocesses (runs + system) are alive. The worker group has no
+# service/health check today, so a machine that is "up" but running no SAQ
+# workers is invisible to `fly checks list` and to rolling-deploy readiness.
+[checks]
+  [checks.worker_health]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "240s"
+    method = "GET"
+    path = "/"
+    port = 8082
+    type = "http"
+    processes = ['worker']
+
+# Worker process group — SAQ workers only, ALWAYS restart (ADR 021).
+# policy = "always" restarts the machine no matter the exit code. "on-failure"
+# only restarts a non-zero exit, so a worker machine that a rolling deploy leaves
+# `stopped` (clean exit / SIGTERM teardown) stays down — the 2026-08-08 outage
+# where both worker machines were `stopped` for ~3h and needed a manual
+# `fly machines start`. "always" is the Fly-documented policy for long-running
+# background workers: crash, clean exit, or deploy replacement all self-heal.
 [[restart]]
   processes = ['worker']
-  policy = "on-failure"
+  policy = "always"
 
 [env]
   MODULO_DB = "postgres"
@@ -64,6 +90,7 @@ primary_region = 'lhr'
   # MODULO_USERS is set with `fly secrets set` and must not be committed.
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
+  SAQ_WORKER_CONCURRENCY = "20"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
@@ -77,6 +104,6 @@ primary_region = 'lhr'
 
 [[vm]]
   processes = ['worker']
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1

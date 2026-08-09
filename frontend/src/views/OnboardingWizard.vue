@@ -221,7 +221,7 @@
               data-testid="onboarding-wizard-library-search"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <Select v-model="libraryTypeFilter">
+            <Select aria-label="Filter by type" v-model="libraryTypeFilter">
               <SelectTrigger data-testid="onboarding-wizard-library-type-filter" aria-label="Filter by type" class="rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <SelectValue placeholder="All types" />
               </SelectTrigger>

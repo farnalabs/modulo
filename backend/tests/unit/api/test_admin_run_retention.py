@@ -82,7 +82,7 @@ def _session_returning(settings_json: object) -> AsyncMock:
     return mock_session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> TestClient:
     yield TestClient(app)
     app.dependency_overrides.clear()

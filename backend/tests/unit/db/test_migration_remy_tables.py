@@ -22,7 +22,8 @@ _REMY_TABLES = {"chat_sessions", "chat_messages", "remy_skills"}
 @pytest.fixture(scope="module")
 def migration() -> ModuleType:
     spec = importlib.util.spec_from_file_location("migration_0005_remy_tables", _MIGRATION_PATH)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

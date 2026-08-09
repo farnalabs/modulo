@@ -28,42 +28,40 @@ _DB_PATH = "./test_multi_backend.db"
 
 
 @pytest.fixture(scope="module")
-def _engine():
-    engine = create_async_engine(_DB_URL, echo=False)
-    yield engine
+def engine():
+    return create_async_engine(_DB_URL, echo=False)
 
 
 @pytest.fixture(scope="module")
-async def _tables(_engine):
+async def _tables(engine):
     # SQLite does not support ARRAY type - skip tables that use it
     from sqlalchemy import ARRAY
 
     tables_to_create = [t for t in Base.metadata.sorted_tables if not any(isinstance(c.type, ARRAY) for c in t.columns)]
-    async with _engine.begin() as conn:
+    async with engine.begin() as conn:
         await conn.run_sync(lambda conn: Base.metadata.create_all(conn, tables=tables_to_create))
     yield
-    async with _engine.begin() as conn:
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-    await _engine.dispose()
+    await engine.dispose()
     if await anyio.to_thread.run_sync(os.path.exists, _DB_PATH):
         await anyio.to_thread.run_sync(os.remove, _DB_PATH)
 
 
 @pytest.fixture(autouse=True)
-async def _clear_data(_engine, _tables):
+async def _clear_data(engine, _tables):
     from sqlalchemy import ARRAY
 
-    async with _engine.begin() as conn:
+    async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             if not any(isinstance(c.type, ARRAY) for c in table.columns):
                 await conn.execute(table.delete())
-    yield
 
 
 class TestSqliteMultiBackend:
-    async def test_create_and_retrieve_org(self, _engine) -> None:
+    async def test_create_and_retrieve_org(self, engine) -> None:
         org_id = uuid.uuid4()
-        async with AsyncSession(_engine) as session:
+        async with AsyncSession(engine) as session:
             async with session.begin():
                 session.add(Organisation(id=org_id, name="Smoke Test Org", slug="smoke-test-org"))
             result = await session.execute(select(Organisation).where(Organisation.id == org_id))
@@ -71,13 +69,13 @@ class TestSqliteMultiBackend:
             assert org.name == "Smoke Test Org"
             assert org.slug == "smoke-test-org"
 
-    async def test_tenant_filter_via_org_membership(self, _engine) -> None:
+    async def test_tenant_filter_via_org_membership(self, engine) -> None:
         org_a = uuid.uuid4()
         org_b = uuid.uuid4()
         user_a_id = uuid.uuid4()
         user_b_id = uuid.uuid4()
 
-        async with AsyncSession(_engine) as session:
+        async with AsyncSession(engine) as session:
             async with session.begin():
                 session.add_all(
                     [
@@ -101,11 +99,11 @@ class TestSqliteMultiBackend:
             assert len(memberships) == 1
             assert memberships[0].account_id == user_a_id
 
-    async def test_insert_and_query_account(self, _engine) -> None:
+    async def test_insert_and_query_account(self, engine) -> None:
         org_id = uuid.uuid4()
         user_id = uuid.uuid4()
 
-        async with AsyncSession(_engine) as session:
+        async with AsyncSession(engine) as session:
             async with session.begin():
                 session.add_all(
                     [

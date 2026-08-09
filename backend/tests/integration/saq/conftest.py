@@ -28,7 +28,7 @@ def saq_redis_url(redis_container: RedisContainer) -> str:
     return f"redis://{host}:{port}/0"
 
 
-@pytest.fixture()
+@pytest.fixture
 def saq_settings_env(saq_redis_url: str, migrated_db_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Point settings at the testcontainers Postgres + Redis for one test."""
     monkeypatch.setenv("DATABASE_URL", migrated_db_url)

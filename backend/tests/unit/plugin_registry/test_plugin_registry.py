@@ -798,7 +798,7 @@ def test_backend_providers_property():
 
 
 @pytest.mark.parametrize(
-    "method,args,expected",
+    ("method", "args", "expected"),
     [
         ("list_plugins", [], {}),
         ("get_plugin", ["nope"], None),

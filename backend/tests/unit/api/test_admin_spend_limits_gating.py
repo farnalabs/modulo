@@ -63,7 +63,7 @@ def _settings_with_license() -> Settings:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -83,7 +83,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def licensed_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
     plan_ctx = _team_plan_context()

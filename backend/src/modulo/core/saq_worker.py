@@ -2,18 +2,20 @@
 
 Two worker processes (plan F1/F2):
 
-* ``runs_settings`` — queue ``runs``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
-  decoupled from Redis pool size), no web UI. Executes
+* ``runs_settings`` — queue ``runs``, concurrency (SAQ_WORKER_CONCURRENCY,
+  default 5, deployed at 20 in prod/staging, decoupled from Redis pool size),
+  no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
-* ``system_settings`` — queue ``system``, concurrency 5 (SAQ_WORKER_CONCURRENCY,
-  decoupled from Redis pool size), web UI on 8081 bound
+* ``system_settings`` — queue ``system``, concurrency (SAQ_WORKER_CONCURRENCY,
+  default 5, deployed at 20 in prod/staging, decoupled from Redis pool size),
+  web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
   webhook-dedup cleanup, stale_run_recovery.
 
-Accepted design target: concurrency 5 per worker x up to 5 machines = up to 25
+Accepted design target: concurrency 20 per worker x up to 5 machines = up to 100
 concurrent runs (recorded in ADR 017).
 
 Staging uses the SAME workers on dedicated queue names so a staging worker can
@@ -394,14 +396,51 @@ async def claim_expiry(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
-    """System cron — batch-delete terminal runs older than the retention window."""
+    """System cron — batch-delete terminal runs and old LangGraph checkpoint rows.
+
+    Deletes terminal ``runs`` rows older than the retention window (via
+    ``batch_delete_old_terminal_runs``) AND purges LangGraph checkpoint rows
+    (``checkpoints``, ``checkpoint_blobs``, ``checkpoint_writes``) older than
+    the retention window (via ``batch_delete_langgraph_checkpoints``). The two
+    purges run in SEPARATE transactions so a failure in the checkpoint purge
+    can never roll back the already-executed runs purge.
+
+    The checkpoint purge is tolerant of a missing saver schema: the system
+    worker's cron can fire before the app boot creates the checkpoint tables /
+    ``created_at`` columns, in which case ``ProgrammingError`` (the SQLAlchemy
+    wrapper for the DBAPI's missing-table/column errors, e.g. psycopg's
+    ``UndefinedTable``/``UndefinedColumn``) is caught, logged as a warning, and
+    the job still reports the runs purge count (``checkpoints_deleted=0``)
+    without failing — the app boot creates the schema later. The retention
+    session is intentionally system-scoped (no ``set_rls_org``) — checkpoint
+    retention is cross-org by design and operates on the saver's unqualified
+    tables.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    from modulo.db.crud.org_deletion import batch_delete_langgraph_checkpoints
     from modulo.db.crud.run import batch_delete_old_terminal_runs
 
-    async with _make_session_factory()() as session, session.begin():
+    factory = _make_session_factory()
+    async with factory() as session, session.begin():
         deleted = await batch_delete_old_terminal_runs(session)
-    if deleted:
-        _log.info("saq.retention_cleanup.deleted_old_runs", extra={"count": deleted})
-    return {"deleted": deleted}
+
+    checkpoints_deleted = 0
+    try:
+        async with factory() as session, session.begin():
+            checkpoints_deleted = await batch_delete_langgraph_checkpoints(session)
+    except ProgrammingError:
+        _log.warning(
+            "saq.retention_cleanup.checkpoint_schema_missing",
+            exc_info=True,
+        )
+
+    if deleted or checkpoints_deleted:
+        _log.info(
+            "saq.retention_cleanup.deleted_old_runs",
+            extra={"count": deleted, "checkpoints_deleted": checkpoints_deleted},
+        )
+    return {"deleted": deleted, "checkpoints_deleted": checkpoints_deleted}
 
 
 async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:

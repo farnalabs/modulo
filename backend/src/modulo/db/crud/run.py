@@ -48,6 +48,10 @@ _SANDBOX_CONCURRENCY_KEY = "sandbox_concurrency_limit"
 _SANDBOX_CONCURRENCY_MIN = 1
 _SANDBOX_CONCURRENCY_MAX = 100
 
+_RUN_CONCURRENCY_KEY = "run_concurrency_limit"
+_RUN_CONCURRENCY_MIN = 1
+_RUN_CONCURRENCY_MAX = 100
+
 
 def _input_hash(payload: dict[str, Any]) -> str:
     """Stable SHA-256 hex digest of a JSON-serialisable payload."""
@@ -252,6 +256,39 @@ async def get_child_runs_cost(
     return rollup
 
 
+async def get_child_run_rollup(
+    session: AsyncSession,
+    parent_run_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, tuple[Decimal, int]]:
+    """Roll up child-run cost AND count per parent run.
+
+    ONE ``GROUP BY`` query returning ``{parent_run_id: (total_cost, count)}``
+    so callers avoid N+1 aggregation over the runs list. Parents with no
+    children -- or only NULL-cost children -- are absent from the dict; callers
+    treat a missing key as ``(0, 0)``. NULL ``total_cost_usd`` children
+    contribute 0 to the SUM. Cost values are quantized to 6 decimal places to
+    match the ``Numeric(14, 6)`` column scale.
+    """
+    if not parent_run_ids:
+        return {}
+    result = await session.execute(
+        select(
+            Run.parent_run_id,
+            func.coalesce(func.sum(Run.total_cost_usd), 0),
+            func.count().label("child_count"),
+        )
+        .where(Run.parent_run_id.in_(parent_run_ids))
+        .group_by(Run.parent_run_id)
+    )
+    rollup: dict[uuid.UUID, tuple[Decimal, int]] = {}
+    for parent_id, cost, count in result.all():
+        rollup[uuid.UUID(str(parent_id))] = (
+            Decimal(str(cost)).quantize(_COST_ROLLUP_QUANTUM),
+            int(count),
+        )
+    return rollup
+
+
 _COST_BREAKDOWN_SENTINEL: Any = object()
 
 
@@ -321,6 +358,58 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
     return run
 
 
+# Active (non-terminal) run statuses. A pending run only counts when
+# ``include_pending=True`` is requested (variant-group quota); capacity gates
+# pass ``include_pending=False`` because a pending run does not hold a slot.
+_ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
+
+
+def _active_run_statuses(include_pending: bool) -> set[str]:
+    """Resolve the status set for an active-run count.
+
+    * ``include_pending=False`` (capacity gate): running/awaiting_human/claimed/
+      waiting_for_lock — a pending run does not hold capacity.
+    * ``include_pending=True`` (quota): all non-terminal runs including
+      ``pending``.
+    """
+    if include_pending:
+        return set(_ACTIVE_RUN_STATUSES)
+    return set(_ACTIVE_RUN_STATUSES - {"pending"})
+
+
+async def _count_active_runs(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID | None,
+    pipeline_id: uuid.UUID | None,
+    include_pending: bool,
+    exclude_run_id: uuid.UUID | None,
+) -> int:
+    """Shared active-run counter for the pipeline- and org-scoped gates.
+
+    Scopes to exactly one of *org_id* (org gate) or *pipeline_id* (pipeline
+    gate). ``include_pending`` selects the status set via
+    :func:`_active_run_statuses`. Optionally excludes a specific *run_id* so a
+    pending run does not count itself when checking capacity.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Run)
+        .where(
+            Run.status.in_(_active_run_statuses(include_pending)),
+            Run.cancellation_requested == False,  # noqa: E712
+        )
+    )
+    if pipeline_id is not None:
+        stmt = stmt.where(Run.pipeline_id == pipeline_id)
+    elif org_id is not None:
+        stmt = stmt.where(Run.organisation_id == org_id)
+    if exclude_run_id is not None:
+        stmt = stmt.where(Run.id != exclude_run_id)
+    result = await session.execute(stmt)
+    return int(result.scalar_one_or_none() or 0)
+
+
 async def count_active_runs_for_pipeline(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
@@ -341,22 +430,45 @@ async def count_active_runs_for_pipeline(
     Optionally excludes a specific *run_id* from the count so a pending run does
     not count itself when checking capacity.
     """
-    active_statuses = {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
-    if not include_pending:
-        active_statuses = active_statuses - {"pending"}
-    stmt = (
-        select(func.count())
-        .select_from(Run)
-        .where(
-            Run.pipeline_id == pipeline_id,
-            Run.status.in_(active_statuses),
-            Run.cancellation_requested == False,  # noqa: E712
-        )
+    return await _count_active_runs(
+        session,
+        org_id=None,
+        pipeline_id=pipeline_id,
+        include_pending=include_pending,
+        exclude_run_id=exclude_run_id,
     )
-    if exclude_run_id is not None:
-        stmt = stmt.where(Run.id != exclude_run_id)
-    result = await session.execute(stmt)
-    return int(result.scalar_one_or_none() or 0)
+
+
+async def count_active_runs_for_org(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    include_pending: bool,
+    exclude_run_id: uuid.UUID | None = None,
+) -> int:
+    """Count active runs for an organisation (org-level run concurrency gate).
+
+    Mirrors :func:`count_active_runs_for_pipeline` but scopes to the WHOLE org
+    across all pipelines. ``include_pending`` selects the same two behaviours:
+
+    * ``include_pending=False`` (dispatch admission gate): counts only runs
+      that are actually executing or claimed (running/awaiting_human/claimed/
+      waiting_for_lock) — a pending run does not hold capacity.
+    * ``include_pending=True`` (quota semantics): counts all non-terminal runs
+      including ``pending``.
+
+    ``exclude_run_id`` lets a pending run avoid counting itself. The explicit
+    ``organisation_id`` filter makes the query cross-tenant safe on top of RLS
+    (like :func:`count_active_sandbox_runs_for_org`) — a caller must still set
+    RLS org context before invoking.
+    """
+    return await _count_active_runs(
+        session,
+        org_id=org_id,
+        pipeline_id=None,
+        include_pending=include_pending,
+        exclude_run_id=exclude_run_id,
+    )
 
 
 def _graph_contains_sandbox_agent(graph_json: dict[str, Any] | None) -> bool:
@@ -406,6 +518,49 @@ async def count_active_sandbox_runs_for_org(
     return sum(1 for graph_json in rows if _graph_contains_sandbox_agent(graph_json))
 
 
+async def _read_org_int_limit(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    key: str,
+    min_value: int,
+    max_value: int,
+    log_prefix: str,
+) -> int | None:
+    """Read an org-level integer limit from ``settings_json`` (shared reader).
+
+    ``None`` means no cap. Fail-open: a malformed value (non-dict settings,
+    string, float, bool) or a missing org returns ``None`` with a warning and
+    never raises. An out-of-range ``int`` is clamped to ``[min_value,
+    max_value]`` so a direct-DB edit cannot crash the capacity check. The
+    *log_prefix* selects the structured-log event namespace (e.g.
+    ``sandbox_concurrency`` / ``run_concurrency``).
+    """
+    org = await get_organisation(session, org_id)
+    if org is None:
+        _log.warning(f"{log_prefix}.org_not_found", extra={"org_id": str(org_id)})
+        return None
+    settings = org.settings_json
+    if not isinstance(settings, dict):
+        _log.warning(f"{log_prefix}.settings_not_dict", extra={"org_id": str(org_id)})
+        return None
+    raw = settings.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        _log.warning(
+            f"{log_prefix}.invalid_type",
+            extra={"org_id": str(org_id), "value": repr(raw)},
+        )
+        return None
+    if raw < min_value or raw > max_value:
+        _log.warning(
+            f"{log_prefix}.out_of_range",
+            extra={"org_id": str(org_id), "value": raw},
+        )
+        return max(min_value, min(max_value, raw))
+    return raw
+
+
 async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:
     """Read the org's sandbox concurrency limit from ``settings_json``.
 
@@ -414,30 +569,32 @@ async def get_sandbox_concurrency_limit(session: AsyncSession, org_id: uuid.UUID
     never raises. An out-of-range ``int`` is clamped to ``[1, 100]`` so a
     direct-DB edit cannot crash the capacity claim.
     """
-    org = await get_organisation(session, org_id)
-    if org is None:
-        _log.warning("sandbox_concurrency.org_not_found", extra={"org_id": str(org_id)})
-        return None
-    settings = org.settings_json
-    if not isinstance(settings, dict):
-        _log.warning("sandbox_concurrency.settings_not_dict", extra={"org_id": str(org_id)})
-        return None
-    raw = settings.get(_SANDBOX_CONCURRENCY_KEY)
-    if raw is None:
-        return None
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        _log.warning(
-            "sandbox_concurrency.invalid_type",
-            extra={"org_id": str(org_id), "value": repr(raw)},
-        )
-        return None
-    if raw < _SANDBOX_CONCURRENCY_MIN or raw > _SANDBOX_CONCURRENCY_MAX:
-        _log.warning(
-            "sandbox_concurrency.out_of_range",
-            extra={"org_id": str(org_id), "value": raw},
-        )
-        return max(_SANDBOX_CONCURRENCY_MIN, min(_SANDBOX_CONCURRENCY_MAX, raw))
-    return raw
+    return await _read_org_int_limit(
+        session,
+        org_id,
+        _SANDBOX_CONCURRENCY_KEY,
+        _SANDBOX_CONCURRENCY_MIN,
+        _SANDBOX_CONCURRENCY_MAX,
+        "sandbox_concurrency",
+    )
+
+
+async def get_org_run_concurrency_limit(session: AsyncSession, org_id: uuid.UUID) -> int | None:
+    """Read the org's run concurrency limit from ``settings_json``.
+
+    ``None`` means no cap. Fail-open: a malformed value (non-dict settings,
+    string, float, bool) or a missing org returns ``None`` with a warning and
+    never raises. An out-of-range ``int`` is clamped to ``[1, 100]`` so a
+    direct-DB edit cannot crash the dispatch-time admission gate.
+    """
+    return await _read_org_int_limit(
+        session,
+        org_id,
+        _RUN_CONCURRENCY_KEY,
+        _RUN_CONCURRENCY_MIN,
+        _RUN_CONCURRENCY_MAX,
+        "run_concurrency",
+    )
 
 
 def _percentile(sorted_data: list[float], p: float) -> float:

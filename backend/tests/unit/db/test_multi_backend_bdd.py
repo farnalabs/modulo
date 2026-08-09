@@ -74,7 +74,7 @@ class TestGenericRepositoryTenantFilter:
     def dialect(self, request: pytest.FixtureRequest) -> str:
         return request.param
 
-    @pytest.fixture()
+    @pytest.fixture
     def repo(self) -> GenericRepository:
         return GenericRepository(session_factory=MagicMock())
 
@@ -146,7 +146,7 @@ class TestGenericRepositoryTenantFilter:
 class TestPostgresRepositoryRLS:
     """Verify PostgresRepository relies on set_config + policy, not WHERE injection."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def repo(self) -> PostgresRepository:
         return PostgresRepository(session_factory=MagicMock())
 
@@ -200,7 +200,7 @@ class TestPostgresRepositoryRLS:
 class TestCrossOrgIsolationGeneric:
     """Verify that GenericRepository isolates org data on SQLite."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def repo(self) -> GenericRepository:
         return GenericRepository(session_factory=MagicMock())
 

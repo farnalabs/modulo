@@ -19,6 +19,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.eval_engine.okr import track_okr_progress
 from modulo.core.eval_engine.regression import detect_regressions
+from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
 from modulo.db.crud.account import get_account_by_email, get_account_by_id
 from modulo.db.crud.last_admin_guard import (
@@ -42,6 +43,7 @@ from modulo.db.crud.publisher import (
 )
 from modulo.db.crud.run import (
     batch_delete_old_terminal_runs,
+    get_org_run_concurrency_limit,
     get_sandbox_concurrency_limit,
     purge_runs,
 )
@@ -63,6 +65,7 @@ from modulo.db.models.stage import Stage
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -1712,6 +1715,7 @@ class BillingOverviewResponse(BaseModel):
 async def admin_billing_overview(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> BillingOverviewResponse:
     if current_user.org_role != "admin":
         raise HTTPException(
@@ -1763,14 +1767,10 @@ async def admin_billing_overview(
         ) from None
 
     plan_id = org.plan_id or "community"
-    if plan_id and plan_id.startswith("team"):
-        plan_tier = "team"
-    elif plan_id and plan_id != "community":
-        plan_tier = "pro"
-    else:
-        plan_tier = "community"
+    plan_context = await resolve_plan_context(settings, session, org)
+    plan_tier = plan_context.tier()
 
-    settings = org.settings_json or {}
+    org_settings = org.settings_json or {}
     return BillingOverviewResponse(
         plan_id=plan_id,
         plan_tier=plan_tier,
@@ -1779,7 +1779,7 @@ async def admin_billing_overview(
         total_teams=team_count,
         total_pipelines=pipeline_count,
         total_runs_this_month=runs_this_month,
-        license_key=settings.get("license_key"),
+        license_key=org_settings.get("license_key"),
     )
 
 
@@ -3319,6 +3319,168 @@ async def admin_update_sandbox_concurrency(
         },
     )
     return SandboxConcurrencyResponse(sandbox_concurrency_limit=req.sandbox_concurrency_limit)
+
+
+# ── Org Run Concurrency Limit ──────────────────────────────────────────────
+# Org self-service route: principal's own org only (never from path/body), so
+# cross-org writes are structurally impossible. Mirrors the sandbox-concurrency
+# endpoints above, but gates org-wide RUN concurrency (all pipeline runs) rather
+# than sandbox-agent runs. The two caps are independent org settings and share
+# the ``org_capacity_limited`` error-code marker on deferred runs.
+
+
+class RunConcurrencyResponse(BaseModel):
+    run_concurrency_limit: int | None = None
+
+
+class UpdateRunConcurrencyRequest(BaseModel):
+    run_concurrency_limit: int | None = Field(default=None, ge=1, le=100)
+
+
+@router.get("/org/run-concurrency", response_model=RunConcurrencyResponse)
+async def admin_get_run_concurrency(
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> RunConcurrencyResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can view run concurrency",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            limit = await get_org_run_concurrency_limit(session, current_user.organisation_id)
+    except asyncio.CancelledError:
+        raise
+    except ProgrammingError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    return RunConcurrencyResponse(run_concurrency_limit=limit)
+
+
+@router.put("/org/run-concurrency", response_model=RunConcurrencyResponse, status_code=status.HTTP_200_OK)
+async def admin_update_run_concurrency(
+    req: UpdateRunConcurrencyRequest,
+    current_user: TenantPrincipal = Depends(get_current_tenant_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> RunConcurrencyResponse:
+    if current_user.org_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can update run concurrency",
+        )
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+            settings = dict(org.settings_json) if org.settings_json else {}
+            settings["run_concurrency_limit"] = req.run_concurrency_limit
+            org.settings_json = settings
+            await session.flush()
+    except asyncio.CancelledError:
+        raise
+    except IntegrityError:
+        logger.exception("admin.admin_update_run_concurrency")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again later.",
+        ) from None
+    except Exception:
+        logger.exception("routes.admin")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+
+    from modulo.core.audit_logger import append_audit_event
+
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+            await append_audit_event(
+                session,
+                org_id=current_user.organisation_id,
+                event_type="org.run_concurrency_updated",
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"run_concurrency_limit": req.run_concurrency_limit},
+            )
+    except IntegrityError:
+        logger.exception("admin.admin_update_run_concurrency.audit")
+    except ProgrammingError:
+        logger.warning(
+            "run_concurrency audit event ProgrammingError — limit was updated",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "run_concurrency_limit": req.run_concurrency_limit,
+            },
+        )
+    except SQLAlchemyError:
+        logger.warning(
+            "run_concurrency audit event SQLAlchemyError — limit was updated",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "run_concurrency_limit": req.run_concurrency_limit,
+            },
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "admin.admin_update_run_concurrency.audit",
+            extra={
+                "org_id": str(current_user.organisation_id),
+                "run_concurrency_limit": req.run_concurrency_limit,
+            },
+        )
+
+    logger.info(
+        "run_concurrency.updated",
+        extra={
+            "org_id": str(current_user.organisation_id),
+            "run_concurrency_limit": req.run_concurrency_limit,
+        },
+    )
+    return RunConcurrencyResponse(run_concurrency_limit=req.run_concurrency_limit)
 
 
 @handle_db_errors("admin.admin_get_storage")

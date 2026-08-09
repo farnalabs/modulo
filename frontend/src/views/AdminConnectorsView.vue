@@ -1,7 +1,7 @@
 <template>
   <FeatureGate feature-name="plugin_management" required-tier="community" show-disabled>
 
-    <div class="page-narrow">
+    <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader title="Connectors" subtitle="Manage connector instances for data source integration" />
       <Button
@@ -35,7 +35,7 @@
             </div>
             <div>
               <label for="adminconnectorsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminConnectorsView.type') }}</label>
-              <Select v-model="formData.connector_type">
+              <Select aria-label="Type" v-model="formData.connector_type">
                 <SelectTrigger data-testid="admin-connectors-type-select" aria-label="Type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                   <SelectValue placeholder="PostgreSQL" />
                 </SelectTrigger>
@@ -96,7 +96,7 @@
         </p>
       </div>
 
-      <div v-else class="table-wrapper">
+      <div v-else class="table-wrapper overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead>
             <tr>
@@ -145,7 +145,7 @@
         <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
           {{ $t('views.AdminConnectorsView.preview_connectors_count', { count: previewConnectors.length }, previewConnectors.length) }}
         </summary>
-        <div class="overflow-hidden border-t">
+        <div class="overflow-x-auto border-t">
           <table class="w-full text-left text-sm">
             <thead>
               <tr>

@@ -137,10 +137,16 @@ def _period_metric(current: float | None, previous: float | None) -> dict[str, A
 async def _facts_window(
     session: AsyncSession,
     org_id: uuid.UUID,
-    window_start: datetime,
-    window_end: datetime,
+    start_date: date,
+    end_date: date,
 ) -> dict[str, Any]:
     """Aggregate ``run_daily_facts`` for one window (count/tokens/duration/success).
+
+    Window bounds are ``run_date`` day boundaries (``[start_date, end_date)``)
+    — the same day-level bucket key the analytics foundation and the spend
+    ledger use. Filtering on ``created_at`` (the write/source-run instant)
+    would mis-scope backfilled rows, whose ``created_at`` is recent but whose
+    ``run_date`` falls in the target window.
 
     Isolation invariant: the explicit ``organisation_id = :org`` predicate is
     the control (modulo_app is BYPASSRLS; RLS is defense-in-depth only) — same
@@ -156,8 +162,8 @@ async def _facts_window(
                 func.count().filter(RunDailyFact.status == "complete").label("complete"),
             ).where(
                 RunDailyFact.organisation_id == org_id,
-                RunDailyFact.created_at >= window_start,
-                RunDailyFact.created_at < window_end,
+                RunDailyFact.run_date >= start_date,
+                RunDailyFact.run_date < end_date,
             )
         )
     ).one()
@@ -175,17 +181,17 @@ async def _facts_window(
 async def _facts_status_counts(
     session: AsyncSession,
     org_id: uuid.UUID,
-    window_start: datetime,
-    window_end: datetime,
+    start_date: date,
+    end_date: date,
 ) -> dict[str, int]:
-    """Facts count grouped by status for one window."""
+    """Facts count grouped by status for one ``run_date`` window."""
     rows = (
         await session.execute(
             select(RunDailyFact.status, func.count().label("cnt"))
             .where(
                 RunDailyFact.organisation_id == org_id,
-                RunDailyFact.created_at >= window_start,
-                RunDailyFact.created_at < window_end,
+                RunDailyFact.run_date >= start_date,
+                RunDailyFact.run_date < end_date,
             )
             .group_by(RunDailyFact.status)
         )
@@ -244,28 +250,33 @@ async def _compute_period_metrics(
 ) -> dict[str, Any]:
     """Period-scoped metrics with same-source/same-window value AND arrow.
 
-    Current window ends now; the previous window is the immediately-preceding
-    equal-length window. Every metric compares the same source over the same
-    window so the value and its trend arrow are always consistent.
+    The current window is the trailing ``days`` day-bucket period ending today
+    (exclusive): ``[today - days, today)``; the previous window is the
+    immediately-preceding equal-length period ``[today - 2*days, today - days)``.
+    Facts and status counts filter on ``run_date`` (the day-level bucket key),
+    matching the spend ledger; eval pass rate keeps a ``now``-based rolling
+    window on ``evaluated_at`` (a timestamp, not a day bucket). Every metric
+    compares the same source over the same window so the value and its trend
+    arrow are always consistent.
     """
+    today = datetime.now(UTC).date()
+    current_start = today - timedelta(days=days)
+    current_end = today
+    prev_start = today - timedelta(days=2 * days)
+    prev_end = today - timedelta(days=days)
+
+    current_facts = await _facts_window(session, org_id, current_start, current_end)
+    previous_facts = await _facts_window(session, org_id, prev_start, prev_end)
+
+    current_status = await _facts_status_counts(session, org_id, current_start, current_end)
+    previous_status = await _facts_status_counts(session, org_id, prev_start, prev_end)
+
+    current_spend = await _ledger_spend_window(session, org_id, current_start, current_end)
+    previous_spend = await _ledger_spend_window(session, org_id, prev_start, prev_end)
+
     now = datetime.now(UTC)
-    current_start = now - timedelta(days=days)
-    prev_start = now - timedelta(days=2 * days)
-    today = now.date()
-
-    current_facts = await _facts_window(session, org_id, current_start, now)
-    previous_facts = await _facts_window(session, org_id, prev_start, current_start)
-
-    current_status = await _facts_status_counts(session, org_id, current_start, now)
-    previous_status = await _facts_status_counts(session, org_id, prev_start, current_start)
-
-    current_spend = await _ledger_spend_window(session, org_id, today - timedelta(days=days), today)
-    previous_spend = await _ledger_spend_window(
-        session, org_id, today - timedelta(days=2 * days), today - timedelta(days=days)
-    )
-
-    current_eval = await _eval_rate_window(session, org_id, current_start, now)
-    previous_eval = await _eval_rate_window(session, org_id, prev_start, current_start)
+    current_eval = await _eval_rate_window(session, org_id, now - timedelta(days=days), now)
+    previous_eval = await _eval_rate_window(session, org_id, now - timedelta(days=2 * days), now - timedelta(days=days))
 
     status_metrics = {
         status: _period_metric(current_status.get(status, 0), previous_status.get(status, 0))

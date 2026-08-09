@@ -219,7 +219,7 @@
 
     <div>
       <label for="ssoproviderform-field-1" class="mb-1 block text-sm font-medium">{{ $t('components.SsoProviderForm.default_role') }}</label>
-      <Select :model-value="data.default_role" @update:model-value="(val) => emitUpdate({...data, default_role: val as string})">
+      <Select :aria-label="$t('components.SsoProviderForm.default_role')" :model-value="data.default_role" @update:model-value="(val) => emitUpdate({...data, default_role: val as string})">
         <SelectTrigger class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :aria-label="$t('components.SsoProviderForm.default_role')">
           <SelectValue :placeholder="$t('components.SsoProviderForm.default_role')" />
         </SelectTrigger>

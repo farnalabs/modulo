@@ -53,7 +53,7 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
@@ -69,7 +69,7 @@ def mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def app() -> FastAPI:
     _app = FastAPI()
     _app.include_router(auth_router)
@@ -77,7 +77,7 @@ def app() -> FastAPI:
     return _app
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(mock_session: AsyncMock, app: FastAPI) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session

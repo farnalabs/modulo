@@ -224,3 +224,75 @@ class TestKnownFlags:
         flag = registry.get_flag("remy_ui_driving")
         assert flag is not None
         assert flag.tier == "community"
+
+
+class TestDbCatalogTeamTierFlags:
+    """Flags upserted into the DB catalog (FAR-114) must enable on team tier.
+
+    Regression: the seed ``FLAGS`` in ``modulo.core.seed_data.catalog`` was
+    missing ``runtime_config`` / ``rate_limits`` / ``error_tracking``, so
+    ``load_from_db()`` dropped them from the registry and the pages 402'd even
+    on the team tier.
+    """
+
+    @staticmethod
+    def _db_flags() -> list[dict[str, object]]:
+        return [
+            {
+                "name": "runtime_config",
+                "description": "Runtime configuration overrides",
+                "tier_id": "team",
+                "depends_on": None,
+                "is_active": True,
+            },
+            {
+                "name": "rate_limits",
+                "description": "Configure API rate limits",
+                "tier_id": "team",
+                "depends_on": None,
+                "is_active": True,
+            },
+            {
+                "name": "error_tracking",
+                "description": "External error tracking and alerting integrations",
+                "tier_id": "team",
+                "depends_on": None,
+                "is_active": True,
+            },
+        ]
+
+    async def test_team_tier_enables_upserted_flags(self) -> None:
+        from modulo.core.feature_flags import DbPlanContext
+
+        session = _make_session()
+        db_tiers = [
+            {"tier_id": "community", "rank": 0},
+            {"tier_id": "team", "rank": 1},
+        ]
+
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
+        ):
+            ctx = await DbPlanContext.from_db(session, "team", has_license_key=True)
+
+        for name in ("runtime_config", "rate_limits", "error_tracking"):
+            assert ctx.feature_enabled(name) is True, f"{name} should be enabled on team tier"
+
+    async def test_community_tier_keeps_upserted_flags_locked(self) -> None:
+        from modulo.core.feature_flags import DbPlanContext
+
+        session = _make_session()
+        db_tiers = [
+            {"tier_id": "community", "rank": 0},
+            {"tier_id": "team", "rank": 1},
+        ]
+
+        with (
+            patch("modulo.db.crud.tier_catalog.list_tiers", return_value=db_tiers),
+            patch("modulo.db.crud.tier_catalog.list_feature_flags", return_value=self._db_flags()),
+        ):
+            ctx = await DbPlanContext.from_db(session, "community")
+
+        for name in ("runtime_config", "rate_limits", "error_tracking"):
+            assert ctx.feature_enabled(name) is False, f"{name} should be locked on community tier"

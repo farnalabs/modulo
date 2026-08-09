@@ -72,11 +72,11 @@ class TestBuildLockService:
 class TestPostgresLock:
     _KEY = "test-resource"
 
-    @pytest.fixture()
+    @pytest.fixture
     def lock(self) -> PostgresLock:
         return PostgresLock()
 
-    @pytest.fixture()
+    @pytest.fixture
     def session(self) -> AsyncMock:
         s = AsyncMock(spec=AsyncSession)
         result = MagicMock()
@@ -133,11 +133,11 @@ class TestPostgresLock:
 class TestGenericLock:
     _KEY = "generic-lock-key"
 
-    @pytest.fixture()
+    @pytest.fixture
     def lock(self) -> GenericLock:
         return GenericLock()
 
-    @pytest.fixture()
+    @pytest.fixture
     def session(self) -> AsyncMock:
         return AsyncMock(spec=AsyncSession)
 

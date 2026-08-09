@@ -41,6 +41,7 @@ from modulo.core.analytics.metrics import (
 )
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.team import Team
@@ -130,6 +131,47 @@ async def backfill_facts(session: Any, day: date) -> int:
         ),
         else_=None,
     )
+    queue_wait_ms_expr = sa.case(
+        (
+            sa.and_(Run.dispatched_at.is_not(None), Run.started_at.is_not(None)),
+            sa.cast(sa.func.extract("epoch", Run.dispatched_at - Run.started_at) * 1000, sa.BigInteger),
+        ),
+        else_=None,
+    )
+    final_idle_ms_expr = sa.case(
+        (
+            sa.and_(Run.completed_at.is_not(None), Run.heartbeat_at.is_not(None)),
+            sa.cast(sa.func.extract("epoch", Run.completed_at - Run.heartbeat_at) * 1000, sa.BigInteger),
+        ),
+        else_=None,
+    )
+    # Graph-derived fields from the snapshot's ``graph_json`` (the serialised
+    # pipeline graph: a dict with a ``nodes`` list). ``graph_json`` is the
+    # native Postgres ``json`` type, so the ``json_*`` functions apply; all
+    # three degrade to defaults when the graph is malformed/absent — backfilled
+    # rows must NEVER carry NULL here (NULL facts on backfilled rows are a bug).
+    graph_nodes_json = PipelineSnapshot.graph_json.op("->")("nodes")
+    node_count_expr = sa.case(
+        (graph_nodes_json.is_not(None), sa.func.coalesce(sa.func.json_array_length(graph_nodes_json), 0)),
+        else_=0,
+    )
+    _node_arr = sa.func.json_array_elements(graph_nodes_json).table_valued("value")
+    _node_value = _node_arr.c.value
+    sandbox_count_subq = (
+        sa.select(sa.func.count())
+        .select_from(_node_arr)
+        .where(_node_value.op("->>")("node_type") == "sandbox_agent")
+        .scalar_subquery()
+    )
+    sandbox_agent_node_count_expr = sa.func.coalesce(sandbox_count_subq, 0)
+    timeout_subq = (
+        sa.select(sa.func.max(sa.cast(_node_value.op("->>")("timeout_seconds"), sa.Integer)))
+        .select_from(_node_arr)
+        .where(_node_value.op("->>")("timeout_seconds").is_not(None))
+        .scalar_subquery()
+    )
+    max_node_timeout_seconds_expr = timeout_subq
+
     select_stmt = (
         sa.select(
             # The surrogate PK must be unique PER ROW — the ORM's Python-side
@@ -150,10 +192,25 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.total_cost_usd,
             Run.total_tokens,
             duration_ms_expr.label("duration_ms"),
+            Run.error_code.label("error_code"),
+            Run.claim_count.label("claim_count"),
+            queue_wait_ms_expr.label("queue_wait_ms"),
+            final_idle_ms_expr.label("final_idle_ms"),
+            Run.cancellation_requested.label("cancellation_requested"),
+            Run.dispatcher.label("dispatcher"),
+            node_count_expr.label("node_count"),
+            sandbox_agent_node_count_expr.label("sandbox_agent_node_count"),
+            max_node_timeout_seconds_expr.label("max_node_timeout_seconds"),
+            Run.parent_run_id.label("parent_run_id"),
+            Run.snapshot_id.label("snapshot_id"),
+            Run.run_number.label("run_number"),
+            sa.func.length(sa.cast(Run.outputs_json, sa.Text)).label("output_bytes"),
+            Run.rate_limit_key.is_not(None).label("rate_limited"),
         )
         .select_from(Run)
         .outerjoin(Team, Team.id == Run.owner_team_id)
         .outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
+        .outerjoin(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id)
         .outerjoin(RunDailyFact, RunDailyFact.run_id == Run.id)
         .where(
             Run.status.in_(TERMINAL_STATUSES),
@@ -180,6 +237,20 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.total_cost_usd,
                 RunDailyFact.total_tokens,
                 RunDailyFact.duration_ms,
+                RunDailyFact.error_code,
+                RunDailyFact.claim_count,
+                RunDailyFact.queue_wait_ms,
+                RunDailyFact.final_idle_ms,
+                RunDailyFact.cancellation_requested,
+                RunDailyFact.dispatcher,
+                RunDailyFact.node_count,
+                RunDailyFact.sandbox_agent_node_count,
+                RunDailyFact.max_node_timeout_seconds,
+                RunDailyFact.parent_run_id,
+                RunDailyFact.snapshot_id,
+                RunDailyFact.run_number,
+                RunDailyFact.output_bytes,
+                RunDailyFact.rate_limited,
             ],
             select_stmt,
         )

@@ -25,13 +25,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import and_, or_
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.engine import Dialect
 from sqlalchemy.sql import ColumnElement
 from sqlalchemy.sql.expression import TextClause, text
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Dialect
 
 from modulo.db.models.account import Account
 

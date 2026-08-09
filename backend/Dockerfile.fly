@@ -77,8 +77,10 @@ COPY scripts/ /app/scripts/
 
 # Entrypoint + bootstrap
 COPY deploy/fly/entrypoint.sh /entrypoint.sh
+COPY deploy/fly/release.sh /release.sh
 COPY deploy/fly/bootstrap_db.py /app/deploy/fly/bootstrap_db.py
 RUN chmod +x /entrypoint.sh
+RUN chmod +x /release.sh
 
 EXPOSE 8000
 

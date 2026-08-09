@@ -23,11 +23,11 @@ async function globalSetup(_config: FullConfig) {
   }
 
   const env = getTestEnv()
-  console.log(`[global-setup] Seeding data for ${target}...`)
+  process.stdout.write(`[global-setup] Seeding data for ${target}...\n`)
   const ctx = await seedTargetEnvironment(env)
-  console.log(`[global-setup] Seeder result: pipelineId=${ctx.pipelineId}, pipelineName=${ctx.pipelineName}`)
+  process.stdout.write(`[global-setup] Seeder result: pipelineId=${ctx.pipelineId}, pipelineName=${ctx.pipelineName}\n`)
 
-  console.log(`[global-setup] Logging in once for ${target}...`)
+  process.stdout.write(`[global-setup] Logging in once for ${target}...\n`)
   const browser = await chromium.launch()
   const page = await browser.newPage()
 
@@ -38,9 +38,15 @@ async function globalSetup(_config: FullConfig) {
   await page.click('button[type="submit"]')
   await page.waitForURL(/^(?!.*\/login).*$/, { timeout: 60000 })
 
+  await page.evaluate(() => {
+    localStorage.removeItem('remy-panel-state')
+    localStorage.removeItem('remy-panel-position')
+    localStorage.removeItem('remy-panel-size')
+  })
+
   await page.context().storageState({ path: 'storageState-staging.json' })
   await browser.close()
-  console.log('[global-setup] Login complete, storageState saved.')
+  process.stdout.write('[global-setup] Login complete, storageState saved.\n')
 }
 
 export default globalSetup

@@ -23,5 +23,5 @@ class TestParseSamlDatetime:
         assert dt == expected
 
     def test_raises_on_invalid_format(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid isoformat string"):
             _parse_saml_datetime("not-a-date")

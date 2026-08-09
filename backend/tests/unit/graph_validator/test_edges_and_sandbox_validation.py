@@ -162,6 +162,34 @@ def test_sandbox_missing_template_warns():
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_MISSING_TEMPLATE" in _codes(result)
+    assert "SANDBOX_UNKNOWN_TEMPLATE" not in _codes(result)
+
+
+def test_sandbox_modulo_opencode_template_is_valid():
+    """The managed cache-warmed 'modulo-opencode' template is a known-good value."""
+    graph = {"nodes": [_sandbox_node(template_id="modulo-opencode")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert not result.issues
+
+
+def test_sandbox_unknown_template_warns():
+    """A template_id outside the known-good set emits SANDBOX_UNKNOWN_TEMPLATE."""
+    graph = {"nodes": [_sandbox_node(template_id="bogus-template")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    codes = _codes(result)
+    assert "SANDBOX_UNKNOWN_TEMPLATE" in codes
+    assert "SANDBOX_MISSING_TEMPLATE" not in codes
+    assert result.is_valid  # warnings only
+
+
+def test_sandbox_default_opencode_template_is_valid():
+    """The default 'opencode' template remains a known-good value."""
+    graph = {"nodes": [_sandbox_node(template_id="opencode")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert not result.issues
 
 
 def test_sandbox_timeout_too_low_warns():

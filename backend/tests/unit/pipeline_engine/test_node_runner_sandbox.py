@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.node_runner import (
     _E2B_SANDBOX_USD_PER_HOUR,
     _MAX_ARTIFACT_LOG,
@@ -28,7 +29,41 @@ _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
 
 
-def _make_sandbox_mock():
+@pytest.fixture(autouse=True)
+def _disable_e2b_idempotency_fence(monkeypatch):
+    """Short-circuit the E2B dispatch fence so no test constructs Settings().
+
+    Worktrees have no ``backend/.env``; ``e2b_idempotency_enabled()`` calls
+    ``get_settings()`` which builds ``Settings()`` and REQUIRES database_url /
+    secret_key / fernet_key, raising ValidationError before the sandbox path is
+    reached. The fence is incidental to these tests (none exercise it), so a
+    module-scoped autouse fixture returning False makes the file runnable in
+    any environment while leaving fence-specific behaviour untested elsewhere.
+    """
+    monkeypatch.setattr(
+        "modulo.core.pipeline_execution.e2b_idempotency_enabled",
+        lambda: False,
+    )
+
+
+def _read_router(output_json: str, log_content: str = ""):
+    """Route sandbox.files.read by path: output.json vs the redirected agent log.
+
+    The FAR-97 pipe-buffer fix redirects the agent command's stdout/stderr to a
+    sandbox log file, so sandbox.files.read is called for BOTH the log file
+    (drain probe) and /home/user/output.json (final result). Routing by path
+    keeps the two distinct.
+    """
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return output_json
+        return log_content
+
+    return _read
+
+
+def _make_sandbox_mock(*, log_content: str = "", output_json: str = '{"summary": "done"}'):
     cmd_result = MagicMock()
     cmd_result.exit_code = 0
     cmd_result.stdout = "agent stdout"
@@ -39,8 +74,9 @@ def _make_sandbox_mock():
 
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router(output_json, log_content))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(log_content)))
     sandbox.commands.run = AsyncMock(return_value=handle)
-    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
     sandbox.kill = AsyncMock()
     return sandbox
 
@@ -83,7 +119,7 @@ def test_missing_agent_commands_only_raises_value_error():
         "agent_prompt": "Do the thing",
         "agent_commands": [],
     }
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="missing required 'agent_command'"):
         make_sandbox_agent_fn(node_def)
 
 
@@ -164,8 +200,9 @@ async def test_sandbox_agent_success_output_includes_cost_estimate_usd():
 
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done", "cost_estimate_usd": 0.001}'))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
     sandbox.commands.run = AsyncMock(return_value=handle)
-    sandbox.files.read = AsyncMock(return_value='{"summary": "done", "cost_estimate_usd": 0.001}')
     sandbox.kill = AsyncMock()
 
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
@@ -348,8 +385,9 @@ async def test_sandbox_agent_command_timeout_surfaces_clear_summary():
 
 
 async def test_idle_watchdog_kills_stalled_command_and_fails():
-    """A command that goes silent for _SANDBOX_IDLE_TIMEOUT is killed and the
-    node fails fast — it does not block for the full sandbox_timeout (FAR-97)."""
+    """A command whose sandbox connection dies (drain probe fails for
+    _SANDBOX_IDLE_TIMEOUT) is killed and the node fails fast — it does not block
+    for the full sandbox_timeout (FAR-97)."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
 
@@ -361,11 +399,15 @@ async def test_idle_watchdog_kills_stalled_command_and_fails():
     sandbox.files.write = AsyncMock()
     sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.files.read = AsyncMock(return_value='{"summary": "fabricated"}')
+    # The sandbox connection is dead: the drain probe fails on every tick, so the
+    # idle watchdog's liveness signal goes stale and the watchdog fires.
+    sandbox.files.get_info = AsyncMock(side_effect=OSError("sandbox connection dead"))
     sandbox.kill = AsyncMock()
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
     ):
         result = await fn(_run_state())
 
@@ -421,6 +463,102 @@ async def test_background_command_success_still_completes():
     assert result["output"]["status"] == "completed"
     assert result["output"]["summary"] == "done"
     assert result["output"]["agent_stdout"] == "agent stdout"
+
+
+# ---------------------------------------------------------------------------
+# FAR-97 pipe-buffer fix: stdout redirected to a sandbox log file + drain probe
+# ---------------------------------------------------------------------------
+
+
+async def test_sandbox_command_stdout_redirected_to_log_file():
+    """The agent command is wrapped so stdout/stderr are redirected to a sandbox
+    log file — the process's stdout is a regular file, never a pipe that can fill
+    and block a long session (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "> /home/user/agent.log 2>&1" in wrapped
+    assert "( opencode run --auto --format json < /home/user/prompt.md )" in wrapped
+
+
+async def test_drain_probe_keeps_silent_live_agent_alive():
+    """A live agent that stops producing NEW log output is NOT killed by the idle
+    watchdog — liveness comes from the drain probe (get_info success on every
+    tick), so a silent-but-connected agent gets the full timeout budget to finish
+    (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    wait_calls = {"n": 0}
+
+    async def _wait():
+        wait_calls["n"] += 1
+        if wait_calls["n"] < 3:
+            raise TimeoutError
+        return cmd_result
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    # The log file exists and is responsive but only grew once — the agent then
+    # fell into a long silent phase (e.g. an LLM turn) with no new output.
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=64))
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done"}', log_content="x" * 64))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        # Tick must stay above the Windows monotonic-clock quantum (15.6ms): at
+        # 0.01 the per-slice shield timeout fires immediately and loses the
+        # mock's result, so the command appears to time out at the full 30s.
+        # 0.05 keeps the test fast (<2s) while staying above the quantum.
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    # The idle watchdog must NOT have killed the live-but-silent process.
+    handle.kill.assert_not_awaited()
+    # The drain probe ran and refreshed liveness on every tick.
+    sandbox.files.get_info.assert_awaited()
+    # The drained log content is the artifact's stdout.
+    assert output["agent_stdout"] == "x" * 64
+    assert output["stdout_length"] == 64
+
+
+async def test_drain_captures_pipe_buffer_size_output():
+    """Output larger than a typical 64KB pipe buffer is drained from the sandbox
+    log file and captured in full — the process never blocks on a full stdout
+    pipe and the artifact carries the complete output (FAR-97)."""
+    big = "y" * (65536 + 1234)
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock(log_content=big)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == big
+    assert output["stdout_length"] == len(big)
 
 
 # ---------------------------------------------------------------------------
@@ -526,8 +664,13 @@ async def test_stalled_command_output_includes_stall_reason():
 # ---------------------------------------------------------------------------
 
 
-def _broker_state(broker) -> dict:
-    return {**_run_state(), "_broker": broker}
+def _with_registered_broker(broker) -> dict:
+    """Register the broker in the process-local registry keyed by its run id and
+    return a state dict whose _run_id matches, so the sandbox_agent node streams
+    through the registry lookup instead of a _broker key carried in state (the
+    broker is not msgpack-serializable, so it must not live in LangGraph state)."""
+    get_registry()._brokers[broker.run_id] = broker
+    return {**_run_state(), "_run_id": str(broker.run_id)}
 
 
 async def test_on_stdout_buffers_and_flushes_joined_chunk():
@@ -540,24 +683,27 @@ async def test_on_stdout_buffers_and_flushes_joined_chunk():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_broker_state(broker))
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            result = await fn(_with_registered_broker(broker))
 
-    assert result["output"]["status"] == "completed"
-    on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
-    await on_stdout("line one\n")  # first chunk publishes immediately
-    await on_stdout("line two\n")  # within the 1s window -> buffered
-    await asyncio.sleep(1.05)  # cross the flush boundary
-    await on_stdout("line three\n")  # flushes joined buffer + this chunk
+        assert result["output"]["status"] == "completed"
+        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+        await on_stdout("line one\n")  # first chunk publishes immediately
+        await on_stdout("line two\n")  # within the 1s window -> buffered
+        await asyncio.sleep(1.05)  # cross the flush boundary
+        await on_stdout("line three\n")  # flushes joined buffer + this chunk
 
-    chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
-    assert len(chunk_events) == 2
-    assert chunk_events[0].payload["chunk"] == "line one\n"
-    assert chunk_events[1].payload["chunk"] == "line two\nline three\n"
-    payload = chunk_events[1].payload
-    assert payload["node_id"] == "n1"
-    assert payload["seq"] == chunk_events[1].seq
-    assert isinstance(payload["ts"], int)
+        chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
+        assert len(chunk_events) == 2
+        assert chunk_events[0].payload["chunk"] == "line one\n"
+        assert chunk_events[1].payload["chunk"] == "line two\nline three\n"
+        payload = chunk_events[1].payload
+        assert payload["node_id"] == "n1"
+        assert payload["seq"] == chunk_events[1].seq
+        assert isinstance(payload["ts"], int)
+    finally:
+        get_registry().close(broker.run_id)
 
 
 async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
@@ -569,19 +715,22 @@ async def test_on_stdout_publishes_unthrottled_when_interval_elapsed():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_broker_state(broker))
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            result = await fn(_with_registered_broker(broker))
 
-    assert result["output"]["status"] == "completed"
-    on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
-    with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
-        await on_stdout("a")
-        await on_stdout("b")
+        assert result["output"]["status"] == "completed"
+        on_stdout = sandbox.commands.run.call_args.kwargs["on_stdout"]
+        with patch("modulo.core.pipeline_engine.node_runner._STREAM_FLUSH_INTERVAL", 0.0):
+            await on_stdout("a")
+            await on_stdout("b")
 
-    chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
-    assert len(chunk_events) == 2
-    assert chunk_events[0].payload["chunk"] == "a"
-    assert chunk_events[1].payload["chunk"] == "b"
+        chunk_events = [e for e in broker.replay_since(0) if e.event_type == "node.stdout_chunk"]
+        assert len(chunk_events) == 2
+        assert chunk_events[0].payload["chunk"] == "a"
+        assert chunk_events[1].payload["chunk"] == "b"
+    finally:
+        get_registry().close(broker.run_id)
 
 
 async def test_on_stderr_publishes_stderr_chunk_event():
@@ -593,22 +742,26 @@ async def test_on_stderr_publishes_stderr_chunk_event():
     sandbox = _make_sandbox_mock()
     broker = RunEventBroker(uuid.uuid4())
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_broker_state(broker))
+    try:
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+            result = await fn(_with_registered_broker(broker))
 
-    assert result["output"]["status"] == "completed"
-    on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
-    await on_stderr("warn: something")
+        assert result["output"]["status"] == "completed"
+        on_stderr = sandbox.commands.run.call_args.kwargs["on_stderr"]
+        await on_stderr("warn: something")
 
-    stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
-    assert len(stderr_events) == 1
-    assert stderr_events[0].payload["chunk"] == "warn: something"
-    assert stderr_events[0].payload["node_id"] == "n1"
+        stderr_events = [e for e in broker.replay_since(0) if e.event_type == "node.stderr_chunk"]
+        assert len(stderr_events) == 1
+        assert stderr_events[0].payload["chunk"] == "warn: something"
+        assert stderr_events[0].payload["node_id"] == "n1"
+    finally:
+        get_registry().close(broker.run_id)
 
 
-async def test_streaming_skipped_when_no_broker_in_state():
-    """Without a broker in state, on_stdout/on_stderr skip silently — no error,
-    no publish, node completes normally."""
+async def test_streaming_skipped_when_no_broker_registered_for_run():
+    """Without a broker registered for the run id (a non-UUID run id or no
+    registration), on_stdout/on_stderr skip silently — no error, no publish,
+    node completes normally."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
@@ -647,8 +800,9 @@ async def test_success_output_carries_full_stdout_length_when_truncated():
 
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done"}'))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
     sandbox.commands.run = AsyncMock(return_value=handle)
-    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
     sandbox.kill = AsyncMock()
 
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):

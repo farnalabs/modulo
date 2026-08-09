@@ -12,7 +12,7 @@ from modulo.db.models.base import Base
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 
 
-@pytest.fixture()
+@pytest.fixture
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
     instance = create_async_engine("sqlite+aiosqlite://", echo=False)
     async with instance.begin() as connection:

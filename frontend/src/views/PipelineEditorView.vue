@@ -541,7 +541,7 @@
           <div>
             <dt class="text-muted-foreground">{{ $t('views.PipelineEditorView.type_label') }}</dt>
             <dd>
-              <Select v-model="edgeForm.edge_type">
+              <Select aria-label="Edge type" v-model="edgeForm.edge_type">
                 <SelectTrigger aria-label="Edge type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                   <SelectValue placeholder="Normal" />
                 </SelectTrigger>
@@ -648,7 +648,7 @@
 
           <div>
             <label for="pipelineeditorview-field-11" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.condition_type') }}</label>
-            <Select v-model="edgeForm.condition_type">
+            <Select aria-label="Condition type" v-model="edgeForm.condition_type">
               <SelectTrigger aria-label="Condition type" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                 <SelectValue placeholder="None (always gate)" />
               </SelectTrigger>
@@ -695,7 +695,7 @@
               </div>
               <div class="flex-1">
                 <label for="pipelineeditorview-field-7" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.PipelineEditorView.operator') }}</label>
-                <Select v-model="edgeForm.eval_operator">
+                <Select aria-label="Operator" v-model="edgeForm.eval_operator">
                   <SelectTrigger aria-label="Operator" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="lt (score &lt; threshold)" />
                   </SelectTrigger>
@@ -749,7 +749,7 @@
       <div class="space-y-4">
           <div>
             <label for="pipelineeditorview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.agent') }}</label>
-            <Select v-model="pickerAgentId" @update:model-value="onAgentChange">
+            <Select aria-label="Agent" v-model="pickerAgentId" @update:model-value="onAgentChange">
               <SelectTrigger data-testid="pipeline-editor-agent-select" aria-label="Agent" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                 <SelectValue :placeholder="$t('views.PipelineEditorView.select_agent_placeholder')" />
               </SelectTrigger>
@@ -761,7 +761,7 @@
           </div>
           <div v-if="selectedAgent">
             <label for="pipelineeditorview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.connector') }}</label>
-            <Select v-model="pickerConnectorId">
+            <Select aria-label="Connector" v-model="pickerConnectorId">
               <SelectTrigger data-testid="pipeline-editor-connector-select" aria-label="Connector" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                 <SelectValue :placeholder="$t('views.PipelineEditorView.select_connector_placeholder')" />
               </SelectTrigger>
@@ -807,7 +807,7 @@
         </p>
         <div>
           <label for="pipelineeditorview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineEditorView.snapshot_label') }}</label>
-          <Select v-model="revertSnapshotId">
+          <Select aria-label="Snapshot" v-model="revertSnapshotId">
             <SelectTrigger data-testid="pipeline-editor-snapshot-select" aria-label="Snapshot" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
               <SelectValue :placeholder="$t('views.PipelineEditorView.select_snapshot_placeholder')" />
             </SelectTrigger>

@@ -183,7 +183,8 @@
           {{ $t('views.RunDetailView.no_node_data_failed') }}
         </div>
 
-        <table v-else class="w-full text-left text-sm">
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
           <thead>
             <tr class="border-b text-xs uppercase text-muted-foreground">
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.node') }}</th>
@@ -327,6 +328,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
       </section>
 
       <!-- Workspace Lease -->
@@ -373,7 +375,7 @@
           data-testid="run-detail-aggregate-cost"
           class="mt-3 rounded-lg border border-muted bg-muted/30 px-3 py-2 text-sm"
         >
-          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.total_including_child_runs') }}</span>
+          <span class="font-medium text-foreground">{{ childRunCount > 0 ? $t('views.RunDetailView.total_including_child_runs_count', childRunCount) : $t('views.RunDetailView.total_including_child_runs') }}</span>
           <span class="ml-1 tabular-nums font-semibold">{{ formatMoney(aggregateCost, currencyCode, 6) }}</span>
           <span class="ml-1 text-xs text-muted-foreground">{{ $t('views.RunDetailView.includes_child_run_cost', { amount: formatMoney(childRunCost, currencyCode, 6) }) }}</span>
         </div>
@@ -487,6 +489,7 @@ type RunResponse = components['schemas']['RunResponse'] & {
   started_at?: string | null
   completed_at?: string | null
   child_runs_cost_usd?: string | null
+  child_runs_count?: number
   aggregate_cost_usd?: string | null
 }
 type RunIOResponse = components['schemas']['RunIOResponse']
@@ -775,6 +778,11 @@ const aggregateCost = computed(() => {
   if (a == null || a === '') return null
   const n = Number(a)
   return Number.isFinite(n) ? n : null
+})
+
+const childRunCount = computed(() => {
+  const c = run.value?.child_runs_count
+  return Number.isInteger(c) && (c ?? 0) > 0 ? (c as number) : 0
 })
 
 const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed']

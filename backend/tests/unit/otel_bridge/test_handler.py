@@ -17,12 +17,12 @@ from opentelemetry.trace import StatusCode
 from modulo.otel_bridge.handler import LangGraphOtelBridge
 
 
-@pytest.fixture()
+@pytest.fixture
 def exporter() -> InMemorySpanExporter:
     return InMemorySpanExporter()
 
 
-@pytest.fixture()
+@pytest.fixture
 def bridge(exporter: InMemorySpanExporter) -> LangGraphOtelBridge:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -71,7 +71,8 @@ def test_chain_error_finishes_span_with_error(bridge: LangGraphOtelBridge, expor
     assert len(spans) == 1
     span = spans[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert span.status.description is not None and "boom" in span.status.description
+    assert span.status.description is not None
+    assert "boom" in span.status.description
     events = [e.name for e in span.events]
     assert "exception" in events
     assert str(run_id) not in bridge._spans

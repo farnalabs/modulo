@@ -7,7 +7,7 @@ import pytest
 from modulo.model_backends.watsonx import WATSONX_BASE_URL, WatsonXBackend
 
 
-@pytest.fixture()
+@pytest.fixture
 def backend():
     with patch("modulo.model_backends.watsonx.ChatWatsonx"):
         return WatsonXBackend(

@@ -28,7 +28,19 @@
           {{ $t("views.AnalyticsView.group_by") }}
         </p>
         <div class="flex flex-wrap gap-1">
+          <template v-if="isHourGranular">
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              class="cursor-not-allowed rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground opacity-70"
+              data-testid="analytics-group-by-hour"
+            >
+              {{ $t("views.AnalyticsView.group_by_hour") }}
+            </button>
+          </template>
           <button
+            v-else
             v-for="g in groupByOptions"
             :key="g.value"
             :data-testid="`analytics-group-by-${g.value}`"
@@ -146,6 +158,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import {
   MEASURES,
   RUN_STATUSES,
@@ -173,6 +186,14 @@ const timespans = TIMESPANS.map((t) => ({
   value: t.value,
   labelKey: `views.AnalyticsView.timespan_${t.value}`,
 }));
+
+// Hour-granular timespans (1h/24h) force `group_by=hour` server-side, so the
+// day/week granularity control is inert. Reflect the applied granularity and
+// disable the control instead of letting it silently ignore clicks.
+const isHourGranular = computed(() => {
+  const timespan = TIMESPANS.find((t) => t.value === props.filters.timespan);
+  return timespan?.granularity === "hour";
+});
 
 const groupByOptions = [
   { value: "day" as const, labelKey: "views.AnalyticsView.group_by_day" },
