@@ -5,7 +5,7 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
   // dev server can exceed the 30s default before any assertion runs.
   test.setTimeout(90_000)
 
-  test('renders vue-json-pretty with token colours and no dep palette leaks', async ({ page, env }) => {
+  test('renders vue-json-pretty with token colours and no dep palette leaks', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     const runPayload = {
@@ -114,7 +114,7 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
     expect(lightProbe.actual, 'light-mode string value should follow the light success token').toBe(lightProbe.expected)
   })
 
-  test('copy button writes the formatted JSON to the clipboard', async ({ page, env }) => {
+  test('copy button writes the formatted JSON to the clipboard', { tag: '@regression' }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
 
     // The only JsonViewer rolled out with a toolbar is the failed-run input

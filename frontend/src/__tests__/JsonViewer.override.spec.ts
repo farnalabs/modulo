@@ -91,8 +91,9 @@ function ruleSelectors(sheet: CSSStyleSheet | null): string[] {
       const rule = sheet.cssRules[j]
       if (rule instanceof CSSStyleRule) selectors.push(rule.selectorText)
     }
-  } catch {
+  } catch (err) {
     // jsdom can throw on foreign/at-rule boundaries — skip.
+    console.warn('Failed to read cssRules', err)
   }
   return selectors
 }
