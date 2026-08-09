@@ -80,6 +80,7 @@
                   v-if="entry.hot_reloadable"
                   v-model="editedValues[entry.key]"
                   data-testid="settings-runtime-config-value"
+                  :aria-label="`${$t('views.SettingsRuntimeConfigView.current_value')}: ${entry.key}`"
                   :class="inputClasses(entry)"
                   @input="markEdited(entry.key)"
                 />
