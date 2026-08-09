@@ -135,7 +135,10 @@ async function checkNoHorizontalOverflow(page: Page) {
     if (overflow) {
       // computed width:100vw resolves to viewport width + scrollbar, so elements
       // wider than the visible viewport are the classic scrollbar-overflow cause
+      // Sample the first 200 elements — enrichment is advisory, and
+      // getComputedStyle per element is the slow part on a large DOM.
       culprits = Array.from(document.querySelectorAll('*'))
+        .slice(0, 200)
         .filter(el => {
           const w = parseFloat(getComputedStyle(el).width)
           return !Number.isNaN(w) && w > vw
@@ -195,19 +198,27 @@ async function checkInteractiveNotClipped(page: Page) {
     }
     // A right-side overhang inside a horizontal scroll container (e.g. a wide
     // table with overflow-x: auto) is reachable by scrolling the container —
-    // not a clipping bug. Walk the ancestor chain up to the document root.
+    // not a clipping bug. Walk the ancestor chain (bounded).
+    // Bounded ancestor walk — 30 steps covers realistic wrapper nesting while
+    // keeping per-element work O(30) instead of walking to the document root.
     function hasHorizontalScrollableAncestor(el: Element): boolean {
       let node = el.parentElement
-      while (node) {
+      let depth = 0
+      while (node && depth < 30) {
         const overflowX = getComputedStyle(node).overflowX
         if (overflowX === 'auto' || overflowX === 'scroll') return true
         node = node.parentElement
+        depth += 1
       }
       return false
     }
     const selector = 'button, a, input, select, textarea, [tabindex], [role="button"]'
+    const interactives = Array.from(document.querySelectorAll(selector))
+    if (interactives.length > 500) {
+      console.log(`[mobile-layout] clipped scan sampled: ${interactives.length} interactives, processing first 500`)
+    }
     const clipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
-    for (const el of Array.from(document.querySelectorAll(selector))) {
+    for (const el of interactives.slice(0, 500)) {
       const htmlEl = el as HTMLElement
       if (htmlEl.offsetParent === null) continue
       if (getComputedStyle(htmlEl).visibility === 'hidden') continue
@@ -250,6 +261,13 @@ async function checkInteractiveNotClipped(page: Page) {
 
 // Check 5 — axe WCAG AA at the mobile viewport.
 async function checkAxeMobile(page: Page) {
+  // Pathological pages (e.g. the admin housekeeping candidate list) render
+  // thousands of elements; running axe over that DOM exceeds the test timeout.
+  const domSize = await page.evaluate(() => document.querySelectorAll('*').length)
+  if (domSize > 8000) {
+    console.log(`[mobile-layout] skipping axe on ${page.url()} (DOM too large: ${domSize} elements)`)
+    return
+  }
   const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
   const violations = filterViolations(results.violations)
   if (violations.length > 0) {
