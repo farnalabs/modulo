@@ -16,6 +16,7 @@ default components are seeded. It fails before the fix and passes after.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -84,38 +85,40 @@ async def test_seed_cost_components_is_idempotent(
     assert len(components) == 3  # no duplicates from the second pass
 
 
-async def test_seed_cost_components_emits_print_diagnostics(
+async def test_seed_cost_components_logs_seed_progress(
     factory: async_sessionmaker[AsyncSession],
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The print() diagnostics must not crash the seed and must be emitted.
+    """The seed reports per-component and completion via the structured logger.
 
-    These lines are the ONLY way the seed failure is visible in `fly logs`
-    (the structured JsonFormatter logger lines do not render there), so they
-    must survive the factory path the lifespan uses.
+    The temporary ``print(..., flush=True)`` diagnostics (FAR-113) were
+    removed once the seed was confirmed working on prod; the ``_log.info``
+    lines are the observability record of the seed.
     """
+    caplog.set_level(logging.INFO, logger="modulo.core.seed_data.cost_components")
     async with factory() as session, session.begin():
         session.add(Organisation(id=_ORG, name="Seed Org", slug="seed-org"))
 
     seeded = await seed_cost_components(factory)
 
-    out = capsys.readouterr().out
-    assert "SEED_COST_COMPONENTS: enumerated orgs=1" in out
-    assert f"SEED_COST_COMPONENTS: org {_ORG} OK" in out
-    assert f"SEED_COST_COMPONENTS: complete seeded={seeded} of orgs=1" in out
+    assert seeded == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages.count("cost_components.seeded") == 3
+    assert messages.count("cost_components.seed_complete") == 1
 
 
-async def test_seed_cost_components_no_orgs_emits_warning_diagnostic(
+async def test_seed_cost_components_no_orgs_is_a_noop(
     factory: async_sessionmaker[AsyncSession],
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Zero-org enumeration must print the 'NO ORGS' diagnostic, not fail."""
+    """Zero-org enumeration must not crash and must seed nothing."""
+    caplog.set_level(logging.INFO, logger="modulo.core.seed_data.cost_components")
     seeded = await seed_cost_components(factory)
 
     assert seeded == 0
-    out = capsys.readouterr().out
-    assert "SEED_COST_COMPONENTS: enumerated orgs=0" in out
-    assert "SEED_COST_COMPONENTS: NO ORGS" in out
+    messages = [r.getMessage() for r in caplog.records]
+    assert "cost_components.seeded" not in messages
+    assert "cost_components.seed_complete" in messages
 
 
 async def test_seed_cost_components_for_org_seeds_fresh_org(
