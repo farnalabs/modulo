@@ -944,3 +944,178 @@ async def test_health_check_self_hosted_scope_probe_uses_instance_root(connector
     assert route.called
     assert result.ok is False
     assert "write_repository" in result.detail
+
+
+@respx.mock
+async def test_write_file_blocked_without_write_repository_scope(connector):
+    """A read_api-only token must be blocked before a repository-file write reaches the API."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api"]}))
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py")
+    with pytest.raises(ValueError, match="requires scope 'write_repository'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file",
+                data={
+                    "project": "group/project",
+                    "path": "src/main.py",
+                    "content": "print('hello')",
+                    "message": "Update file",
+                },
+            )
+        )
+    assert not write_route.called
+
+
+@respx.mock
+async def test_write_file_blocked_error_lists_declared_scopes(connector):
+    """The scope error must surface exactly which scopes the token declares."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api"]}))
+    with pytest.raises(ValueError, match="token declares: read_api"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file",
+                data={"project": "group/project", "path": "src/main.py", "content": "x", "message": "m"},
+            )
+        )
+
+
+@respx.mock
+async def test_write_mr_blocked_without_api_scope(connector):
+    """write_repository without api must not permit MR creation (MRs need the api scope)."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api", "write_repository"]}))
+    mr_route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests")
+    with pytest.raises(ValueError, match="requires scope 'api'"):
+        await connector.write(
+            ConnectorPayload(
+                resource="mr",
+                data={"project": "group/project", "title": "Add feature", "source_branch": "feature-branch"},
+            )
+        )
+    assert not mr_route.called
+
+
+@respx.mock
+async def test_write_file_allowed_with_write_repository_scope(connector):
+    """write_repository satisfies repository-file writes without the api scope."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api", "write_repository"]}))
+    response_body = {"file_path": "src/main.py", "branch": "main"}
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={"project": "group/project", "path": "src/main.py", "content": "print('hello')", "message": "m"},
+        )
+    )
+    assert write_route.called
+    assert result["file_path"] == "src/main.py"
+
+
+@respx.mock
+async def test_write_allowed_with_api_scope(connector):
+    """The api scope satisfies both repository-file and non-file writes (superset)."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
+    response_body = {"id": 99, "web_url": "https://gitlab.com/group/project/-/merge_requests/99"}
+    mr_route = respx.post(f"{_API}/projects/group%2Fproject/merge_requests").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="mr",
+            data={"project": "group/project", "title": "Add feature", "source_branch": "feature-branch"},
+        )
+    )
+    assert mr_route.called
+    assert result["id"] == 99
+
+
+@respx.mock
+async def test_write_proceeds_when_scopes_unavailable(connector):
+    """An unavailable token-info endpoint (old self-hosted) must not block writes."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(404, text="Not Found"))
+    response_body = {"file_path": "src/main.py", "branch": "main"}
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json=response_body)
+    )
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={"project": "group/project", "path": "src/main.py", "content": "print('hello')", "message": "m"},
+        )
+    )
+    assert write_route.called
+    assert result["file_path"] == "src/main.py"
+
+
+@respx.mock
+async def test_write_proceeds_when_token_info_network_error(connector):
+    """A network error probing scopes must degrade to allow, not block the write."""
+    respx.get(_TOKEN_INFO).mock(side_effect=httpx.ConnectError("Connection refused"))
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={"project": "group/project", "path": "src/main.py", "content": "x", "message": "m"},
+        )
+    )
+    assert write_route.called
+
+
+@respx.mock
+async def test_verify_write_scopes_reports_missing(connector):
+    """verify_write_scopes returns exactly the scopes a resource lacks."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["read_api"]}))
+    assert await connector.verify_write_scopes("file") == frozenset({"write_repository"})
+    assert await connector.verify_write_scopes("issue") == frozenset({"api"})
+    assert await connector.verify_write_scopes("unknown_resource") == frozenset()
+
+
+@respx.mock
+async def test_verify_write_scopes_empty_when_satisfied_or_unknown(connector):
+    """verify_write_scopes returns empty when the token has the scope or it can't be probed."""
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
+    assert await connector.verify_write_scopes("file") == frozenset()
+    assert await connector.verify_write_scopes("mr_merge") == frozenset()
+    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(404, text="Not Found"))
+    assert await connector.verify_write_scopes("file") == frozenset()
+
+
+@respx.mock
+async def test_write_scope_cache_avoids_reprobe(connector):
+    """Declared scopes are cached so consecutive writes don't re-hit token-info."""
+    token_info_route = respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
+    )
+    payload = ConnectorPayload(
+        resource="file",
+        data={"project": "group/project", "path": "src/main.py", "content": "x", "message": "m"},
+    )
+    await connector.write(payload)
+    await connector.write(payload)
+    assert write_route.called
+    assert len(token_info_route.calls) == 1
+
+
+@respx.mock
+async def test_health_check_warms_write_scope_cache(connector):
+    """A successful health check caches scopes so writes verify without re-probing."""
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
+    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
+    token_info_route = respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json={"scope": ["api"]}))
+    result = await connector.health_check()
+    assert result.ok is True
+    write_route = respx.put(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
+        return_value=httpx.Response(200, json={"file_path": "src/main.py", "branch": "main"})
+    )
+    await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={"project": "group/project", "path": "src/main.py", "content": "x", "message": "m"},
+        )
+    )
+    assert write_route.called
+    assert len(token_info_route.calls) == 1
