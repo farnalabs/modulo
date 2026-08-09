@@ -27,7 +27,24 @@ _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
 
 
-def _make_sandbox_mock():
+def _read_router(output_json: str, log_content: str = ""):
+    """Route sandbox.files.read by path: output.json vs the redirected agent log.
+
+    The FAR-97 pipe-buffer fix redirects the agent command's stdout/stderr to a
+    sandbox log file, so sandbox.files.read is called for BOTH the log file
+    (drain probe) and /home/user/output.json (final result). Routing by path
+    keeps the two distinct.
+    """
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return output_json
+        return log_content
+
+    return _read
+
+
+def _make_sandbox_mock(*, log_content: str = "", output_json: str = '{"summary": "done"}'):
     cmd_result = MagicMock()
     cmd_result.exit_code = 0
     cmd_result.stdout = "agent stdout"
@@ -38,8 +55,9 @@ def _make_sandbox_mock():
 
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router(output_json, log_content))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=len(log_content)))
     sandbox.commands.run = AsyncMock(return_value=handle)
-    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
     sandbox.kill = AsyncMock()
     return sandbox
 
@@ -163,8 +181,9 @@ async def test_sandbox_agent_success_output_includes_cost_estimate_usd():
 
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done", "cost_estimate_usd": 0.001}'))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
     sandbox.commands.run = AsyncMock(return_value=handle)
-    sandbox.files.read = AsyncMock(return_value='{"summary": "done", "cost_estimate_usd": 0.001}')
     sandbox.kill = AsyncMock()
 
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
@@ -347,8 +366,9 @@ async def test_sandbox_agent_command_timeout_surfaces_clear_summary():
 
 
 async def test_idle_watchdog_kills_stalled_command_and_fails():
-    """A command that goes silent for _SANDBOX_IDLE_TIMEOUT is killed and the
-    node fails fast — it does not block for the full sandbox_timeout (FAR-97)."""
+    """A command whose sandbox connection dies (drain probe fails for
+    _SANDBOX_IDLE_TIMEOUT) is killed and the node fails fast — it does not block
+    for the full sandbox_timeout (FAR-97)."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
 
@@ -360,11 +380,15 @@ async def test_idle_watchdog_kills_stalled_command_and_fails():
     sandbox.files.write = AsyncMock()
     sandbox.commands.run = AsyncMock(return_value=handle)
     sandbox.files.read = AsyncMock(return_value='{"summary": "fabricated"}')
+    # The sandbox connection is dead: the drain probe fails on every tick, so the
+    # idle watchdog's liveness signal goes stale and the watchdog fires.
+    sandbox.files.get_info = AsyncMock(side_effect=OSError("sandbox connection dead"))
     sandbox.kill = AsyncMock()
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
     ):
         result = await fn(_run_state())
 
@@ -420,6 +444,98 @@ async def test_background_command_success_still_completes():
     assert result["output"]["status"] == "completed"
     assert result["output"]["summary"] == "done"
     assert result["output"]["agent_stdout"] == "agent stdout"
+
+
+# ---------------------------------------------------------------------------
+# FAR-97 pipe-buffer fix: stdout redirected to a sandbox log file + drain probe
+# ---------------------------------------------------------------------------
+
+
+async def test_sandbox_command_stdout_redirected_to_log_file():
+    """The agent command is wrapped so stdout/stderr are redirected to a sandbox
+    log file — the process's stdout is a regular file, never a pipe that can fill
+    and block a long session (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "> /home/user/agent.log 2>&1" in wrapped
+    assert "( opencode run --auto --format json < /home/user/prompt.md )" in wrapped
+
+
+async def test_drain_probe_keeps_silent_live_agent_alive():
+    """A live agent that stops producing NEW log output is NOT killed by the idle
+    watchdog — liveness comes from the drain probe (get_info success on every
+    tick), so a silent-but-connected agent gets the full timeout budget to finish
+    (FAR-97)."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    wait_calls = {"n": 0}
+
+    async def _wait():
+        wait_calls["n"] += 1
+        if wait_calls["n"] < 3:
+            raise TimeoutError
+        return cmd_result
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    # The log file exists and is responsive but only grew once — the agent then
+    # fell into a long silent phase (e.g. an LLM turn) with no new output.
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=64))
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done"}', log_content="x" * 64))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    # The idle watchdog must NOT have killed the live-but-silent process.
+    handle.kill.assert_not_awaited()
+    # The drain probe ran and refreshed liveness on every tick.
+    sandbox.files.get_info.assert_awaited()
+    # The drained log content is the artifact's stdout.
+    assert output["agent_stdout"] == "x" * 64
+    assert output["stdout_length"] == 64
+
+
+async def test_drain_captures_pipe_buffer_size_output():
+    """Output larger than a typical 64KB pipe buffer is drained from the sandbox
+    log file and captured in full — the process never blocks on a full stdout
+    pipe and the artifact carries the complete output (FAR-97)."""
+    big = "y" * (65536 + 1234)
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock(log_content=big)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == big
+    assert output["stdout_length"] == len(big)
 
 
 # ---------------------------------------------------------------------------
@@ -563,8 +679,9 @@ async def test_success_output_carries_full_stdout_length_when_truncated():
 
     sandbox = MagicMock()
     sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(side_effect=_read_router('{"summary": "done"}'))
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
     sandbox.commands.run = AsyncMock(return_value=handle)
-    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
     sandbox.kill = AsyncMock()
 
     with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):

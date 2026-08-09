@@ -280,6 +280,67 @@ if [ "$FLY_PROCESS_GROUP" = "worker" ]; then
     start_saq_system &
     SAQ_SYSTEM_WRAPPER_PID=$!
 
+    # -----------------------------------------------------------------------
+    # Worker health liveness server (ADR 021): binds 0.0.0.0:8082 and returns
+    # 200 only while BOTH SAQ worker subprocesses are alive (tracked via the PID
+    # files the wrappers above write). Backs the top-level [checks.worker_health]
+    # in fly.toml — the worker process group has no service/health check today,
+    # so a machine that is "up" but running no SAQ workers is invisible to
+    # `fly checks list` and to rolling-deploy readiness.
+    # The subshell exits 0 on failure (|| true) and is `disown`ed so a health-
+    # server crash can never fail the container through `set -e`/`wait`, and so
+    # the main `wait` below still returns the SAQ wrappers' exit status alone
+    # (fail-closed on crash-limit preserved). `kill 0` in the SIGTERM/SIGINT
+    # trap still tears it down on deploy.
+    # -----------------------------------------------------------------------
+    echo "=== Starting worker health liveness server (0.0.0.0:${WORKER_HEALTH_PORT:-8082}) ==="
+    (
+        python3 - <<'PY' || echo "worker health server exited (non-fatal)"
+import os
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+_PID_FILES = ("/tmp/run-worker.pid", "/tmp/system-worker.pid")
+_PORT = int(os.environ.get("WORKER_HEALTH_PORT", "8082"))
+
+
+def _saq_workers_alive():
+    pids = []
+    for path in _PID_FILES:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                pids.append(int(fh.read().strip()))
+        except (OSError, ValueError):
+            return False
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+    return True
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        alive = _saq_workers_alive()
+        body = b"worker-health ok" if alive else b"worker-health degraded"
+        self.send_response(200 if alive else 503)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write("health:%s - %s\n" % (self.address_string(), fmt % args))
+
+
+ThreadingHTTPServer(("0.0.0.0", _PORT), _Handler).serve_forever()
+PY
+    ) &
+    WORKER_HEALTH_PID=$!
+    disown "$WORKER_HEALTH_PID" || true
+    echo "Worker health server PID: $WORKER_HEALTH_PID"
+
     trap 'kill 0; wait' SIGTERM SIGINT
     wait
 

@@ -734,9 +734,33 @@ Agents run targeted files only (see §2 impact consideration) — never the full
 ### Frontend worktrees and node_modules
 
 `git worktree add` creates a new working tree with no installed dependencies.
-Frontend Workers cannot reliably run `npm run lint`, `npx vue-tsc`, or `npm test`
-inside worktrees. Workers implement and commit without frontend tooling;
+Fast path on Windows — junction the main repo's `frontend/node_modules` into the
+worktree (validated FAR-115/117/118/119, 2026-08-08). If the main repo's
+node_modules is current (lockfiles match):
+
+```powershell
+Test-Path "<worktree>\frontend\node_modules"   # expect False
+cmd /c mklink /J "<worktree>\frontend\node_modules" "<main-repo>\frontend\node_modules"
+```
+
+The junction is gitignored and harmless. With it, Workers can run `npm run lint`,
+`npx vue-tsc --noEmit`, and `npx vitest run <spec> --pool=threads --maxWorkers=2`
+in the worktree — and the pre-commit `eslint` hook passes on commit (without it,
+`git commit` fails at eslint with `'eslint' is not recognized`, even for
+CSS-only changes). Remove the junction before `git worktree remove` if desired
+(leftover is harmless). If lockfiles differ, `npm install --force` in the
+worktree instead.
+
+Without a junction, Workers implement and commit without frontend tooling;
 verification happens via GitHub CI on the PR.
+
+**Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
+admin-view gaps whenever an `Admin*.vue` file is touched — every
+`frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your
+change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
+FAR-117), the commit is blocked — add the wrapper with the correct feature name
+(match sibling views) rather than bypassing the hook.
+- **`npm install --force` in a worktree can yield node_modules WITHOUT the `.bin` shims** (2026-08-08) — `npm run test:unit` then fails with 'vitest is not recognized' (and `npx` fails too, and `node node_modules/vitest/vitest.mjs` fails with `ERR_MODULE_NOT_FOUND`). Worktree frontend tooling is therefore unreliable even when node_modules appears present. Don't burn time reinstalling in the worktree: use the main tree's node_modules junction (see the junction lesson) when it exists, otherwise skip worktree frontend checks and let GitHub CI (PR) + `gate.ps1`/`smoke-test.ps1` (post-merge, main tree) be the verification gates.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
@@ -1152,3 +1176,137 @@ The Conductor MUST verify footprint at commit time, not trust the report. After 
 If the footprint exceeds the allowlist or deletes anything, the branch is DISCARDED (worktree removed, branch deleted) and the task is respawned with a tighter contract. Never merge a branch whose footprint was not verified.
 
 Learned on 2026-08-03 when the first Worker attempt at the break-glass deliverable A catastrophically exceeded scope: it deleted ~2736 lines of unrelated tests (test_trigger_crud_tools.py -488, test_executor.py -205, test_linear.py -195), deleted PRD product features (get/update/delete_trigger sections), and modified files across Linear, determination, rate_limiter, and MCP subsystems - all invisible from its commit message. The entire branch was discarded and the work redone by a Worker given a strict scope contract (18-file allowlist), which stayed clean and merged as PR #591. Skipping this contract silently deletes thousands of lines of tests and features, wastes hours, and ends in a discarded branch.
+
+
+## Reviewer first-pass quality: contract round-trip, prove-the-fix, scope-diff
+
+Analysis of 180 CHANGES_REQUESTED review bodies across 792 merged PRs
+(2026-08-08) shows three recurring agent mistakes that cost a review cycle.
+First-pass approval is ~82% in August; these three checks are the highest-value
+ways to push it higher. Apply all three before pushing a branch.
+
+### 1. Verify the frontend-backend contract round-trip, not just mocked tests
+
+The costliest recurring bug: frontend sends camelCase keys the backend Pydantic
+model silently ignores (snake_case), so the setting never persists — found
+twice independently (PR #784, #796: `circuitBreakerEnabled` vs
+`circuit_breaker_enabled`). CI stayed green because backend tests sent
+snake_case and frontend tests mocked `api.GET`.
+
+Rules:
+- When a PR touches both frontend and backend (or changes any API
+  request/response shape), verify the wire shape against the generated OpenAPI
+  types (`frontend/src/lib/api/schema.ts`; regenerate with `npm run
+  generate:api`). Frontend keys must match backend field names unless the
+  Pydantic model has aliases / `populate_by_name`.
+- A test that mocks `api.GET` / `api.POST` / `httpx.Response` does NOT
+  validate the contract. Add at least one test that round-trips through the
+  real endpoint with the real payload shape (integration or BDD scenario).
+- When adding a frontend param/query value, confirm the backend accepts that
+  exact value (enum, range, type) in the same PR (PR #767 sent `days=3` and
+  `group_by=hour` the backend rejected → 422 at runtime; CI passed only
+  because tests mocked `api.GET`).
+- Backend tests must exercise the same payload shape the frontend actually
+  sends — not an idealized snake_case-only shape.
+
+### 2. Prove the fix actually fixes it — trace the code path, no no-op fixes
+
+The most common single finding: the change does not change behaviour. Trace
+the exact code path your change affects and verify observable effect before
+pushing. Recurring no-op traps the reviewer has caught:
+- Exit-code capture order: `RUNS_EXIT=$?` after a command substitution
+  captures the substitution's status (0), not the command's (PR #729).
+- Exception MRO ordering: `except ProgrammingError` after `except
+  DBAPIError` is unreachable (ProgrammingError subclasses DatabaseError →
+  DBAPIError) — order specific exceptions before their bases (PR #740).
+- Self-referencing measurements: a throttle measuring against its own
+  in-progress run is always "just ran" — exclude the current run (PR #865,
+  #570).
+- Cache keys must include every input that changes the cached value:
+  `(pipeline_id, snapshot_id, node_timeout_seconds)`, not just the first two
+  (PR #382).
+- Boundary clamps must preserve the invariant they guard: `max(pool_size - 5,
+  5)` exceeds a pool of size < 5, reintroducing the exact bug (PR #701).
+- Grep patterns must match what the CLI actually emits — `grep -q
+  "PreconditionError"` never matches when the CLI prints `error: ...` (PR
+  #668).
+- The thing being compared must be the thing that runs: jq comparing a number
+  field to a quoted string literal is always unequal (PR #865).
+
+Write the test that fails without your fix and passes with it. If you cannot
+write such a test, the fix may be a no-op — reconsider.
+
+### 3. Scope-diff before pushing — no silent reverts or deleted tests
+
+"tests:" and "improve:" PRs repeatedly ship silent reverts of production
+hardening and deletions of passing coverage (PR #792, #775, #759, #391,
+#518). Before pushing any PR whose title scopes it to tests/docs/improve:
+- Run `git diff main...HEAD --stat` and confirm every changed file is within
+  the stated scope.
+- After resolving any merge/rebase conflict, re-check the diff — never let a
+  conflict resolution drop the other side's production work. A botched merge
+  that reverts a security advisory fix or a production guard is a CRITICAL
+  review finding even when CI is green.
+- Never delete passing tests or gut behavioural assertions as part of a
+  stylistic refactor. If a test conflicts, fix it in place; if a deletion is
+  genuinely required, justify it in the PR description.
+
+### 4. Migration heads: branch off the current head, never edit shipped migrations
+
+Migration problems appear in 15 PRs (divergent Alembic heads, editing shipped
+migrations in place, deleting applied migrations). Rules:
+- Before creating a migration, verify `down_revision` points at the CURRENT
+  head — not a mid-chain revision. A migration branching off an old revision
+  creates a second Alembic head and a permanent fork every future migration
+  must merge around (PR #381). Run `alembic heads` (or the `check-migration-heads`
+  pre-commit hook, which fires when migration files are staged) before committing.
+- NEVER edit a migration that has already shipped/merged. Alembic records it
+  as applied, so the change only lands on fresh DBs — existing deployments
+  never execute it (PR #367 edited migration 0022 in place). Add a NEW
+  migration on top instead.
+- NEVER delete a migration file that has been applied. `alembic_version`
+  points at a now-missing revision, breaking the next `alembic upgrade` on
+  every existing environment (PR #518).
+- If `check-migration-heads.ps1` blocks you: renumber your migration to the
+  next free sequential number and fix its `down_revision` to point at the
+  current head.
+
+### 5. i18n: no hardcoded user-facing strings in frontend views
+
+The reviewer flags hardcoded English in `.vue` views that otherwise use
+`$t()` (16 reviews). Rules:
+- Every new user-facing string in a view that already uses
+  `$t()`/`t()`/`useI18n` must use a locale key — a hardcoded string is a
+  major finding (PR #816, #775, #784, #371).
+- Add the key in the CORRECT namespace. A key under the wrong namespace
+  silently fails to resolve (PR #438). Keys live in
+  `frontend/src/locales/en-US.js` under the view's namespace
+  (`views.<ViewName>...`) unless a shared namespace already exists.
+- Add the key to ALL locale files, not just `en-US` — a missing key in a
+  secondary locale is a silent UI gap.
+- Never put JS expressions inside translation values — the vue-i18n message
+  compiler cannot parse ternaries; use pluralization syntax
+  (`"key | key_plural"`) or simplify the message.
+- If the change removes a `$t(w.labelKey)` pattern, re-add the keys to the
+  locale file — deleting keys orphans every other locale that references them.
+
+### 6. A11y: dynamic status needs aria-live, icon buttons need labels, keyboards stay usable
+
+The reviewer applies the ux-conformance criteria (A11Y-1/2/4, STATE-1/2/6) to
+every frontend diff (33 reviews). Self-check these before pushing:
+- Dynamic status messages that appear/disappear (banners, toggle labels
+  swapping between "Pause all"/"Resume") need `role="status"` /
+  `aria-live="polite"` — WCAG 4.1.3 Status Messages, Level AA (PR #674).
+- Error feedback regions need `aria-live="assertive"` (or `role="alert"`) and
+  should be wired via `aria-describedby` to the controls they describe (PR
+  #784).
+- Icon-only buttons need `aria-label` (or visible text). Check every new icon
+  button in the diff.
+- Keyboard handlers on a container must not break editable children:
+  `@keydown.left/right.prevent` on a titlebar fires on bubbled events from a
+  child `<input>`, breaking text-cursor movement — ignore events originating
+  from `INPUT`/`TEXTAREA` (PR #634).
+- Follow `ux-conformance/criteria.yaml` — the same criteria the reviewer
+  loads. If a new interactive element lacks `data-testid`, `aria-label`,
+  focus-visible ring, or keyboard equivalent, the reviewer will request
+  changes.

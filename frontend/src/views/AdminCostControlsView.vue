@@ -152,7 +152,7 @@
                 </p>
               </div>
               <label for="admincostcontrolsview-field-3" class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
-                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
+                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :aria-label="$t('views.AdminCostControlsView.auto_stop_on_budget_exceeded')" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
                 <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full" />
               </label>
             </div>

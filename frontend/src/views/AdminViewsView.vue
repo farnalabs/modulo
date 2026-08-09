@@ -1,5 +1,6 @@
 <template>
-  <div class="page-narrow">
+  <div class="page-wide">
+    <FeatureGate feature-name="view_modes" required-tier="team" show-disabled>
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('components.ViewToggle.saved_views')" :subtitle="$t('views.AdminViewsView.manage_saved_views_for_organizing_and_filtering_data')" />
       <Button
@@ -205,6 +206,7 @@
         <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
       </div>
     </template>
+    </FeatureGate>
   </div>
 </template>
 
@@ -215,6 +217,7 @@ import { getAccessToken } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import {
   Tooltip,
   TooltipTrigger,

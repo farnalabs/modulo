@@ -52,7 +52,7 @@
           </div>
         </template>
 
-        <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 xl:max-w-[1400px] mx-auto">
           <div
             v-for="profile in filteredProfiles"
             :key="profile.id"
@@ -133,6 +133,7 @@
           </div>
           <div v-if="deleteError" class="mt-2 text-sm text-destructive">{{ deleteError }}</div>
         </div>
+
       </div>
 
     </FeatureGate>
