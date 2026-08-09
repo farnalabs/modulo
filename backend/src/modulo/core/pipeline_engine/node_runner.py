@@ -896,6 +896,17 @@ async def _wait_command_with_idle_watchdog(
     pipe, and a successful probe proves the sandbox connection is alive even when
     the agent emits nothing for a long LLM turn. The poll slice is reduced to
     *tick_interval* so on_tick runs frequently enough to keep last_activity fresh.
+
+    Each poll slice shields its own ``handle.wait()`` call: the slice await is
+    ``asyncio.wait_for(asyncio.shield(handle.wait()), timeout=...)``, so a slice
+    timeout cancels only the shield, never the wait. The E2B SDK's
+    ``handle.wait()`` merely awaits a long-lived internal events task
+    (``self._wait``), so the events task survives every slice timeout and the
+    next slice's fresh ``handle.wait()`` still sees it alive. If a slice timeout
+    cancelled that events task, the next slice would re-await a dead task and
+    immediately raise ``CancelledError`` with ``cancelling()==0`` — which
+    LangGraph surfaces as ``NodeCancelledError`` and every sandbox run would
+    fail ~one tick in.
     """
     if tick_interval is None:
         tick_interval = _SANDBOX_TAIL_INTERVAL
@@ -907,7 +918,7 @@ async def _wait_command_with_idle_watchdog(
         if on_tick is not None:
             await on_tick()
         try:
-            return await asyncio.wait_for(handle.wait(), timeout=min(tick_interval, remaining))
+            return await asyncio.wait_for(asyncio.shield(handle.wait()), timeout=min(tick_interval, remaining))
         except TimeoutError:
             if time.monotonic() - last_activity() >= idle_timeout:
                 # Kill the command so the still-running agent cannot write a
