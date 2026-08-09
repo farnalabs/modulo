@@ -957,6 +957,45 @@ def step_github_api_429_exhausted_quota(ctx):
     ctx["_expected_operation"] = "query"
 
 
+@given("the GitHub connector circuit is open")
+def step_github_circuit_open(ctx):
+    from modulo.connectors.github import GitHubCircuitOpenError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise GitHubCircuitOpenError(
+            "GitHub circuit is open after 5 consecutive failures; retry after circuit cooldown (30.0s remaining)",
+            retry_after_seconds=30.0,
+        )
+
+    connector.query = mock_query
+    connector.circuit_state.return_value = {
+        "open": True,
+        "half_open": False,
+        "consecutive_failures": 5,
+        "failure_threshold": 5,
+        "cooldown_seconds": 30.0,
+        "remaining_cooldown": 30.0,
+    }
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@then("the connector reports an open circuit state")
+def step_github_circuit_state_open(ctx):
+    import asyncio
+
+    connector = ctx["connector"]
+    loop = asyncio.new_event_loop()
+    try:
+        state = loop.run_until_complete(connector.circuit_state())
+    finally:
+        loop.close()
+    assert state["open"] is True, f"Expected open circuit state but got {state}"
+    assert state["remaining_cooldown"] > 0, f"Expected a positive remaining cooldown but got {state}"
+
+
 @then(parsers.parse('the connector raises a GitHub error with code "{code}"'))
 def step_connector_raises_github_error_code(code, ctx):
     import asyncio
