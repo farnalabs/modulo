@@ -74,6 +74,7 @@
                   <input
                     type="checkbox"
                     class="peer sr-only"
+                    :aria-label="$t('views.CostComponentsView.enabled') + ': ' + (row as any).display_name"
                     :checked="(row as any).enabled"
                     @change="toggleEnabled(row as any)"
                   />
