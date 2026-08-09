@@ -99,15 +99,17 @@
             <X class="h-3 w-3" aria-hidden="true" />
           </button>
         </div>
-        <button
-          class="remy-only-new-tab"
-          data-testid="remy-only-new-tab"
-          :title="$t('components.remy.RemyOnlyView.new_tab')"
-          :aria-label="$t('components.remy.RemyOnlyView.new_tab')"
-          @click="startNew"
-        >
-          <Plus class="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        <div role="presentation" class="flex shrink-0 items-center">
+          <button
+            class="remy-only-new-tab"
+            data-testid="remy-only-new-tab"
+            :title="$t('components.remy.RemyOnlyView.new_tab')"
+            :aria-label="$t('components.remy.RemyOnlyView.new_tab')"
+            @click="startNew"
+          >
+            <Plus class="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <div
