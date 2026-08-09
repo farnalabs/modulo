@@ -107,15 +107,32 @@ def test_rate_without_source_rejected() -> None:
 
 
 def test_rate_with_fallback_ok() -> None:
+    # A non-None rate_fallback satisfies the 'rate' reference. Pin that the
+    # fallback used here is genuinely registered so a typo'd/renamed registry
+    # entry cannot silently keep this test passing for the wrong reason.
+    assert "e2b_rate" in REGISTERED_RATE_FALLBACKS
     validate_component_formula(
         kind="calculated", formula="rate * wall_clock_hours", rate_usd=None, rate_fallback="e2b_rate"
     )  # no raise — a registered fallback satisfies the 'rate' reference
 
 
 def test_rate_with_rate_usd_ok() -> None:
+    # The cross-field rule only fires when BOTH sources are absent — an explicit
+    # rate_usd satisfies the 'rate' reference, and zero is still an explicit source.
     validate_component_formula(
         kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback=None
     )  # no raise — an explicit rate_usd satisfies the 'rate' reference
+    validate_component_formula(
+        kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal(0), rate_fallback=None
+    )  # no raise — a zero rate_usd is still a provided source
+
+
+def test_rate_with_both_sources_ok() -> None:
+    # Both an explicit rate_usd AND a rate_fallback are set — the 'rate'
+    # reference is satisfied by either source, so the combination must not raise.
+    validate_component_formula(
+        kind="calculated", formula="rate * wall_clock_hours", rate_usd=Decimal("0.13"), rate_fallback="e2b_rate"
+    )
 
 
 # --- CRUD guards (mocked session) ---------------------------------------------
@@ -128,9 +145,8 @@ async def test_create_org_cap_enforced(mock_dup: AsyncMock) -> None:
     count_result = MagicMock()
     count_result.scalar_one.return_value = 50
     session.execute.return_value = count_result
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="org_cap"):
         await create_cost_component(session, **_component_args())
-    assert str(exc_info.value) == "org_cap"
 
 
 @patch("modulo.db.crud.cost_component._duplicate_exists")
@@ -140,9 +156,8 @@ async def test_create_duplicate_is_409(mock_dup: AsyncMock) -> None:
     count_result = MagicMock()
     count_result.scalar_one.return_value = 0
     session.execute.return_value = count_result
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="duplicate_component"):
         await create_cost_component(session, **_component_args())
-    assert str(exc_info.value) == "duplicate_component"
 
 
 # --- seeder idempotency -------------------------------------------------------

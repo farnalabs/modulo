@@ -7,7 +7,7 @@ test.describe('Pipelines Page', { tag: "@regression" }, () => {
     await loginAsAdmin(page, getTestEnv())
     await page.goto('/pipelines')
 
-    await expect(page.locator('h1')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Pipelines')
     await expect(page.getByTestId('pipeline-list-search')).toBeVisible()
   })
 

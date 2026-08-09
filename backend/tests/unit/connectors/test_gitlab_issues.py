@@ -13,7 +13,7 @@ TOKEN = "glpat_test_token"
 _API = "https://gitlab.com/api/v4"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return GitLabConnector(token=TOKEN)
 

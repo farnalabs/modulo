@@ -111,4 +111,54 @@ describe('RunsListView', () => {
     await nextTick()
     expect(wrapper.text()).toContain('—')
   })
+
+  it('shows aggregate cost with a (+child) marker when child runs exist', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, child_runs_cost_usd: '0.25', aggregate_cost_usd: '0.75' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const aggregateCell = wrapper.find('[data-testid="runs-list-aggregate-cost"]')
+    expect(aggregateCell.exists()).toBe(true)
+    expect(aggregateCell.text()).toContain('0.7500')
+    expect(wrapper.text()).toContain('(+child)')
+  })
+
+  it('shows a (+N children) suffix when the child run count is available', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, child_runs_cost_usd: '0.25', aggregate_cost_usd: '0.75', child_runs_count: 3 },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const aggregateCell = wrapper.find('[data-testid="runs-list-aggregate-cost"]')
+    expect(aggregateCell.exists()).toBe(true)
+    expect(wrapper.text()).toContain('(+3 children)')
+    expect(wrapper.text()).not.toContain('(+child)')
+  })
+
+
+  it('shows own cost when aggregate equals own cost (no children)', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, child_runs_cost_usd: '0.000000', aggregate_cost_usd: '0.5' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="runs-list-aggregate-cost"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('0.5000')
+    expect(wrapper.text()).not.toContain('(+child)')
+  })
+
+  it('falls back to own cost when rollup fields are absent', async () => {
+    mockResponses['/api/v1/runs'] = listWith([baseRun])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="runs-list-aggregate-cost"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('0.5000')
+    expect(wrapper.text()).not.toContain('NaN')
+    expect(wrapper.text()).not.toContain('(+child)')
+  })
 })

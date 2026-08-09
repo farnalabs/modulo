@@ -11,7 +11,7 @@ API_KEY = "og_test_key"
 _BASE = "https://api.opsgenie.com/v2"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector() -> OpsgenieConnector:
     return OpsgenieConnector(api_key=API_KEY)
 

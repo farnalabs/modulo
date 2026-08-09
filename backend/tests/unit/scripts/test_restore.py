@@ -153,24 +153,24 @@ def test_decrypt_archive_missing_input(tmp_dir, monkeypatch):
 def test_extract_archive(tmp_dir, sample_archive):
     archive_path, _ = sample_archive
     extract_dir = os.path.join(tmp_dir, "extracted")
-    os.makedirs(extract_dir, exist_ok=True)
+    Path(extract_dir).mkdir(parents=True, exist_ok=True)
     files = extract_archive(archive_path, extract_dir)
     assert "modulo.pgdump" in files
     assert "secrets.env" in files
     assert "manifest.json" in files
-    assert os.path.exists(files["modulo.pgdump"])
+    assert Path(files["modulo.pgdump"]).exists()
 
 
 def test_extract_archive_handles_subdirectories(tmp_dir):
     content = os.path.join(tmp_dir, "content")
-    os.makedirs(os.path.join(content, "sub"))
-    Path(os.path.join(content, "sub", "file.txt")).write_text("x")
-    Path(os.path.join(content, "root.txt")).write_text("y")
+    Path(content, "sub").mkdir(parents=True)
+    Path(content, "sub", "file.txt").write_text("x")
+    Path(content, "root.txt").write_text("y")
     archive_path = os.path.join(tmp_dir, "nested.tar.gz")
     with tarfile.open(archive_path, "w:gz") as tar:
         tar.add(content, arcname=".")
     extract_dir = os.path.join(tmp_dir, "out")
-    os.makedirs(extract_dir, exist_ok=True)
+    Path(extract_dir).mkdir(parents=True, exist_ok=True)
 
     files = extract_archive(archive_path, extract_dir)
 
@@ -180,7 +180,7 @@ def test_extract_archive_handles_subdirectories(tmp_dir):
     # joined paths with os.path.normpath so Windows backslash vs. forward-slash
     # differences do not make the assertion platform-dependent.
     assert os.path.normpath(files["sub/file.txt"]) == os.path.normpath(os.path.join(extract_dir, "sub", "file.txt"))
-    assert os.path.exists(files["sub/file.txt"])
+    assert Path(files["sub/file.txt"]).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +242,7 @@ def test_verify_hashes_unchecked_files_do_not_fail(tmp_dir):
     extra = os.path.join(tmp_dir, "extra.txt")
     Path(known).write_text("aaa")
     Path(extra).write_text("bbb")
-    Path(os.path.join(tmp_dir, "checksums.sha256")).write_text(f"{hash_file(known)}  known.txt\n")
+    Path(tmp_dir, "checksums.sha256").write_text(f"{hash_file(known)}  known.txt\n")
     files = {"known.txt": known, "extra.txt": extra}
     assert verify_hashes(tmp_dir, files) is True
 
@@ -296,7 +296,7 @@ def test_restore_postgres_missing_dump_exits(tmp_dir, capsys):
 
 
 def test_restore_postgres_success(tmp_dir, capsys):
-    Path(os.path.join(tmp_dir, "modulo.pgdump")).write_text("dump")
+    Path(tmp_dir, "modulo.pgdump").write_text("dump")
     ok = MagicMock(returncode=0, stderr="")
     with patch("scripts.restore.subprocess.run", return_value=ok) as mock_run:
         restore_postgres(tmp_dir, "postgresql://u:p@h/db", "pg_restore")
@@ -307,7 +307,7 @@ def test_restore_postgres_success(tmp_dir, capsys):
 
 
 def test_restore_postgres_createdb_failure_exits(tmp_dir, capsys):
-    Path(os.path.join(tmp_dir, "modulo.pgdump")).write_text("dump")
+    Path(tmp_dir, "modulo.pgdump").write_text("dump")
     ok = MagicMock(returncode=0, stderr="")
     fail = MagicMock(returncode=1, stderr="createdb: database creation failed")
     with (
@@ -330,7 +330,7 @@ def test_restore_config_missing_secrets_warns(tmp_dir, capsys):
 
 
 def test_restore_config_prints_exports(tmp_dir, capsys):
-    Path(os.path.join(tmp_dir, "secrets.env")).write_text("FERNET_KEY=abc\nSECRET_KEY=def\n")
+    Path(tmp_dir, "secrets.env").write_text("FERNET_KEY=abc\nSECRET_KEY=def\n")
     restore_config(tmp_dir)
     out = capsys.readouterr().out
     assert "    export FERNET_KEY=abc" in out
@@ -340,10 +340,8 @@ def test_restore_config_prints_exports(tmp_dir, capsys):
 def test_restore_config_prints_manifest_metadata(tmp_dir, capsys):
     import json
 
-    Path(os.path.join(tmp_dir, "secrets.env")).write_text("FERNET_KEY=abc\n")
-    Path(os.path.join(tmp_dir, "manifest.json")).write_text(
-        json.dumps({"created_at": "2026-01-01T00:00:00Z", "version": "1"})
-    )
+    Path(tmp_dir, "secrets.env").write_text("FERNET_KEY=abc\n")
+    Path(tmp_dir, "manifest.json").write_text(json.dumps({"created_at": "2026-01-01T00:00:00Z", "version": "1"}))
     restore_config(tmp_dir)
     out = capsys.readouterr().out
     assert "Backup created at: 2026-01-01T00:00:00Z" in out

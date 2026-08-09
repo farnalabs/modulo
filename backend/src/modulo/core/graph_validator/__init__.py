@@ -58,6 +58,11 @@ _PHASE_1_CUTOVER = datetime(2026, 7, 22, tzinfo=UTC)
 
 _DEFERRED_SCHEMA_KEYWORDS = frozenset({"$ref", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"})
 
+# Known-good E2B sandbox templates. "opencode" is the product default (has the
+# opencode CLI pre-installed); "modulo-opencode" is the managed cache-warmed
+# image built for Modulo's own pipelines.
+_KNOWN_SANDBOX_TEMPLATES = frozenset({"opencode", "modulo-opencode"})
+
 
 def _is_pre_existing(snapshot: PipelineSnapshot) -> bool:
     """Check if a snapshot was created before the Phase 1 cutover date."""
@@ -314,15 +319,31 @@ class GraphValidator:
         entry_ids: list[str],
         result: ValidationResult,
     ) -> None:
-        """Compute longest path from entries to leaf via DFS. Error if > MAX_NESTING_DEPTH."""
+        """Compute longest path from entries to leaf via iterative DFS. Error if > MAX_NESTING_DEPTH."""
 
         def _max_depth(node: str, visited: frozenset[str], _remaining: int = 1000) -> int:
-            if _remaining <= 0:
-                return 0
-            children = [c for c in adj.get(node, []) if c not in visited]
-            if not children:
-                return 0
-            return 1 + max(_max_depth(c, visited | {node}, _remaining - 1) for c in children)
+            # Iterative stack-based DFS. The previous recursive version consumed
+            # multiple Python frames per graph level, so the interpreter's
+            # recursion limit tripped before the _remaining guard could cap deep
+            # graphs — raising RecursionError instead of emitting
+            # TOPOLOGY_NESTING_EXCEEDED. Each stack frame carries the path's
+            # visited set (children outside it are followed), the remaining
+            # descent budget, and the edge count so far; the longest path found
+            # is returned, capped at _remaining like the recursive walk.
+            best = 0
+            # (node, visited-along-current-path, remaining-budget, edges-so-far)
+            stack: list[tuple[str, frozenset[str], int, int]] = [(node, visited, _remaining, 0)]
+            while stack:
+                cur, path_visited, remaining, edges = stack.pop()
+                best = max(best, edges)
+                if remaining <= 0:
+                    continue
+                stack.extend(
+                    (child, path_visited | {cur}, remaining - 1, edges + 1)
+                    for child in adj.get(cur, [])
+                    if child not in path_visited
+                )
+            return best
 
         depth = max((_max_depth(eid, frozenset()) for eid in entry_ids), default=0)
         if depth > self.MAX_NESTING_DEPTH:
@@ -716,7 +737,7 @@ class GraphValidator:
             has_null = "null" in out_type
             accepts_null = isinstance(in_type, list) and "null" in in_type
             errors.extend(
-                f"{path}: type mismatch '{ot}' -> '{in_type}'" for ot in out_type if ot != "null" and ot != in_type
+                f"{path}: type mismatch '{ot}' -> '{in_type}'" for ot in out_type if ot not in ("null", in_type)
             )
             if has_null and not accepts_null:
                 errors.append(f"{path}: output allows null but input does not")
@@ -1514,6 +1535,7 @@ class GraphValidator:
         4. context_files source paths start with /.
         5. env_vars keys avoid reserved prefixes.
         6. output_schema_json has valid JSON Schema structure if present.
+        7. stall_timeout_seconds is a positive number, not exceeding timeout_seconds.
         """
         _reserved_env_prefixes = ("MODULO_", "OPENCODE_API_KEY")
 
@@ -1531,12 +1553,19 @@ class GraphValidator:
                     node_id=nid,
                 )
 
-            # 2. template_id must be set.
+            # 2. template_id must be set to a known-good sandbox template.
             template_id = node.get("template_id")
             if not template_id:
                 result.warning(
                     "SANDBOX_MISSING_TEMPLATE",
-                    f"Sandbox agent node '{nid}' has no template_id (expected 'opencode')",
+                    f"Sandbox agent node '{nid}' has no template_id (expected 'opencode' or 'modulo-opencode')",
+                    node_id=nid,
+                )
+            elif template_id not in _KNOWN_SANDBOX_TEMPLATES:
+                result.warning(
+                    "SANDBOX_UNKNOWN_TEMPLATE",
+                    f"Sandbox agent node '{nid}' template_id '{template_id}' is not a known-good sandbox "
+                    "template (expected 'opencode' or 'modulo-opencode')",
                     node_id=nid,
                 )
 
@@ -1555,6 +1584,37 @@ class GraphValidator:
                     result.warning(
                         "SANDBOX_TIMEOUT_INVALID",
                         f"Sandbox agent node '{nid}' timeout_seconds is not a valid integer",
+                        node_id=nid,
+                    )
+
+            # 7. stall_timeout_seconds sanity checks.
+            stall_timeout = node.get("stall_timeout_seconds")
+            if stall_timeout is not None:
+                try:
+                    st = float(stall_timeout) if not isinstance(stall_timeout, (int, float)) else stall_timeout
+                    if st <= 0:
+                        result.warning(
+                            "SANDBOX_STALL_TIMEOUT_INVALID",
+                            f"Sandbox agent node '{nid}' stall_timeout_seconds={st} is not a positive number",
+                            node_id=nid,
+                        )
+                    elif timeout is not None:
+                        try:
+                            timeout_seconds = int(timeout) if not isinstance(timeout, int) else timeout
+                        except (ValueError, TypeError):
+                            timeout_seconds = None
+                        if timeout_seconds is not None and st > timeout_seconds:
+                            result.warning(
+                                "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT",
+                                f"Sandbox agent node '{nid}' stall_timeout_seconds={st} exceeds "
+                                f"timeout_seconds={timeout_seconds} — a stall timeout larger than the total "
+                                "timeout is pointless",
+                                node_id=nid,
+                            )
+                except (ValueError, TypeError):
+                    result.warning(
+                        "SANDBOX_STALL_TIMEOUT_INVALID",
+                        f"Sandbox agent node '{nid}' stall_timeout_seconds is not a valid number",
                         node_id=nid,
                     )
 

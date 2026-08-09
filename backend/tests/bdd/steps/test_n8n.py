@@ -29,14 +29,14 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-@pytest.fixture()
+@pytest.fixture
 def n8n_connector():
     if _given_invalid:
         return N8NConnector(token="bad_token", base_url=BASE_URL)
     return N8NConnector(token=TOKEN, base_url=BASE_URL)
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector(n8n_connector):
     return n8n_connector
 
@@ -156,7 +156,7 @@ def when_write_resource(n8n_connector, resource, name):
             respx.post(f"{BASE_URL}/rest/workflows").mock(
                 return_value=httpx.Response(201, json={"data": {"id": "W1", "name": name, "active": False}})
             )
-        elif resource == "credential" or resource == "invalid_resource":
+        elif resource in {"credential", "invalid_resource"}:
             pass
         try:
             data: dict = {}

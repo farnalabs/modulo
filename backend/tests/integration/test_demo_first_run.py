@@ -7,6 +7,7 @@ onboarding flow, and demo pipeline lifecycle with a real database via testcontai
 import os
 import uuid
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -29,17 +30,11 @@ pytestmark = pytest.mark.integration
 
 # The onboarding route stores state at backend-root/.onboarding-state.json
 # which is 4 levels up from its own file (backend/src/modulo/api/routes/onboarding.py)
-_ONBOARDING_STATE_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "..",
-    "..",
-    ".onboarding-state.json",
-)
+_ONBOARDING_STATE_PATH = Path(__file__).resolve().parent.parent.parent / ".onboarding-state.json"
 
 
 def _clean_onboarding_state() -> None:
-    if os.path.exists(_ONBOARDING_STATE_PATH):
-        os.remove(_ONBOARDING_STATE_PATH)
+    _ONBOARDING_STATE_PATH.unlink(missing_ok=True)
 
 
 # Tables with a RESTRICT (blocking) foreign key to accounts.id that the demo
@@ -435,7 +430,8 @@ class TestDemoAuth:
 
     async def test_demo_user_can_login(self, demo_client: AsyncClient) -> None:
         token = await _demo_login(demo_client)
-        assert isinstance(token, str) and len(token) > 20
+        assert isinstance(token, str)
+        assert len(token) > 20
 
     async def test_demo_user_invalid_password(self, demo_client: AsyncClient) -> None:
         resp = await demo_client.post(

@@ -277,6 +277,10 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 
 - Every call to the E2B Sandbox SDK (creating a sandbox, running commands, reading files, closing) must be wrapped in `asyncio.wait_for()` with a realistic timeout. The E2B API can hang indefinitely under network congestion, upstream provider issues, or resource exhaustion. Without a timeout, a hung SDK call blocks the entire pipeline node indefinitely, consuming the node's timeout budget without making progress. Use 30s for sandbox creation, 300s for command execution, and 10s for teardown operations as baseline timeouts.
 
+### `asyncio.wait_for` kills long-lived SDK internal tasks — shield the wait
+
+- `asyncio.wait_for(coro.wait(), ...)` where `coro.wait()` internally awaits a long-lived task created ONCE at construction (e.g. an SDK event loop like E2B's `self._wait = asyncio.create_task(self._handle_events())`) is dangerous: the timeout CANCELS that long-lived internal task, and any subsequent call that re-awaits it raises `asyncio.CancelledError` with `cancelling()==0` (which LangGraph surfaces as `NodeCancelledError`). The 2026-08-09 app.modulo.run outage (fixed in #933) was exactly this: `_wait_command_with_idle_watchdog` in `core/pipeline_engine/node_runner.py` polled `handle.wait()` per slice with `asyncio.wait_for(..., timeout=5s)`; the first slice timeout killed the E2B events task, and every later slice re-awaited the dead task → every pipeline run failed ~7s in. Fix: `asyncio.wait_for(asyncio.shield(handle.wait()), timeout=...)` — the shield absorbs the cancellation while the internal task keeps running — or create the task once and shield it per slice. Only `wait_for` on single-shot operations (sandbox creation, file reads/writes, command start/kill, `Event.wait()`, `Lock.acquire()`, DB queries) is safe to cancel, because each call creates a fresh coroutine/future that is discarded after cancellation. Audit rule: any `asyncio.wait_for(X.wait(), ...)` where `X` is a long-lived object must be verified against this pattern before merging.
+
 ### `**env_vars_extra` must stay AFTER system env vars in the sandbox envs dict
 
 - In `node_runner.py` the sandbox `envs={...}` dict is ordered: system env vars first (`MODULO_*`, `APP_MODULO_OPENCODE_API_KEY`, `GITHUB_TOKEN`), then `**env_vars_extra` last. This is DELIBERATE — pipelines must be able to override system defaults for identity separation (e.g. PR Reviewer injects its own `modulo-reviewbot` PAT via `env_vars_extra`, not the system's `farnalabs` bot token). Commit b0c4bde97 reverted an earlier "env_vars_extra first" change for exactly this reason; do not move it back. The reserved-prefix validator prevents pipelines from overriding `MODULO_*` vars.
@@ -324,3 +328,32 @@ snapshot and the live catalog, so a stale snapshot fails loudly. Run the
 rebuild with the app drained / writes quiesced: the pre-checks and the rebuild
 transaction are separate windows, so a concurrent INSERT between them would be
 lost.
+
+### Ops / Fly: `fly ssh console` runs commands WITHOUT a shell (2026-08-07 DB restart)
+
+`fly ssh console --app <app> --machine <id> --command "<cmd>"` does NOT execute
+`<cmd>` through a shell — it splits the string into argv tokens. This means:
+- Pipes, redirects (`2>&1`, `> file`), `||`, `&&`, and command substitution DO NOT work.
+- The classic `su - postgres -c '...'` wrapper pattern gets mangled — the inner
+  command is executed as the connected user anyway (e.g. `pg_ctl` ran as root and
+  failed with `pg_ctl: command not found`), and commands with `|` or `2>&1` are
+  split into separate argv entries (`ls: cannot access '|': No such file or directory`).
+
+Use the `--user` flag to connect as the right user and pass a direct command:
+```
+fly ssh console --app modulo-app-db --machine <id> --user postgres --command "/usr/lib/postgresql/17/bin/pg_ctl restart -D /data/postgresql -m fast"
+```
+Notes: `pg_ctl restart` can take a while and the SSH command may appear to hang —
+that is normal; verify completion via `pg_postmaster_start_time()` afterwards.
+
+### Ops / Fly: Postgres Flex listens on port 5433 internally, not 5432
+
+On Fly Postgres Flex machines the postmaster runs on port **5433** (`postgres -D /data/postgresql -p 5433`), so a default-socket psql check fails with
+`connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory`
+even when the server is healthy. Verify with:
+```
+fly ssh console --app modulo-app-db --machine <id> --user postgres --command "psql -p 5433 -tAc 'select pg_postmaster_start_time();'"
+```
+Reliable restart indicators: `pg_postmaster_start_time()` (new value after a
+restart) and the machine's UPDATED timestamp in `fly status`. Do NOT treat a
+5432-socket psql failure as "postgres is down".

@@ -778,7 +778,7 @@ _TEAM = uuid.uuid4()
 
 
 @pytest.mark.parametrize(
-    "team_id,expected_team_id",
+    ("team_id", "expected_team_id"),
     [
         (_TEAM, _TEAM),
         (_TEAM, None),
@@ -840,7 +840,7 @@ def _make_session_factory(
 
 
 @pytest.mark.parametrize(
-    "team_id,team_endpoints,org_endpoints,expected_count,expected_team",
+    ("team_id", "team_endpoints", "org_endpoints", "expected_count", "expected_team"),
     [
         (_TEAM, [_fake_endpoint(team_id=_TEAM)], [], 1, _TEAM),
         (_TEAM, [], [_fake_endpoint(team_id=None)], 1, None),

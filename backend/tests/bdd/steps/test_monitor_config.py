@@ -122,6 +122,29 @@ def _bdd_put_monitor_config(client: TestClient, request, backends: str) -> None:
     request.node._resp = resp
 
 
+@when(parsers.parse("I PUT /api/v1/admin/monitor-config with backends [{backends}] and a clientToken"))
+def _bdd_put_monitor_config_with_token(client: TestClient, request, backends: str) -> None:
+    import json
+
+    parsed = json.loads(f"[{backends}]")
+    payload: dict = {"backends": parsed}
+    if "datadog_rum" in parsed:
+        payload["datadog_rum"] = {"clientToken": "pub123456", "site": "datadoghq.com"}
+    with patch(
+        "modulo.api.routes.admin_monitor_config.set_config",
+        new_callable=AsyncMock,
+        side_effect=_fake_set_config,
+    ):
+        resp = client.put(_URL, json=payload)
+    request.node._resp = resp
+
+
+@when(parsers.parse('I PUT /api/v1/admin/monitor-config enabling "{backend}" without its required fields'))
+def _bdd_put_monitor_config_missing_fields(client: TestClient, request, backend: str) -> None:
+    resp = client.put(_URL, json={"backends": [backend], backend: {}})
+    request.node._resp = resp
+
+
 @when("I PUT /api/v1/admin/monitor-config with backends []")
 def _bdd_put_monitor_config_empty(client: TestClient, request) -> None:
     resp = client.put(_URL, json={"backends": []})

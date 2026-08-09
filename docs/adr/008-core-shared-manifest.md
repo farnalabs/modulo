@@ -1,4 +1,4 @@
-# ADR 008 — Core Shared Manifest: Single Source of Truth for Page Structure
+# ADR 008  –  Core Shared Manifest: Single Source of Truth for Page Structure
 
 **Date**: 2026-07-03
 **Status**: Active
@@ -9,9 +9,9 @@
 
 Remy's UI commands work through runtime discovery (`get_page_interactables()`), but page metadata is scattered across five separate sources: Vue Router route config, sidebar nav config, route `meta` breadcrumbs, `data-testid` in Vue templates, product map entries, and i18n locale files. This duplication causes:
 
-1. **Inconsistency** — a route added in the router but missing from the nav config, or a `data-testid` renamed in a template but not updated in tests.
-2. **Blind LLM navigation** — Remy must navigate to a page before discovering its elements, adding latency and failure points.
-3. **No integrity validation** — no automated check that a `data-testid` referenced anywhere actually exists in a template, or that every product map entry corresponds to a real route.
+1. **Inconsistency**  –  a route added in the router but missing from the nav config, or a `data-testid` renamed in a template but not updated in tests.
+2. **Blind LLM navigation**  –  Remy must navigate to a page before discovering its elements, adding latency and failure points.
+3. **No integrity validation**  –  no automated check that a `data-testid` referenced anywhere actually exists in a template, or that every product map entry corresponds to a real route.
 
 ## Decision
 
@@ -28,7 +28,7 @@ Create a single `frontend/src/manifest.yaml` that serves as the source of truth 
 Both frontend and backend consume this file:
 - **Frontend**: Vite imports YAML at build time. Sidebar nav, breadcrumbs, `<FeatureGate>` props, and route guards read from manifest-derived data.
 - **Backend**: Loaded at app startup (copied into Docker image, bind-mounted in local dev). Remy's `get_manifest(path?)` tool returns structured page data directly (no HTTP loopback). Exposed as `GET /api/v1/manifest` for diagnostics only.
-- **Validation**: `validate-manifest.ps1` checks integrity at pre-commit and CI time — every route matches a router entry, every static `data-testid` exists in a template, every `product_map` ref resolves, no orphaned elements, no circular parent chains.
+- **Validation**: `validate-manifest.ps1` checks integrity at pre-commit and CI time  –  every route matches a router entry, every static `data-testid` exists in a template, every `product_map` ref resolves, no orphaned elements, no circular parent chains.
 
 ## Concrete Design
 
@@ -71,10 +71,10 @@ sidebar_groups:
 
 ## Why Not Continue with the Current Scattered Approach
 
-1. **Five sources of truth cannot be kept in sync by convention alone** — every route change requires updates to router config, nav config, breadcrumb meta, product map, and potentially i18n. The validator catches drift only at CI time; before CI, drift silently accumulates.
-2. **`get_page_interactables()` is a fallback, not a plan** — runtime discovery costs an LLM round trip (navigate → discover → decide → act). A manifest lets Remy plan the entire workflow in one LLM turn.
-3. **Pre-commit validation of `data-testid` integrity is uniquely valuable** — the validator catches renamed testids before they reach CI, preventing Remy from targeting elements that no longer exist.
-4. **The manifest is opt-in** — existing routes without manifest entries continue to work. Only routes explicitly added to the manifest get validation and LLM discoverability. No migration pressure.
+1. **Five sources of truth cannot be kept in sync by convention alone**  –  every route change requires updates to router config, nav config, breadcrumb meta, product map, and potentially i18n. The validator catches drift only at CI time; before CI, drift silently accumulates.
+2. **`get_page_interactables()` is a fallback, not a plan**  –  runtime discovery costs an LLM round trip (navigate → discover → decide → act). A manifest lets Remy plan the entire workflow in one LLM turn.
+3. **Pre-commit validation of `data-testid` integrity is uniquely valuable**  –  the validator catches renamed testids before they reach CI, preventing Remy from targeting elements that no longer exist.
+4. **The manifest is opt-in**  –  existing routes without manifest entries continue to work. Only routes explicitly added to the manifest get validation and LLM discoverability. No migration pressure.
 
 ## What This Means for Code
 
@@ -91,14 +91,14 @@ sidebar_groups:
 
 ## When to Revisit
 
-- The manifest exceeds 1,000 lines (too large for its purpose — consider splitting by domain)
+- The manifest exceeds 1,000 lines (too large for its purpose  –  consider splitting by domain)
 - A route requires metadata that cannot be expressed in the current schema
 - The `deliver` skill is observed to consistently forget to update the manifest (automation gap)
 - Performance of the validator on a full codebase becomes a CI bottleneck
 
 ## Related Documents
 
-- PRD §8.28 — Core Shared Manifest feature specification
-- ADR 007 — Remy UI Commands: Frontend-Mediated Browser Automation
-- `frontend/src/manifest.yaml` — the manifest file (created in phase nv36)
-- `Dev-Harness/tools/validate-manifest.ps1` — validation script
+- PRD §8.28  –  Core Shared Manifest feature specification
+- ADR 007  –  Remy UI Commands: Frontend-Mediated Browser Automation
+- `frontend/src/manifest.yaml`  –  the manifest file (created in phase nv36)
+- `Dev-Harness/tools/validate-manifest.ps1`  –  validation script

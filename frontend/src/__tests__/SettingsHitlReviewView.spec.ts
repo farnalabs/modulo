@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
@@ -16,34 +16,41 @@ vi.mock('../lib/api/schema', () => ({}))
 import SettingsHitlReviewView from '../views/SettingsHitlReviewView.vue'
 
 describe('SettingsHitlReviewView', () => {
+  let wrapper: VueWrapper | null = null
+
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
   })
 
   it('renders without crashing', async () => {
     const { api } = await import('../lib/api/client');
     (api.GET as any).mockResolvedValue({ data: { gates: [] }, error: undefined })
 
-    const wrapper = mount(SettingsHitlReviewView, {
+    wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await nextTick()
     await nextTick()
     await nextTick()
-    expect(wrapper.exists()).toBe(true)
-    expect(wrapper.text()).toContain('HITL Review')
+    expect(wrapper!.exists()).toBe(true)
+    expect(wrapper!.text()).toContain('HITL Review')
   })
 
   it('shows loading spinner initially', async () => {
     const { api } = await import('../lib/api/client');
     (api.GET as any).mockReturnValue(new Promise(() => {}))
 
-    const wrapper = mount(SettingsHitlReviewView, {
+    wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await nextTick()
-    expect(wrapper.find('.animate-spin').exists()).toBe(true)
+    expect(wrapper!.find('.animate-spin').exists()).toBe(true)
   })
 
   it('renders gates list', async () => {
@@ -67,13 +74,13 @@ describe('SettingsHitlReviewView', () => {
       error: undefined,
     })
 
-    const wrapper = mount(SettingsHitlReviewView, {
+    wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
-    expect(wrapper.text()).toContain('#approval')
-    expect(wrapper.text()).toContain('pending')
+    expect(wrapper!.text()).toContain('#approval')
+    expect(wrapper!.text()).toContain('pending')
   })
 
   it('expands gate detail panel on click', async () => {
@@ -97,18 +104,18 @@ describe('SettingsHitlReviewView', () => {
       error: undefined,
     })
 
-    const wrapper = mount(SettingsHitlReviewView, {
+    wrapper = mount(SettingsHitlReviewView, {
       global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
     })
     await flushPromises()
     await nextTick()
 
-    const toggle = wrapper.find('[data-testid="hitl-review-toggle-expand"]')
+    const toggle = wrapper!.find('[data-testid="hitl-review-toggle-expand"]')
     expect(toggle.exists()).toBe(true)
     await toggle.trigger('click')
     await nextTick()
 
-    expect(wrapper.text()).toContain('Claim Gate')
-    expect(wrapper.text()).toContain('Claim Metadata')
+    expect(wrapper!.text()).toContain('Claim Gate')
+    expect(wrapper!.text()).toContain('Claim Metadata')
   })
 })

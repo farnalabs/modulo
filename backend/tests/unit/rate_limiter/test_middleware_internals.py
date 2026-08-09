@@ -9,20 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
-from tests.unit.rate_limiter.helpers import make_settings
+from tests.unit.rate_limiter.helpers import make_mock_request, make_settings
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.core.rate_limiter import RateLimiterRegistry
-
-
-def _make_request(path="/api/v1/runs", headers=None, client=None, scope=None):
-    request = MagicMock()
-    request.url.path = path
-    request.scope = {} if scope is None else scope
-    header_map = headers or {}
-    request.headers.get = MagicMock(side_effect=lambda name, default="": header_map.get(name, default))
-    request.client = client
-    return request
 
 
 @pytest.fixture
@@ -36,32 +26,33 @@ def middleware():
 
 class TestClientKey:
     def test_auth_principal_api_key(self):
-        request = _make_request(scope={"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}})
+        scope = {"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}}
+        request = make_mock_request(scope=scope)
         assert RateLimitMiddleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
 
     def test_auth_principal_user(self):
-        request = _make_request(scope={"auth_principal": {"type": "user", "org_id": "org-1", "user_id": "user-7"}})
+        request = make_mock_request(scope={"auth_principal": {"type": "user", "org_id": "org-1", "user_id": "user-7"}})
         assert RateLimitMiddleware._client_key(request) == "user:org-1:user-7:/api/v1/runs"
 
     def test_auth_principal_takes_precedence_over_authorization_header(self):
-        request = _make_request(
+        request = make_mock_request(
             scope={"auth_principal": {"type": "api_key", "org_id": "org-1", "prefix": "abcd1234"}},
             headers={"Authorization": "Bearer mk_abcdefgh_test1234567890123456789012"},
         )
-        assert RateLimitMiddleware._client_key(request).startswith("ak:")
+        assert RateLimitMiddleware._client_key(request) == "ak:org-1:abcd1234:/api/v1/runs"
 
     def test_no_client_and_no_xff_falls_back_to_unknown(self):
-        request = _make_request(headers={}, client=None)
+        request = make_mock_request(headers={}, client=None)
         assert RateLimitMiddleware._client_key(request) == "ip:unknown:/api/v1/runs"
 
 
 class TestRuleFor:
     def test_matching_rule(self, middleware):
-        request = _make_request(path="/api/v1/runs/123")
+        request = make_mock_request(path="/api/v1/runs/123")
         assert middleware._rule_for(request) == ("/api/v1/runs", 60, 60)
 
     def test_no_matching_rule_returns_empty_rule(self, middleware):
-        request = _make_request(path="/api/v1/other")
+        request = make_mock_request(path="/api/v1/other")
         assert middleware._rule_for(request) == ("", 0, 0)
 
 
@@ -78,7 +69,7 @@ class TestSetRules:
         original = list(RateLimitMiddleware.RULES)
         try:
             RateLimitMiddleware.set_rules([("/api/v1/custom", 5, 10)])
-            request = _make_request(path="/api/v1/custom/42")
+            request = make_mock_request(path="/api/v1/custom/42")
             assert middleware._rule_for(request) == ("/api/v1/custom", 5, 10)
         finally:
             RateLimitMiddleware.set_rules(original)

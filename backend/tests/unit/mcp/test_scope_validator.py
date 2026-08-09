@@ -42,12 +42,26 @@ class TestCheckToolScope:
             ("admin", "create_agent"),
             ("operator", "infer_schema"),
             ("admin", "infer_schema"),
+            ("viewer", "query_analytics"),
+            ("runner", "query_analytics"),
+            ("operator", "query_analytics"),
+            ("admin", "query_analytics"),
             ("operator", "review_hitl"),
             ("admin", "review_hitl"),
         ],
     )
     def test_authorized_role_passes(self, role: str, tool: str) -> None:
         assert check_tool_scope(role, tool) is None
+
+    def test_query_analytics_resolves_to_viewer(self) -> None:
+        from modulo.auth.permissions import resolve_required
+        from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+        assert TOOL_SCOPE_REQUIREMENTS["query_analytics"] == "analytics.query"
+        assert resolve_required("analytics.query") == "viewer"
+        # all four roles pass at the viewer boundary
+        for role in ("viewer", "runner", "operator", "admin"):
+            assert check_tool_scope(role, "query_analytics") is None
 
     @pytest.mark.parametrize(
         ("role", "tool"),
@@ -286,6 +300,7 @@ class TestConstants:
             "delete_secret",
             "list_secrets",
             "list_trigger_events",
+            "query_analytics",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 

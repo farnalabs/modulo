@@ -81,6 +81,7 @@ async def test_unknown_event_returns_none(mapper: NotificationEventMapper) -> No
 _EXPECTED_MAPPING = {
     "hitl_awaiting": ("info", "org", "hitl.awaiting", "any_scope", True, 72),
     "run_failed": ("error", "org", "run.failed", "any_scope", True, 168),
+    "run_stalled": ("warning", "org", "run.stalled", "any_scope", True, 72),
     "budget_exceeded": ("warning", "org", "run.budget_exceeded", "org_admin", True, 168),
     "claim_expired": ("info", "org", "hitl.claim_expired", "any_scope", True, 24),
     "hitl_overdue": ("warning", "admin", "hitl.overdue", "org_admin", True, 168),
@@ -142,6 +143,17 @@ async def test_run_failed_templates_resolved(mapper: NotificationEventMapper) ->
     kwargs = mock_create.await_args.kwargs
     assert kwargs["title"] == "Run failed — my-pipeline"
     assert kwargs["body"] == 'Run for "my-pipeline" failed with error: E_TIMEOUT.'
+    assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
+
+
+async def test_run_stalled_templates_resolved(mapper: NotificationEventMapper) -> None:
+    """run_stalled is a warning that tells orgs which pipeline went silent (FAR-98)."""
+    _, mock_create = await _call(mapper, "run_stalled")
+    kwargs = mock_create.await_args.kwargs
+    assert kwargs["title"] == "Run stalled — my-pipeline"
+    assert kwargs["body"] == (
+        'Run for "my-pipeline" stalled — the agent produced no output for the configured stall timeout.'
+    )
     assert kwargs["action_url"] == f"/runs/{_PAYLOAD['run_id']}"
 
 

@@ -74,7 +74,7 @@ def _reset_cache():
 # ── Test client fixtures for route-level integration tests ──────────────────
 
 
-@pytest.fixture()
+@pytest.fixture
 def free_client() -> Generator[TestClient, None, None]:
     """Client with no license — observability is team-gated."""
     mock_session = _make_mock_session()
@@ -130,7 +130,8 @@ class TestObservabilityCache:
         _update_cache(org_b, {"otlp_endpoint": "http://b:4318"})
         a_config = _cached_config(org_a)
         b_config = _cached_config(org_b)
-        assert a_config is not None and b_config is not None
+        assert a_config is not None
+        assert b_config is not None
         assert a_config["otlp_endpoint"] == "http://a:4318"
         assert b_config["otlp_endpoint"] == "http://b:4318"
 

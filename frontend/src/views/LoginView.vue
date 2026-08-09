@@ -1,5 +1,5 @@
 <template>
-  <div class="relative mx-auto flex min-h-screen max-w-md items-center justify-center p-6">
+  <div class="relative mx-auto flex min-h-screen max-w-md items-center justify-center overflow-x-hidden p-6">
     <div
       class="pointer-events-none fixed inset-0 -z-10"
       style="background-image: radial-gradient(circle at 1px 1px, var(--dot-color) 1px, transparent 0); background-size: 32px 32px;"

@@ -106,6 +106,7 @@ function setupEmptyMocks() {
 describe('DashboardView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorage.clear()
     vi.clearAllMocks()
     setupDefaultMocks()
   })
@@ -211,16 +212,17 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('No runs yet')
   })
 
-  it('shows the rolling-window toggle with 5 values', async () => {
+  it('shows the rolling-window toggle with 6 values including All time', async () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     const toggles = wrapper.findAll('[data-testid^="trend-toggle-"]')
-    expect(toggles.length).toBe(5)
+    expect(toggles.length).toBe(6)
     expect(wrapper.findAll('[data-testid="trend-toggle-1"]').length).toBe(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-3"]').length).toBe(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-7"]').length).toBe(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-30"]').length).toBe(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-90"]').length).toBe(1)
+    expect(wrapper.findAll('[data-testid="trend-toggle-all"]').length).toBe(1)
   })
 
   it('fetches a period-scoped summary when a window is selected', async () => {
@@ -232,6 +234,53 @@ describe('DashboardView', () => {
       '/api/v1/dashboard/summary',
       expect.objectContaining({ params: { query: { days: 7 } } }),
     )
+  })
+
+  it('does not render the global loading skeleton when a window is selected', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.animate-pulse').length).toBe(0)
+  })
+
+  it('All-time option calls fetchSummary with no days', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-all"]').trigger('click')
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/summary',
+      expect.objectContaining({ params: { query: {} } }),
+    )
+  })
+
+  it('defaults to the 3d window when nothing is stored', async () => {
+    localStorage.clear()
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/summary',
+      expect.objectContaining({ params: { query: { days: 3 } } }),
+    )
+    expect(wrapper.find('[data-testid="trend-toggle-3"]').classes()).toContain('bg-primary')
+  })
+
+  it('persists the selected window to localStorage and restores it on mount', async () => {
+    localStorage.clear()
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-30"]').trigger('click')
+    await flushPromises()
+    expect(localStorage.getItem('modulo.dashboard.trendWindow')).toBe('30')
+
+    const wrapper2 = mount(DashboardView)
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/v1/dashboard/summary',
+      expect.objectContaining({ params: { query: { days: 30 } } }),
+    )
+    expect(wrapper2.find('[data-testid="trend-toggle-30"]').classes()).toContain('bg-primary')
   })
 
   it('renders period-scoped stat values and trend arrows when a window is selected', async () => {

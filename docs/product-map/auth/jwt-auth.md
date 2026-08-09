@@ -28,7 +28,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 ### Access Tokens
 - [x] Access token returned on successful login (PRD §7.10)
 - [x] Access token has 15-minute expiry (PRD §7.10)
-- [x] Access token grants access to protected endpoints (`/api/auth/me`)
+- [x] Access token grants access to protected endpoints (`/api/v1/auth/me`)
 - [x] Expired access token is rejected with 401
 - [x] Token with invalid signature is rejected with 401
 - [x] Token with `alg=none` is rejected (algorithm pinning to HS256)
@@ -46,7 +46,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - [x] Refresh token has `purpose: refresh` claim
 - [x] Refresh endpoint accepts refresh token and returns new token pair
 - [x] Refresh token rotation: new tokens differ from old pair
-- [x] Reusing a refresh token (stalest sequence) detects theft — returns 401
+- [x] Reusing a refresh token (stalest sequence) detects theft – returns 401
 - [x] Theft-detected error message includes "theft" or "revoked"
 - [x] Refresh token with wrong key raises JWTError
 - [x] Access token rejected by refresh endpoint (purpose check)
@@ -75,7 +75,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 
 ### Algorithm Pinning & SECRET_KEY
 - [x] JWT decode uses `algorithms=["HS256"]` explicitly
-- [x] `none` algorithm rejected — algorithm confusion attack prevented at library level
+- [x] `none` algorithm rejected – algorithm confusion attack prevented at library level
 - [x] SECRET_KEY minimum 32 bytes enforced at startup via Settings validation
 - [x] Blocked placeholder SECRET_KEY values rejected at startup (`changeme`, `secret`, etc.)
 - [x] SECRET_KEY exactly 32 bytes passes validation
@@ -124,7 +124,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - WS token scenario is tested via unit tests but not via BDD feature file
 - No integration test for token family invalidation with real Redis
 - No integration test for WS token opaque path with real Redis
-- BDD test mock infrastructure is incomplete — login/logout scenarios with DB mocking fail due to `list_memberships_for_account` coroutine iteration issue
+- BDD test mock infrastructure is incomplete – login/logout scenarios with DB mocking fail due to `list_memberships_for_account` coroutine iteration issue
 - No end-to-end test for stale JWT revocation flow through admin UI
 - WS token single-use enforcement (opaque token path) is tested in unit tests but has no BDD coverage
 - SECRET_KEY at-rest encryption validation (that checkpoint blobs remain encrypted after key rotation)
@@ -132,13 +132,13 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 
 ## QA History
 
-### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
+### 2026-07-12 – Round 3 re-QA (improve-architecture auth remaining)
 - Fixed operator precedence bug in auth.py:100 (`not a or not b and c` → `not a or (limiter is not None and not b)`)
 - Removed unused `# noqa: S106` directives on ws_token_type lines, then re-added with proper intent coverage
 - Verified all claimed Round 2 fixes (B904, CancelledError, dead code removal) are correctly applied
 - Status: partial
 
-### 2026-07-01 — Cross-cutting QA (improve-architecture index 25)
+### 2026-07-01 – Cross-cutting QA (improve-architecture index 25)
 - Fixed access token expiry: 60m → 15m (PRD §7.10 compliance)
 - Fixed refresh token expiry: 24h → 168h (7 days, PRD §7.10 compliance)
 - Fixed JWT WS token fallback to use configured TTL instead of hardcoded 15m
@@ -148,7 +148,7 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Enriched product map entry with full behaviour list (was a stub)
 - Status changed from `gap` to `partial`
 
-### 2026-07-05 — Cross-cutting QA (improve-architecture index 149)
+### 2026-07-05 – Cross-cutting QA (improve-architecture index 149)
 - Fixed CRITICAL: added ProgrammingError→501 catches to all 4 DB-accessing auth routes (login, refresh, logout, me)
 - Fixed MAJOR: logout() now checks blacklist_family result and logs warning if family not found
 - Created test_auth_programming_error.py (5 test cases: 4 ProgrammingError→501 + 1 idempotent logout)
@@ -157,8 +157,8 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Added unit-tests frontmatter ref to new test file
 - Status: partial (9 known gaps remain)
 
-### 2026-07-08 — Cross-cutting QA (improve-architecture index 256)
-- Fixed CRITICAL: added SQLAlchemyError→503 catches to all 4 auth routes (login, refresh, logout, me) — connection/deadlock failures previously propagated as raw 500
+### 2026-07-08 – Cross-cutting QA (improve-architecture index 256)
+- Fixed CRITICAL: added SQLAlchemyError→503 catches to all 4 auth routes (login, refresh, logout, me) – connection/deadlock failures previously propagated as raw 500
 - Fixed CRITICAL: added IntegrityError→409 catch on login route (token family creation race)
 - Fixed MAJOR: corrected BDD feature file API paths from `/api/auth/` to `/api/v1/auth/` to match actual router prefix
 - Fixed MAJOR: `test_none_algorithm_rejected` now properly verifies decode-time rejection of `alg: none` tokens (manually crafted JWT bypasses PyJWT encode-time validation)
@@ -166,8 +166,8 @@ WebSocket auth tokens, algorithm pinning, and SECRET_KEY entropy enforcement (PR
 - Updated Error Handling section with 5 new [x] checkboxes
 - 9 existing tests + 5 new tests all pass
 
-### 2026-07-11 — Round 2 re-QA (improve-architecture index 387)
+### 2026-07-11 – Round 2 re-QA (improve-architecture index 387)
 - Fixed B904: added `from None` to all `except IntegrityError`, `except ProgrammingError`, `except SQLAlchemyError` handlers (prevented internal exception chain leakage in responses)
-- Fixed B904: added `asyncio.CancelledError: raise` guards before all `except Exception` blocks (login, refresh, logout inner, ws_token, me, csrf_token) — prevented silent CancelledError suppression
+- Fixed B904: added `asyncio.CancelledError: raise` guards before all `except Exception` blocks (login, refresh, logout inner, ws_token, me, csrf_token) – prevented silent CancelledError suppression
 - Removed dead `except IntegrityError` handler from `me()` endpoint (SELECT-only query cannot raise IntegrityError)
 - Updated product map: added Round 2 QA entry

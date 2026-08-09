@@ -15,6 +15,7 @@ from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunNotFoundError,
     _graph_contains_sandbox_agent,
+    _node_output_stall_reason,
     _seed_state,
 )
 
@@ -106,6 +107,19 @@ def test_aggregate_sandbox_cost_ignores_non_dict():
     assert PipelineExecutor._aggregate_sandbox_cost(completed_node_outputs) == Decimal(0)
     assert PipelineExecutor._aggregate_sandbox_cost(None) == Decimal(0)
     assert PipelineExecutor._aggregate_sandbox_cost({}) == Decimal(0)
+
+
+def test_node_output_stall_reason_extraction():
+    """_node_output_stall_reason only surfaces a non-empty stall_reason from a
+    sandbox-style node output; garbage and non-stalled outputs yield None."""
+    stalled = {"output": {"status": "failed", "stall_reason": "agent produced no output for 60s"}}
+    assert _node_output_stall_reason(stalled) == "agent produced no output for 60s"
+    assert _node_output_stall_reason({"output": {"status": "completed", "summary": "ok"}}) is None
+    assert _node_output_stall_reason({"output": {"stall_reason": ""}}) is None
+    assert _node_output_stall_reason({"output": None}) is None
+    assert _node_output_stall_reason("not-a-dict") is None
+    assert _node_output_stall_reason(None) is None
+    assert _node_output_stall_reason({"output": {"stall_reason": 42}}) is None
 
 
 async def test_execute_routes_completed_outputs_to_finalize_cost():
@@ -484,6 +498,84 @@ async def test_execute_publishes_run_completed_event():
     broker = registry.get_or_create.return_value
     published_types = [call.args[0] for call in broker.publish.call_args_list]
     assert "run_completed" in published_types
+
+
+async def test_execute_publishes_run_stalled_when_node_output_carries_stall_reason():
+    """A sandbox-agent node output carrying stall_reason publishes run_stalled
+    so the run.stalled notification advertised by FAR-98 is actually reachable."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {
+                "output": {
+                    "output": {
+                        "status": "failed",
+                        "stall_reason": "agent produced no output for 60s",
+                    }
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    registry = _mock_registry()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    broker = registry.get_or_create.return_value
+    stalled_calls = [call.args for call in broker.publish.call_args_list if call.args[0] == "run_stalled"]
+    assert stalled_calls == [("run_stalled", {"node_id": "node-a", "stall_reason": "agent produced no output for 60s"})]
+
+
+async def test_execute_does_not_publish_run_stalled_without_stall_reason():
+    """A normal (non-stalled) node output never emits run_stalled."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {"output": {"output": {"status": "completed", "summary": "all good"}}},
+        }
+    ]
+    compiled = _mock_compiled(events)
+    registry = _mock_registry()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    broker = registry.get_or_create.return_value
+    stalled_calls = [call.args for call in broker.publish.call_args_list if call.args[0] == "run_stalled"]
+    assert stalled_calls == []
 
 
 async def test_execute_seeds_state_with_run_context():
@@ -1355,6 +1447,132 @@ async def test_check_capacity_unlimited_pipeline_still_enforces_org_cap():
 
     assert result.status == "pending"
     assert calls[-1][1]["error_code"] == "org_capacity_limited"
+
+
+async def test_check_capacity_org_run_cap_demotes_at_claim_time():
+    """Major 3: the org run-concurrency cap is re-checked at claim time.
+
+    The dispatch-time admission gate counts active runs in one transaction
+    but enqueues later; newly-enqueued runs stay ``pending`` (invisible to
+    the count) until a worker claims them, so a burst of dispatches can each
+    see ``active < limit`` and exceed the org cap by the batch size. This
+    claim-time backstop (mirroring the sandbox-cap pattern) demotes the run
+    back to ``pending`` with ``org_capacity_limited``.
+    """
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", return_value=2),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=10,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][0] == "pending"
+    assert calls[-1][1]["error_code"] == "org_capacity_limited"
+    assert "cap 2" in calls[-1][1]["error_detail"]
+
+
+async def test_check_capacity_org_run_cap_applies_without_sandbox_graph():
+    """Major 3: the org run cap is a run-level gate — no sandbox node required."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=1),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", return_value=1),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=0,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "pending"
+    assert calls[-1][1]["error_code"] == "org_capacity_limited"
+
+
+async def test_check_capacity_org_run_cap_admits_when_under_cap():
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch(
+            "modulo.core.pipeline_engine.executor.update_run_status",
+            side_effect=_make_update_status(run, calls),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=5),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", return_value=2),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=10,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
+
+
+async def test_check_capacity_org_run_cap_fail_open_when_count_raises():
+    """Major 3: a count error reads as uncapped (admit), never raises."""
+    session = _make_capacity_session()
+    executor = _make_capacity_executor(session)
+    run = _capacity_run()
+
+    async def _raise_count(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("org run count boom")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", side_effect=_make_update_status(run, [])),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", return_value=0),
+        patch("modulo.core.pipeline_engine.executor.get_org_run_concurrency_limit", return_value=2),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_org", side_effect=_raise_count),
+    ):
+        result = await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=5,
+            graph_json={"nodes": [{"id": "a", "node_type": "agent"}]},
+        )
+
+    assert result.status == "running"
 
 
 async def test_check_capacity_admission_clears_marker():

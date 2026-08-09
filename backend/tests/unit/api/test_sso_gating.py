@@ -41,7 +41,7 @@ def _settings_with_license() -> Settings:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
     mock_plan = MagicMock()
@@ -82,12 +82,12 @@ def _build_client(settings_fn, sso_enabled: bool = True) -> Generator[TestClient
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def client_no_sso() -> Generator[TestClient, None, None]:
     yield from _build_client(_settings_without_license, sso_enabled=False)
 
 
-@pytest.fixture()
+@pytest.fixture
 def client_with_sso() -> Generator[TestClient, None, None]:
     yield from _build_client(_settings_with_license, sso_enabled=True)
 

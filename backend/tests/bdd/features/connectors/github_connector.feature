@@ -127,3 +127,44 @@ Feature: GitHub Connector
     Given a GitHub connector with valid token
     When I write GitHub files batch for repo "owner/repo" with traversal path "../evil.txt"
     Then the write is an error containing "path traversal"
+
+  Scenario: Query results expose rate-limit budget metadata
+    Given a GitHub connector with valid token
+    When I query resource "repos" with limit 5
+    Then the query result exposes rate-limit metadata
+
+  Scenario: Query the rate-limit budget directly
+    Given a GitHub connector with valid token
+    When I query resource "rate_limit"
+    Then the result has records
+    And the query result exposes rate-limit metadata
+
+  Scenario: Rate-limited response reports quota detail
+    Given a GitHub connector with valid token
+    When the GitHub API is rate limited with zero remaining quota
+    Then the connector raises a ValueError with "quota"
+    And the connector raises a ValueError with "X-RateLimit-Remaining"
+
+  Scenario: Health check detects an expired token
+    Given a GitHub connector with valid token
+    And a GitHub connector whose health check reports an expired token
+    When I perform a health check
+    Then the health result indicates failure
+    And the health result detail describes an expired token
+
+  Scenario: Health check reports missing scopes with machine-readable codes
+    Given a GitHub connector with valid token
+    And a GitHub connector whose health check reports missing scope "repo"
+    When I perform a health check
+    Then the health result indicates failure
+    And the health result detail contains "missing_scope:repo"
+
+  Scenario: Query surfaces a typed auth error with a machine-readable code
+    Given a GitHub connector with valid token
+    When the GitHub API returns HTTP 401 with an expired token
+    Then the connector raises a GitHub error with code "token_expired"
+
+  Scenario: Query surfaces a rate-limit error with a machine-readable code
+    Given a GitHub connector with valid token
+    When the GitHub API returns HTTP 429 with exhausted quota
+    Then the connector raises a GitHub error with code "rate_limited"

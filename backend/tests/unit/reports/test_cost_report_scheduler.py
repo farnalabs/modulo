@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Self, cast
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,38 +15,7 @@ from modulo.core.reports.cost_report import deliver_cost_report, format_cost_rep
 from modulo.core.reports.scheduler import _fire_scheduled_report, get_generator
 from modulo.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
 from modulo.db.models.scheduled_report import ScheduledReport
-
-
-class _Begin:
-    async def __aenter__(self) -> None:
-        return None
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
-
-
-class _Session:
-    def __init__(self, results: list[MagicMock]) -> None:
-        self.execute = AsyncMock(side_effect=results)
-        self.delete = AsyncMock()
-        self.flush = AsyncMock()
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
-
-    def begin(self) -> _Begin:
-        return _Begin()
-
-
-class _Factory:
-    def __init__(self, session: _Session) -> None:
-        self._session = session
-
-    def __call__(self) -> _Session:
-        return self._session
+from tests.unit.reports.helpers import MockSession, MockSessionFactory
 
 
 def _report(*, schedule_type: str) -> MagicMock:
@@ -101,18 +70,18 @@ async def test_generate_format_and_deliver_cost_report() -> None:
 
 
 @pytest.mark.parametrize(
-    "config",
+    ("config", "match"),
     [
-        {"period": "hourly", "group_by": "team", "format": "csv"},
-        {"period": "daily", "group_by": "department", "format": "csv"},
-        {"period": "daily", "group_by": "team", "format": "xml"},
-        {},
+        ({"period": "hourly", "group_by": "team", "format": "csv"}, "period"),
+        ({"period": "daily", "group_by": "department", "format": "csv"}, "grouping"),
+        ({"period": "daily", "group_by": "team", "format": "xml"}, "format"),
+        ({}, "period"),
     ],
 )
-async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str]) -> None:
+async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str], match: str) -> None:
     with (
         patch("modulo.core.reports.cost_report.get_cost_report", new_callable=AsyncMock) as get_cost,
-        pytest.raises(ValueError),
+        pytest.raises(ValueError, match=f"Unsupported scheduled cost report {match}"),
     ):
         await generate_cost_report(
             cast(AsyncSession, MagicMock(spec=AsyncSession)),
@@ -154,26 +123,26 @@ def test_format_cost_report_json_emits_json_array() -> None:
 
 
 def test_format_cost_report_rejects_unknown_format() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unsupported scheduled cost report format"):
         format_cost_report({"period": "daily", "group_by": "team", "format": "pdf", "items": []})
 
 
 @pytest.mark.parametrize(
-    "recipient_config",
+    ("recipient_config", "match"),
     [
-        {"type": "slack", "emails": ["admin@example.com"]},
-        {"type": "email", "emails": "admin@example.com"},
-        {"type": "email", "emails": []},
-        {"type": "email", "emails": [""]},
-        {"type": "email", "emails": ["admin@example.com", 42]},
+        ({"type": "slack", "emails": ["admin@example.com"]}, "require an email recipient"),
+        ({"type": "email", "emails": "admin@example.com"}, "must be a list"),
+        ({"type": "email", "emails": []}, "non-empty"),
+        ({"type": "email", "emails": [""]}, "non-empty"),
+        ({"type": "email", "emails": ["admin@example.com", 42]}, "non-empty"),
     ],
 )
-async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object]) -> None:
+async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object], match: str) -> None:
     payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
     with (
         patch("modulo.core.reports.cost_report.get_settings"),
         patch("modulo.core.reports.cost_report.send_email", new_callable=AsyncMock) as send,
-        pytest.raises(ValueError),
+        pytest.raises(ValueError, match=match),
     ):
         await deliver_cost_report(payload, recipient_config)
     send.assert_not_awaited()
@@ -205,14 +174,14 @@ async def test_due_report_executes_and_transitions_schedule(
     report = _report(schedule_type=schedule_type)
     selected = MagicMock()
     selected.scalar_one_or_none.return_value = report
-    session = _Session([selected, MagicMock()])
+    session = MockSession([selected, MagicMock()])
     generator = AsyncMock(return_value={"items": [], "period": "daily", "group_by": "team", "format": "csv"})
     formatter = MagicMock(return_value={"subject": "Cost", "body_html": "<p />", "body_text": "cost"})
     deliverer = AsyncMock(return_value=[{"type": "email", "status": "delivered", "recipient_count": 1}])
 
     with (
         patch("modulo.core.reports.scheduler._get_engine"),
-        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=_Factory(session)),
+        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=MockSessionFactory(session)),
         patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
         patch("modulo.core.reports.scheduler.get_formatter", return_value=formatter),
@@ -235,13 +204,13 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
     report = _report(schedule_type="one_time")
     selected = MagicMock()
     selected.scalar_one_or_none.return_value = report
-    session = _Session([selected])
+    session = MockSession([selected])
     generator = AsyncMock(return_value={"items": [], "period": "daily", "group_by": "team", "format": "csv"})
     deliverer = AsyncMock(side_effect=RuntimeError("SMTP unavailable"))
 
     with (
         patch("modulo.core.reports.scheduler._get_engine"),
-        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=_Factory(session)),
+        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=MockSessionFactory(session)),
         patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
         patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
         patch("modulo.core.reports.scheduler.get_formatter", return_value=MagicMock()),
@@ -256,7 +225,7 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
 async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
     listed = MagicMock()
     listed.scalars.return_value.all.return_value = []
-    session = _Session([listed])
+    session = MockSession([listed])
     org_id = uuid.uuid4()
 
     assert await list_scheduled_reports(cast(AsyncSession, session), organisation_id=org_id) == []
@@ -265,7 +234,7 @@ async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
 
     missing = MagicMock()
     missing.scalar_one_or_none.return_value = None
-    session = _Session([missing])
+    session = MockSession([missing])
     deleted = await delete_scheduled_report(
         cast(AsyncSession, session),
         report_id=uuid.uuid4(),

@@ -162,6 +162,26 @@ async def change_password(
                         current_user.account_id,
                     )
 
+            # Audit is fail-open-with-alert: the password change ALWAYS commits;
+            # a failed audit write is loudly logged and never rolls back the change.
+            try:
+                from modulo.core.audit_logger import append_audit_event
+
+                await set_rls_org(session, current_user.organisation_id)
+                await append_audit_event(
+                    session,
+                    org_id=current_user.organisation_id,
+                    event_type="password_changed",
+                    actor_user_id=current_user.account_id,
+                    resource_type="account",
+                    resource_id=current_user.account_id,
+                    payload_json={"method": "self_service"},
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("me.change_password audit write failed")
+
     except ProgrammingError:
         logger.exception("routes.me")
         raise HTTPException(

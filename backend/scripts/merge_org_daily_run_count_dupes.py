@@ -78,8 +78,7 @@ async def _merge_for_org(session: AsyncSession, org_id: uuid.UUID, dry_run: bool
             run_count += int(count)
             if clamped_flag:
                 clamped = True
-        if total > _COST_COLUMN_CAP:
-            total = _COST_COLUMN_CAP
+        total = min(total, _COST_COLUMN_CAP)
         if dry_run:
             print(
                 f"[dry-run] org={org_id} date={run_date}: {len(group)} rows -> "

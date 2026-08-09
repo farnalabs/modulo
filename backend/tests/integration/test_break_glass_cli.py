@@ -80,7 +80,8 @@ async def test_activate_creates_row_and_audit(db_engine: AsyncEngine, bg_session
     now = datetime.now(UTC)
 
     credential = await bg.activate(bg_session, now=now, org_id=org_id, ttl_minutes=30, actor="operator", reason="TKT-1")
-    assert credential and len(credential) >= 20
+    assert credential
+    assert len(credential) >= 20
 
     rows: list[dict] = []
     async with bg_session.begin():

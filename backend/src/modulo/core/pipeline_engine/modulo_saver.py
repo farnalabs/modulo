@@ -12,7 +12,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, cast
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -146,6 +146,11 @@ _MIGRATION_SQL: list[str] = [
     "CREATE INDEX IF NOT EXISTS ix_checkpoint_blobs_org ON checkpoint_blobs (organisation_id, thread_id);",
     "CREATE INDEX IF NOT EXISTS ix_checkpoint_writes_org"
     " ON checkpoint_writes (organisation_id, thread_id, checkpoint_id);",
+    # created_at for the nightly checkpoint retention job (idempotent — safe to
+    # re-run because setup() executes every migration on each startup).
+    "ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();",
+    "ALTER TABLE checkpoint_blobs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();",
+    "ALTER TABLE checkpoint_writes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();",
 ]
 
 
@@ -183,10 +188,12 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         organisation_id: uuid.UUID,
         fernet_key: str | None = None,
         fernet_key_old: str | None = None,
+        conn_string: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(conn, **kwargs)
         self._org_id = organisation_id
+        self._conn_string = conn_string
         self._fernet = Fernet(fernet_key.encode()) if fernet_key else None
         self._fernet_old = Fernet(fernet_key_old.encode()) if fernet_key_old else None
         if fernet_key is None:
@@ -453,24 +460,58 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"]["checkpoint_id"]
 
-        async with self._cursor() as cur:
-            for idx, (channel, value) in enumerate(writes):
-                type_str, blob_bytes = self.serde.dumps_typed(value)
-                encrypted = self._encrypt_blob(blob_bytes)
-                await cur.execute(
-                    self.UPSERT_CHECKPOINT_WRITES_SQL,
-                    (
-                        self._org_id,
-                        thread_id,
-                        checkpoint_ns,
-                        checkpoint_id,
-                        task_id,
-                        idx,
-                        channel,
-                        type_str,
-                        encrypted,
-                    ),
-                )
+        for _attempt in range(2):
+            try:
+                async with self._cursor() as cur:
+                    for idx, (channel, value) in enumerate(writes):
+                        type_str, blob_bytes = self.serde.dumps_typed(value)
+                        encrypted = self._encrypt_blob(blob_bytes)
+                        await cur.execute(
+                            self.UPSERT_CHECKPOINT_WRITES_SQL,
+                            (
+                                self._org_id,
+                                thread_id,
+                                checkpoint_ns,
+                                checkpoint_id,
+                                task_id,
+                                idx,
+                                channel,
+                                type_str,
+                                encrypted,
+                            ),
+                        )
+                return
+            except Exception as exc:
+                is_conn_drop = type(exc).__name__ == "OperationalError"
+                if _attempt == 0 and is_conn_drop:
+                    _log.warning(
+                        "checkpoint.aput_writes_retry",
+                        extra={"error": str(exc)[:300]},
+                    )
+                    await self._reconnect()
+                    continue
+                raise
+
+    # ------------------------------------------------------------------
+    # Retry helpers — reconnect after a connection-drop OperationalError
+    # ------------------------------------------------------------------
+
+    async def _reconnect(self) -> None:
+        """Re-establish the DB connection after a connection-drop OperationalError."""
+        if not self._conn_string:
+            return
+        with suppress(Exception):
+            await self.conn.close()
+        # Match the AsyncPostgresSaver.from_conn_string connection setup
+        from psycopg import AsyncConnection
+        from psycopg.rows import dict_row
+
+        self.conn = await AsyncConnection.connect(
+            self._conn_string,
+            autocommit=True,
+            prepare_threshold=0,
+            row_factory=dict_row,
+        )
 
     # ------------------------------------------------------------------
     # Override: from_conn_string — passes org_id and fernet_key
@@ -493,6 +534,7 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
                 organisation_id=organisation_id,
                 fernet_key=fernet_key,
                 fernet_key_old=fernet_key_old,
+                conn_string=conn_string,
             )
 
     # ------------------------------------------------------------------

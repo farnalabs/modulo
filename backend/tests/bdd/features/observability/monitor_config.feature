@@ -19,9 +19,24 @@ Feature: Monitoring Configuration
 
   Scenario: Admin updates monitoring configuration
     Given I am authenticated as an admin
-    When I PUT /api/v1/admin/monitor-config with backends ["datadog_rum"]
+    When I PUT /api/v1/admin/monitor-config with backends ["datadog_rum"] and a clientToken
     Then the response status is 200
     And the monitor config includes the "datadog_rum" backend
+
+  Scenario: PUT enabling Sentry without a DSN returns 422
+    Given I am authenticated as an admin
+    When I PUT /api/v1/admin/monitor-config enabling "sentry" without its required fields
+    Then the response status is 422
+
+  Scenario: PUT enabling Datadog RUM without a client token returns 422
+    Given I am authenticated as an admin
+    When I PUT /api/v1/admin/monitor-config enabling "datadog_rum" without its required fields
+    Then the response status is 422
+
+  Scenario: PUT enabling Grafana Faro without a collector URL returns 422
+    Given I am authenticated as an admin
+    When I PUT /api/v1/admin/monitor-config enabling "grafana_faro" without its required fields
+    Then the response status is 422
 
   Scenario: PUT with unknown backend returns 422
     Given I am authenticated as an admin

@@ -9,7 +9,7 @@
     <PageHeader :title="$t('views.AdminCostBreakdownView.cost_controls')" :subtitle="$t('views.AdminCostControlsView.budget_overview_team_budgets_alert_thresholds_and_billing_se')" />
 
     <FeatureGate feature-name="admin_cost_controls" required-tier="team" show-disabled>
-
+      <div class="space-y-6">
       <LoadingSpinner v-if="loading" />
       <template v-else>
         <Card>
@@ -24,21 +24,21 @@
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostBreakdownView.total_spend') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-total-spend">{{ currencySymbol }}{{ totalSpend.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-total-spend">{{ formatMoney(totalSpend, settings.currency) }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.budget') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-budget">{{ currencySymbol }}{{ settings.budget.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" data-testid="cc-budget">{{ formatMoney(settings.budget, settings.currency) }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <p class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.remaining') }}</p>
-                  <p class="mt-1 text-2xl font-semibold tabular-nums" :class="remainingClass" data-testid="cc-remaining">{{ currencySymbol }}{{ remainingBudget.toFixed(2) }}</p>
+                  <p class="mt-1 text-2xl font-semibold tabular-nums" :class="remainingClass" data-testid="cc-remaining">{{ formatMoney(remainingBudget, settings.currency) }}</p>
                 </div>
               </div>
               <div>
                 <div class="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                   <span>{{ percentUsed.toFixed(1) }}% used</span>
-                  <span>{{ currencySymbol }}{{ totalSpend.toFixed(2) }} / {{ currencySymbol }}{{ settings.budget.toFixed(2) }}</span>
+                  <span>{{ formatMoney(totalSpend, settings.currency) }} / {{ formatMoney(settings.budget, settings.currency) }}</span>
                 </div>
                 <div class="h-2.5 w-full overflow-hidden rounded-full bg-muted">
                   <div
@@ -85,7 +85,7 @@
                 <p v-if="(row as any).saveError" class="mt-1 text-xs text-destructive">{{ (row as any).saveError }}</p>
               </template>
               <template #cell-spend="{ row }">
-                <span class="text-muted-foreground">{{ currencySymbol }}{{ teamCostMap[(row as any).id]?.toFixed(2) ?? '0.00' }}</span>
+                <span class="text-muted-foreground">{{ formatMoney(teamCostMap[(row as any).id] ?? 0, settings.currency) }}</span>
               </template>
               <template #cell-actions="{ row }">
                 <div class="text-right">
@@ -152,7 +152,7 @@
                 </p>
               </div>
               <label for="admincostcontrolsview-field-3" class="relative inline-flex cursor-pointer items-center" data-testid="cc-circuit-breaker">
-                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
+                <input id="admincostcontrolsview-field-3" type="checkbox" class="peer sr-only" :aria-label="$t('views.AdminCostControlsView.auto_stop_on_budget_exceeded')" :checked="settings.circuitBreakerEnabled" @change="toggleCircuitBreaker" />
                 <div class="peer h-6 w-11 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-muted after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full" />
               </label>
             </div>
@@ -169,7 +169,7 @@
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <label for="admincostcontrolsview-field-2" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.currency') }}</label>
-                <Select :model-value="settings.currency" @update:model-value="onCurrencyChange">
+                <Select aria-label="Currency" :model-value="settings.currency" @update:model-value="onCurrencyChange">
                   <SelectTrigger data-testid="cc-currency" aria-label="Currency" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="USD ($)" />
                   </SelectTrigger>
@@ -183,7 +183,7 @@
               </div>
               <div>
                 <label for="admincostcontrolsview-field-1" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.AdminCostControlsView.billing_period') }}</label>
-                <Select :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
+                <Select :aria-label="$t('views.AdminCostControlsView.billing_period')" :model-value="settings.billingPeriod" @update:model-value="onBillingPeriodChange">
                   <SelectTrigger data-testid="cc-billing-period" :aria-label="$t('views.AdminCostControlsView.billing_period')" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
                     <SelectValue :placeholder="$t('views.AdminCostControlsView.monthly')" />
                   </SelectTrigger>
@@ -220,6 +220,7 @@
           </CardContent>
         </Card>
       </template>
+      </div>
     </FeatureGate>
   </div>
 </template>
@@ -239,6 +240,7 @@ import { Button } from '../components/ui/button'
 import { DataTable } from '../components/ui/data-table'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import PageTabs from "../components/PageTabs.vue"
+import { formatMoney } from '../lib/money'
 
 const planStore = usePlanStore()
 
@@ -371,14 +373,6 @@ const circuitBreakerSaveError = ref<string | null>(null)
 const currencySaveError = ref<string | null>(null)
 const periodSaveError = ref<string | null>(null)
 
-const currencyMap: Record<string, string> = {
-  USD: '$',
-  EUR: '€',
-  GBP: '£',
-}
-
-const currencySymbol = computed(() => currencyMap[settings.value.currency] ?? '$')
-
 const remainingBudget = computed(() => Math.max(0, settings.value.budget - totalSpend.value))
 const percentUsed = computed(() => {
   if (settings.value.budget <= 0) return 0
@@ -408,7 +402,21 @@ async function loadSettings() {
     if (err) {
       return
     } else if (data) {
-      settings.value = { ...settings.value, ...data }
+      const resp = data as {
+        budget?: number | null
+        currency?: string | null
+        billing_period?: string | null
+        alert_thresholds?: number[] | null
+        circuit_breaker_enabled?: boolean | null
+      }
+      settings.value = {
+        ...settings.value,
+        ...(typeof resp.budget === 'number' ? { budget: resp.budget } : {}),
+        ...(typeof resp.currency === 'string' && resp.currency ? { currency: resp.currency as ControlsSettings['currency'] } : {}),
+        ...(typeof resp.billing_period === 'string' && resp.billing_period ? { billingPeriod: resp.billing_period as ControlsSettings['billingPeriod'] } : {}),
+        ...(Array.isArray(resp.alert_thresholds) ? { alertThresholds: resp.alert_thresholds } : {}),
+        ...(typeof resp.circuit_breaker_enabled === 'boolean' ? { circuitBreakerEnabled: resp.circuit_breaker_enabled } : {}),
+      }
     }
   } catch (e) {
     console.warn('Failed to load cost control settings', e)
@@ -460,30 +468,35 @@ async function saveBudget() {
 async function toggleThreshold(threshold: number) {
   const prev = [...settings.value.alertThresholds]
   const idx = settings.value.alertThresholds.indexOf(threshold)
+  const next = [...prev]
   if (idx >= 0) {
-    settings.value.alertThresholds.splice(idx, 1)
+    next.splice(idx, 1)
   } else {
-    settings.value.alertThresholds.push(threshold)
-    settings.value.alertThresholds.sort((a, b) => a - b)
+    next.push(threshold)
+    next.sort((a, b) => a - b)
   }
+  if (next.length === 0) {
+    thresholdSaveError.value = 'At least one alert threshold must remain enabled'
+    return
+  }
+  settings.value.alertThresholds = next
   thresholdSaveError.value = null
-  try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alertThresholds: settings.value.alertThresholds } })
-  } catch {
+  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { alert_thresholds: next } })
+  if (err) {
     settings.value.alertThresholds = prev
-    thresholdSaveError.value = 'Failed to save thresholds'
+    thresholdSaveError.value = `Failed to save thresholds: ${formatApiError(err)}`
   }
 }
 
 async function toggleCircuitBreaker() {
   const prev = settings.value.circuitBreakerEnabled
-  settings.value.circuitBreakerEnabled = !prev
+  const next = !prev
+  settings.value.circuitBreakerEnabled = next
   circuitBreakerSaveError.value = null
-  try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuitBreakerEnabled: settings.value.circuitBreakerEnabled } })
-  } catch {
+  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { circuit_breaker_enabled: next } })
+  if (err) {
     settings.value.circuitBreakerEnabled = prev
-    circuitBreakerSaveError.value = 'Failed to save circuit breaker'
+    circuitBreakerSaveError.value = `Failed to save circuit breaker: ${formatApiError(err)}`
   }
 }
 
@@ -501,13 +514,13 @@ async function onCurrencyChange(value: unknown) {
 
 async function onBillingPeriodChange(value: unknown) {
   const prev = settings.value.billingPeriod
-  settings.value.billingPeriod = String(value) as 'monthly' | 'quarterly' | 'annual'
+  const next = String(value) as 'monthly' | 'quarterly' | 'annual'
+  settings.value.billingPeriod = next
   periodSaveError.value = null
-  try {
-    await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billingPeriod: settings.value.billingPeriod } })
-  } catch {
+  const { error: err } = await (api as any).PUT('/api/v1/admin/costs/controls', { body: { billing_period: next } })
+  if (err) {
     settings.value.billingPeriod = prev
-    periodSaveError.value = 'Failed to save billing period'
+    periodSaveError.value = `Failed to save billing period: ${formatApiError(err)}`
   }
 }
 

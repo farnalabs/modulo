@@ -4,13 +4,14 @@ import asyncio
 import csv
 import io
 import logging
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, ClassVar
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,15 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report
+from modulo.core.cost_settings import (
+    COST_CONTROLS_KEY,
+    DEFAULT_ALERT_THRESHOLDS,
+    DEFAULT_BILLING_PERIOD,
+    DEFAULT_CIRCUIT_BREAKER_ENABLED,
+    DEFAULT_CURRENCY,
+    SUPPORTED_BILLING_PERIODS,
+    SUPPORTED_CURRENCIES,
+)
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.scheduled_report import (
     create_scheduled_report,
@@ -48,6 +58,71 @@ def _coerce_spend_limit_usd(value: Decimal | None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _cost_controls(org: object) -> dict[str, Any]:
+    """Return the org's persisted ``cost_controls`` settings dict (may be empty).
+
+    ``settings_json`` is a JSON column that may be ``None`` or hold any shape;
+    only dict values are treated as cost-control settings.
+    """
+    settings = getattr(org, "settings_json", None)
+    if not isinstance(settings, dict):
+        return {}
+    cc = settings.get(COST_CONTROLS_KEY)
+    return cc if isinstance(cc, dict) else {}
+
+
+def _read_cost_control(org: object | None, key: str, default: Any) -> Any:
+    """Read a single persisted cost-control field, falling back to ``default``."""
+    if org is None:
+        return default
+    value = _cost_controls(org).get(key, default)
+    return value if value is not None else default
+
+
+def _read_currency(org: object | None) -> str:
+    value = _read_cost_control(org, "currency", DEFAULT_CURRENCY)
+    return value if isinstance(value, str) and value in SUPPORTED_CURRENCIES else DEFAULT_CURRENCY
+
+
+def _read_billing_period(org: object | None) -> str:
+    value = _read_cost_control(org, "billing_period", DEFAULT_BILLING_PERIOD)
+    return value if isinstance(value, str) and value in SUPPORTED_BILLING_PERIODS else DEFAULT_BILLING_PERIOD
+
+
+def _read_circuit_breaker(org: object | None) -> bool:
+    value = _read_cost_control(org, "circuit_breaker_enabled", DEFAULT_CIRCUIT_BREAKER_ENABLED)
+    return value if isinstance(value, bool) else DEFAULT_CIRCUIT_BREAKER_ENABLED
+
+
+def _read_alert_thresholds(org: object | None) -> list[float]:
+    """Read persisted alert thresholds, degrading to the default when corrupted.
+
+    ``settings_json`` is persisted JSON and may hold arbitrary shapes. Anything
+    that is not a non-empty list of whole numbers within 1..100 is rejected so a
+    corrupted persisted value degrades to the default instead of raising (which
+    would 500 the endpoint). Non-finite floats (``NaN``/``Infinity``) are also
+    rejected since ``int()`` cannot coerce them and ``json.loads`` accepts them.
+    Out-of-range ints are checked before any float conversion because
+    ``math.isfinite`` raises ``OverflowError`` for ints too large to fit a
+    float (e.g. a persisted ``[1000000000000000000000000000000]``). Normal
+    writes are validated by
+    ``UpdateCostControlsRequest._validate_alert_thresholds``; this read path is
+    what keeps defensiveness against previously-corrupted data.
+    """
+    value = _read_cost_control(org, "alert_thresholds", [])
+    if not isinstance(value, list) or not value:
+        return list(DEFAULT_ALERT_THRESHOLDS)
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return list(DEFAULT_ALERT_THRESHOLDS)
+        if isinstance(item, int):
+            if not 1 <= item <= 100:
+                return list(DEFAULT_ALERT_THRESHOLDS)
+        elif not math.isfinite(item) or int(item) != item or not 1 <= item <= 100:
+            return list(DEFAULT_ALERT_THRESHOLDS)
+    return [float(v) for v in value]
 
 
 class CostReportComponent(BaseModel):
@@ -326,7 +401,7 @@ async def set_team_spend_limit(
 class CostControlsResponse(BaseModel):
     teams: list[dict[str, object]]
     budget: float | None = None
-    alert_thresholds: ClassVar[list[float]] = []
+    alert_thresholds: list[float] = Field(default_factory=lambda: list(DEFAULT_ALERT_THRESHOLDS))
     circuit_breaker_enabled: bool = False
     currency: str = "USD"
     billing_period: str = "monthly"
@@ -336,8 +411,22 @@ class UpdateCostControlsRequest(BaseModel):
     budget: float | None = None
     alert_thresholds: list[float] | None = None
     circuit_breaker_enabled: bool | None = None
-    currency: str | None = None
-    billing_period: str | None = None
+    currency: Literal["USD", "EUR", "GBP"] | None = None
+    billing_period: Literal["monthly", "quarterly", "annual"] | None = None
+
+    @field_validator("alert_thresholds")
+    @classmethod
+    def _validate_alert_thresholds(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return value
+        if not value:
+            raise ValueError("alert_thresholds must be a non-empty list of integers in 1..100")
+        for threshold in value:
+            if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+            if int(threshold) != threshold or not 1 <= int(threshold) <= 100:
+                raise ValueError("alert_thresholds values must be integers in 1..100")
+        return value
 
 
 @handle_db_errors("costs.get_cost_controls")
@@ -386,6 +475,10 @@ async def get_cost_controls(
             for t in teams_result.items
         ],
         budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
+        alert_thresholds=_read_alert_thresholds(org),
+        circuit_breaker_enabled=_read_circuit_breaker(org),
+        currency=_read_currency(org),
+        billing_period=_read_billing_period(org),
     )
 
 
@@ -401,16 +494,35 @@ async def update_cost_controls(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
-            if req.budget is not None:
-                org = await get_organisation(session, current_user.organisation_id)
-                if org is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
-
-                org.daily_spend_limit = Decimal(str(req.budget))
-                await session.flush()
-
-            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
             org = await get_organisation(session, current_user.organisation_id)
+            if org is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organisation not found")
+
+            if req.budget is not None:
+                org.daily_spend_limit = Decimal(str(req.budget))
+
+            if (
+                req.currency is not None
+                or req.billing_period is not None
+                or req.circuit_breaker_enabled is not None
+                or req.alert_thresholds is not None
+            ):
+                settings_raw = org.settings_json if isinstance(org.settings_json, dict) else {}
+                settings_dict = dict(settings_raw)
+                cc = dict(_cost_controls(org))
+                if req.currency is not None:
+                    cc["currency"] = req.currency
+                if req.billing_period is not None:
+                    cc["billing_period"] = req.billing_period
+                if req.circuit_breaker_enabled is not None:
+                    cc["circuit_breaker_enabled"] = req.circuit_breaker_enabled
+                if req.alert_thresholds is not None:
+                    cc["alert_thresholds"] = [float(t) for t in req.alert_thresholds]
+                settings_dict[COST_CONTROLS_KEY] = cc
+                org.settings_json = settings_dict
+
+            await session.flush()
+            teams_result = await list_teams(session, org_id=current_user.organisation_id, page=1, page_size=1000)
     except ProgrammingError:
         _log.exception("update_cost_controls ProgrammingError (org_id=%s)", current_user.organisation_id)
         raise HTTPException(
@@ -443,7 +555,11 @@ async def update_cost_controls(
             }
             for t in teams_result.items
         ],
-        budget=_coerce_spend_limit_usd(org.daily_spend_limit) if org is not None else None,
+        budget=_coerce_spend_limit_usd(org.daily_spend_limit),
+        alert_thresholds=_read_alert_thresholds(org),
+        circuit_breaker_enabled=_read_circuit_breaker(org),
+        currency=_read_currency(org),
+        billing_period=_read_billing_period(org),
     )
 
 

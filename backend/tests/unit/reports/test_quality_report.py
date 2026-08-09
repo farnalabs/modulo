@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -97,7 +98,7 @@ def _mock_resp(is_success: bool = True, status_code: int = 200, text: str = "ok"
 
 class TestPctDelta:
     @pytest.mark.parametrize(
-        "current,previous,expected",
+        ("current", "previous", "expected"),
         [
             (10.0, 0.0, None),
             (150.0, 100.0, 50.0),
@@ -117,7 +118,7 @@ class TestPctDelta:
 
 class TestTrendSymbol:
     @pytest.mark.parametrize(
-        "delta,expected",
+        ("delta", "expected"),
         [
             (10.0, "\u2191"),
             (-10.0, "\u2193"),
@@ -150,7 +151,7 @@ class TestTrendSymbol:
 
 class TestFmtDelta:
     @pytest.mark.parametrize(
-        "delta,expected",
+        ("delta", "expected"),
         [
             (None, "N/A"),
             (10.0, "+10.0%"),
@@ -584,4 +585,12 @@ class TestGenerateQualityReport:
         session.execute = AsyncMock(side_effect=RuntimeError("boom"))
 
         with pytest.raises(RuntimeError, match="boom"):
+            await generate_quality_report(session, org_id)
+
+    async def test_reraises_cancelled_error(self) -> None:
+        org_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
             await generate_quality_report(session, org_id)

@@ -3,7 +3,7 @@
 import contextlib
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import parsers, scenarios, then, when
@@ -46,9 +46,11 @@ def step_change_password(
     from modulo.auth.passwords import hash_password
 
     with (
-        patch("modulo.api.routes.me.get_account_by_id") as mock_get_user,
-        patch("modulo.api.routes.me.list_families_for_account") as mock_list,
-        patch("modulo.api.routes.me.blacklist_family") as mock_blacklist,
+        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
+        patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
+        patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
     ):
         mock_user = MagicMock()
         mock_user.password_hash = hash_password("correct-horse-battery")
@@ -68,6 +70,8 @@ def step_change_password(
         )
         _store_response(request, ctx, resp)
         ctx["_mock_blacklist"] = mock_blacklist
+        ctx["_mock_rls"] = mock_rls
+        ctx["_mock_audit"] = mock_audit
 
 
 @when("I attempt to change my password without a local password set")
@@ -77,9 +81,9 @@ def step_change_password_no_local(
     ctx: dict[str, Any],
 ) -> None:
     with (
-        patch("modulo.api.routes.me.get_account_by_id") as mock_get_user,
-        patch("modulo.api.routes.me.list_families_for_account") as mock_list,
-        patch("modulo.api.routes.me.blacklist_family") as mock_blacklist,
+        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
     ):
         mock_user = MagicMock()
         mock_user.password_hash = None
@@ -109,3 +113,13 @@ def step_all_families_blacklisted(ctx: dict[str, Any]) -> None:
     mock_blacklist = ctx.get("_mock_blacklist")
     assert mock_blacklist is not None, "No blacklist_family mock found — was the When step run?"
     mock_blacklist.assert_called()
+
+
+@then("the password change is recorded in the audit trail")
+def step_password_change_audited(ctx: dict[str, Any]) -> None:
+    mock_audit = ctx.get("_mock_audit")
+    assert mock_audit is not None, "No append_audit_event mock found — was the When step run?"
+    mock_audit.assert_called_once()
+    _, kwargs = mock_audit.call_args
+    assert kwargs["event_type"] == "password_changed"
+    assert kwargs["resource_type"] == "account"

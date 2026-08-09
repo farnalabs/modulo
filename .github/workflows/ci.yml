@@ -29,6 +29,8 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run --no-sync ruff check .
+      - name: Ruff format check
+        run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy src/modulo/
       - run: uv run --no-sync bandit -r src/modulo/ -ll
       - name: Semgrep (block new findings)
@@ -91,9 +93,78 @@ jobs:
         run: npx playwright test wcag-contrast
       - run: npm run lint
       - run: npm run type-check
-      - run: npm run test:unit
+      - name: Run unit tests (vitest)
+        # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
+        # script hardcodes --maxWorkers=4, which saturates both cores with 4
+        # concurrently-loading jsdom environments (Vue SFC + ECharts/reka-ui/
+        # vue-query) and starves setImmediate (flushPromises) by 10+s. Cap the
+        # runner at 2 workers — matches actual CPU capacity, not a race-hiding
+        # hack. Invoke vitest directly so the script's --maxWorkers=4 is never
+        # inherited. 15000ms test/hook timeouts (vite.config.ts, from #817)
+        # remain the safety net for heavy mount+settle specs.
+        run: npx vitest run src --pool=threads --maxWorkers=2
       - run: npm run build
       - run: npm audit --audit-level=critical
+
+  schema-freshness:
+    # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
+    # FAILS if the committed schema differs from what the generator produces.
+    # Any backend API change (routes, request/response models) therefore forces
+    # `npm run generate:api` in the same PR. Mirrors scripts/generate-api-types.ps1:
+    # dump the OpenAPI JSON by importing modulo.api.main, then feed it to
+    # openapi-typescript. Runs on ALL events (PR + push to main + manual) so a
+    # schema that drifts out of sync on main is caught immediately.
+    name: Schema freshness
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Install backend deps
+        working-directory: backend
+        run: uv sync --frozen
+      - name: Dump OpenAPI schema from backend
+        working-directory: backend
+        shell: bash
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
+          SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          MODULO_CSRF_ENABLED: "false"
+        run: |
+          cat > /tmp/gen_openapi.py <<'EOF'
+          import os, json, sys
+          sys.tracebacklimit = 0
+          from modulo.api.main import app
+          with open("/tmp/modulo_openapi.json", "w", encoding="utf-8") as f:
+              json.dump(app.openapi(), f, ensure_ascii=False)
+          print(f"Schema: {os.path.getsize('/tmp/modulo_openapi.json')} bytes")
+          EOF
+          uv run --no-sync python /tmp/gen_openapi.py
+      - name: Generate TypeScript types
+        # Pin the openapi-typescript version to the one in frontend/package.json
+        # (7.13.0) so the gate is deterministic — a bare `npx openapi-typescript`
+        # would pull the latest release and cause version-skew churn between local
+        # (`npm run generate:api`, uses the lockfile install) and CI.
+        working-directory: frontend
+        shell: bash
+        run: npx --yes openapi-typescript@7.13.0 /tmp/modulo_openapi.json --output src/lib/api/schema.ts
+      - name: Fail if schema.ts is stale
+        shell: bash
+        run: |
+          if git diff --exit-code -- frontend/src/lib/api/schema.ts; then
+            echo "schema.ts is up to date"
+          else
+            echo "::error::frontend/src/lib/api/schema.ts is stale. Run 'npm run generate:api' from frontend/ and commit the regenerated file."
+            exit 1
+          fi
 
   product-map-validate:
     name: Product map validation
@@ -285,7 +356,7 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -366,11 +437,18 @@ jobs:
 
   notify-pr-review:
     name: Trigger PR Reviewer
-    if: github.event_name == 'pull_request' && success()
-    needs: [backend-lint, backend-test, frontend, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    # Mirror the notify-pr-failure pattern above: a job-level `success()`
+    # surfaces this check as "skipped" in the check-runs API whenever any
+    # needed job fails or is cancelled (e.g. a runner outage), and the PR
+    # Reviewer flags that as a non-green signal. The check itself always
+    # reports success on pull_request events; the "only dispatch when all
+    # needed checks are green" logic lives on the webhook step below.
+    if: github.event_name == 'pull_request' && always()
+    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Send webhook to Modulo PR Review Agent
+        if: success()
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}

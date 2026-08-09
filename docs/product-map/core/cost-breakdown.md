@@ -5,6 +5,7 @@ delivery-tasks: [task-nv7-cost-breakdown]
 code:
   - backend/src/modulo/core/cost_controller/__init__.py
   - backend/src/modulo/api/routes/costs.py
+  - backend/src/modulo/api/routes/org_settings.py
 depends-on: [feat-teams-team-crud]
 unit-tests:
   - backend/tests/unit/core/cost_controller/test_cost_controller.py
@@ -160,7 +161,6 @@ Discovered from 1 completed delivery tasks.
 - Token-level accumulation via LLM callback not wired up
 - Anomalies route uses GET for dismiss action (should be POST/PATCH per REST conventions)
 - Integration tests skipped (awaiting fixture repair)
-- `get_cost_controls` and `update_cost_controls` return hardcoded defaults for alert_thresholds, circuit_breaker_enabled, currency, billing_period — never persisted to DB
 
 ## QA History
 

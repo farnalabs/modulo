@@ -21,7 +21,7 @@ def mock_redis():
 
 
 class TestRedisSlidingWindowRateLimiter:
-    @pytest.mark.parametrize("zcard_value,expected", [(0, True), (1, True), (5, True), (6, False)])
+    @pytest.mark.parametrize(("zcard_value", "expected"), [(0, True), (1, True), (5, True), (6, False)])
     async def test_check_limit(self, mock_redis, zcard_value, expected):
         mock_redis.pipeline.return_value.execute = AsyncMock(return_value=(None, None, zcard_value, True))
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
@@ -73,6 +73,14 @@ class TestRedisSlidingWindowRateLimiter:
         assert pipe.expire.call_args[0][0] == "ratelimit:k"
         assert pipe.expire.call_args[0][1] == 240
 
+    async def test_expires_key_at_default_double_window(self, mock_redis):
+        """With the default window, the TTL must be 2 * WINDOW_SECONDS."""
+        limiter = RedisSlidingWindowRateLimiter(mock_redis)
+        await limiter.check("k", max_requests=5)
+        pipe = mock_redis.pipeline.return_value
+        pipe.expire.assert_called_once()
+        assert pipe.expire.call_args[0][1] == WINDOW_SECONDS * 2
+
     async def test_records_timestamp_member(self, mock_redis):
         limiter = RedisSlidingWindowRateLimiter(mock_redis)
         await limiter.check("k", max_requests=5)
@@ -123,7 +131,7 @@ class TestRateLimitRule:
 
 class TestRateLimiterRegistry:
     @pytest.mark.parametrize(
-        "redis_result,expected",
+        ("redis_result", "expected"),
         [
             ((None, None, 1, True), True),
             ((None, None, 6, True), False),

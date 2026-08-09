@@ -10,6 +10,7 @@ from modulo.core.team_visibility import (
     ConnectorTeamMismatch,
     connector_team_mismatch,
     connector_team_mismatch_detail,
+    extract_connector_bindings,
     find_connector_team_mismatches,
 )
 from modulo.db.models.connector_instance import ConnectorInstance
@@ -84,6 +85,70 @@ def test_detail_contains_named_error() -> None:
     assert str(_TEAM_B) in detail
 
 
+def test_detail_joins_multiple_mismatches() -> None:
+    m1 = ConnectorTeamMismatch(
+        connector_id=uuid.uuid4(),
+        connector_name="db-a",
+        connector_owner_team_id=_TEAM_A,
+        pipeline_owner_team_id=_TEAM_B,
+        node_id=_NODE_ID,
+    )
+    m2 = ConnectorTeamMismatch(
+        connector_id=uuid.uuid4(),
+        connector_name="db-b",
+        connector_owner_team_id=_TEAM_B,
+        pipeline_owner_team_id=_TEAM_A,
+        node_id="node-2",
+    )
+    detail = connector_team_mismatch_detail([m1, m2])
+    assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
+    assert "db-a" in detail
+    assert "db-b" in detail
+    assert str(_TEAM_A) in detail
+    assert str(_TEAM_B) in detail
+    assert detail.count("is team-private") == 2
+    assert "; " in detail
+
+
+# ---------------------------------------------------------------------------
+# extract_connector_bindings (graph node → snapshot binding descriptors)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_connector_bindings_valid_node() -> None:
+    node_id = str(uuid.uuid4())
+    instance_id = str(uuid.uuid4())
+    nodes = [{"id": node_id, "connector_binding": {"instance_id": instance_id}}]
+    assert extract_connector_bindings(nodes) == [{"node_id": node_id, "connector_instance_id": instance_id}]
+
+
+def test_extract_connector_bindings_skips_nodes_without_binding() -> None:
+    node_id = str(uuid.uuid4())
+    assert extract_connector_bindings([{"id": node_id}]) == []
+
+
+def test_extract_connector_bindings_skips_non_dict_bindings() -> None:
+    node_id = str(uuid.uuid4())
+    for bad in ("instance_id", 42, None, ["instance_id"]):
+        nodes = [{"id": node_id, "connector_binding": bad}]
+        assert extract_connector_bindings(nodes) == []
+
+
+def test_extract_connector_bindings_skips_missing_instance_id() -> None:
+    node_id = str(uuid.uuid4())
+    nodes = [
+        {"id": node_id, "connector_binding": {}},
+        {"id": node_id, "connector_binding": {"instance_id": None}},
+    ]
+    assert extract_connector_bindings(nodes) == []
+
+
+def test_extract_connector_bindings_missing_node_id_stringifies_none() -> None:
+    instance_id = str(uuid.uuid4())
+    nodes = [{"connector_binding": {"instance_id": instance_id}}]
+    assert extract_connector_bindings(nodes) == [{"node_id": "None", "connector_instance_id": instance_id}]
+
+
 # ---------------------------------------------------------------------------
 # find_connector_team_mismatches (async DB check)
 # ---------------------------------------------------------------------------
@@ -132,6 +197,35 @@ async def test_team_connector_on_org_pipeline_returns_mismatch() -> None:
     session = _mock_session([conn])
     mismatches = await find_connector_team_mismatches(session, _ORG_ID, None, bindings)
     assert len(mismatches) == 1
+    assert mismatches[0].connector_id == conn.id
+    assert mismatches[0].connector_name == "eng-db"
+    assert mismatches[0].connector_owner_team_id == _TEAM_A
+    assert mismatches[0].pipeline_owner_team_id is None
+    assert mismatches[0].node_id == _NODE_ID
+
+
+@pytest.mark.asyncio
+async def test_binding_without_node_id_reports_none_node() -> None:
+    conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="eng-db")
+    bindings = [{"connector_instance_id": str(conn.id)}]
+    session = _mock_session([conn])
+    mismatches = await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert len(mismatches) == 1
+    assert mismatches[0].node_id is None
+
+
+@pytest.mark.asyncio
+async def test_mixed_valid_and_invalid_instance_ids() -> None:
+    conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="eng-db")
+    bindings: list[dict[str, str | None]] = [
+        {"node_id": _NODE_ID, "connector_instance_id": str(conn.id)},
+        {"node_id": _NODE_ID, "connector_instance_id": "not-a-uuid"},
+        {"node_id": _NODE_ID, "connector_instance_id": None},
+    ]
+    session = _mock_session([conn])
+    mismatches = await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert len(mismatches) == 1
+    assert mismatches[0].connector_id == conn.id
 
 
 @pytest.mark.asyncio

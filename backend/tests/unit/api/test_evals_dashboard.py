@@ -129,7 +129,7 @@ def _configure_execute(
     ]
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
     _configure_execute(mock_session)
@@ -153,7 +153,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()
@@ -163,7 +163,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
     _configure_execute(mock_session)
@@ -187,7 +187,7 @@ def operator_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def runner_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
     _configure_execute(mock_session)

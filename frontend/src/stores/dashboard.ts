@@ -161,6 +161,7 @@ export const useDashboardStore = defineStore("dashboard", () => {
   const { t } = useI18n();
   const summary = ref<DashboardSummary | null>(null);
   const loading = ref(false);
+  const periodRefreshing = ref(false);
   const summaryError = ref<string | ProblemDetail | null>(null);
   const syncingIds = ref(new Set<string>());
   const unsubHandlers: (() => void)[] = [];
@@ -199,6 +200,43 @@ export const useDashboardStore = defineStore("dashboard", () => {
       summaryError.value = formatApiError(e);
     } finally {
       loading.value = false;
+    }
+  }
+
+  async function fetchPeriodMetrics(days: number) {
+    if (periodRefreshing.value) return;
+    periodRefreshing.value = true;
+    try {
+      const { data: result, error: err } = await withTimeout(
+        api.GET("/api/v1/dashboard/summary", {
+          params: { query: { days } },
+        }),
+        15000,
+        "Dashboard summary request",
+      );
+      if (err) {
+        summaryError.value = formatApiError(err);
+      } else {
+        const validated = validateDashboardSummary(result);
+        if (validated) {
+          // Refresh ONLY the period-scoped block — never wipe the all-time
+          // summary (total_runs, teams, trend, recent_runs stay as-is) and
+          // never set the global loading flag, so the dashboard doesn't flash
+          // its full skeleton on every window click.
+          if (summary.value) {
+            summary.value = { ...summary.value, period: validated.period };
+          } else {
+            summary.value = validated;
+          }
+          daysParam.value = days;
+        } else {
+          summaryError.value = t("views.DashboardView.invalid_dashboard_data");
+        }
+      }
+    } catch (e: unknown) {
+      summaryError.value = formatApiError(e);
+    } finally {
+      periodRefreshing.value = false;
     }
   }
 
@@ -281,12 +319,14 @@ export const useDashboardStore = defineStore("dashboard", () => {
     summary,
     trends,
     loading,
+    periodRefreshing,
     trendsLoading,
     error,
     summaryError,
     trendsError,
     totalSpend,
     fetchSummary,
+    fetchPeriodMetrics,
     fetchTrends,
     disposeHandlers,
   };

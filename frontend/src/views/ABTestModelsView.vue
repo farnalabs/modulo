@@ -122,7 +122,7 @@
                 </div>
                 <div>
                   <label for="abtestmodelsview-field-4" class="mb-1 block text-xs font-medium text-muted-foreground">{{ $t('views.ABTestModelsView.model_backend') }}</label>
-                  <Select v-model="v.modelBackendId">
+                  <Select aria-label="Model backend" v-model="v.modelBackendId">
                     <SelectTrigger id="abtestmodelsview-field-4" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Model backend" :data-testid="`ab-test-models-model-backend-${i}`">
                       <SelectValue :placeholder="$t('views.ABTestModelsView.select_model')" />
                     </SelectTrigger>
@@ -229,7 +229,7 @@
                     :key="`cost-${s.name}`"
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
-                    <span v-if="s.totalCost !== null">${{ Number(s.totalCost).toFixed(6) }}</span>
+                    <span v-if="s.totalCost !== null">{{ formatMoney(Number(s.totalCost), currencyCode, 6) }}</span>
                     <span v-else class="text-muted-foreground">�</span>
                   </td>
                 </tr>
@@ -297,6 +297,10 @@ import {
   SelectItem,
   SelectValue,
 } from '@/components/ui/select'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
+
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 type PipelineItem = components['schemas']['PipelineResponse']
 type VariantGroup = components['schemas']['VariantGroupResponse']
@@ -808,4 +812,6 @@ async function fetchSnapshotForPipeline(pipelineId: string) {
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+
+loadCurrency()
 </script>

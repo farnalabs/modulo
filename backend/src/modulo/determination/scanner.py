@@ -71,6 +71,27 @@ async def _query_with_timeout(connector: ConnectorBase, query: ConnectorQuery) -
         raise TimeoutError(f"connector query '{query.resource}' timed out after {_QUERY_TIMEOUT}s") from None
 
 
+async def _sample_query(
+    connector: ConnectorBase,
+    connector_id: uuid.UUID,
+    resource: str,
+    query: ConnectorQuery,
+) -> tuple[Any | None, str | None]:
+    """Run a sampling query, converting failures into ``(result, error)``.
+
+    Returns ``(result, None)`` on success and ``(None, error)`` on failure so a
+    single connector's query error becomes an error sample instead of aborting
+    the whole scan. ``CancelledError`` is always re-raised.
+    """
+    try:
+        return await _query_with_timeout(connector, query), None
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Sampling %s failed for connector %s: %s", resource, connector_id, exc)
+        return None, str(exc)[:200]
+
+
 async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -> list[ScanSample]:
     """Sample data from a single connector based on its type."""
     samples: list[ScanSample] = []
@@ -83,103 +104,87 @@ async def _sample_connector(connector_id: uuid.UUID, connector: ConnectorBase) -
             return samples
 
         case ConnectorType.GITHUB:
-            repos: list[dict[str, Any]] = []
-            try:
-                r = await _query_with_timeout(connector, ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT))
-                repos = r.records
-                _add(samples, connector_id, ct, "repos", repos, len(repos))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("GitHub repo sampling failed for connector %s: %s", connector_id, exc)
-                _add(samples, connector_id, ct, "repos", [], 0, str(exc)[:200])
+            repos_result, repos_error = await _sample_query(
+                connector,
+                connector_id,
+                "repos",
+                ConnectorQuery(resource="repos", limit=_SAMPLE_LIMIT),
+            )
+            repos = repos_result.records if repos_result is not None else []
+            _add(samples, connector_id, ct, "repos", repos, len(repos), repos_error)
 
             for repo in repos:
                 name = _repo_name(repo)
                 if not name:
                     continue
-                try:
-                    r = await _query_with_timeout(
-                        connector,
-                        ConnectorQuery(resource="pulls", filters={"repo": name, "state": "open"}),
-                    )
-                    _add(samples, connector_id, ct, "pulls", r.records, len(r.records))
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning(
-                        "GitHub PR sampling failed for connector %s repo %s: %s",
-                        connector_id,
-                        name,
-                        exc,
-                    )
-                    _add(samples, connector_id, ct, "pulls", [], 0, str(exc)[:200])
+                pulls_result, pulls_error = await _sample_query(
+                    connector,
+                    connector_id,
+                    "pulls",
+                    ConnectorQuery(resource="pulls", filters={"repo": name, "state": "open"}),
+                )
+                pulls = pulls_result.records if pulls_result is not None else []
+                _add(samples, connector_id, ct, "pulls", pulls, len(pulls), pulls_error)
 
         case ConnectorType.GITLAB:
-            projects: list[dict[str, Any]] = []
-            try:
-                r = await _query_with_timeout(connector, ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT))
-                projects = r.records
-                _add(samples, connector_id, ct, "projects", projects, len(projects))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("GitLab project sampling failed for connector %s: %s", connector_id, exc)
-                _add(samples, connector_id, ct, "projects", [], 0, str(exc)[:200])
+            projects_result, projects_error = await _sample_query(
+                connector,
+                connector_id,
+                "projects",
+                ConnectorQuery(resource="projects", limit=_SAMPLE_LIMIT),
+            )
+            projects = projects_result.records if projects_result is not None else []
+            _add(samples, connector_id, ct, "projects", projects, len(projects), projects_error)
 
             for project in projects:
                 name = _repo_name(project)
                 if not name:
                     continue
-                try:
-                    r = await _query_with_timeout(
-                        connector,
-                        ConnectorQuery(resource="mrs", filters={"project": name, "state": "opened"}),
-                    )
-                    _add(samples, connector_id, ct, "mrs", r.records, len(r.records))
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning(
-                        "GitLab MR sampling failed for connector %s project %s: %s",
-                        connector_id,
-                        name,
-                        exc,
-                    )
-                    _add(samples, connector_id, ct, "mrs", [], 0, str(exc)[:200])
+                mrs_result, mrs_error = await _sample_query(
+                    connector,
+                    connector_id,
+                    "mrs",
+                    ConnectorQuery(resource="mrs", filters={"project": name, "state": "opened"}),
+                )
+                mrs = mrs_result.records if mrs_result is not None else []
+                _add(samples, connector_id, ct, "mrs", mrs, len(mrs), mrs_error)
 
         case ConnectorType.JIRA:
-            try:
-                r = await _query_with_timeout(
-                    connector,
-                    ConnectorQuery(
-                        resource="search",
-                        filters={"jql": "ORDER BY created DESC", "max_results": _SAMPLE_LIMIT},
-                    ),
-                )
-                _add(samples, connector_id, ct, "issues", r.records, getattr(r, "total", None) or len(r.records))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("JIRA sampling failed for connector %s: %s", connector_id, exc)
-                _add(samples, connector_id, ct, "issues", [], 0, str(exc)[:200])
+            result, error = await _sample_query(
+                connector,
+                connector_id,
+                "issues",
+                ConnectorQuery(
+                    resource="search",
+                    filters={"jql": "ORDER BY created DESC", "max_results": _SAMPLE_LIMIT},
+                ),
+            )
+            _add(
+                samples,
+                connector_id,
+                ct,
+                "issues",
+                result.records if result is not None else [],
+                (getattr(result, "total", None) or len(result.records)) if result is not None else 0,
+                error,
+            )
 
         case ConnectorType.LINEAR:
-            try:
-                r = await _query_with_timeout(connector, ConnectorQuery(resource="search", filters={"query": ""}))
-                _add(
-                    samples,
-                    connector_id,
-                    ct,
-                    "issues",
-                    r.records[:_SAMPLE_LIMIT],
-                    min(len(r.records), _SAMPLE_LIMIT),
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("Linear sampling failed for connector %s: %s", connector_id, exc)
-                _add(samples, connector_id, ct, "issues", [], 0, str(exc)[:200])
+            result, error = await _sample_query(
+                connector,
+                connector_id,
+                "issues",
+                ConnectorQuery(resource="search", filters={"query": ""}),
+            )
+            _add(
+                samples,
+                connector_id,
+                ct,
+                "issues",
+                result.records[:_SAMPLE_LIMIT] if result is not None else [],
+                min(len(result.records), _SAMPLE_LIMIT) if result is not None else 0,
+                error,
+            )
 
     return samples
 

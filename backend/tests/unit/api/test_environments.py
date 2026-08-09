@@ -72,7 +72,7 @@ def _fake_profile(**overrides: Any) -> MagicMock:
     return p
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -98,7 +98,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()
@@ -118,7 +118,7 @@ _ENV_AUTH_CASES = [
 ]
 
 
-@pytest.mark.parametrize("method,url", _ENV_AUTH_CASES, ids=["list", "create", "get", "update", "delete", "test"])
+@pytest.mark.parametrize(("method", "url"), _ENV_AUTH_CASES, ids=["list", "create", "get", "update", "delete", "test"])
 def test_endpoints_unauthenticated(unauth_client: TestClient, method: str, url: str) -> None:
     resp = getattr(unauth_client, method.lower())(url)
     assert resp.status_code in (401, 403), f"Expected 401/403 for {method} {url}, got {resp.status_code}"

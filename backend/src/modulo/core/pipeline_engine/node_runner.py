@@ -48,6 +48,7 @@ import math
 import os
 import re as _re
 import time
+import urllib.request
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
@@ -66,6 +67,7 @@ from modulo.core.cost_controller.breakdown.constants import (
 from modulo.core.cost_controller.breakdown.metrics import record_out_of_band
 from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalResult
 from modulo.core.pipeline_engine.decorator import cancellable_node
+from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.input_truncation import truncate_input
 from modulo.core.run_context.autonomy import (
     effective_autonomy_level,
@@ -80,7 +82,11 @@ _log = logging.getLogger(__name__)
 
 _is_truthy = bool
 
-_MAX_ARTIFACT_LOG = 102400
+# Cap for the stored artifact stdout/stderr blobs. 512KB keeps storage bounded
+# while capturing realistic sessions (real runs stream 364KB+; the old 100KB
+# cap made every long run look cut mid-JSON). Consumers can tell stored
+# truncation from a genuine cut via the stdout_length/stderr_length fields.
+_MAX_ARTIFACT_LOG = 512000
 _MAX_OTEL_LOG_ATTR = 32768
 _MAX_ERROR_MSG = 500
 
@@ -88,6 +94,16 @@ _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after comm
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
+_STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
+# FAR-97 pipe-buffer fix: the agent command's stdout/stderr are redirected to a
+# log file inside the sandbox so the process can never block on a full stdout
+# pipe (a long session emitting >64KB before completion would otherwise stall on
+# write). A periodic drain probe reads that file and uses its success as the
+# idle watchdog's liveness signal — the sandbox connection — instead of the
+# fragile RPC output stream.
+_SANDBOX_LOG_PATH = "/home/user/agent.log"
+_SANDBOX_TAIL_INTERVAL = 5.0  # seconds between sandbox log drain probes
+_SANDBOX_TAIL_READ_TIMEOUT = 10.0  # per-drain probe wait_for timeout
 
 # The raw_reported display clamp for the node-output surface: the RAW value
 # rides for audit, the SEPARATE clamped display field is what the UI/money
@@ -269,6 +285,59 @@ def _compute_sandbox_cost(elapsed_seconds: float, output_json: Any) -> float:
     if not math.isfinite(total):
         return 0.0
     return round(total, 6)
+
+
+async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> str:
+    """Fetch the tail of an E2B sandbox's logs — the only place the kill reason lives.
+
+    Uses GET https://api.e2b.app/sandboxes/{sandbox_id}/logs?limit={limit} with
+    header X-API-KEY: <MODULO_E2B_API_KEY or E2B_API_KEY>. Returns a bounded
+    string (last ~limit log lines) or "" if unavailable/disabled. Never raises.
+    """
+    if not isinstance(sandbox_id, str) or not sandbox_id:
+        return ""
+    api_key = os.environ.get("MODULO_E2B_API_KEY") or os.environ.get("E2B_API_KEY")
+    if not api_key:
+        return ""
+
+    def _fetch_bytes() -> bytes:
+        _req = urllib.request.Request(
+            f"https://api.e2b.app/sandboxes/{sandbox_id}/logs?limit={limit}",
+            headers={"X-API-KEY": api_key, "Accept": "application/json"},
+        )
+        # URL is a hard-coded https endpoint, not caller-controlled.
+        with urllib.request.urlopen(_req, timeout=8) as _resp:  # noqa: S310  # nosec B310
+            return bytes(_resp.read())
+
+    try:
+        raw = (await asyncio.to_thread(_fetch_bytes)).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    try:
+        payload = json.loads(raw)
+        entries = payload.get("logEntries") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            return raw[:4000]
+        preferred: list[str] = []
+        rest: list[str] = []
+        preferred_levels = {"info", "warn", "warning", "error"}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            msg = entry.get("message")
+            if msg is None:
+                msg = entry.get("fields")
+            if not msg:
+                continue
+            text = str(msg)
+            if isinstance(entry.get("level"), str) and entry["level"].lower() in preferred_levels:
+                preferred.append(text)
+            else:
+                rest.append(text)
+        combined = (preferred + rest)[-limit:]
+        return "\n".join(combined)[-6000:]
+    except Exception:
+        return raw[:4000]
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -809,23 +878,53 @@ async def _wait_command_with_idle_watchdog(
     total_timeout: float,
     idle_timeout: float,
     last_activity: Callable[[], float],
-) -> Any:
+    on_tick: Callable[[], Awaitable[None]] | None = None,
+    tick_interval: float | None = None,
+) -> tuple[Any, str | None]:
     """Wait for a background command, failing fast if the agent goes silent.
 
     The E2B SDK's commands.run(timeout=...) only enforces a CONNECT timeout;
     the response stream has no read timeout, so a stalled agent blocks the
     node until total_timeout expires. This helper polls handle.wait() in
-    idle_timeout slices and raises TimeoutError as soon as the agent has
-    produced no output for idle_timeout seconds (FAR-97). The caller should
-    track last_activity via on_stdout/on_stderr callbacks.
+    idle_timeout slices and returns ``(None, stall_reason)`` as soon as the
+    agent has produced no output for idle_timeout seconds (FAR-97 / FAR-98).
+    On normal completion it returns ``(cmd_result, None)``; a total-timeout
+    still raises TimeoutError. The caller should track last_activity via
+    on_stdout/on_stderr callbacks.
+
+    Since the FAR-97 pipe-buffer fix, liveness is tracked by a per-tick drain
+    probe (*on_tick*) that reads the sandbox-side output log file: the process's
+    stdout is a regular file inside the sandbox, so it can never block on a full
+    pipe, and a successful probe proves the sandbox connection is alive even when
+    the agent emits nothing for a long LLM turn. The poll slice is reduced to
+    *tick_interval* so on_tick runs frequently enough to keep last_activity fresh.
+
+    Each poll slice shields its own ``handle.wait()`` call: the slice await is
+    ``asyncio.wait_for(asyncio.shield(handle.wait()), timeout=...)``, so a slice
+    timeout cancels only the shield, never the wait. The E2B SDK's
+    ``handle.wait()`` merely awaits a long-lived internal events task
+    (``self._wait``), so the events task survives every slice timeout and the
+    next slice's fresh ``handle.wait()`` still sees it alive. If a slice timeout
+    cancelled that events task, the next slice would re-await a dead task and
+    immediately raise ``CancelledError`` with ``cancelling()==0`` — which
+    LangGraph surfaces as ``NodeCancelledError`` and every sandbox run would
+    fail ~one tick in.
     """
+    if tick_interval is None:
+        tick_interval = _SANDBOX_TAIL_INTERVAL
     deadline = time.monotonic() + total_timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"command exceeded total timeout of {total_timeout:.0f}s")
+        if on_tick is not None:
+            await on_tick()
         try:
-            return await asyncio.wait_for(handle.wait(), timeout=min(idle_timeout, remaining))
+            cmd_result = await asyncio.wait_for(
+                asyncio.shield(handle.wait()),
+                timeout=min(tick_interval, remaining),
+            )
+            return cmd_result, None
         except TimeoutError:
             if time.monotonic() - last_activity() >= idle_timeout:
                 # Kill the command so the still-running agent cannot write a
@@ -834,7 +933,7 @@ async def _wait_command_with_idle_watchdog(
                     await asyncio.wait_for(handle.kill(), timeout=10.0)
                 except Exception:
                     _log.exception("sandbox_agent.idle_watchdog_kill_failed")
-                raise TimeoutError(f"command produced no output for {idle_timeout:.0f}s (stalled)") from None
+                return None, f"agent produced no output for {idle_timeout:.0f}s"
 
 
 def make_sandbox_agent_fn(
@@ -853,6 +952,8 @@ def make_sandbox_agent_fn(
         (no default — a sandbox agent cannot run without an explicit command)
       - output_schema_json: dict | None —  optional output schema validation
       - timeout_seconds: int —  max wall-clock time (default 600)
+      - stall_timeout_seconds: float —  max seconds of agent silence before the
+        idle watchdog treats the command as stalled (default 300)
       - context_files: dict[str, str] —  optional files to write into the sandbox
         keyed by path
 
@@ -889,6 +990,7 @@ def make_sandbox_agent_fn(
         )
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     sandbox_timeout: int = node_def.get("timeout_seconds", 1200)
+    stall_timeout_override: Any = node_def.get("stall_timeout_seconds")
     context_files: dict[str, str] = node_def.get("context_files") or {}
 
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
@@ -970,6 +1072,8 @@ def make_sandbox_agent_fn(
 
         _stdout_len = 0
         _stderr_len = 0
+        _sandbox_id: str | None = None
+        _sandbox_log_tail: str = ""
 
         async def _read_current_claim_token() -> str | None:
             """Read the run's current ``runs.claim_token`` via the shared session factory.
@@ -1060,6 +1164,7 @@ def make_sandbox_agent_fn(
                 timeout=min(sandbox_timeout, 120),
             )
             assert sandbox is not None, "Sandbox was not created before use"
+            _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
             for path, content in context_files.items():
                 if path.endswith(".b64"):
                     content = base64.b64decode(content).decode()
@@ -1086,17 +1191,146 @@ def make_sandbox_agent_fn(
                 # Track the last time the agent emitted output so the idle
                 # watchdog can fail fast on stalls (FAR-97). The callbacks run
                 # from the SDK's event task and may be async or sync.
-                _activity: dict[str, float] = {"last": time.monotonic()}
+                _activity: dict[str, Any] = {"last": time.monotonic()}
+                stall_reason: str | None = None
+
+                # FAR-98: stall_timeout_seconds (node config) overrides the idle
+                # watchdog's silence window. Resolve the DEFAULT at runtime so
+                # the constant stays patchable (the FAR-97 tests patch it).
+                try:
+                    stall_timeout: float = (
+                        float(stall_timeout_override) if stall_timeout_override is not None else _SANDBOX_IDLE_TIMEOUT
+                    )
+                except (TypeError, ValueError):
+                    _log.warning(
+                        "sandbox_agent.stall_timeout_invalid_fallback",
+                        extra={"node_id": node_id, "stall_timeout_raw": stall_timeout_override},
+                    )
+                    stall_timeout = _SANDBOX_IDLE_TIMEOUT
+
+                # Live-output streaming (FAR-98): look the run event broker up in
+                # the process-local registry by run id (the broker is never carried
+                # inside LangGraph state — it is not msgpack-serializable, and
+                # carrying it in state broke checkpoint writes for every run).
+                # Buffer stdout/stderr chunks and publish a throttled
+                # node.stdout_chunk / node.stderr_chunk event at most once per
+                # _STREAM_FLUSH_INTERVAL so Run detail can show live output while
+                # the sandbox process runs. No broker registered -> skip silently
+                # (streaming is best-effort, never fatal).
+                _stream_broker = None
+                if run_id:
+                    try:
+                        _stream_broker = get_registry().get(uuid.UUID(run_id))
+                    except (TypeError, ValueError):
+                        _stream_broker = None
+                _stream_enabled = isinstance(_stream_broker, RunEventBroker)
+
+                def _stream_chunk(chunk: str, stream: str) -> None:
+                    broker = _stream_broker
+                    if not _stream_enabled or not isinstance(broker, RunEventBroker):
+                        return
+                    now = time.monotonic()
+                    buf_key = f"{stream}_buf"
+                    buf = _activity.setdefault(buf_key, [])
+                    if chunk:
+                        buf.append(chunk)
+                    if not buf:
+                        return
+                    if now - _activity.get("last_stream_ts", 0.0) < _STREAM_FLUSH_INTERVAL:
+                        return
+                    payload: dict[str, Any] = {
+                        "node_id": node_id,
+                        "chunk": "".join(buf),
+                        "ts": int(now * 1000),
+                    }
+                    buf.clear()
+                    _activity["last_stream_ts"] = now
+                    try:
+                        event = broker.publish(
+                            "node.stdout_chunk" if stream == "stdout" else "node.stderr_chunk",
+                            payload,
+                        )
+                        payload["seq"] = event.seq
+                    except RuntimeError:
+                        # Broker already closed (run finalised) — stop streaming.
+                        return
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.stream_publish_failed",
+                            extra={"node_id": node_id, "run_id": run_id},
+                        )
 
                 async def _on_stdout(chunk: str) -> None:
                     _activity["last"] = time.monotonic()
+                    _stream_chunk(chunk, "stdout")
 
                 async def _on_stderr(chunk: str) -> None:
                     _activity["last"] = time.monotonic()
+                    _stream_chunk(chunk, "stderr")
 
+                # FAR-97 pipe-buffer fix: the agent command's stdout/stderr are
+                # redirected to a log file inside the sandbox, so the process can
+                # never block on a full stdout pipe. The drain probe below runs on
+                # every watchdog tick: (1) it refreshes the idle watchdog's liveness
+                # signal from the sandbox connection (a successful get_info proves
+                # the sandbox is responsive even when the agent emits no output for
+                # a long LLM turn), (2) it streams newly-appended content to the run
+                # event broker (live output), and (3) it accumulates the content for
+                # the node artifact.
+                _drained_chunks: list[str] = []
+                _drain_offset = 0
+
+                async def _drain_sandbox_log() -> None:
+                    nonlocal _drain_offset
+                    # Probe failed (log file not created yet, sandbox connection
+                    # unresponsive). Do NOT refresh liveness — the idle watchdog
+                    # treats a prolonged probe failure as a genuine stall.
+                    try:
+                        info = await asyncio.wait_for(
+                            sandbox.files.get_info(_SANDBOX_LOG_PATH),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
+                        _activity["last"] = time.monotonic()
+                        size = int(getattr(info, "size", 0) or 0)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.info(
+                            "sandbox_agent.log_drain_probe_failed",
+                            extra={"node_id": node_id},
+                        )
+                        return
+                    if size <= _drain_offset:
+                        return
+                    try:
+                        content = await asyncio.wait_for(
+                            sandbox.files.read(_SANDBOX_LOG_PATH, format="text"),
+                            timeout=_SANDBOX_TAIL_READ_TIMEOUT,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.exception(
+                            "sandbox_agent.log_drain_failed",
+                            extra={"node_id": node_id},
+                        )
+                        return
+                    text = content if isinstance(content, str) else bytes(content).decode("utf-8", "replace")
+                    new = text[_drain_offset:] if _drain_offset < len(text) else ""
+                    if new:
+                        _drained_chunks.append(new)
+                        _stream_chunk(new, "stdout")
+                        _activity["last"] = time.monotonic()
+                    _drain_offset = max(_drain_offset, len(text))
+
+                # Redirect the agent's stdout/stderr into a sandbox log file so
+                # the process writes to a regular file — never a pipe that can
+                # fill and block a long session (FAR-97). The subshell preserves
+                # the command's exit code for the SDK's wait().
+                wrapped_command = f"( {agent_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
                 cmd_handle = await asyncio.wait_for(
                     sandbox.commands.run(
-                        agent_command,
+                        wrapped_command,
                         background=True,
                         on_stdout=_on_stdout,
                         on_stderr=_on_stderr,
@@ -1123,11 +1357,13 @@ def make_sandbox_agent_fn(
                     ),
                     timeout=min(sandbox_timeout, 120),
                 )
-                cmd_result = await _wait_command_with_idle_watchdog(
+                cmd_result, stall_reason = await _wait_command_with_idle_watchdog(
                     cmd_handle,
                     total_timeout=sandbox_timeout,
-                    idle_timeout=_SANDBOX_IDLE_TIMEOUT,
+                    idle_timeout=stall_timeout,
                     last_activity=lambda: _activity["last"],
+                    on_tick=_drain_sandbox_log,
+                    tick_interval=_SANDBOX_TAIL_INTERVAL,
                 )
             except asyncio.CancelledError:
                 raise
@@ -1151,9 +1387,18 @@ def make_sandbox_agent_fn(
                 )
                 cmd_result = getattr(_cee, "result", None) or _cee
 
+            # One final drain so the last growth (between the last tick and the
+            # process exit) is captured before we read output.json. The probe is
+            # fully guarded — on a dead sandbox it returns immediately.
+            await _drain_sandbox_log()
+
             elapsed = time.monotonic() - start_time
             exit_code: int = getattr(cmd_result, "exit_code", -1)
-            agent_stdout_raw: str = getattr(cmd_result, "stdout", "") or ""
+            # The redirected log file is the process's real stdout — prefer the
+            # drained content (which also survives a timeout where cmd_result is
+            # None and would otherwise surface EMPTY output), falling back to the
+            # SDK's captured stream for non-redirected (legacy) paths.
+            agent_stdout_raw: str = "".join(_drained_chunks) or (getattr(cmd_result, "stdout", "") or "")
             agent_stderr_raw: str = getattr(cmd_result, "stderr", "") or ""
             _stdout_len = len(agent_stdout_raw)
             _stderr_len = len(agent_stderr_raw)
@@ -1163,14 +1408,23 @@ def make_sandbox_agent_fn(
             # A timed-out command leaves ``cmd_result`` as None: the run timed
             # out (1800s node timeout) with COMPLETELY EMPTY stdout/stderr and
             # exit_code -1. Surface a clear explanation instead of silently
-            # returning an empty-summary failure.
+            # returning an empty-summary failure. A STALLED command (idle
+            # watchdog fired, FAR-98) carries a distinct stall_reason so the
+            # two failure modes are distinguishable.
             command_error: str = ""
             if cmd_result is None:
-                command_error = (
-                    f"Sandbox agent command produced no output within {sandbox_timeout}s. "
-                    "No stdout/stderr was captured — the agent likely hung before "
-                    "writing any result."
-                )
+                if stall_reason:
+                    command_error = stall_reason
+                else:
+                    command_error = (
+                        f"Sandbox agent command produced no output within {sandbox_timeout}s. "
+                        "No stdout/stderr was captured — the agent likely hung before "
+                        "writing any result."
+                    )
+                # The E2B kill reason only lives in the sandbox logs, and the logs
+                # endpoint only serves live sandboxes — fetch the tail BEFORE the
+                # kill below (FAR-97 observability).
+                _sandbox_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
                 # The command stalled or timed out. Kill the sandbox BEFORE
                 # reading output.json: the interrupted-but-alive process could
                 # otherwise write a fabricated completion in the grace window
@@ -1243,6 +1497,8 @@ def make_sandbox_agent_fn(
                                     "output_json": output_json,
                                     "agent_stdout": agent_stdout,
                                     "agent_stderr": agent_stderr,
+                                    "stdout_length": _stdout_len,
+                                    "stderr_length": _stderr_len,
                                 },
                             }
                         ],
@@ -1254,6 +1510,8 @@ def make_sandbox_agent_fn(
                             **_build_model_cost_fields(output_json),
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
+                            "stdout_length": _stdout_len,
+                            "stderr_length": _stderr_len,
                         },
                     }
 
@@ -1273,6 +1531,16 @@ def make_sandbox_agent_fn(
                 result_summary = command_error or "Sandbox agent command failed"
 
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, output_json)
+            _stall_reason_field: dict[str, str] = {"stall_reason": stall_reason} if stall_reason else {}
+
+            # Only the timeout/stall failure carries the sandbox trace — the
+            # success path doesn't need it and stays small.
+            _sandbox_failure_fields: dict[str, Any] = {}
+            if cmd_result is None:
+                _sandbox_failure_fields = {
+                    "sandbox_id": _sandbox_id,
+                    "sandbox_log_tail": _sandbox_log_tail,
+                }
 
             return {
                 "artifacts": [
@@ -1291,6 +1559,10 @@ def make_sandbox_agent_fn(
                             "output_json": output_json,
                             "agent_stdout": agent_stdout,
                             "agent_stderr": agent_stderr,
+                            "stdout_length": _stdout_len,
+                            "stderr_length": _stderr_len,
+                            **_stall_reason_field,
+                            **_sandbox_failure_fields,
                         },
                     }
                 ],
@@ -1302,6 +1574,10 @@ def make_sandbox_agent_fn(
                     **_build_model_cost_fields(output_json),
                     "agent_stdout": agent_stdout,
                     "agent_stderr": agent_stderr,
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                    **_stall_reason_field,
+                    **_sandbox_failure_fields,
                 },
             }
 
@@ -1347,6 +1623,9 @@ def make_sandbox_agent_fn(
             _exc_stdout = locals().get("agent_stdout", "")
             _exc_stderr = locals().get("agent_stderr", "")
             _exc_output_json = locals().get("output_json")
+            # Best-effort sandbox trace on the generic-exception path too — the
+            # sandbox may already be dead, in which case the helper returns "".
+            _exc_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
             _cost_estimate_usd = _compute_sandbox_cost(elapsed, _exc_output_json)
             return {
                 "artifacts": [
@@ -1364,6 +1643,10 @@ def make_sandbox_agent_fn(
                             **_build_model_cost_fields(_exc_output_json),
                             "agent_stdout": _exc_stdout,
                             "agent_stderr": _exc_stderr,
+                            "stdout_length": _stdout_len,
+                            "stderr_length": _stderr_len,
+                            "sandbox_id": _sandbox_id,
+                            "sandbox_log_tail": _exc_log_tail,
                         },
                     }
                 ],
@@ -1375,6 +1658,10 @@ def make_sandbox_agent_fn(
                     **_build_model_cost_fields(_exc_output_json),
                     "agent_stdout": _exc_stdout,
                     "agent_stderr": _exc_stderr,
+                    "stdout_length": _stdout_len,
+                    "stderr_length": _stderr_len,
+                    "sandbox_id": _sandbox_id,
+                    "sandbox_log_tail": _exc_log_tail,
                 },
             }
         finally:

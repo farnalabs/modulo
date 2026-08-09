@@ -96,7 +96,7 @@ class TestComputeNextFire:
         assert result == datetime.datetime(2026, 1, 1, 9, 0, tzinfo=datetime.UTC)
 
     def test_invalid_expression_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="columns has to be specified"):
             compute_next_fire("not-a-cron")
 
     def test_invalid_timezone_raises(self):
@@ -197,5 +197,5 @@ class TestComputeNextSend:
         assert next_send == datetime.datetime(2026, 1, 2, 9, 0, 0, tzinfo=datetime.UTC)
 
     def test_next_send_invalid_expression_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="columns has to be specified"):
             compute_next_send("not-a-cron")

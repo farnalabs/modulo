@@ -757,7 +757,11 @@ async def test_validate_node_category_invalid_id():
     session = AsyncMock()
     result = await validate_node_category({"id": "n1"}, "not-a-uuid", session)
     assert not result.is_valid
-    assert any(i.code == "CATEGORY_INVALID_ID" for i in result.issues)
+    invalid = [i for i in result.issues if i.code == "CATEGORY_INVALID_ID"]
+    assert invalid
+    assert invalid[0].node_id == "n1"
+    assert "not-a-uuid" in invalid[0].message
+    session.execute.assert_not_called()
 
 
 async def test_validate_node_category_not_found():
@@ -768,7 +772,10 @@ async def test_validate_node_category_not_found():
     session.execute = AsyncMock(return_value=exc)
     result = await validate_node_category({"id": "n1"}, str(cat_id), session)
     assert not result.is_valid
-    assert any(i.code == "CATEGORY_NOT_FOUND" for i in result.issues)
+    missing = [i for i in result.issues if i.code == "CATEGORY_NOT_FOUND"]
+    assert missing
+    assert missing[0].node_id == "n1"
+    assert str(cat_id) in missing[0].message
 
 
 async def test_validate_node_category_found():

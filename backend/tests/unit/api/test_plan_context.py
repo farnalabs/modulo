@@ -227,8 +227,9 @@ async def _seed_catalog(engine) -> None:
         await session.commit()
 
 
+@pytest.mark.usefixtures("_seed_catalog")
 @pytest.mark.asyncio
-async def test_real_session_loads_catalog_rows(_seed_catalog, engine) -> None:
+async def test_real_session_loads_catalog_rows(engine) -> None:
     """With real rows present, the load runs inside the auto-begun transaction."""
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
     async with factory() as session:

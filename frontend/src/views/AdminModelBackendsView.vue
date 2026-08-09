@@ -1,6 +1,6 @@
 <template>
   <FeatureGate feature-name="model_backend_management" show-disabled>
-    <div class="page-narrow">
+    <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')" />
         <Button
@@ -44,7 +44,7 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-12" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.provider') }}</label>
-                <Select v-model="formData.provider">
+                <Select aria-label="Provider" v-model="formData.provider">
                   <SelectTrigger data-testid="admin-model-backends-provider-select" aria-label="Provider" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="anthropic" />
                   </SelectTrigger>
@@ -107,7 +107,7 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <Select v-model="formData.visibility">
+                <Select aria-label="Visibility" v-model="formData.visibility">
                   <SelectTrigger data-testid="admin-model-backends-visibility-select" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="org" />
                   </SelectTrigger>
@@ -147,7 +147,7 @@
           </p>
         </div>
 
-        <div v-else class="table-wrapper">
+        <div v-else class="table-wrapper overflow-x-auto">
           <table class="w-full text-left text-sm">
             <thead>
               <tr>
@@ -202,7 +202,7 @@
           <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
             {{ $t('views.AdminModelBackendsView.preview_model_backends_count', { count: previewBackends.length }, previewBackends.length) }}
           </summary>
-          <div class="overflow-hidden border-t">
+          <div class="overflow-x-auto border-t">
           <table class="w-full text-left text-sm">
             <thead>
               <tr>
@@ -291,7 +291,7 @@
               </div>
               <div>
                 <label for="adminmodelbackendsview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.AdminModelBackendsView.visibility') }}</label>
-                <Select v-model="formData.visibility">
+                <Select aria-label="Visibility" v-model="formData.visibility">
                   <SelectTrigger data-testid="admin-model-backends-edit-visibility" aria-label="Visibility" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm">
                     <SelectValue placeholder="org" />
                   </SelectTrigger>

@@ -30,7 +30,7 @@ class TestCrypto:
         assert isinstance(fp, str)
 
     @pytest.mark.parametrize(
-        "tamper,expected",
+        ("tamper", "expected"),
         [
             (None, True),
             (lambda p: {"a": 2}, False),
@@ -90,7 +90,7 @@ class TestCrypto:
 
 class TestBundleIntegrity:
     @pytest.mark.parametrize(
-        "bundle,hash_bundle,expected",
+        ("bundle", "hash_bundle", "expected"),
         [
             ({"pipeline": {"name": "test"}}, None, True),
             ({"key": "value"}, {"key": "value"}, True),
@@ -134,7 +134,7 @@ class TestRegistryCRUD:
         assert entry is None
 
     @pytest.mark.parametrize(
-        "slug,expected_author,expected_name",
+        ("slug", "expected_author", "expected_name"),
         [
             ("modulo/prd-input-schema", "modulo", "prd-input-schema"),
             ("my-schema", "modulo", "my-schema"),

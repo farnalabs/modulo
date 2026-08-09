@@ -101,7 +101,7 @@ async def test_topology_single_node_no_edges():
 
 
 @pytest.mark.parametrize(
-    "graph_json,expected_code",
+    ("graph_json", "expected_code"),
     [
         ({"nodes": [], "edges": []}, "TOPOLOGY_NO_NODES"),
         ({"nodes": [{"id": "a"}], "edges": [{"source": "x", "target": "a"}]}, "TOPOLOGY_UNKNOWN_SOURCE"),

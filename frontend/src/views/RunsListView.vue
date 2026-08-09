@@ -57,14 +57,10 @@
           :rows="runs"
           @row-click="(row: any) => navigateToDetail(row.run_id)"
         >
-          <template #cell-pipeline_name="{ row, value }">
-            <router-link
-              :to="`/runs/${row.run_id}`"
-              class="font-medium hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 rounded"
-              @click.stop
-            >
+          <template #cell-pipeline_name="{ value }">
+            <span class="font-medium hover:underline">
               {{ value || '(deleted pipeline)' }}
-            </router-link>
+            </span>
           </template>
           <template #cell-status="{ value }">
             <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
@@ -86,8 +82,15 @@
           <template #cell-duration="{ row }">
             <span class="whitespace-nowrap tabular-nums text-muted-foreground">{{ formatDuration(row.started_at as string, row.completed_at as string) }}</span>
           </template>
-          <template #cell-total_cost_usd="{ value }">
-            <span class="tabular-nums">{{ value != null ? '$' + Number(value).toFixed(4) : '—' }}</span>
+          <template #cell-total_cost_usd="{ value, row }">
+            <span class="tabular-nums">
+              <template v-if="aggregateCosts[row.run_id as string] != null">
+                <span data-testid="runs-list-aggregate-cost">{{ formatMoney(aggregateCosts[row.run_id as string] as number, currencyCode, 4) }}</span>
+                <span v-if="childCounts[row.run_id as string]" class="ml-1 text-xs text-muted-foreground">{{ $t('views.RunsListView.cost_includes_child_runs_count', childCounts[row.run_id as string]) }}</span>
+                <span v-else class="ml-1 text-xs text-muted-foreground">{{ $t('views.RunsListView.cost_includes_child_runs') }}</span>
+              </template>
+              <span v-else>{{ value != null ? formatMoney(Number(value), currencyCode, 4) : '—' }}</span>
+            </span>
           </template>
         </DataTable>
       </div>
@@ -134,9 +137,12 @@ import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const router = useRouter()
 const route = useRoute()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 const pageSize = 20
 const page = ref(1)
@@ -167,6 +173,35 @@ const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items:
 
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)
+
+function aggregateCostValue(run: RunListItem): number | null {
+  if (run.aggregate_cost_usd == null || run.aggregate_cost_usd === '') return null
+  const aggregate = Number(run.aggregate_cost_usd)
+  if (!Number.isFinite(aggregate)) return null
+  const own = run.total_cost_usd == null ? 0 : Number(run.total_cost_usd)
+  const ownSafe = Number.isFinite(own) ? own : 0
+  if (Math.abs(aggregate - ownSafe) < 1e-9) return null
+  return aggregate
+}
+
+const aggregateCosts = computed<Record<string, number>>(() => {
+  const byRunId: Record<string, number> = {}
+  for (const run of runs.value) {
+    const value = aggregateCostValue(run)
+    if (value != null) byRunId[run.run_id] = value
+  }
+  return byRunId
+})
+
+
+const childCounts = computed<Record<string, number>>(() => {
+  const byRunId: Record<string, number> = {}
+  for (const run of runs.value) {
+    const count = run.child_runs_count
+    if (Number.isInteger(count) && (count ?? 0) > 0) byRunId[run.run_id] = count as number
+  }
+  return byRunId
+})
 
 watch([filterStatus, filterTriggerType, filterSearch], ([status, triggerType, search]) => {
   localStorage.setItem(`${FILTER_STORAGE_KEY}.status`, status)
@@ -207,6 +242,8 @@ function prevPage() {
 function navigateToDetail(id: string) {
   router.push(`/runs/${id}`)
 }
+
+loadCurrency()
 
 function formatDuration(startIso: string | null | undefined, endIso: string | null | undefined): string {
   if (!startIso || !endIso) return '—'

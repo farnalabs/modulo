@@ -80,7 +80,7 @@ def _make_mock_provider(**overrides: object) -> MagicMock:
     return provider
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -110,14 +110,14 @@ def _make_plan_context() -> PlanContext:
     return ctx
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 

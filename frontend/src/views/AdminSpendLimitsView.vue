@@ -9,7 +9,7 @@
     <PageHeader :title="$t('views.AdminCostBreakdownView.spend_limits')" :subtitle="$t('views.AdminSpendLimitsView.configure_daily_spend_limits_at_the_org_and_team_level')" />
 
     <FeatureGate feature-name="admin_spend_limits" required-tier="team" show-disabled>
-
+      <div class="space-y-6">
       <LoadingSpinner v-if="loading" />
 
       <ErrorAlert v-else-if="loadError" :message="loadError" :on-retry="loadData" />
@@ -90,7 +90,7 @@
               <div class="flex items-center justify-between rounded-lg border bg-muted p-4">
                 <span class="text-sm font-medium">{{ $t('views.AdminSpendLimitsView.org_total') }}</span>
                 <span class="text-lg font-semibold" :class="overageClass(orgTotalCost, orgLimit)">
-                  ${{ orgTotalCost.toFixed(2) }}
+                  {{ formatMoney(orgTotalCost, currencyCode) }}
                 </span>
               </div>
               <div v-if="teamCosts.length > 0" class="space-y-2">
@@ -101,7 +101,7 @@
                 >
                   <span class="text-sm">{{ tc.team_name }}</span>
                   <span class="text-sm font-medium" :class="overageClass(tc.cost_usd, tc.limit_usd)">
-                    ${{ tc.cost_usd.toFixed(2) }}
+                    {{ formatMoney(tc.cost_usd, currencyCode) }}
                   </span>
                 </div>
               </div>
@@ -110,6 +110,7 @@
           </CardContent>
         </Card>
       </template>
+      </div>
     </FeatureGate>
   </div>
 </template>
@@ -128,8 +129,11 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Input } from '../components/ui/input'
 import { Button } from '../components/ui/button'
 import PageTabs from "../components/PageTabs.vue"
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const planStore = usePlanStore()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 interface SpendLimitData {
   org_daily_limit_usd: number | null
@@ -266,4 +270,5 @@ async function saveTeamLimit(team: TeamRow) {
 }
 
 planStore.fetchPlan()
+loadCurrency()
 </script>

@@ -75,7 +75,11 @@ async def upsert_error_group(
             ErrorGroup.organisation_id == org_id,
             ErrorGroup.fingerprint == fingerprint,
         )
-        .with_for_update()
+        # ErrorGroup.sample_event is lazy="joined", so this SELECT emits a LEFT
+        # OUTER JOIN to error_events. Unqualified FOR UPDATE would try to lock
+        # the nullable (right) side of that outer join, which Postgres rejects
+        # with FeatureNotSupportedError. Lock only the error_groups row.
+        .with_for_update(of=ErrorGroup)
     )
     group = result.scalar_one_or_none()
     if group is None:

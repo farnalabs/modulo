@@ -60,7 +60,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def free_client() -> Generator[TestClient, None, None]:
     """Client with no license key — team_rbac is disabled."""
     mock_session = _make_mock_session()
@@ -84,7 +84,7 @@ def free_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def licensed_client() -> Generator[TestClient, None, None]:
     """Client with a license key — team_rbac is enabled."""
     mock_session = _make_mock_session()

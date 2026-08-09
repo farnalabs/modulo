@@ -23,6 +23,8 @@ import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import date as _date
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
@@ -54,6 +56,21 @@ from modulo.auth.oauth import (
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.core.analytics.builder import (
+    AnalyticsDimension,
+    AnalyticsGroupBy,
+    AnalyticsStatus,
+    AnalyticsTriggerType,
+)
+from modulo.core.analytics.service import (
+    AnalyticsDatabaseError,
+    AnalyticsMigrationRequiredError,
+    AnalyticsParams,
+    AnalyticsQueryTimeoutError,
+    AnalyticsRateLimitedError,
+    AnalyticsValidationError,
+    run_analytics_query,
+)
 from modulo.core.cost_controller.breakdown.constants import RAW_REPORTED_DISPLAY_CLAMP
 from modulo.core.cost_controller.finalize import finalize_cancelled_run
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
@@ -186,6 +203,20 @@ def _sanitize_cost_breakdown(breakdown: Any) -> list[dict[str, Any]]:
                 out[key] = _sanitize_mcp_string(str(value))
         sanitized.append(out)
     return sanitized
+
+
+_MCP_COST_ROLLUP_ZERO = Decimal("0.000000")
+_MCP_COST_ROLLUP_QUANTUM = Decimal("0.000001")
+
+
+def _quantize_mcp_cost_rollup(value: Decimal) -> Decimal:
+    """Normalise a cost rollup value to 6 decimal places (Numeric(14, 6) scale).
+
+    Mirrors the REST runs API's ``_quantize_cost_rollup`` so the MCP run
+    resources render the same ``child_runs_cost_usd`` / ``aggregate_cost_usd``
+    values as the REST surface.
+    """
+    return value.quantize(_MCP_COST_ROLLUP_QUANTUM)
 
 
 def _format_breakdown_line(entry: dict[str, Any]) -> str:
@@ -965,6 +996,132 @@ async def list_runs(
     except Exception:
         _log.exception("list_runs failed")
         return _tool_error("Failed to list runs")
+
+
+def _parse_mcp_datetime(value: str, name: str) -> datetime:
+    """Parse an MCP date/datetime param (bare date or ISO datetime) into a datetime.
+
+    Matches the REST surface: "2026-08-06" is accepted as midnight, ISO
+    datetimes accept a trailing 'Z' (Python 3.11+ fromisoformat handles it).
+    """
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        pass
+    try:
+        return datetime.combine(_date.fromisoformat(value), datetime.min.time())
+    except ValueError:
+        raise AnalyticsValidationError(f"{name}: invalid date value {value!r}") from None
+
+
+@mcp.tool(
+    name="query_analytics",
+    description=(
+        "Query run analytics over the daily facts table. Returns a bucketed series "
+        "(hour/day/week) with per-bucket count, cost, tokens, duration, success rate, "
+        "failure and stall counts, queue wait, final idle, and output size. "
+        "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
+        "and error_code for filtering/grouping by failure code. Requires the "
+        "analytics.query permission and the analytics_page plan feature."
+    ),
+)
+@_RETRY_DB
+async def query_analytics(
+    dimension: str | None = None,
+    group_by: str = "day",
+    auto_granularity: bool = False,
+    trigger_type: str | None = None,
+    status: str | None = None,
+    pipeline_id: list[str] | None = None,
+    error_code: str | None = None,
+    folder_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "query_analytics")
+
+        org_id = _ctx_org_id_val()
+        settings = get_settings()
+
+        # analytics_page feature gate — mirror the REST route's require_feature.
+        from modulo.core.feature_flags import resolve_plan_context
+        from modulo.db.crud.organisation import get_organisation
+
+        async with _session(org_id) as s:
+            org = await get_organisation(s, org_id)
+        async with _session(org_id) as s:
+            plan_ctx = await resolve_plan_context(settings, s, org)
+        if not plan_ctx.feature_enabled("analytics_page"):
+            return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
+
+        try:
+            dim = AnalyticsDimension(dimension) if dimension is not None else None
+            grp = AnalyticsGroupBy(group_by)
+            tt = AnalyticsTriggerType(trigger_type) if trigger_type is not None else None
+            st = AnalyticsStatus(status) if status is not None else None
+        except ValueError:
+            return {
+                "error": "invalid_params",
+                "detail": f"invalid enum value (dimension={dimension!r} group_by={group_by!r})",
+            }
+
+        pids: tuple[uuid.UUID, ...] = ()
+        if pipeline_id:
+            try:
+                pids = tuple(uuid.UUID(p) for p in pipeline_id)
+            except ValueError:
+                return {"error": "invalid_params", "detail": "pipeline_id entries must be valid UUIDs"}
+
+        fid: uuid.UUID | None = None
+        if folder_id is not None:
+            try:
+                fid = uuid.UUID(folder_id)
+            except ValueError:
+                return {"error": "invalid_params", "detail": f"Invalid folder_id UUID: {folder_id}"}
+
+        params = AnalyticsParams(
+            group_by=grp,
+            auto_granularity=auto_granularity,
+            dimension=dim,
+            trigger_type=tt,
+            status=st,
+            pipeline_ids=pids,
+            error_code=error_code,
+            folder_id=fid,
+            date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
+            date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
+            limit=max(1, min(limit, 1000)),
+        )
+        return await run_analytics_query(
+            org_id=org_id,
+            params=params,
+            factory=_get_session_factory(),
+            settings=settings,
+            account_id=_ctx_user_id_val(),
+            org_role=_ctx_role_val() or "",
+        )
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except AnalyticsRateLimitedError:
+        return {"error": "rate_limited", "detail": "Rate limit exceeded"}
+    except AnalyticsValidationError as exc:
+        return {"error": "invalid_params", "detail": exc.detail}
+    except AnalyticsQueryTimeoutError as exc:
+        return {"error": "query_timeout", "detail": str(exc)}
+    except AnalyticsMigrationRequiredError as exc:
+        return {"error": "migration_required", "detail": str(exc)}
+    except AnalyticsDatabaseError as exc:
+        return {"error": "database_error", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("query_analytics failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except Exception:
+        _log.exception("query_analytics failed")
+        return _tool_error("Failed to query analytics")
 
 
 @mcp.tool(
@@ -3280,16 +3437,26 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
         if pipeline is None:
             return f"Pipeline {pipeline_id} not found."
         result = await list_runs(s, pipeline_id=pid, page=1, page_size=50)
+        # Child-run cost+count rollup: ONE GROUP BY query for the whole page,
+        # joined in Python — never a per-row aggregate (avoids N+1).
+        run_ids = [r.id for r in result.items]
+        from modulo.db.crud.run import get_child_run_rollup
+
+        child_rollups = await get_child_run_rollup(s, run_ids) if run_ids else {}
 
     if not result.items:
         return f"Pipeline '{pipeline.name}' has no runs."
 
     lines = []
     for r in result.items:
+        child_cost, child_count = child_rollups.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
+        own_cost = Decimal(str(r.total_cost_usd)) if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+        aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
         line = (
             f"- Run {r.id} | status={r.status} | trigger={r.trigger_type} | "
             f"created={r.created_at.isoformat()} | "
-            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0}"
+            f"tokens={r.total_tokens or 0} | cost=${r.total_cost_usd or 0} | "
+            f"child_count={child_count} | child_cost=${child_cost} | aggregate_cost=${aggregate_cost}"
         )
         if r.cost_breakdown is not None:
             breakdown = _sanitize_cost_breakdown(r.cost_breakdown)
@@ -3387,7 +3554,7 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
         return "error: Invalid UUID format"
 
     async with _session(org_id) as s:
-        snap = await get_snapshot_detail(s, sid)
+        snap = await get_snapshot_detail(s, sid, organisation_id=org_id, pipeline_id=uuid.UUID(pipeline_id))
 
     if snap is None:
         return f"error: Snapshot {snapshot_id} not found"
@@ -3412,7 +3579,9 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
     for n in nodes:
         safe = {k: v for k, v in n.items() if k not in ("agent_prompt", "agent_command")}
         result += json.dumps(safe, indent=2, default=str)[:2000] + "\n"
-        ap = n.get("agent_prompt", "") or ""
+        ap = n.get("agent_prompt")
+        if ap is None:
+            ap = ""
         if ap:
             result += f"    agent_prompt: {ap[:200].replace(chr(10), ' ')}...\n"
         ac = n.get("agent_command", "") or ""
@@ -3439,8 +3608,14 @@ async def resource_run(run_id: str) -> str:
         return f"error: Invalid UUID format: {run_id}"
     async with _session(org_id) as s:
         run = await get_run(s, rid)
-    if run is None:
-        return f"Run {run_id} not found."
+        if run is None:
+            return f"Run {run_id} not found."
+        from modulo.db.crud.run import get_child_run_rollup
+
+        child_rollups = await get_child_run_rollup(s, [rid])
+        child_cost, child_count = child_rollups.get(rid, (_MCP_COST_ROLLUP_ZERO, 0))
+        own_cost = Decimal(str(run.total_cost_usd)) if run.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+        aggregate_cost = _quantize_mcp_cost_rollup(own_cost + child_cost)
     parts = [
         f"Run: {run.id}",
         f"Pipeline: {run.pipeline_id}",
@@ -3452,6 +3627,9 @@ async def resource_run(run_id: str) -> str:
         parts.append(f"Error: {run.error_code}")
     if run.total_cost_usd is not None:
         parts.append(f"Total cost: ${run.total_cost_usd}")
+    parts.append(f"Child runs cost: ${child_cost}")
+    parts.append(f"Child runs count: {child_count}")
+    parts.append(f"Aggregate cost: ${aggregate_cost}")
     if run.cost_breakdown is not None:
         breakdown = _sanitize_cost_breakdown(run.cost_breakdown)
         if breakdown:
@@ -4013,7 +4191,7 @@ async def _oauth_token(request: Request) -> JSONResponse:
             {
                 "access_token": access_token,
                 "refresh_token": refresh_token,
-                "token_type": "Bearer",
+                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
                 "expires_in": 3600,
                 "scope": " ".join(scopes_list),
             }
@@ -4169,7 +4347,7 @@ async def _oauth_refresh(request: Request) -> JSONResponse:
             {
                 "access_token": new_access_token,
                 "refresh_token": new_refresh_token,
-                "token_type": "Bearer",
+                "token_type": "Bearer",  # nosec B105 - RFC 6750 token_type label, not a credential
                 "expires_in": 3600,
                 "scope": " ".join(claims.scopes),
             }

@@ -10,7 +10,7 @@ API_KEY = "lin_api_key_xxxx"
 _GRAPHQL = "https://api.linear.app/graphql"
 
 
-@pytest.fixture()
+@pytest.fixture
 def connector():
     return LinearConnector(api_key=API_KEY)
 

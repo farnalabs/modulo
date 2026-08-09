@@ -500,7 +500,8 @@ def resp_has_name(expected: str, request):
 def resp_redirects_to_spa(request):
     resp = request.node._resp
     location = resp.headers.get("Location", "")
-    assert location.startswith("http") and "/oauth/authorize?" in location
+    assert location.startswith("http")
+    assert "/oauth/authorize?" in location
 
 
 @then("the consent-state row was created with the code_challenge")

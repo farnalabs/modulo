@@ -2,6 +2,8 @@
   <div class="page-wide">
     <PageHeader :title="$t('views.SettingsRuntimeConfigView.runtime_configuration')" :subtitle="$t('views.SettingsRuntimeConfigView.description')" />
 
+    <FeatureGate feature-name="runtime_config" required-tier="team" show-disabled>
+
     <div class="flex items-center gap-3">
       <div v-if="hasDrift" class="flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning">
         <span>⚠</span>
@@ -20,9 +22,9 @@
 
     <LoadingSpinner v-if="loading" />
 
-    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadConfig" />
+    <ErrorAlert v-else-if="error && !featureRequired" :message="error" :on-retry="loadConfig" />
 
-    <div v-else class="rounded-lg border">
+    <div v-else-if="!featureRequired" class="rounded-lg border overflow-x-auto">
       <table class="w-full">
         <thead>
           <tr class="border-b text-left text-sm font-medium text-muted-foreground">
@@ -78,6 +80,7 @@
                   v-if="entry.hot_reloadable"
                   v-model="editedValues[entry.key]"
                   data-testid="settings-runtime-config-value"
+                  :aria-label="`${$t('views.SettingsRuntimeConfigView.current_value')}: ${entry.key}`"
                   :class="inputClasses(entry)"
                   @input="markEdited(entry.key)"
                 />
@@ -158,6 +161,7 @@
     <div v-if="formSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
       {{ formSuccess }}
     </div>
+    </FeatureGate>
   </div>
 </template>
 
@@ -166,13 +170,19 @@ import { ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
-import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 
 const { t } = useI18n()
+
+function isFeatureRequiredError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const obj = err as Record<string, unknown>
+  return obj.status === 402 || obj.type === 'urn:problem:modulo:feature_required'
+}
 
 interface ConfigEntry {
   key: string
@@ -198,15 +208,20 @@ const editedValues = reactive<Record<string, string>>({})
 const editedKeys = reactive(new Set<string>())
 
 const items = ref<ConfigEntry[]>([])
-const { get: getUntyped } = useApi()
+const featureRequired = ref(false)
 const { loading, error, data: configData, load: loadConfig } = useDataFetch<ConfigResponse>(
   async () => {
-    try {
-      const data = await getUntyped<ConfigResponse>('/api/v1/admin/runtime-config')
-      return { data, error: undefined }
-    } catch (e) {
-      return { data: undefined, error: { detail: formatApiError(e) } }
+    const res = await api.GET('/api/v1/admin/runtime-config')
+    if (res.error) {
+      if (isFeatureRequiredError(res.error)) {
+        featureRequired.value = true
+        return { data: { items: [], has_drift: false } as ConfigResponse, error: undefined }
+      }
+      featureRequired.value = false
+      return { data: undefined, error: { detail: formatApiError(res.error) } }
     }
+    featureRequired.value = false
+    return { data: res.data as unknown as ConfigResponse, error: undefined }
   },
 )
 

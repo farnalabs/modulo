@@ -35,7 +35,15 @@ class Settings(BaseSettings):
     modulo_users: str = Field("")
 
     modulo_public_url: str = Field("http://localhost:8000")
-    modulo_demo_mode: bool = Field(False)
+    # Demo-data seeding flag. Deliberately named for what it does (seed rich
+    # demo data) with NO tier implication — it must never grant a paid tier.
+    modulo_seed_demo_data: bool = Field(False)
+    # Deprecated legacy name for the same flag. Kept read-only for backward
+    # compatibility with the old MODULO_DEMO_MODE env var and old Settings
+    # kwargs (fly.toml / docker-compose.yml / integration tests predate the
+    # rename). Migrated onto modulo_seed_demo_data in
+    # ``_migrate_demo_mode_flag``; excluded from serialization.
+    modulo_demo_mode: bool = Field(False, exclude=True)
     modulo_license_key: str = Field("")
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
@@ -168,11 +176,12 @@ class Settings(BaseSettings):
     # below this pool so the semaphore can never exhaust every connection.
     saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # SAQ worker concurrency (how many jobs run at once per worker).
-    # KEPT at 5 — the accepted design target (5 per worker x up to 5 machines
-    # = up to 25 concurrent runs), verified-safe against the prod Postgres
-    # 300-connection cap (only ~40 in use). Decoupled from Redis pool size —
-    # pool=20 handles bursty Redis ops while concurrency=5 prevents runaway
-    # job parallelism.
+    # Default 5; prod/staging pin this to 20 via fly.toml — the accepted
+    # design target (20 per worker x up to 5 machines = up to 100 concurrent
+    # runs), verified-safe against the prod Postgres 300-connection cap (only
+    # ~40 in use; SAQ is asyncio single-engine so concurrency does not multiply
+    # the DB pool). Decoupled from Redis pool size — pool=20 handles bursty
+    # Redis ops while concurrency prevents runaway job parallelism.
     saq_worker_concurrency: int = Field(default=5, alias="SAQ_WORKER_CONCURRENCY", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second
@@ -374,6 +383,13 @@ class Settings(BaseSettings):
     def _warn_if_no_auth(self) -> "Settings":
         if not self.modulo_admin_password and not self.modulo_users:
             _log.warning("settings.no_auth_configured")
+        return self
+
+    @model_validator(mode="after")
+    def _migrate_demo_mode_flag(self) -> "Settings":
+        """Migrate the legacy MODULO_DEMO_MODE flag onto modulo_seed_demo_data."""
+        if self.modulo_demo_mode and not self.modulo_seed_demo_data:
+            self.modulo_seed_demo_data = True
         return self
 
     @model_validator(mode="after")

@@ -73,7 +73,7 @@ def _make_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin_client() -> TestClient:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[_get_engine] = lambda: MagicMock()

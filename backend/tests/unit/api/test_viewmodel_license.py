@@ -23,7 +23,7 @@ def _make_settings() -> Settings:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = lambda: MagicMock()

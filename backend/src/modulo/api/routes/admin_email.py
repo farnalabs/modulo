@@ -97,7 +97,8 @@ async def admin_update_email_settings(
     session: AsyncSession = Depends(get_db_session),
 ) -> EmailSettingsResponse:
     try:
-        org = await get_organisation(session, org_id)
+        async with session.begin():
+            org = await get_organisation(session, org_id)
     except ProgrammingError:
         logger.exception("admin_email.admin_update_email_settings")
         raise HTTPException(
@@ -139,7 +140,8 @@ async def admin_update_email_settings(
     settings_json["email"] = merged
 
     try:
-        await update_organisation(session, org_id, {"settings_json": settings_json})
+        async with session.begin():
+            await update_organisation(session, org_id, {"settings_json": settings_json})
     except ProgrammingError:
         logger.exception("admin_email.admin_update_email_settings")
         raise HTTPException(
@@ -180,7 +182,8 @@ async def admin_test_email_settings(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-        org = await get_organisation(session, org_id)
+        async with session.begin():
+            org = await get_organisation(session, org_id)
     except ProgrammingError:
         logger.exception("admin_email.admin_test_email_settings")
         raise HTTPException(

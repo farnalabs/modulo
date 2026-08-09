@@ -38,10 +38,20 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # require_permission -> resolve_authz_enforce reads the org authz kill-switch
+    # via `await session.execute(...)` then calls the un-awaited
+    # `result.scalar_one_or_none()`. With a bare AsyncMock execute result that
+    # chained call leaks an unawaited AsyncMockMixin._execute_mock_call
+    # coroutine (PytestUnraisableExceptionWarning) on EVERY request. Returning
+    # a plain MagicMock result keeps the sync `.scalar_one_or_none()` chain off
+    # the async-mock path; None mirrors the "row absent" default (enforce).
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=execute_result)
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -72,7 +82,7 @@ class _EnterprisePlan:
         return []
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
@@ -80,7 +90,7 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -512,7 +522,7 @@ class TestDeleteReport:
 class TestGetAnomalies:
     ENDPOINT = "/api/v1/admin/costs/anomalies"
 
-    @pytest.fixture()
+    @pytest.fixture
     def anomaly_client(self) -> Generator[TestClient, None, None]:
         """Dedicated fixture that configures session.execute for anomaly tests."""
         mock_session = _make_mock_session()
@@ -605,3 +615,363 @@ class TestDismissAnomaly:
             resp = client.get(self.ENDPOINT)
 
         assert resp.status_code == 404
+
+
+class TestCostControlsCurrency:
+    """Cost-control currency/billing settings persist via org.settings_json and round-trip."""
+
+    ENDPOINT = "/api/v1/admin/costs/controls"
+
+    def _org(self, settings_json: dict | None = None) -> MagicMock:
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = None
+        org.settings_json = settings_json if settings_json is not None else {}
+        return org
+
+    def test_controls_defaults_when_unset(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["currency"] == "USD"
+        assert data["billing_period"] == "monthly"
+        assert data["circuit_breaker_enabled"] is False
+        assert data["alert_thresholds"] == [50, 75, 90]
+
+    def test_update_persists_currency_and_settings(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(
+                self.ENDPOINT,
+                json={"currency": "EUR", "billing_period": "quarterly", "circuit_breaker_enabled": True},
+            )
+
+        assert resp.status_code == 200
+        assert org.settings_json == {
+            "cost_controls": {
+                "currency": "EUR",
+                "billing_period": "quarterly",
+                "circuit_breaker_enabled": True,
+            }
+        }
+
+    def test_update_persists_alert_thresholds(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 75, 90]})
+
+        assert resp.status_code == 200
+        assert org.settings_json == {"cost_controls": {"alert_thresholds": [50.0, 75.0, 90.0]}}
+        assert resp.json()["alert_thresholds"] == [50.0, 75.0, 90.0]
+
+    def test_get_returns_persisted_alert_thresholds(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": [50, 90]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50.0, 90.0]
+
+    def test_update_rejects_unknown_currency(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "ABC"})
+
+        assert resp.status_code == 422
+
+    def test_update_rejects_unknown_billing_period(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"billing_period": "yearly"})
+
+        assert resp.status_code == 422
+
+    def test_currency_round_trips_through_update_get(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            put_resp = client.put(self.ENDPOINT, json={"currency": "GBP"})
+            assert put_resp.status_code == 200
+            get_resp = client.get(self.ENDPOINT)
+
+        assert get_resp.status_code == 200
+        data = get_resp.json()
+        assert data["currency"] == "GBP"
+        assert data["billing_period"] == "monthly"
+        assert data["circuit_breaker_enabled"] is False
+
+    def test_update_preserves_existing_settings_and_budget(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "USD", "billing_period": "monthly"}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "EUR", "budget": 250.0})
+
+        assert resp.status_code == 200
+        assert org.settings_json["cost_controls"] == {
+            "currency": "EUR",
+            "billing_period": "monthly",
+        }
+
+    def test_update_org_not_found_returns_404(self, client: TestClient) -> None:
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=None),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "EUR"})
+
+        assert resp.status_code == 404
+
+
+class TestCostControlsAlertThresholds:
+    """alert_thresholds persist via org.settings_json and round-trip through update/get."""
+
+    ENDPOINT = "/api/v1/admin/costs/controls"
+
+    def _org(self, settings_json: dict | None = None) -> MagicMock:
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.daily_spend_limit = None
+        org.settings_json = settings_json if settings_json is not None else {}
+        return org
+
+    def test_defaults_when_unset(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    def test_defaults_ignores_corrupted_persisted_value(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": "not-a-list"}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    def test_defaults_ignores_non_numeric_list_item(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": [50, "high"]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    def test_defaults_ignores_out_of_range_persisted_value(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": [50, 1000]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    def test_defaults_ignores_overflow_huge_int_persisted_value(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": [50, int("1" + "0" * 400)]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_defaults_ignores_non_finite_persisted_value(self, client: TestClient, bad: float) -> None:
+        org = self._org({"cost_controls": {"alert_thresholds": [50, bad]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json()["alert_thresholds"] == [50, 75, 90]
+
+    def test_update_persists_alert_thresholds(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 75, 90, 100]})
+
+        assert resp.status_code == 200
+        assert org.settings_json == {"cost_controls": {"alert_thresholds": [50.0, 75.0, 90.0, 100.0]}}
+
+    def test_alert_thresholds_round_trip_through_update_get(self, client: TestClient) -> None:
+        org = self._org()
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            put_resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 100]})
+            assert put_resp.status_code == 200
+            get_resp = client.get(self.ENDPOINT)
+
+        assert get_resp.status_code == 200
+        assert get_resp.json()["alert_thresholds"] == [50.0, 100.0]
+
+    def test_update_preserves_existing_thresholds_and_currency(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "EUR", "alert_thresholds": [75]}})
+        page_result = MagicMock(items=[], total=0, page=1, page_size=1000)
+        with (
+            patch("modulo.api.routes.costs.get_organisation", return_value=org),
+            patch("modulo.api.routes.costs.list_teams", return_value=page_result),
+            patch("modulo.api.routes.costs.set_rls_org"),
+        ):
+            resp = client.put(self.ENDPOINT, json={"currency": "GBP"})
+
+        assert resp.status_code == 200
+        assert org.settings_json["cost_controls"] == {"currency": "GBP", "alert_thresholds": [75]}
+
+    def test_empty_thresholds_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": []})
+        assert resp.status_code == 422
+
+    def test_out_of_range_threshold_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50, 150]})
+        assert resp.status_code == 422
+
+    def test_non_integer_threshold_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": [50.5]})
+        assert resp.status_code == 422
+
+    def test_non_numeric_threshold_returns_422(self, client: TestClient) -> None:
+        resp = client.put(self.ENDPOINT, json={"alert_thresholds": ["high"]})
+        assert resp.status_code == 422
+
+    def test_operator_returns_403(self, operator_client: TestClient) -> None:
+        resp = operator_client.put(self.ENDPOINT, json={"alert_thresholds": [50]})
+        assert resp.status_code == 403
+
+
+class TestOrgSettingsCurrency:
+    """GET /api/v1/org/settings exposes the org currency to any tenant member."""
+
+    ENDPOINT = "/api/v1/org/settings"
+
+    def _org(self, settings_json: dict | None = None) -> MagicMock:
+        org = MagicMock()
+        org.id = _ORG_ID
+        org.settings_json = settings_json if settings_json is not None else {}
+        return org
+
+    def test_returns_default_when_unset(self, client: TestClient) -> None:
+        org = self._org()
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "USD"}
+
+    def test_returns_persisted_currency(self, client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "EUR", "billing_period": "quarterly"}})
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "EUR"}
+
+    def test_non_admin_tenant_member_can_read(self, operator_client: TestClient) -> None:
+        org = self._org({"cost_controls": {"currency": "GBP"}})
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=org),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = operator_client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "GBP"}
+
+    def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.get(self.ENDPOINT)
+        assert resp.status_code in (401, 403)
+
+    def test_missing_org_returns_default(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.org_settings.get_organisation", return_value=None),
+            patch("modulo.api.routes.org_settings.set_rls_org"),
+        ):
+            resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"currency": "USD"}

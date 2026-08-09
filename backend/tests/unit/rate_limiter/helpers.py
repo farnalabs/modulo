@@ -1,20 +1,18 @@
-"""Shared fixtures and builders for the rate_limiter test package.
+"""Shared builders for the rate_limiter test package.
 
-Each test module previously re-implemented the Settings builder and the
-module-level state isolation fixture with slightly different shapes. Keeping
-them here means a change to the Settings contract or to how the middleware
-tracks its module globals only has to be made once.
+Each test module previously re-implemented the Settings builder with slightly
+different shapes. Keeping it here means a change to the Settings contract only
+has to be made once. Fixtures (``mock_redis``, ``_isolate_module_state``) live
+in ``conftest.py`` — pytest only auto-applies fixtures from conftest files and
+test modules, so defining them here was dead code that silently duplicated the
+conftest versions.
 """
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-from modulo.api.middleware import rate_limiter as rl_mod
-from modulo.api.middleware.rate_limiter import RateLimitMiddleware
 from modulo.settings import Settings
 
 BASE_SETTINGS: dict[str, object] = {
@@ -57,28 +55,25 @@ def make_redis_client(*, auth: bool = False) -> MagicMock:
     return client
 
 
-@pytest.fixture
-def mock_redis() -> MagicMock:
-    """Auth-flavoured Redis mock used by AuthRateLimiter/middleware tests."""
-    return make_redis_client(auth=True)
+def make_mock_request(
+    method: str = "POST",
+    path: str = "/api/v1/runs",
+    headers: dict[str, str] | None = None,
+    scope: dict | None = None,
+    client: Any = None,
+) -> MagicMock:
+    """Build a MagicMock stand-in for a starlette.Request.
 
-
-@pytest.fixture(autouse=True)
-def _isolate_module_state() -> Generator[None, None, None]:
-    """Snapshot and restore the rate-limiter module globals between tests.
-
-    Resets ``_redis_clients``, ``redis_available``, the ``_auth_rate_limiter``
-    singleton and the class-level ``RateLimitMiddleware.RULES`` so a mutation in
-    one test (e.g. ``set_rules`` or a shutdown that clears the client set) can
-    never leak into a later test.
+    ``headers.get`` honours the same default-return contract as the real
+    implementation so callers can simulate X-Forwarded-For / Authorization /
+    bypass headers; ``client`` is attached verbatim to drive the
+    ``client.host`` IP fallback.
     """
-    saved_clients = set(rl_mod._redis_clients)
-    saved_available = rl_mod.redis_available
-    saved_limiter = rl_mod._auth_rate_limiter
-    saved_rules = list(RateLimitMiddleware.RULES)
-    yield
-    rl_mod._redis_clients.clear()
-    rl_mod._redis_clients.update(saved_clients)
-    rl_mod.redis_available = saved_available
-    rl_mod._auth_rate_limiter = saved_limiter
-    RateLimitMiddleware.RULES = saved_rules
+    req = MagicMock()
+    req.method = method
+    req.url.path = path
+    req.scope = {} if scope is None else scope
+    header_map = headers or {}
+    req.headers.get = MagicMock(side_effect=lambda name, default="": header_map.get(name, default))
+    req.client = client
+    return req

@@ -1,5 +1,5 @@
 <template>
-  <div data-testid="folder-tree" class="w-64 border-r border-border h-screen sticky top-0 overflow-y-auto bg-card flex flex-col">
+  <div data-testid="folder-tree" class="hidden md:flex w-64 border-r border-border h-screen sticky top-0 overflow-y-auto bg-card flex-col">
     <div class="p-3 border-b border-border flex items-center justify-between shrink-0">
       <h3 class="text-sm font-semibold text-foreground">{{ $t('views.PipelineListView.folders') }}</h3>
       <button
@@ -110,7 +110,7 @@
           <!-- Parent folder selector -->
           <div>
             <label for="folder-tree-parent" class="mb-1 block text-sm font-medium">{{ $t('components.pipelines.FolderTree.parent_folder') }}</label>
-            <Select v-model="newFolderParentId">
+            <Select :aria-label="$t('components.pipelines.FolderTree.parent_folder')" v-model="newFolderParentId">
               <SelectTrigger id="folder-tree-parent">
                 <SelectValue :placeholder="$t('components.pipelines.FolderTree.no_parent_root_level')" />
               </SelectTrigger>

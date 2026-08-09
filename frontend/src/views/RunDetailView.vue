@@ -31,7 +31,7 @@
         </div>
         <div class="text-right text-xs text-muted-foreground">
           <div v-if="run.total_cost_usd != null" class="text-base font-semibold tabular-nums text-foreground">
-            Total: ${{ formattedCost }}
+            Total: {{ formatMoney(Number(formattedCost), currencyCode, 6) }}
           </div>
           <button
             data-testid="run-detail-share-summary"
@@ -183,7 +183,8 @@
           {{ $t('views.RunDetailView.no_node_data_failed') }}
         </div>
 
-        <table v-else class="w-full text-left text-sm">
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
           <thead>
             <tr class="border-b text-xs uppercase text-muted-foreground">
               <th class="pb-2 pr-4 font-medium">{{ $t('views.RunDetailView.node') }}</th>
@@ -207,11 +208,19 @@
               <td class="py-3 pr-4 font-medium">{{ node.name }}</td>
               <td class="py-3 pr-4">
                 <span :class="[nodeStatusBadgeClass(node), 'capitalize']">{{ node.status }}</span>
+                <span
+                  v-if="node.stallReason"
+                  data-testid="run-detail-node-stalled"
+                  class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                  :title="node.stallReason"
+                >
+                  {{ $t('views.RunDetailView.agent_stalled', { reason: node.stallReason }) }}
+                </span>
               </td>
               <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.outputTokens ?? '—' }}</td>
-              <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? '$' + node.cost.toFixed(6) : '—' }}</td>
+              <td class="py-3 pr-4 tabular-nums">{{ node.cost != null ? formatMoney(node.cost, currencyCode, 6) : '—' }}</td>
               <td class="py-3 pr-4">
                 <button
                   v-if="node.traceId"
@@ -293,6 +302,14 @@
               v-show="expandedLogs.has(node.name)"
             >
               <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
+                <div
+                  v-if="!isTerminal && liveOutput[node.name]"
+                  class="rounded-lg border border-primary/40 bg-muted p-4"
+                  data-testid="run-detail-live-output"
+                >
+                  <h4 class="mb-2 text-xs font-semibold text-primary">{{ $t('views.RunDetailView.live_output') }}</h4>
+                  <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ liveOutput[node.name] }}</code></pre>
+                </div>
                 <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.agent_stdout') }}</h4>
                   <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stdout') }}</code></pre>
@@ -301,13 +318,17 @@
                   <h4 class="mb-2 text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stderr') }}</code></pre>
                 </div>
-                <div v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr')" class="text-center text-sm text-muted-foreground py-4">
+                <div
+                  v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr') && !liveOutput[node.name]"
+                  class="text-center text-sm text-muted-foreground py-4"
+                >
                   {{ $t('views.RunDetailView.no_agent_logs') }}
                 </div>
               </td>
             </tr>
           </tbody>
         </table>
+        </div>
       </section>
 
       <!-- Workspace Lease -->
@@ -343,11 +364,21 @@
       <section v-if="run.total_cost_usd != null" class="rounded-lg border bg-card p-6">
         <div class="flex items-center justify-between">
           <h2 class="text-base font-semibold tracking-tight">{{ $t('views.RunDetailView.total_run_cost') }}</h2>
-          <span class="text-2xl font-semibold tabular-nums">${{ formattedCost }}</span>
+          <span class="text-2xl font-semibold tabular-nums">{{ formatMoney(Number(formattedCost), currencyCode, 6) }}</span>
         </div>
         <p v-if="totalTokens != null" class="mt-1 text-xs text-muted-foreground">
           {{ $t('views.RunDetailView.total_tokens', { count: totalTokens.toLocaleString() }) }}
         </p>
+
+        <div
+          v-if="childRunCost > 0 && aggregateCost != null"
+          data-testid="run-detail-aggregate-cost"
+          class="mt-3 rounded-lg border border-muted bg-muted/30 px-3 py-2 text-sm"
+        >
+          <span class="font-medium text-foreground">{{ childRunCount > 0 ? $t('views.RunDetailView.total_including_child_runs_count', childRunCount) : $t('views.RunDetailView.total_including_child_runs') }}</span>
+          <span class="ml-1 tabular-nums font-semibold">{{ formatMoney(aggregateCost, currencyCode, 6) }}</span>
+          <span class="ml-1 text-xs text-muted-foreground">{{ $t('views.RunDetailView.includes_child_run_cost', { amount: formatMoney(childRunCost, currencyCode, 6) }) }}</span>
+        </div>
 
         <template v-if="breakdownPresent">
           <p v-if="breakdownTotalClamped" class="mt-4 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning" data-testid="run-detail-cost-clamped">
@@ -370,7 +401,7 @@
                     <span v-if="entry.missing_self_report" class="ml-1 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" data-testid="run-detail-not-reported">{{ $t('views.RunDetailView.not_reported') }}</span>
                     <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
                   </td>
-                  <td class="py-2 pr-4 tabular-nums">${{ entry.amountUsd }}</td>
+                  <td class="py-2 pr-4 tabular-nums">{{ formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
                   <td class="py-2 pr-4">
                     <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs" :class="entry.source === 'self_reported' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'">
                       {{ entry.source === 'self_reported' ? $t('views.RunDetailView.reported') : $t('views.RunDetailView.estimated') }}
@@ -382,7 +413,7 @@
               <tfoot>
                 <tr class="border-t font-medium">
                   <td class="py-2 pr-4">{{ $t('views.RunDetailView.sum_of_components') }}</td>
-                  <td class="py-2 pr-4 tabular-nums">${{ breakdownTotal }}</td>
+                  <td class="py-2 pr-4 tabular-nums">{{ formatMoney(Number(breakdownTotal), currencyCode, 6) }}</td>
                   <td colspan="2" class="py-2 text-xs text-muted-foreground">{{ $t('views.RunDetailView.breakdown_sum_not_total') }}</td>
                 </tr>
               </tfoot>
@@ -437,6 +468,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
+import { useApi } from '../composables/useApi'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -449,11 +481,16 @@ import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
 import Button from '../components/ui/button/Button.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId, formatRun } from '../utils/format'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 type RunResponse = components['schemas']['RunResponse'] & {
   created_at?: string | null
   started_at?: string | null
   completed_at?: string | null
+  child_runs_cost_usd?: string | null
+  child_runs_count?: number
+  aggregate_cost_usd?: string | null
 }
 type RunIOResponse = components['schemas']['RunIOResponse']
 
@@ -488,6 +525,7 @@ interface NodeEntry {
   traceId: string | null
   io: { input: unknown; output: unknown } | null
   hasLogs: boolean
+  stallReason: string | null
 }
 
 interface WorkspaceLeaseInfo {
@@ -497,8 +535,16 @@ interface WorkspaceLeaseInfo {
   error_message?: string
 }
 
+interface RunChunkEvent {
+  seq: number
+  event_type: string
+  payload?: { node_id?: string; chunk?: string }
+  ts?: string
+}
+
 const route = useRoute()
 const { t, locale } = useI18n()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 const run = ref<RunResponse | null>(null)
 const runIO = ref<RunIOResponse | null>(null)
 const expandedNodes = ref(new Set<string>())
@@ -521,6 +567,8 @@ const claimLoading = ref(false)
 const actioning = ref<string | null>(null)
 const hitlNotes = ref('')
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
+const liveOutput = ref<Record<string, string>>({})
+const liveOutputSeq = ref(0)
 
 const shareSummary = computed(() => {
   const r = run.value
@@ -528,7 +576,7 @@ const shareSummary = computed(() => {
   const completed = nodeEntries.value.filter(n => n.status === 'complete').length
   const total = nodeEntries.value.length
   const tokens = totalTokens.value?.toLocaleString() ?? '—'
-  const cost = r.total_cost_usd != null ? `$${Number(r.total_cost_usd).toFixed(6)}` : '—'
+  const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
   return [
     `Run: ${r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)}`,
     `Pipeline: ${r.pipeline_name || shortId(r.pipeline_id)}`,
@@ -677,6 +725,8 @@ const statusBadgeClass = computed(() => {
   return map[s] ?? 'badge badge-context-slate'
 })
 
+const isTerminal = computed(() => run.value != null && TERMINAL_STATUSES.includes(run.value.status))
+
 function nodeStatusBadgeClass(node: NodeEntry): string {
   const map: Record<string, string> = {
     running: 'badge badge-status-primary',
@@ -714,6 +764,25 @@ const formattedCost = computed(() => {
   const c = run.value?.total_cost_usd
   if (c == null) return '0.00'
   return Number(c).toFixed(6)
+})
+
+const childRunCost = computed(() => {
+  const c = run.value?.child_runs_cost_usd
+  if (c == null || c === '') return 0
+  const n = Number(c)
+  return Number.isFinite(n) ? n : 0
+})
+
+const aggregateCost = computed(() => {
+  const a = run.value?.aggregate_cost_usd
+  if (a == null || a === '') return null
+  const n = Number(a)
+  return Number.isFinite(n) ? n : null
+})
+
+const childRunCount = computed(() => {
+  const c = run.value?.child_runs_count
+  return Number.isInteger(c) && (c ?? 0) > 0 ? (c as number) : 0
 })
 
 const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed']
@@ -954,6 +1023,9 @@ const nodeEntries = computed<NodeEntry[]>(() => {
     const nodeOutput = outputs[name] as Record<string, unknown> | undefined
     const outputValue = (nodeOutput?.output as Record<string, unknown>) ?? {}
     const hasLogs = !!(outputValue.agent_stdout || outputValue.agent_stderr)
+    const stallReason = typeof outputValue.stall_reason === 'string' && outputValue.stall_reason.length > 0
+      ? outputValue.stall_reason
+      : null
 
     return {
       name,
@@ -970,6 +1042,7 @@ const nodeEntries = computed<NodeEntry[]>(() => {
           }
         : null,
       hasLogs,
+      stallReason,
     }
   })
 })
@@ -1011,6 +1084,32 @@ async function fetchRunData(runId: string) {
   }
 }
 
+async function fetchLiveOutput(runId: string) {
+  if (run.value && TERMINAL_STATUSES.includes(run.value.status)) return
+  try {
+    const data = await useApi().get<{ events?: RunChunkEvent[] }>(
+      `/api/v1/runs/${runId}/events?since_seq=${liveOutputSeq.value}`,
+    )
+    const events = data?.events
+    if (!events || events.length === 0) return
+    const next = { ...liveOutput.value }
+    let maxSeq = liveOutputSeq.value
+    for (const evt of events) {
+      if (!evt || typeof evt.seq !== 'number') continue
+      if (evt.event_type === 'node.stdout_chunk' && evt.payload?.node_id) {
+        const nodeId = evt.payload.node_id
+        next[nodeId] = (next[nodeId] ?? '') + (evt.payload.chunk ?? '')
+      }
+      if (evt.seq > maxSeq) maxSeq = evt.seq
+    }
+    liveOutput.value = next
+    liveOutputSeq.value = maxSeq
+  } catch (e) {
+    // Live output is best-effort — polling must never break the page.
+    console.warn('Failed to fetch live run output', e)
+  }
+}
+
 function startPolling(runId: string) {
   pollInterval.value = setInterval(async () => {
     if (run.value && TERMINAL_STATUSES.includes(run.value.status)) {
@@ -1019,6 +1118,7 @@ function startPolling(runId: string) {
       return
     }
     await fetchRunData(runId)
+    await fetchLiveOutput(runId)
   }, 3000)
 }
 
@@ -1075,4 +1175,6 @@ onUnmounted(() => {
     clearInterval(pollInterval.value)
   }
 })
+
+loadCurrency()
 </script>

@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import BigInteger, Date, ForeignKey, Index, Integer, Numeric, String, Uuid
+from sqlalchemy import BigInteger, Boolean, Date, ForeignKey, Index, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -61,6 +61,41 @@ class RunDailyFact(OrgScoped):
     total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     duration_ms: Mapped[int | None] = mapped_column(BigInteger)
+    # FAR-102 enrichment — stall dimensions + other run facts (migration 0071).
+    # All nullable where the source run may not carry the value.
+    error_code: Mapped[str | None] = mapped_column(String(255), comment="the stall dimension — from Run.error_code")
+    claim_count: Mapped[int | None] = mapped_column(Integer)
+    queue_wait_ms: Mapped[int | None] = mapped_column(
+        BigInteger, comment="Run.dispatched_at - Run.started_at when both present, else NULL"
+    )
+    final_idle_ms: Mapped[int | None] = mapped_column(
+        BigInteger, comment="Run.completed_at - Run.heartbeat_at (the stuck-with-no-heartbeat window), else NULL"
+    )
+    cancellation_requested: Mapped[bool | None] = mapped_column(Boolean)
+    dispatcher: Mapped[str | None] = mapped_column(String(20))
+    node_count: Mapped[int | None] = mapped_column(
+        Integer, comment="number of nodes in the pipeline snapshot graph_json (NULL-safe)"
+    )
+    sandbox_agent_node_count: Mapped[int | None] = mapped_column(
+        Integer, comment="count of sandbox_agent nodes in the snapshot graph_json (NULL-safe)"
+    )
+    max_node_timeout_seconds: Mapped[int | None] = mapped_column(
+        Integer, comment="max timeout_seconds across snapshot graph nodes (NULL-safe)"
+    )
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(),
+        comment=(
+            "deliberately NOT a FK to runs — facts survive the run purge; a future 'fix' into an FK breaks retention"
+        ),
+    )
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), comment="NOT a FK — the snapshot row may be purged independently of the fact"
+    )
+    run_number: Mapped[int | None] = mapped_column(Integer)
+    output_bytes: Mapped[int | None] = mapped_column(
+        BigInteger, comment="serialised size of Run.outputs_json (json.dumps length) when present"
+    )
+    rate_limited: Mapped[bool | None] = mapped_column(Boolean, comment="True when Run.rate_limit_key is not null")
 
     team: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_id])
     pipeline: Mapped[Optional["Pipeline"]] = relationship(foreign_keys=[pipeline_id])

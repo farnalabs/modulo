@@ -4,6 +4,7 @@ import { parseISO, isValid } from "date-fns";
 import { api } from "../lib/api/client";
 import { withTimeout } from "../lib/asyncUtils";
 import { toProblemDetail, type ProblemDetail } from "../lib/api/formatError";
+import { formatDateShortWithTime } from "../lib/formatDate";
 
 export type AnalyticsMeasure =
   | "count"
@@ -11,7 +12,7 @@ export type AnalyticsMeasure =
   | "tokens"
   | "duration"
   | "success_rate";
-export type AnalyticsTimespan = "24h" | "3d" | "7d" | "30d" | "90d";
+export type AnalyticsTimespan = "1h" | "24h" | "3d" | "7d" | "30d" | "90d";
 export type AnalyticsGroupBy = "day" | "week";
 export type AnalyticsDimension =
   | "trigger_type"
@@ -98,8 +99,9 @@ export const RUN_STATUSES = [
 ] as const;
 
 export const TIMESPANS: AnalyticsTimespanOption[] = [
-  { value: "24h", days: 1 },
-  { value: "3d", days: 3 },
+  { value: "1h", hours: 1, granularity: "hour" },
+  { value: "24h", days: 1, granularity: "hour" },
+  { value: "3d", days: 3, granularity: "day" },
   { value: "7d", days: 7 },
   { value: "30d", days: 30 },
   { value: "90d", days: 90 },
@@ -107,7 +109,9 @@ export const TIMESPANS: AnalyticsTimespanOption[] = [
 
 export interface AnalyticsTimespanOption {
   value: AnalyticsTimespan;
-  days: number;
+  days?: number;
+  hours?: number;
+  granularity?: "hour" | "day" | "week";
 }
 
 export const MEASURES: { value: AnalyticsMeasure; labelKey: string }[] = [
@@ -127,6 +131,7 @@ const MEASURE_KEYS: Record<AnalyticsMeasure, keyof AnalyticsBucket> = {
 };
 
 const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
 
 function isoDay(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -151,9 +156,9 @@ function shiftUtcDays(date: Date, days: number): Date {
 
 /**
  * Rolling timespan → typed query params (UTC). Filters included only when set.
- * All timespans are day-granular windows that send ISO day strings and respect
- * the user's day/week granularity control — the backend only supports
- * `AnalyticsGroupBy` of day/week with date-typed `date_from`/`date_to`.
+ * Hour-granular timespans (1h/24h) send ISO datetime strings and force
+ * `group_by=hour`; day-granular timespans keep the day-window behaviour (ISO
+ * day strings) and respect the user's day/week granularity control.
  */
 export function serializeFilters(
   filters: AnalyticsFilters,
@@ -162,15 +167,30 @@ export function serializeFilters(
   const timespan =
     TIMESPANS.find((t) => t.value === filters.timespan) ??
     TIMESPANS.find((t) => t.value === DEFAULT_FILTERS.timespan)!;
-  // Parse the ISO day as UTC (parseDay appends T00:00:00.000Z). Parsing the bare
-  // date string with parseISO uses local midnight, which round-trips through
-  // toISOString() to the previous UTC day on any UTC+ timezone.
-  const dateTo = parseDay(isoDay(now));
-  const dateFrom = shiftUtcDays(dateTo, timespan.days);
+  let groupBy: string;
+  let dateFrom: string;
+  let dateTo: string;
+  if (timespan.granularity === "hour") {
+    // Hour-granular window: derive the span from the preset (`hours` for 1h,
+    // `days * 24` for 24h) and send ISO datetimes so the backend grids by hour.
+    const spanHours = timespan.hours ?? (timespan.days ?? 1) * 24;
+    groupBy = "hour";
+    dateFrom = new Date(now.getTime() - spanHours * HOUR_MS).toISOString(); // nosemgrep: new-date-without-guard
+    dateTo = now.toISOString();
+  } else {
+    // Parse the ISO day as UTC (parseDay appends T00:00:00.000Z). Parsing the bare
+    // date string with parseISO uses local midnight, which round-trips through
+    // toISOString() to the previous UTC day on any UTC+ timezone.
+    const dayTo = parseDay(isoDay(now));
+    const dayFrom = shiftUtcDays(dayTo, timespan.days ?? 0);
+    groupBy = filters.groupBy;
+    dateFrom = isoDay(dayFrom);
+    dateTo = isoDay(dayTo);
+  }
   const params: AnalyticsQueryParams = {
-    group_by: filters.groupBy,
-    date_from: isoDay(dateFrom),
-    date_to: isoDay(dateTo),
+    group_by: groupBy,
+    date_from: dateFrom,
+    date_to: dateTo,
     limit: 1000,
   };
   if (filters.dimension) params.dimension = filters.dimension;
@@ -181,8 +201,27 @@ export function serializeFilters(
   return params;
 }
 
-/** Shift a window back by exactly one window (for current-vs-previous deltas). */
+/**
+ * Shift a window back by exactly one window (for current-vs-previous deltas).
+ * Hour-granular windows (params carry ISO datetimes) are shifted back by their
+ * span in hours; day-granular windows keep the existing day-shift logic.
+ */
 export function previousWindowParams(params: AnalyticsQueryParams): AnalyticsQueryParams {
+  if (params.date_from.includes("T") || params.date_to.includes("T")) {
+    const to = parseISO(params.date_to);
+    const from = parseISO(params.date_from);
+    if (!isValid(to) || !isValid(from)) {
+      return { ...params };
+    }
+    const spanMs = to.getTime() - from.getTime();
+    const prevTo = new Date(to.getTime() - spanMs); // nosemgrep: new-date-without-guard
+    const prevFrom = new Date(from.getTime() - spanMs); // nosemgrep: new-date-without-guard
+    return {
+      ...params,
+      date_from: prevFrom.toISOString(),
+      date_to: prevTo.toISOString(),
+    };
+  }
   const to = parseDay(params.date_to);
   const from = parseDay(params.date_from);
   const spanDays = Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1;
@@ -252,6 +291,20 @@ export function isDimensioned(series: AnalyticsBucket[]): boolean {
   return series.some((b) => b.key != null && b.key !== "");
 }
 
+/**
+ * Humanize a backend bucket label. Hour-granular buckets carry naive-UTC ISO
+ * datetimes (e.g. "2026-08-06T14:00:00") that must be read as UTC — appending Z
+ * so `new Date` parses them as UTC, then formatting in the viewer's timezone.
+ * Day-granular buckets are bare "YYYY-MM-DD" strings and are returned unchanged.
+ */
+export function formatBucketDate(date: string | null | undefined): string {
+  if (date == null) return "";
+  if (date.includes("T")) {
+    return formatDateShortWithTime(`${date}Z`);
+  }
+  return date;
+}
+
 /** Pure series → ECharts option mapping. The backend is the sole bucketing authority. */
 export function buildChartOption(
   series: AnalyticsBucket[],
@@ -260,7 +313,7 @@ export function buildChartOption(
 ): Record<string, unknown> {
   const dimensioned = isDimensioned(series);
   const buckets = dimensioned ? aggregateByKey(series) : series;
-  const labels = buckets.map((b) => b.key ?? b.date);
+  const labels = buckets.map((b) => b.key ?? formatBucketDate(b.date));
   const values = buckets.map((b) => measureValue(b, measure));
   return {
     tooltip: { trigger: "axis" },
@@ -366,7 +419,10 @@ export const useAnalyticsStore = defineStore("analytics", () => {
         (b.total_tokens != null && b.total_tokens > 0),
     ),
   );
-  const groupBy = computed(() => filters.value.groupBy);
+  const groupBy = computed(() => {
+    const timespan = TIMESPANS.find((t) => t.value === filters.value.timespan);
+    return timespan?.granularity === "hour" ? "hour" : filters.value.groupBy;
+  });
 
   function setFilters(patch: Partial<AnalyticsFilters>): void {
     filters.value = { ...filters.value, ...patch };

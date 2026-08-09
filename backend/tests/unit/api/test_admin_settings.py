@@ -93,7 +93,7 @@ def _fake_team(
     return team
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
     plan_ctx = _team_plan_context()
@@ -115,14 +115,14 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
     plan_ctx = _team_plan_context()
@@ -534,7 +534,7 @@ class TestBillingOverview:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["plan_tier"] == "pro"
+        assert body["plan_tier"] == "community"
         assert body["plan_id"] == "pro_monthly"
         assert body["license_key"] == "LIC-1234-ABCD"
 

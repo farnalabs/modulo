@@ -13,7 +13,7 @@
       <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
       <div class="flex flex-wrap items-center gap-4">
-        <Select v-model="selectedGroupId">
+        <Select aria-label="Compare group" v-model="selectedGroupId">
           <SelectTrigger data-testid="variant-compare-group-select" aria-label="Compare group" class="min-w-[280px] rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <SelectValue :placeholder="$t('views.variantCompare.selectGroup')" />
           </SelectTrigger>
@@ -76,19 +76,19 @@
                     <div>
                   <span
                     v-if="getCellStatus(node, v.name) === 'pass'"
-                    class="badge badge-status-success"
+                    class="badge badge-status-success capitalize"
                   >
                     {{ $t('views.variantCompare.statusPass') }}
                   </span>
                   <span
                     v-else-if="getCellStatus(node, v.name) === 'fail'"
-                    class="badge badge-status-destructive"
+                    class="badge badge-status-destructive capitalize"
                   >
                     {{ $t('views.variantCompare.statusFail') }}
                   </span>
                   <span
                     v-else-if="getCellStatus(node, v.name) === 'partial'"
-                    class="badge badge-status-warning"
+                    class="badge badge-status-warning capitalize"
                   >
                     {{ $t('views.variantCompare.statusPartial') }}
                   </span>
@@ -142,7 +142,7 @@
                       <span class="text-muted-foreground">{{ $t('views.variantCompare.pass') }}</span>
                     </div>
                     <div v-if="s.totalCost !== null" class="text-muted-foreground">
-                      {{ $t('views.variantCompare.cost', { cost: Number(s.totalCost).toFixed(6) }) }}
+                      {{ $t('views.variantCompare.cost', { cost: formatMoney(Number(s.totalCost), currencyCode, 6) }) }}
                     </div>
                     <div v-if="s.tokenTotal !== null" class="text-muted-foreground">
                       {{ $t('views.variantCompare.tokens', { count: s.tokenTotal.toLocaleString() }) }}
@@ -244,8 +244,11 @@ import { formatApiError } from '../lib/api/formatError'
 import { Button } from '@/components/ui/button'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { formatMoney } from '../lib/money'
+import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const { t } = useI18n()
+const { currencyCode, loadCurrency } = useOrgCurrency()
 
 type VariantGroup = components['schemas']['VariantGroupResponse']
 type RunResponse = components['schemas']['RunResponse']
@@ -591,4 +594,6 @@ async function fetchRunEvals(runId: string, variantName: string) {
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+
+loadCurrency()
 </script>

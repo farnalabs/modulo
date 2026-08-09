@@ -87,7 +87,8 @@ def response_detail_describes_error(request):
     detail = getattr(request.node._resp, "detail", None) or (
         request.node._resp_body.detail if hasattr(request.node._resp_body, "detail") else None
     )
-    assert detail and len(detail) > 0
+    assert detail
+    assert len(detail) > 0
 
 
 # ============================================================================
@@ -370,9 +371,32 @@ def step_github_connector(ctx):
                         "rate_limit": {
                             "X-RateLimit-Limit": "5000",
                             "X-RateLimit-Remaining": "4998",
-                            "X-RateLimit-Reset": "1754000000",
                             "X-RateLimit-Used": "2",
+                            "X-RateLimit-Reset": "1754160000",
                             "X-RateLimit-Resource": "core",
+                        }
+                    },
+                )
+            case "rate_limit":
+                return ConnectorResult(
+                    records=[
+                        {
+                            "core": {
+                                "limit": 5000,
+                                "remaining": 4998,
+                                "reset": 1754160000,
+                                "used": 2,
+                                "resource": "core",
+                            },
+                            "search": {"limit": 30, "remaining": 30, "reset": 1754160000, "used": 0},
+                        }
+                    ],
+                    total=1,
+                    metadata={
+                        "rate_limit": {
+                            "X-RateLimit-Limit": "5000",
+                            "X-RateLimit-Remaining": "4998",
+                            "X-RateLimit-Reset": "1754160000",
                         }
                     },
                 )
@@ -738,38 +762,6 @@ def step_records_contain_repo_metadata(ctx):
         assert "full_name" in rec or "name" in rec, f"Record missing repo metadata: {rec}"
 
 
-@then("the result exposes the rate-limit budget")
-def step_result_exposes_rate_limit_budget(ctx):
-    result = ctx.get("query_result")
-    assert result is not None, "No query result"
-    rate_limit = result.metadata.get("rate_limit")
-    assert rate_limit is not None, "Query result missing metadata['rate_limit']"
-    assert rate_limit.get("X-RateLimit-Limit") is not None, "Missing X-RateLimit-Limit budget header"
-    assert rate_limit.get("X-RateLimit-Remaining") is not None, "Missing X-RateLimit-Remaining budget header"
-    assert rate_limit.get("X-RateLimit-Reset") is not None, "Missing X-RateLimit-Reset budget header"
-
-
-@then(parsers.parse('the connector raises a ValueError with "{expected}" and the quota header "{header}"'))
-def step_connector_raises_value_error_with_quota(expected, header, ctx):
-    import asyncio
-
-    from modulo.connectors.base import ConnectorQuery
-
-    connector = ctx["connector"]
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
-        ctx["query_error"] = None
-    except ValueError as exc:
-        ctx["query_error"] = str(exc)
-    finally:
-        loop.close()
-
-    assert ctx["query_error"] is not None, f"Expected ValueError with '{expected}' but no error occurred"
-    assert expected in ctx["query_error"], f"Expected '{expected}' in error but got: {ctx['query_error']}"
-    assert header in ctx["query_error"], f"Expected quota header '{header}' in error but got: {ctx['query_error']}"
-
-
 @then("the record contains file content")
 def step_record_contains_file_content(ctx):
     result = ctx["query_result"]
@@ -814,6 +806,63 @@ def step_result_reports_no_next_cursor(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
     assert result.next_cursor is None, f"Expected no next page cursor but got {result.next_cursor!r}"
+
+
+@then("the result exposes the rate-limit budget")
+def step_result_exposes_rate_limit_budget(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    rate_limit = result.metadata.get("rate_limit")
+    assert rate_limit is not None, "Query result missing metadata['rate_limit']"
+    assert rate_limit.get("X-RateLimit-Limit") is not None, "Missing X-RateLimit-Limit budget header"
+    assert rate_limit.get("X-RateLimit-Remaining") is not None, "Missing X-RateLimit-Remaining budget header"
+    assert rate_limit.get("X-RateLimit-Reset") is not None, "Missing X-RateLimit-Reset budget header"
+
+
+@then(parsers.parse('the connector raises a ValueError with "{expected}" and the quota header "{header}"'))
+def step_connector_raises_value_error_with_quota(expected, header, ctx):
+    import asyncio
+
+    from modulo.connectors.base import ConnectorQuery
+
+    connector = ctx["connector"]
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
+        ctx["query_error"] = None
+    except ValueError as exc:
+        ctx["query_error"] = str(exc)
+    finally:
+        loop.close()
+
+    assert ctx["query_error"] is not None, f"Expected ValueError with '{expected}' but no error occurred"
+    assert expected in ctx["query_error"], f"Expected '{expected}' in error but got: {ctx['query_error']}"
+    assert header in ctx["query_error"], f"Expected quota header '{header}' in error but got: {ctx['query_error']}"
+
+
+@then("the query result exposes rate-limit metadata")
+def step_github_result_exposes_rate_limit_metadata(ctx):
+    result = ctx.get("query_result")
+    assert result is not None, "No query result"
+    meta = result.metadata.get("rate_limit", {})
+    assert meta, f"Expected rate-limit metadata but got: {result.metadata}"
+    assert "X-RateLimit-Remaining" in meta, f"Missing X-RateLimit-Remaining in {meta}"
+    assert "X-RateLimit-Reset" in meta, f"Missing X-RateLimit-Reset in {meta}"
+
+
+@when("the GitHub API is rate limited with zero remaining quota")
+def step_github_api_rate_limited_zero_quota(ctx):
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise ValueError(
+            "GitHub API HTTP 429: Rate limit exceeded "
+            "(quota: X-RateLimit-Limit=5000; X-RateLimit-Remaining=0; X-RateLimit-Reset=1754160000)"
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
 
 
 @when(parsers.parse('the API returns HTTP {status_code:d} "{reason}"'))
@@ -871,6 +920,101 @@ def step_connector_raises_value_error(expected, ctx):
 
     assert ctx["query_error"] is not None, f"Expected ValueError with '{expected}' but no error occurred"
     assert expected in ctx["query_error"], f"Expected '{expected}' in error but got: {ctx['query_error']}"
+
+
+@when("the GitHub API returns HTTP 401 with an expired token")
+def step_github_api_401_expired_token(ctx):
+    from modulo.connectors.github import GitHubAuthError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise GitHubAuthError(
+            "GitHub API HTTP 401: Bad credentials",
+            status_code=401,
+            error_code="token_expired",
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@when("the GitHub API returns HTTP 429 with exhausted quota")
+def step_github_api_429_exhausted_quota(ctx):
+    from modulo.connectors.github import GitHubRateLimitError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise GitHubRateLimitError(
+            "GitHub API HTTP 429: Rate limit exceeded",
+            status_code=429,
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@then(parsers.parse('the connector raises a GitHub error with code "{code}"'))
+def step_connector_raises_github_error_code(code, ctx):
+    import asyncio
+
+    from modulo.connectors.base import ConnectorQuery
+    from modulo.connectors.github import GitHubError
+
+    connector = ctx["connector"]
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
+        ctx["query_error"] = "unexpected_success"
+    except GitHubError as exc:
+        ctx["query_error"] = str(exc)
+        assert exc.error_code == code, f"Expected error code {code!r} but got {exc.error_code!r}"
+    except ValueError as exc:
+        ctx["query_error"] = str(exc)
+        raise AssertionError(f"Expected a GitHubError but got a plain ValueError: {exc}") from exc
+    finally:
+        loop.close()
+
+
+@given("a GitHub connector whose health check reports an expired token")
+def step_github_health_expired_token(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Invalid or expired GitHub token (HTTP 401)")
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@given(parsers.parse('a GitHub connector whose health check reports missing scope "{scope}"'))
+def step_github_health_missing_scope(scope, ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(
+            ok=False,
+            detail=(f"Missing scopes: missing_scope:{scope} ({scope}). Required: repo, read:org"),
+        )
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@then("the health result detail describes an expired token")
+def step_health_detail_expired_token(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert "expired" in result.detail.lower(), f"Expected expired-token detail but got: {result.detail}"
+    assert "HTTP 401" in result.detail
+
+
+@then(parsers.parse('the health result detail contains "{text}"'))
+def step_health_detail_contains(text, ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert text in result.detail, f"Expected {text!r} in detail but got: {result.detail}"
 
 
 @when(parsers.parse('writing a file to GitHub returns HTTP {status_code:d} "{reason}"'))
@@ -1708,7 +1852,8 @@ def step_jira_result_lists_attachments(ctx):
 def step_jira_write_returns_attachment(ctx):
     result = ctx.get("write_result")
     assert result is not None, "No write result"
-    assert isinstance(result, list) and result, f"Expected an attachment list but got {result}"
+    assert isinstance(result, list), f"Expected an attachment list but got {result}"
+    assert result, "Expected a non-empty attachment list"
     assert result[0].get("filename"), f"Expected filename in upload result but got {result}"
 
 
@@ -3163,7 +3308,8 @@ def step_slack_ephemeral_no_user(resource, channel, ctx):
 def step_records_contain_channel_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, f"Record missing channel metadata: {rec}"
+        assert "id" in rec, f"Record missing channel metadata: {rec}"
+        assert "name" in rec, f"Record missing channel metadata: {rec}"
 
 
 @when(
@@ -4063,7 +4209,8 @@ def step_gitlab_api_unreachable(ctx):
 def step_records_contain_issue_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "iid" in rec, f"Record missing issue metadata: {rec}"
+        assert "id" in rec, f"Record missing issue metadata: {rec}"
+        assert "iid" in rec, f"Record missing issue metadata: {rec}"
 
 
 @then("the records contain issue fields")
@@ -4706,7 +4853,9 @@ def step_monday_add_update(resource, item_id, body, ctx):
 def step_monday_users_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec and "email" in rec, f"Record missing user fields: {rec}"
+        assert "id" in rec, f"Record missing user fields: {rec}"
+        assert "name" in rec, f"Record missing user fields: {rec}"
+        assert "email" in rec, f"Record missing user fields: {rec}"
 
 
 # ============================================================================
@@ -5012,14 +5161,16 @@ def step_trello_health_not_ok(ctx):
 def step_trello_boards_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, f"Record missing board metadata: {rec}"
+        assert "id" in rec, f"Record missing board metadata: {rec}"
+        assert "name" in rec, f"Record missing board metadata: {rec}"
 
 
 @then("the records contain list metadata")
 def step_trello_lists_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, f"Record missing list metadata: {rec}"
+        assert "id" in rec, f"Record missing list metadata: {rec}"
+        assert "name" in rec, f"Record missing list metadata: {rec}"
 
 
 @then("the record contains card fields")
@@ -5027,7 +5178,8 @@ def step_trello_card_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "name" in rec, f"Record missing card fields: {rec}"
+    assert "id" in rec, f"Record missing card fields: {rec}"
+    assert "name" in rec, f"Record missing card fields: {rec}"
 
 
 # ============================================================================
@@ -5711,14 +5863,16 @@ def step_shortcut_update_story(resource, story_id, name, ctx):
 def step_asana_workspace_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "gid" in rec and "name" in rec, f"Record missing workspace metadata: {rec}"
+        assert "gid" in rec, f"Record missing workspace metadata: {rec}"
+        assert "name" in rec, f"Record missing workspace metadata: {rec}"
 
 
 @then("the records contain project metadata")
 def step_asana_project_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "gid" in rec and "name" in rec, f"Record missing project metadata: {rec}"
+        assert "gid" in rec, f"Record missing project metadata: {rec}"
+        assert "name" in rec, f"Record missing project metadata: {rec}"
 
 
 @then("the record contains project fields")
@@ -5726,14 +5880,16 @@ def step_asana_project_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "gid" in rec and "name" in rec, f"Record missing project fields: {rec}"
+    assert "gid" in rec, f"Record missing project fields: {rec}"
+    assert "name" in rec, f"Record missing project fields: {rec}"
 
 
 @then("the records contain section metadata")
 def step_asana_section_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "gid" in rec and "name" in rec, f"Record missing section metadata: {rec}"
+        assert "gid" in rec, f"Record missing section metadata: {rec}"
+        assert "name" in rec, f"Record missing section metadata: {rec}"
 
 
 @when(parsers.parse('I write resource "{resource}" for story "{story_id}" with text "{text}"'))
@@ -5759,7 +5915,8 @@ def step_shortcut_add_comment(resource, story_id, text, ctx):
 def step_shortcut_story_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, f"Record missing story metadata: {rec}"
+        assert "id" in rec, f"Record missing story metadata: {rec}"
+        assert "name" in rec, f"Record missing story metadata: {rec}"
 
 
 @then("the record contains story fields")
@@ -5767,7 +5924,8 @@ def step_shortcut_story_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "name" in rec, f"Record missing story fields: {rec}"
+    assert "id" in rec, f"Record missing story fields: {rec}"
+    assert "name" in rec, f"Record missing story fields: {rec}"
 
 
 # ============================================================================
@@ -6648,7 +6806,8 @@ def step_youtrack_write_comment(resource, issue_id, text, ctx):
 def step_notion_database_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "object" in rec, f"Record missing database metadata: {rec}"
+        assert "id" in rec, f"Record missing database metadata: {rec}"
+        assert "object" in rec, f"Record missing database metadata: {rec}"
 
 
 @then("the record contains database fields")
@@ -6656,7 +6815,8 @@ def step_notion_database_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "title" in rec, f"Record missing database fields: {rec}"
+    assert "id" in rec, f"Record missing database fields: {rec}"
+    assert "title" in rec, f"Record missing database fields: {rec}"
 
 
 @then("the record contains Notion page fields")
@@ -6664,14 +6824,16 @@ def step_notion_page_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "properties" in rec, f"Record missing Notion page fields: {rec}"
+    assert "id" in rec, f"Record missing Notion page fields: {rec}"
+    assert "properties" in rec, f"Record missing Notion page fields: {rec}"
 
 
 @then("the records contain page metadata")
 def step_confluence_page_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "title" in rec, f"Record missing page metadata: {rec}"
+        assert "id" in rec, f"Record missing page metadata: {rec}"
+        assert "title" in rec, f"Record missing page metadata: {rec}"
 
 
 @then("the record contains page fields")
@@ -6679,28 +6841,34 @@ def step_confluence_page_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "title" in rec and "spaceId" in rec, f"Record missing page fields: {rec}"
+    assert "id" in rec, f"Record missing page fields: {rec}"
+    assert "title" in rec, f"Record missing page fields: {rec}"
+    assert "spaceId" in rec, f"Record missing page fields: {rec}"
 
 
 @then("the records contain space metadata")
 def step_confluence_space_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec and "key" in rec, f"Record missing space metadata: {rec}"
+        assert "id" in rec, f"Record missing space metadata: {rec}"
+        assert "name" in rec, f"Record missing space metadata: {rec}"
+        assert "key" in rec, f"Record missing space metadata: {rec}"
 
 
 @then("the records contain label metadata")
 def step_confluence_label_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, f"Record missing label metadata: {rec}"
+        assert "id" in rec, f"Record missing label metadata: {rec}"
+        assert "name" in rec, f"Record missing label metadata: {rec}"
 
 
 @then("the records contain document metadata")
 def step_google_docs_document_metadata(ctx):
     result = ctx["query_result"]
     for rec in result.records:
-        assert "id" in rec and "name" in rec, f"Record missing document metadata: {rec}"
+        assert "id" in rec, f"Record missing document metadata: {rec}"
+        assert "name" in rec, f"Record missing document metadata: {rec}"
 
 
 @then("the record contains document fields")
@@ -6708,7 +6876,8 @@ def step_google_docs_document_fields(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "documentId" in rec and "title" in rec, f"Record missing document fields: {rec}"
+    assert "documentId" in rec, f"Record missing document fields: {rec}"
+    assert "title" in rec, f"Record missing document fields: {rec}"
 
 
 @then("the record contains file metadata")
@@ -6716,7 +6885,9 @@ def step_google_docs_file_metadata(ctx):
     result = ctx["query_result"]
     assert len(result.records) > 0
     rec = result.records[0]
-    assert "id" in rec and "name" in rec and "mimeType" in rec, f"Record missing file metadata: {rec}"
+    assert "id" in rec, f"Record missing file metadata: {rec}"
+    assert "name" in rec, f"Record missing file metadata: {rec}"
+    assert "mimeType" in rec, f"Record missing file metadata: {rec}"
 
 
 # ============================================================================
@@ -6985,7 +7156,8 @@ def step_datadog_result_contains_monitors(ctx):
     assert result is not None, "No query result"
     assert len(result.records) > 0, "Expected monitor records"
     for rec in result.records:
-        assert "id" in rec and "name" in rec, f"Monitor record missing fields: {rec}"
+        assert "id" in rec, f"Monitor record missing fields: {rec}"
+        assert "name" in rec, f"Monitor record missing fields: {rec}"
 
 
 @then("the result contains Datadog events")
@@ -6994,7 +7166,8 @@ def step_datadog_result_contains_events(ctx):
     assert result is not None, "No query result"
     assert len(result.records) > 0, "Expected event records"
     for rec in result.records:
-        assert "id" in rec and "title" in rec, f"Event record missing fields: {rec}"
+        assert "id" in rec, f"Event record missing fields: {rec}"
+        assert "title" in rec, f"Event record missing fields: {rec}"
 
 
 @then("the result contains metric data")
@@ -7011,7 +7184,8 @@ def step_datadog_result_contains_dashboards(ctx):
     assert result is not None, "No query result"
     assert len(result.records) > 0, "Expected dashboard records"
     for rec in result.records:
-        assert "id" in rec and "attributes" in rec, f"Dashboard record missing fields: {rec}"
+        assert "id" in rec, f"Dashboard record missing fields: {rec}"
+        assert "attributes" in rec, f"Dashboard record missing fields: {rec}"
 
 
 @then("the result contains log events")

@@ -96,7 +96,7 @@ def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def mock_session() -> AsyncMock:
     session = AsyncMock(spec=AsyncSession)
     begin_cm = AsyncMock()
@@ -112,14 +112,14 @@ def mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def app() -> FastAPI:
     _app = FastAPI()
     _app.include_router(auth_router)
     return _app
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(mock_session: AsyncMock, app: FastAPI) -> Generator[TestClient, None, None]:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
@@ -161,7 +161,7 @@ async def test_enforce_break_glass_live_returns_true() -> None:
 
 
 @pytest.mark.parametrize(
-    "expires_at,deactivated_at,active",
+    ("expires_at", "deactivated_at", "active"),
     [
         (_PAST, None, True),  # expired
         (None, None, True),  # NULL-expiry (CHECK-unrepresentable for live, deny defensively)

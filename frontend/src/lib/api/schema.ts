@@ -513,6 +513,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/org/run-concurrency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Get Run Concurrency */
+        get: operations["admin_get_run_concurrency_api_v1_admin_org_run_concurrency_get"];
+        /** Admin Update Run Concurrency */
+        put: operations["admin_update_run_concurrency_api_v1_admin_org_run_concurrency_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/runs/storage": {
         parameters: {
             query?: never;
@@ -1199,6 +1217,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Query
+         * @description Bucketed run-facts series over the requested range, grouped hour/day/ISO-week.
+         *
+         *     ``pipeline_id`` may be repeated for "A vs B" comparisons in a single
+         *     request. ``error_code`` filters to a specific failure code and doubles as a
+         *     group-by dimension (``dimension=error_code``). ``date_from``/``date_to``
+         *     accept bare dates ("2026-08-06", parsed as midnight UTC) or ISO datetimes
+         *     ("2026-08-06T14:00:00Z"). ``auto_granularity=true`` overrides ``group_by``
+         *     from the effective range span (hour ≤3d, day ≤90d, week otherwise).
+         */
+        get: operations["analytics_query_api_v1_analytics_query_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Export
+         * @description Raw fact rows (no bucketing) filtered by the same typed params.
+         *
+         *     Paginated via ``offset``/``limit`` (default 500, max 5000), ordered by
+         *     ``run_date``/``created_at``. ``format=json`` (default) returns structured
+         *     rows; ``format=csv`` returns a Content-Disposition attachment with one row
+         *     per fact and one column per fact field. ``dimension`` is accepted for
+         *     surface parity but ignored — export has no bucketing.
+         */
+        get: operations["analytics_export_api_v1_analytics_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard/summary": {
         parameters: {
             query?: never;
@@ -1208,7 +1279,7 @@ export interface paths {
         };
         /**
          * Dashboard Summary
-         * @description Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend. Optional days query param ({1,7,30,90}) period-scopes the stat numbers with a {current, previous, delta_pct} block per metric.
+         * @description Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend.
          */
         get: operations["dashboard_summary_api_v1_dashboard_summary_get"];
         put?: never;
@@ -1450,6 +1521,42 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/costs/components": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Components */
+        get: operations["get_components_api_v1_admin_costs_components_get"];
+        put?: never;
+        /** Create Component */
+        post: operations["create_component_api_v1_admin_costs_components_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/costs/components/{component_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Component */
+        put: operations["update_component_api_v1_admin_costs_components__component_id__put"];
+        post?: never;
+        /** Delete Component */
+        delete: operations["delete_component_api_v1_admin_costs_components__component_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2771,10 +2878,12 @@ export interface paths {
         put?: never;
         /**
          * Detect Params Endpoint
-         * @description Scan sub-pipeline agent prompts for ``{{parameter.*}}`` placeholders.
+         * @description Scan sub-pipeline node prompts for ``{{parameter.*}}`` placeholders.
          *
-         *     TODO: Implement actual prompt scanning. Currently returns an empty list.
-         *     The frontend handles empty results gracefully via its best-effort contract.
+         *     Best-effort detection: every unique ``{{parameter.<name>}}`` placeholder
+         *     found on the supplied node definitions (``prompt``, ``prompt_template``,
+         *     ``agent_prompt`` fields) yields a ``ParameterPort``. Nodes without matches
+         *     produce no ports, and the frontend merges new ports with existing ones.
          */
         post: operations["detect_params_endpoint_api_v1_composite_templates_detect_params_post"];
         delete?: never;
@@ -3155,6 +3264,31 @@ export interface paths {
          *     bullet characters.
          */
         get: operations["get_run_node_output_api_v1_runs__run_id__nodes__node_id__output_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Events
+         * @description Return live chunk events for a run since a sequence number.
+         *
+         *     Only ``node.stdout_chunk`` / ``node.stderr_chunk`` events (the live-output
+         *     surface published by sandbox_agent nodes) are returned. Optionally filter
+         *     to a single ``node_id``. The run's org-scoped existence is validated first
+         *     so callers can never observe another org's run events.
+         */
+        get: operations["get_run_events_api_v1_runs__run_id__events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4405,6 +4539,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/org/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Org Settings */
+        get: operations["get_org_settings_api_v1_org_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/registry/primitives": {
         parameters: {
             query?: never;
@@ -5018,6 +5169,23 @@ export interface paths {
         head?: never;
         /** Admin Set Org Authz Enforce */
         patch: operations["admin_set_org_authz_enforce_api_v1_admin_orgs__org_id__authz_enforce_patch"];
+        trace?: never;
+    };
+    "/api/v1/admin/orgs/{org_id}/triggers/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Admin Set Org Triggers Paused */
+        put: operations["admin_set_org_triggers_paused_api_v1_admin_orgs__org_id__triggers_pause_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/admin/remy/config": {
@@ -6960,6 +7128,146 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** AnalyticsBucket */
+        AnalyticsBucket: {
+            /** Date */
+            date: string;
+            /** Key */
+            key?: string | null;
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /** Total Cost Usd */
+            total_cost_usd?: number | null;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /** Avg Duration Ms */
+            avg_duration_ms?: number | null;
+            /** Success Rate */
+            success_rate?: number | null;
+            /**
+             * Failure Count
+             * @default 0
+             */
+            failure_count: number;
+            /**
+             * Stall Count
+             * @default 0
+             */
+            stall_count: number;
+            /** Avg Queue Wait Ms */
+            avg_queue_wait_ms?: number | null;
+            /** Avg Final Idle Ms */
+            avg_final_idle_ms?: number | null;
+            /** Avg Output Bytes */
+            avg_output_bytes?: number | null;
+        };
+        /**
+         * AnalyticsDimension
+         * @enum {string}
+         */
+        AnalyticsDimension: "trigger_type" | "status" | "pipeline" | "folder" | "team" | "error_code";
+        /**
+         * AnalyticsExportItem
+         * @description One raw fact row — all fact columns, serialised to JSON-safe values.
+         */
+        AnalyticsExportItem: {
+            /** Run Id */
+            run_id: string;
+            /** Run Date */
+            run_date: string;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Name */
+            team_name?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
+            /** Trigger Type */
+            trigger_type: string;
+            /** Status */
+            status: string;
+            /** Total Cost Usd */
+            total_cost_usd?: number | null;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            /** Claim Count */
+            claim_count?: number | null;
+            /** Queue Wait Ms */
+            queue_wait_ms?: number | null;
+            /** Final Idle Ms */
+            final_idle_ms?: number | null;
+            /** Cancellation Requested */
+            cancellation_requested?: boolean | null;
+            /** Dispatcher */
+            dispatcher?: string | null;
+            /** Node Count */
+            node_count?: number | null;
+            /** Sandbox Agent Node Count */
+            sandbox_agent_node_count?: number | null;
+            /** Max Node Timeout Seconds */
+            max_node_timeout_seconds?: number | null;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Run Number */
+            run_number?: number | null;
+            /** Output Bytes */
+            output_bytes?: number | null;
+            /** Rate Limited */
+            rate_limited?: boolean | null;
+            /** Created At */
+            created_at: string;
+        };
+        /** AnalyticsExportResponse */
+        AnalyticsExportResponse: {
+            /** Items */
+            items: components["schemas"]["AnalyticsExportItem"][];
+            /** Total */
+            total: number;
+            /** Offset */
+            offset: number;
+            /** Limit */
+            limit: number;
+        };
+        /**
+         * AnalyticsGroupBy
+         * @enum {string}
+         */
+        AnalyticsGroupBy: "hour" | "day" | "week";
+        /** AnalyticsResponse */
+        AnalyticsResponse: {
+            /** Group By */
+            group_by: string;
+            /** Dimension */
+            dimension?: string | null;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Buckets */
+            buckets: components["schemas"]["AnalyticsBucket"][];
+        };
+        /**
+         * AnalyticsStatus
+         * @enum {string}
+         */
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "waiting_for_lock" | "complete" | "failed" | "cancelled" | "eval_failed";
+        /**
+         * AnalyticsTriggerType
+         * @enum {string}
+         */
+        AnalyticsTriggerType: "manual" | "webhook" | "cron" | "polling" | "agent_signal" | "correction";
         /** AnomalyResponse */
         AnomalyResponse: {
             /** Id */
@@ -7657,6 +7965,91 @@ export interface components {
             /** Target Team Id */
             target_team_id?: string | null;
         };
+        /** CostComponentCreate */
+        CostComponentCreate: {
+            /** Name */
+            name: string;
+            /** Display Name */
+            display_name: string;
+            kind: components["schemas"]["CostComponentKind"];
+            /** Rate Usd */
+            rate_usd?: number | string | null;
+            /** Rate Fallback */
+            rate_fallback?: string | null;
+            /** Formula */
+            formula?: string | null;
+            /** Report Key */
+            report_key?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Sort Order
+             * @default 0
+             */
+            sort_order: number;
+        };
+        /**
+         * CostComponentKind
+         * @enum {string}
+         */
+        CostComponentKind: "calculated" | "self_reported";
+        /** CostComponentResponse */
+        CostComponentResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Display Name */
+            display_name: string;
+            /** Kind */
+            kind: string;
+            /** Rate Usd */
+            rate_usd: string | null;
+            /** Rate Fallback */
+            rate_fallback: string | null;
+            /** Formula */
+            formula: string | null;
+            /** Report Key */
+            report_key: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Sort Order */
+            sort_order: number;
+            /** Deleted At */
+            deleted_at?: unknown;
+        };
+        /**
+         * CostComponentUpdate
+         * @description Partial update via ``model_fields_set`` (exclude_unset).
+         *
+         *     Explicit ``rate_usd: None`` clears the field back to NULL (env fallback) —
+         *     do NOT use exclude_none.
+         */
+        CostComponentUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            kind?: components["schemas"]["CostComponentKind"] | null;
+            /** Rate Usd */
+            rate_usd?: number | string | null;
+            /** Rate Fallback */
+            rate_fallback?: string | null;
+            /** Formula */
+            formula?: string | null;
+            /** Report Key */
+            report_key?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Sort Order */
+            sort_order?: number | null;
+        };
         /** CostControlsResponse */
         CostControlsResponse: {
             /** Teams */
@@ -7665,6 +8058,8 @@ export interface components {
             }[];
             /** Budget */
             budget?: number | null;
+            /** Alert Thresholds */
+            alert_thresholds?: number[];
             /**
              * Circuit Breaker Enabled
              * @default false
@@ -7709,8 +8104,11 @@ export interface components {
             legacy_total?: string | null;
             /** Org Total */
             org_total?: string | null;
-            /** Has More */
-            has_more?: boolean;
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
         };
         /** CostReportRow */
         CostReportRow: {
@@ -7723,9 +8121,8 @@ export interface components {
             /** Total Runs */
             total_runs: number;
             /** Components */
-            components: components["schemas"]["CostReportComponent"][];
-            /** Annotations */
-            annotations: components["schemas"]["CostReportAnnotations"];
+            components?: components["schemas"]["CostReportComponent"][];
+            annotations?: components["schemas"]["CostReportAnnotations"];
         };
         /** CreateChangelogEntryRequest */
         CreateChangelogEntryRequest: {
@@ -8598,11 +8995,8 @@ export interface components {
             pipeline_id: string;
             /** Status */
             status: string;
-            /**
-             * Snapshot Graph Json
-             * @default {}
-             */
-            snapshot_graph_json: {
+            /** Snapshot Graph Json */
+            snapshot_graph_json?: {
                 [key: string]: unknown;
             };
             /** Input Payload */
@@ -9060,11 +9454,8 @@ export interface components {
              * @default community
              */
             tier: string;
-            /**
-             * Features
-             * @default []
-             */
-            features: string[];
+            /** Features */
+            features?: string[];
             /**
              * Is Valid
              * @default true
@@ -9801,6 +10192,14 @@ export interface components {
             /** Created At */
             created_at: string;
         };
+        /** OrgSettingsResponse */
+        OrgSettingsResponse: {
+            /**
+             * Currency
+             * @default USD
+             */
+            currency: string;
+        };
         /** OrganisationInfo */
         OrganisationInfo: {
             /**
@@ -10431,6 +10830,11 @@ export interface components {
             poll_interval_seconds?: number | null;
             /** Snapshot Id */
             snapshot_id?: string | null;
+            /**
+             * Daily Spend Limit
+             * @description Daily spend ceiling in USD; null clears, None unchanged
+             */
+            daily_spend_limit?: number | string | null;
         };
         /**
          * PollingTestRequest
@@ -11041,17 +11445,8 @@ export interface components {
              * @default 200000
              */
             default_context_window: number;
-            /**
-             * Allowed Providers
-             * @default [
-             *       "anthropic",
-             *       "openai",
-             *       "gemini",
-             *       "deepseek",
-             *       "groq"
-             *     ]
-             */
-            allowed_providers: string[];
+            /** Allowed Providers */
+            allowed_providers?: string[];
         };
         /** RemyConfigUpdate */
         RemyConfigUpdate: {
@@ -11165,6 +11560,34 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** RunConcurrencyResponse */
+        RunConcurrencyResponse: {
+            /** Run Concurrency Limit */
+            run_concurrency_limit?: number | null;
+        };
+        /** RunEventItem */
+        RunEventItem: {
+            /** Seq */
+            seq: number;
+            /** Event Type */
+            event_type: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Ts */
+            ts: string;
+        };
+        /** RunEventsResponse */
+        RunEventsResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Events */
+            events: components["schemas"]["RunEventItem"][];
+        };
         /** RunIOResponse */
         RunIOResponse: {
             /**
@@ -11229,6 +11652,21 @@ export interface components {
             cost_breakdown?: {
                 [key: string]: unknown;
             }[] | null;
+            /**
+             * Child Runs Cost Usd
+             * @default 0.000000
+             */
+            child_runs_cost_usd: string;
+            /**
+             * Child Runs Count
+             * @default 0
+             */
+            child_runs_count: number;
+            /**
+             * Aggregate Cost Usd
+             * @default 0.000000
+             */
+            aggregate_cost_usd: string;
         };
         /** RunSummary */
         RunSummary: {
@@ -11326,6 +11764,10 @@ export interface components {
         SchemaGenerateRequest: {
             /** Description */
             description: string;
+            /** Examples */
+            examples?: {
+                [key: string]: unknown;
+            }[];
         };
         /** SchemaGenerateResponse */
         SchemaGenerateResponse: {
@@ -11454,6 +11896,10 @@ export interface components {
         SchemaSampleQuery: {
             /** Resource */
             resource: string;
+            /** Filters */
+            filters?: {
+                [key: string]: unknown;
+            };
             /**
              * Limit
              * @default 10
@@ -11714,11 +12160,8 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /**
-             * Values
-             * @default {}
-             */
-            values: {
+            /** Values */
+            values?: {
                 [key: string]: unknown;
             };
         };
@@ -11743,6 +12186,18 @@ export interface components {
         SetOrgLicenseRequest: {
             /** License Key */
             license_key: string;
+        };
+        /** SetOrgTriggersPausedRequest */
+        SetOrgTriggersPausedRequest: {
+            /** Paused */
+            paused: boolean;
+        };
+        /** SetOrgTriggersPausedResponse */
+        SetOrgTriggersPausedResponse: {
+            /** Paused */
+            paused: boolean;
+            /** Paused At */
+            paused_at: string | null;
         };
         /** SetResponse */
         SetResponse: {
@@ -12444,6 +12899,11 @@ export interface components {
              * @default 1
              */
             max_concurrent_runs: number;
+            /**
+             * Daily Spend Limit
+             * @description Daily spend ceiling in USD; None = unlimited
+             */
+            daily_spend_limit?: number | string | null;
             /** Config Json */
             config_json?: {
                 [key: string]: unknown;
@@ -12501,6 +12961,11 @@ export interface components {
             active?: boolean | null;
             /** Max Concurrent Runs */
             max_concurrent_runs?: number | null;
+            /**
+             * Daily Spend Limit
+             * @description Daily spend ceiling in USD; null clears, None unchanged
+             */
+            daily_spend_limit?: number | string | null;
             /** Config Json */
             config_json?: {
                 [key: string]: unknown;
@@ -12571,9 +13036,9 @@ export interface components {
             /** Circuit Breaker Enabled */
             circuit_breaker_enabled?: boolean | null;
             /** Currency */
-            currency?: string | null;
+            currency?: ("USD" | "EUR" | "GBP") | null;
             /** Billing Period */
-            billing_period?: string | null;
+            billing_period?: ("monthly" | "quarterly" | "annual") | null;
         };
         /** UpdateEvalRequest */
         UpdateEvalRequest: {
@@ -12610,6 +13075,11 @@ export interface components {
              * @default 90
              */
             retention_days: number;
+        };
+        /** UpdateRunConcurrencyRequest */
+        UpdateRunConcurrencyRequest: {
+            /** Run Concurrency Limit */
+            run_concurrency_limit?: number | null;
         };
         /** UpdateSandboxConcurrencyRequest */
         UpdateSandboxConcurrencyRequest: {
@@ -12681,11 +13151,8 @@ export interface components {
         ValidateResponse: {
             /** Valid */
             valid: boolean;
-            /**
-             * Errors
-             * @default []
-             */
-            errors: components["schemas"]["ValidationErrorItem"][];
+            /** Errors */
+            errors?: components["schemas"]["ValidationErrorItem"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -13310,11 +13777,8 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            /**
-             * Parameters
-             * @default []
-             */
-            parameters: components["schemas"]["ParameterDef"][];
+            /** Parameters */
+            parameters?: components["schemas"]["ParameterDef"][];
         };
         /** SchemaListResponse */
         modulo__api__routes__parameter_schemas__SchemaListResponse: {
@@ -14743,6 +15207,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SandboxConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_get_run_concurrency_api_v1_admin_org_run_concurrency_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConcurrencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_update_run_concurrency_api_v1_admin_org_run_concurrency_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRunConcurrencyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConcurrencyResponse"];
                 };
             };
             /** @description Validation Error */
@@ -16399,10 +16929,94 @@ export interface operations {
             };
         };
     };
+    analytics_query_api_v1_analytics_query_get: {
+        parameters: {
+            query?: {
+                group_by?: components["schemas"]["AnalyticsGroupBy"];
+                auto_granularity?: boolean;
+                dimension?: components["schemas"]["AnalyticsDimension"] | null;
+                trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
+                status?: components["schemas"]["AnalyticsStatus"] | null;
+                pipeline_id?: string[] | null;
+                error_code?: string | null;
+                folder_id?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                limit?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_export_api_v1_analytics_export_get: {
+        parameters: {
+            query?: {
+                format?: string;
+                offset?: number;
+                limit?: number;
+                dimension?: components["schemas"]["AnalyticsDimension"] | null;
+                trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
+                status?: components["schemas"]["AnalyticsStatus"] | null;
+                pipeline_id?: string[] | null;
+                error_code?: string | null;
+                folder_id?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsExportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     dashboard_summary_api_v1_dashboard_summary_get: {
         parameters: {
             query?: {
-                days?: number;
+                days?: number | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -16922,6 +17536,140 @@ export interface operations {
             };
         };
     };
+    get_components_api_v1_admin_costs_components_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostComponentResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_component_api_v1_admin_costs_components_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostComponentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostComponentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_component_api_v1_admin_costs_components__component_id__put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                component_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostComponentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostComponentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_component_api_v1_admin_costs_components__component_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                component_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_teams_endpoint_api_v1_teams_get: {
         parameters: {
             query?: {
@@ -17257,6 +18005,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PipelineListResponse"];
                 };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -19439,6 +20194,13 @@ export interface operations {
                     "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaListResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -19988,6 +20750,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ModelBackendListResponse"];
                 };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -20725,6 +21494,13 @@ export interface operations {
                     "application/json": components["schemas"]["ConnectorListResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -21446,6 +22222,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeOutputResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_events_api_v1_runs__run_id__events_get: {
+        parameters: {
+            query?: {
+                since_seq?: number;
+                node_id?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunEventsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24254,6 +25065,37 @@ export interface operations {
             };
         };
     };
+    get_org_settings_api_v1_org_settings_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_registry_primitives_endpoint_api_v1_registry_primitives_get: {
         parameters: {
             query?: {
@@ -25638,6 +26480,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetOrgAuthzEnforceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_set_org_triggers_paused_api_v1_admin_orgs__org_id__triggers_pause_put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetOrgTriggersPausedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetOrgTriggersPausedResponse"];
                 };
             };
             /** @description Validation Error */

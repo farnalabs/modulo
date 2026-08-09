@@ -24,7 +24,7 @@ def _make_settings() -> Settings:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True

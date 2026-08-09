@@ -131,11 +131,19 @@ def test_env_var_used_when_no_backend_name(monkeypatch: pytest.MonkeyPatch):
     assert isinstance(backend, FernetSecretsBackend)
 
 
-def test_env_var_backend_name_normalized(monkeypatch: pytest.MonkeyPatch):
-    """The env var is lowercased/stripped before matching, like backend_name."""
+@pytest.mark.parametrize(
+    ("name", "source"),
+    [
+        pytest.param("  Vault  ", "arg", id="backend_name-whitespace-case"),
+        pytest.param("  vault  ", "arg", id="backend_name-whitespace"),
+        pytest.param("  VAULT  ", "env", id="env_var-whitespace-case"),
+        pytest.param("vault", "env", id="env_var-plain"),
+    ],
+)
+def test_backend_name_normalized(monkeypatch: pytest.MonkeyPatch, name: str, source: str):
+    """Both ``backend_name`` and ``MODULO_SECRETS_BACKEND`` are lowercased/stripped before matching."""
     from modulo.core.secrets_backend.vault import VaultSecretsBackend
 
-    monkeypatch.setenv("MODULO_SECRETS_BACKEND", "  VAULT  ")
     monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
     monkeypatch.setenv("VAULT_TOKEN", "x")
     with (
@@ -143,12 +151,16 @@ def test_env_var_backend_name_normalized(monkeypatch: pytest.MonkeyPatch):
         patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
         patch("modulo.core.secrets_backend.vault._hvac"),
     ):
-        backend = create_secrets_backend(fernet_key=_KEY)
-        assert isinstance(backend, VaultSecretsBackend)
+        if source == "env":
+            monkeypatch.setenv("MODULO_SECRETS_BACKEND", name)
+            backend = create_secrets_backend(fernet_key=None)
+        else:
+            backend = create_secrets_backend(fernet_key=None, backend_name=name)
+        assert isinstance(backend, VaultSecretsBackend), f"Expected VaultSecretsBackend for name={name!r}"
 
 
 @pytest.mark.parametrize(
-    "backend_name,env_vars,module_patch,lib_patch",
+    ("backend_name", "env_vars", "module_patch", "lib_patch"),
     [
         pytest.param(
             "vault",
@@ -182,22 +194,6 @@ def test_fernet_key_optional_for_external_backend(
     ):
         backend = create_secrets_backend(fernet_key=None, backend_name=backend_name)
         assert isinstance(backend, expected_cls)
-
-
-@pytest.mark.parametrize("name", ["  Vault  ", "  vault  "])
-def test_backend_name_normalized(monkeypatch: pytest.MonkeyPatch, name):
-    """Factory lowercases and strips backend_name before matching."""
-    from modulo.core.secrets_backend.vault import VaultSecretsBackend
-
-    monkeypatch.setenv("VAULT_ADDR", "http://vault:8200")
-    monkeypatch.setenv("VAULT_TOKEN", "x")
-    with (
-        patch("modulo.core.secrets_backend._check_external_secrets_licensed", return_value=True),
-        patch("modulo.core.secrets_backend.vault._MODULE_AVAILABLE", True),
-        patch("modulo.core.secrets_backend.vault._hvac"),
-    ):
-        backend = create_secrets_backend(fernet_key=None, backend_name=name)
-        assert isinstance(backend, VaultSecretsBackend), f"Expected VaultSecretsBackend for name={name!r}"
 
 
 def test_fernet_key_required_when_backend_is_fernet():

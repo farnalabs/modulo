@@ -233,10 +233,9 @@ RLS context is set using `SET LOCAL app.organisation_id = :org_id` **inside a tr
 - An integration test asserting cross-tenant isolation holds across pooled connections
 
 #### LangGraph Checkpoint Isolation
-LangGraph's `PostgresSaver` creates its own tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) with no `organisation_id` column. RLS cannot be applied to these tables without schema modification. Thread ID prefixing (`org_id:thread_id`) is application-layer isolation only — insufficient for SaaS.
+The production checkpointer is `ModuloPostgresSaver`, a subclass of LangGraph's `AsyncPostgresSaver`. It creates its own tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) with an `organisation_id` column included in each table's primary key, and enforces it on every read/write. Checkpoint JSON is additionally encrypted at rest with Fernet.
 
-**Alpha**: Acceptable. Alpha is single-org. Thread ID prefix is documented as partial isolation.
-**V2 (before SaaS launch)**: Subclass `PostgresSaver` to add `organisation_id` to all checkpoint tables and enforce it on every read/write. This is required work before multi-tenant SaaS deployment. Documented as a known gap.
+**Alpha**: Achieved — org-scoped checkpoint isolation and encryption ship with `ModuloPostgresSaver`. The nightly checkpoint retention job operates on this schema.
 
 #### modulo-cloud Service Layer
 
@@ -1172,6 +1171,7 @@ Before run start: all referenced connector instances are health-checked. Failed 
 | `max_concurrent_runs` | Per pipeline | New run requests blocked (queued or rejected) when limit reached. Default: 5. |
 | `max_concurrent_runs` | Per trigger | New trigger fires blocked when limit reached. Default: 1. |
 | `sandbox_concurrency_limit` | Per organisation | Max concurrently `running` sandbox-agent runs across all pipelines in the org. Default: `null` (unlimited). Runs beyond the cap are demoted back to `pending` with `error_code='org_capacity_limited'` and retried in the background; after the capacity-timeout TTL they terminal-fail with `capacity_timeout`. Stored in `Organisation.settings_json`. |
+| `run_concurrency_limit` | Per organisation | Max concurrently executing/claimed runs across ALL pipelines in the org (sandbox-agent and otherwise). Default: `null` (unlimited). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried in the background; after the capacity-timeout TTL they terminal-fail with `capacity_timeout`. Stored in `Organisation.settings_json`. Independent of `sandbox_concurrency_limit`; both org caps share the same `org_capacity_limited` marker on deferred runs. |
 | Write lock | Per connector instance + target resource | Advisory lock on (connector_instance_id, target_resource) for write operations. Prevents concurrent runs corrupting shared state (e.g. two runs pushing to the same git branch). |
 
 Write lock is advisory (application-layer, using Postgres `pg_try_advisory_lock`). If the lock cannot be acquired, the run enters a `waiting_for_lock` sub-state. The timeout is set per-pipeline via `lock_wait_timeout_seconds` (default: 300, min: 30, max: 3600) stored in the Pipeline entity. After the timeout elapses, the run transitions to `failed` with error code `lock_wait_timeout`. This transition is shown in the state machine: `waiting_for_lock → failed` (timeout). Cancel from `waiting_for_lock` immediately releases via `pg_advisory_unlock` and transitions to `cancelled` (same as §7.8 cancel spec).
@@ -1179,7 +1179,7 @@ Write lock is advisory (application-layer, using Postgres `pg_try_advisory_lock`
 ### 8.8 HITL (Human-in-the-Loop)
 
 #### Run Entity
-`id`, `organisation_id`, `pipeline_id`, `snapshot_id` (FK to PipelineSnapshot), `trigger_id` (nullable FK — null for manual runs), `trigger_type` (`manual` | `webhook` | `cron` | `polling` | `agent_signal`), `status` (see state machine below), `created_by` (user_id; null for webhook-initiated runs with no authenticated caller), `input_hash` (SHA-256 of the entry input payload; stored for audit without storing the payload itself), `created_at`, `started_at` (nullable — set when run transitions from `pending` to `running`), `completed_at` (nullable — set on terminal state), `cancellation_requested` (boolean, default false — polled by the execution loop to implement graceful cancel), `total_tokens` (nullable integer — accumulated from all LLM calls; null until first LLM call completes), `total_cost_usd` (nullable decimal — null when `cost_tracking: disabled`), `error_code` (nullable — named error code on `failed` terminal state; **non-terminal capacity markers**: when a run is demoted back to `pending` at a concurrency limit, `error_code` carries a non-terminal marker — `pipeline_capacity` (per-pipeline `max_concurrent_runs`) or `org_capacity_limited` (org `sandbox_concurrency_limit`) — distinct from terminal failure codes such as `never_dispatched`, `worker_lost`, `capacity_timeout`, and `task_failure`. The marker is cleared on admission to `running`; the stale-run sweep exempts reason-marked pending runs and terminal-fails them with `capacity_timeout` only after the TTL elapses.), `langgraph_thread_id` (the checkpoint thread identifier used with `AsyncPostgresSaver`).
+`id`, `organisation_id`, `pipeline_id`, `snapshot_id` (FK to PipelineSnapshot), `trigger_id` (nullable FK — null for manual runs), `trigger_type` (`manual` | `webhook` | `cron` | `polling` | `agent_signal`), `status` (see state machine below), `created_by` (user_id; null for webhook-initiated runs with no authenticated caller), `input_hash` (SHA-256 of the entry input payload; stored for audit without storing the payload itself), `created_at`, `started_at` (nullable — set when run transitions from `pending` to `running`), `completed_at` (nullable — set on terminal state), `cancellation_requested` (boolean, default false — polled by the execution loop to implement graceful cancel), `total_tokens` (nullable integer — accumulated from all LLM calls; null until first LLM call completes), `total_cost_usd` (nullable decimal — null when `cost_tracking: disabled`), `error_code` (nullable — named error code on `failed` terminal state; **non-terminal capacity markers**: when a run is demoted back to `pending` at a concurrency limit, `error_code` carries a non-terminal marker — `pipeline_capacity` (per-pipeline `max_concurrent_runs`) or `org_capacity_limited` (either org cap: `sandbox_concurrency_limit` for sandbox-agent runs or `run_concurrency_limit` for all org runs) — distinct from terminal failure codes such as `never_dispatched`, `worker_lost`, `capacity_timeout`, and `task_failure`. The marker is cleared on admission to `running`; the stale-run sweep exempts reason-marked pending runs and terminal-fails them with `capacity_timeout` only after the TTL elapses.), `langgraph_thread_id` (the checkpoint thread identifier used with `AsyncPostgresSaver`).
 
 #### Run State Machine
 ```
@@ -1245,7 +1245,7 @@ Removing or weakening an existing HITL gate is a security-sensitive write guarde
 
 #### Long-Running Pipeline Retention
 Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints accumulate:
-- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled)`. Action: delete the entire `runs` metadata row (LangGraph checkpoint blobs cascade on delete). Job failure is logged to the application logger; does not affect active runs.
+- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled)`. Action: delete the entire `runs` metadata row. LangGraph checkpoint rows (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do NOT cascade on run deletion — the saver schema defines no foreign keys — so the retention job also purges them separately via `batch_delete_langgraph_checkpoints` (same retention window, batch of 500). Job failure is logged to the application logger; does not affect active runs.
 - **HITL overdue warning**: configurable per-gate. If a run remains in `awaiting_human` beyond N hours, a new notification fires and the UI surfaces a warning badge.
 - **Admin purge action**: admins can force-terminate and archive stale runs.
 
@@ -2440,7 +2440,7 @@ Each forwarder: per-org enable/disable toggle, test-connection button, status in
 | Feature | Tier |
 |---|---|
 | Error ingestion (backend + frontend) | Community |
-| Error dashboard list + detail | Community |
+| Error dashboard list + detail | Team |
 | Basic filters (level, status, date) | Community |
 | Acknowledge, resolve | Community |
 | Built-in notification rules (max 3, no webhook) | Community |
@@ -2451,6 +2451,13 @@ Each forwarder: per-org enable/disable toggle, test-connection button, status in
 | External forwarders (all 6) | Team |
 | Extended retention (>30 days) | Team |
 | Rules max 10 + webhook action | Team |
+
+> **Page-level gate**: the Error Dashboard page (`/admin/errors`) is gated as a
+> whole behind the Team-tier `error_tracking` feature flag (FeatureGate +
+> `require_feature("error_tracking")` on the API). Error ingestion always runs
+> on Community tier; only the dashboard UI is Team-gated. Finer-grained
+> per-capability gating within the page (basic filters, acknowledge/resolve)
+> is a future refinement.
 
 ---
 
@@ -2495,9 +2502,9 @@ Core (default expanded)
     Variants          /variants/compare
     AB Test Models    /variants/ab-test
   Schemas             (subgroup, default collapsed)
-    Browse            /schemas
-    Editor            /schemas/editor
-    Infer             /schemas/infer
+    Schemas           /schemas
+    Editor            /schemas/editor   (form page, reached via Schemas PageTabs — not a sidebar item)
+    Infer             /schemas/infer    (reached via Schemas PageTabs — not a sidebar item; publicly reachable)
 
 Remy (default collapsed, simple mode)
   My Skills           /settings/remy
@@ -2520,10 +2527,8 @@ Admin (advanced mode, default collapsed)
     Users             /admin/users
     Org Settings      /admin/org
     Audit Log         /admin/audit
-  Cost Management     (subgroup)
-    Overview          /admin/costs
-    Spend Limits      /admin/costs/limits
-    Cost Controls     /admin/costs/controls
+  Cost Management     (single entry — in-page tabs)
+    Costs             /admin/costs   (tabs: Overview, Spend Limits, Cost Components, Cost Controls)
   System              (subgroup)
     Connectors        /admin/connectors
     Model Backends    /admin/model-backends
@@ -2551,7 +2556,7 @@ Key structural changes:
 - Pipelines and Evaluation merged into Core as collapsible subgroups (removes duplicate Library entry)
 - Schemas demoted from standalone group to a subgroup under Core
 - New **Remy** group consolidates user-level skills (`/settings/remy`) and admin config (`/admin/remy`) — both previously scattered across Settings and Admin
-- Admin gets 5 visual subgroups (Access Control, Cost Management, System, Monitoring, Extensions) replacing a flat 20-item list
+- Admin gets 4 visual subgroups (Access Control, System, Monitoring, Extensions) replacing a flat 20-item list; Cost Management is a single sidebar entry with in-page tabs
 - Sidebar active-state: exact path match wins; child routes no longer highlight parent links to avoid ambiguity
 
 #### 8.26.3 Secondary Navigation (Page Tabs)
@@ -2560,7 +2565,7 @@ For page domains with 2–5 sibling routes, horizontal tab bars provide in-page 
 
 | Domain | Routes | Tabs |
 |---|---|---|
-| Cost Management | `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls` | Overview \| Spend Limits \| Cost Controls |
+| Cost Management | single sidebar entry `/admin/costs`; tabs route to `/admin/costs/limits`, `/admin/costs/components`, `/admin/costs/controls` | Overview \| Spend Limits \| Cost Components \| Cost Controls |
 | Errors | `/admin/errors`, `/admin/errors/:id` | Dashboard \| *(Error Detail — not in tabs, has back link)* |
 | Schemas | `/schemas`, `/schemas/editor/:id?`, `/schemas/infer` | Browse \| Editor \| Infer |
 | Evaluation | `/evals/editor`, `/evals/proposals`, `/variants/compare`, `/variants/ab-test` | Evals \| Proposals \| Variants \| AB Test |
@@ -3051,8 +3056,8 @@ and improved continuously.
 Stages), Runs & Eval (Output Diff, Evals, Variants, A/B Test), Schemas (Browse,
 Editor, Infer), Remy (My Skills, Admin Config), Settings (Teams, SSO, License, MCP,
 Triggers, Runtime Config, Rate Limits, HITL Review, Observability, Error Forwarders),
-Access Control (Users, Org Settings, Audit Log), Cost Management (Overview, Spend
-Limits, Cost Controls), System (Connectors, Model Backends, Node Categories,
+Access Control (Users, Org Settings, Audit Log), Cost Management (Costs — Overview, Spend
+Limits, Cost Components, Cost Controls), System (Connectors, Model Backends, Node Categories,
 Feature Flags, Environments, Run Retention, Saved Views), Monitoring (Error Dashboard,
 Notification Log, API Changelog, Team Comparison), Extensions (Plugins, Feedback Inbox).
 
@@ -4171,13 +4176,13 @@ Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one 
 
 #### 8.32.1 Rolling-Window Semantics
 
-Dashboards report over **rolling windows**: **Last 24h / 7d / 30d / 90d** — each window is the N×24h period ending now (timezone-agnostic). Every value is shown with a **period arrow** (delta) that is **period-scoped and same-source/same-window**: a "Last 7d" delta compares the current 7d window against the *previous* 7d window, using the same metric from the same source. Rolling windows eliminate the partial-period bias of calendar-month widgets (a month widget shows 3 days of data on the 3rd).
+Dashboards report over **rolling windows**: **Last 1h / 24h / 3d / 7d / 30d / 90d** — each window is the trailing period ending now (timezone-agnostic). Every value is shown with a **period arrow** (delta) that is **period-scoped and same-source/same-window**: a "Last 7d" delta compares the current 7d window against the *previous* 7d window, using the same metric from the same source. Rolling windows eliminate the partial-period bias of calendar-month widgets (a month widget shows 3 days of data on the 3rd).
 
 The facts table keeps both the source run's `created_at` instant (rolling precision for the 24h window) and the UTC attributed day `run_date` (the day-level bucket key).
 
 #### 8.32.2 Query Surface — Typed Params Only
 
-**No query language in this delivery — structured typed params are the surface** (`group_by`, optional dimension, filters, date range ≤ 365d, limit). A syntax/expression query mode is **deferred until a pre-rolled dependency slots in** — it is never hand-rolled ad hoc. The backend is the sole bucketing authority: day/ISO-week bucketing and zero-fill happen server-side; the client only renders.
+**No query language in this delivery — structured typed params are the surface** (`group_by`, optional dimension, filters, date range ≤ 365d, limit). A syntax/expression query mode is **deferred until a pre-rolled dependency slots in** — it is never hand-rolled ad hoc. The backend is the sole bucketing authority: hour/day/ISO-week bucketing and zero-fill happen server-side; the client only renders. Auto-granularity resolves the bucket by window span (hour for spans ≤ 3 days, day for spans ≤ 90 days, week beyond); an explicit `group_by` passes through unchanged.
 
 #### 8.32.3 Launch-Forward Coverage
 
@@ -4197,17 +4202,19 @@ The analytics dashboard uses the **facts count** for run volume and success rate
 
 #### 8.32.5 Dimensions and Filters
 
-Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`; omitted = overall) and filters: `trigger_type`, `status`, `pipeline_id`, `folder_id`, fixed `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). Timezone is fixed UTC.
+Optional dimension (`trigger_type`, `status`, `pipeline`, `folder`, `team`, `error_code`; omitted = overall) and filters: `trigger_type`, `status`, `pipeline_id` (repeated — a multi-value "A vs B" filter in a single request), `error_code`, `folder_id`, fixed `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). Timezone is fixed UTC.
 
 #### 8.32.6 Flag / Gating
 
 | Component | Tier |
 |---|---|
-| Analytics page + endpoint | Team (`analytics_page` feature flag, default off until the frontend ships) |
+| Analytics page + endpoint | Community (`analytics_page` feature flag, live) |
 
 #### 8.32.7 Dashboard Rolling-Window Toggle
 
-The live dashboard (`/`) has a top-right rolling-window toggle: **Last 24h / 3d / Last 7d / Last 30d / Last 90d** (values 1, 3, 7, 30, 90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
+The live dashboard (`/`) has a top-right rolling-window toggle: **Last 1h / Last 24h / Last 3d / Last 7d / Last 30d / Last 90d** (the `days` query param accepts any integer 1–90). When a window is selected, the stat cards (pipelines, total runs, running / awaiting human / failed / idle, eval pass rate, token spend) become **period-scoped** to that window and each card shows a **trend arrow** (▲ up / ▼ down / → flat; green / red / grey; 1dp %) comparing the current window against the immediately-preceding equal-length window.
+
+The toggle also includes an **All time** option that clears the window (no `days` param) and shows the all-time scalars. The selected window persists to `localStorage` (`modulo.dashboard.trendWindow` — `'all'` for all-time, otherwise the day count as a string) and is restored on the next visit; first-time users (nothing stored) default to the **3d** window. Clicking a numbered window refreshes **only** the period-scoped block via the same `summary?days=N` endpoint — the all-time summary (totals, teams, trend, recent runs) is not reloaded and no full-page loading skeleton appears; switching to All time reloads the full summary. When a period window has no data for a metric (current is zero), the card falls back to the all-time value rather than showing 0.
 
 Semantics are **same-source/same-window**: a card's value and its arrow always come from the same metric over the same window — run counts/status/tokens/success/duration from `run_daily_facts`, spend from the `org_daily_run_counts` ledger (org-level row), eval pass rate from `eval_results`. Because facts record only terminal statuses, running / awaiting-human / idle read zero in period mode. The arrow is omitted when there is no baseline (previous window empty/zero) or no current-window data. The `GET /api/v1/dashboard/summary?days=N` endpoint returns the period metrics as an additive `period` block (`{current, previous, delta_pct}` per metric); without `days` the response is the unchanged all-time summary.
 
@@ -4215,11 +4222,20 @@ Semantics are **same-source/same-window**: a card's value and its arrow always c
 
 The `/analytics` page (sidebar group Core, `analytics.query` permission, community tier) is a **structured filter form → typed query params** surface. There is **no query language in this delivery** (see 8.32.2) — the filter form is the surface; syntax/expression mode stays deferred until a pre-rolled dependency slots in.
 
-- **Filter bar**: rolling timespan toggle (Last 24h / 7d / 30d / 90d), granularity (day / ISO week), optional dimension (trigger_type / status / pipeline / folder / team), and combinable filters (trigger_type, status, pipeline_id, folder_id). A measure picker selects the rendered metric (run count / cost / tokens / avg duration / success rate). The backend returns all metrics per bucket, so the measure is a client-side rendering concern — it is never a query param.
+- **Filter bar**: rolling timespan toggle (1h / 24h / 3d / 7d / 30d / 90d), granularity (hour / day / ISO week; auto resolves by span), optional dimension (trigger_type / status / pipeline / folder / team), and combinable filters (trigger_type, status, pipeline_id, folder_id). A measure picker selects the rendered metric (run count / cost / tokens / avg duration / success rate). The backend returns all metrics per bucket, so the measure is a client-side rendering concern — it is never a query param.
 - **Visualisation**: ECharts (via `vue-echarts`, lazy-loaded). Line chart for undimensioned trends by date; bar chart for dimensioned queries (x = dimension key, fallback date). `buildChartOption` is a pure series → ECharts option mapping — the client never buckets. Pre-coverage buckets render as gaps (`null`), never zero-filled as "zero activity".
 - **Trend table**: rows are buckets; columns are date/key + measure value + a period arrow (▲/▼/→) against the previous equal-length window. The previous window is fetched as a second query and compared by key (dimensioned) or by offset (undimensioned). `prev=0` and both-zero show no arrow.
 - **Empty state**: "No analytics data yet — data since \<date\>" where \<date\> is the earliest bucket with data (launch-forward coverage, 8.32.3).
 - **Flag-off state**: the sidebar link is hidden when the feature flag is off (manifest `required_permissions`); if the page is reached anyway and the API returns 402, an "Analytics is not enabled for your workspace" card is shown — never a spinner.
+
+#### 8.32.9 Queryable-Data Layer (FAR-102)
+
+The facts table is enriched with stall-dimension and run-lifecycle columns so the analytics surface can answer "why did runs fail / stall" without reading live `runs`: `error_code` (the stall dimension), `claim_count`, `queue_wait_ms` (dispatched − started), `final_idle_ms` (completed − heartbeat — the stuck-with-no-heartbeat window), `cancellation_requested`, `dispatcher`, `node_count` / `sandbox_agent_node_count` / `max_node_timeout_seconds` (derived from the snapshot `graph_json`, NULL-safe), `parent_run_id`, `snapshot_id` (both NO FKs — facts survive purge), `run_number`, `output_bytes` (serialised `outputs_json` size), and `rate_limited`. All are nullable where the source run may not carry the value. The live writer and the daily backfill both populate them — a backfilled fact never carries NULL where the source provides a value.
+
+- **Per-bucket metrics**: the query surface adds `failure_count`, `stall_count`, `avg_queue_wait_ms`, `avg_final_idle_ms`, and `avg_output_bytes` to every bucket. A **stall** is a run whose `status == "failed"` and `error_code` is in a fixed `STALL_ERROR_CODES` set (`executor_stalled`, `node_timeout`, `TimeoutError` — the no-progress error codes the executor actually emits).
+- **Comparison**: a repeated `pipeline_id` query param returns an "A vs B" series in a single request (the builder bounds it via an allowlisted, parameterised `IN` — never string interpolation).
+- **Export**: `GET /api/v1/analytics/export` returns raw fact rows (no bucketing, all fact columns) filtered by the same typed params, ordered by `run_date`/`created_at`, paginated (`offset`/`limit`, default 500, max 5000), org-scoped, rate-limited, permission + feature gated. `format=json` (default) or `format=csv` (Content-Disposition attachment).
+- **MCP**: the `query_analytics` MCP tool mirrors the REST surface (typed params incl. repeated `pipeline_id`, `error_code`, date range, limit), enforcing the `analytics.query` permission and the `analytics_page` feature gate. Both REST and MCP funnel through the same shared service, so org predicate, rate limit, statement timeout, bucketing, and error semantics stay identical.
 
 ---
 
@@ -4260,7 +4276,7 @@ The `/analytics` page (sidebar group Core, `analytics.query` permission, communi
 | Model backend management | First-class ModelBackend entity; ModelBackendHub; Fernet-encrypted; health check; rotation; parallel to ConnectorInstance |
 | API key hashing | SHA-256 (not bcrypt); `mk_<lookup_prefix>_<secret>` format |
 | RLS connection pooling | `SET LOCAL app.organisation_id` inside transactions; lint rule banning bare `SET`; isolation integration test |
-| LangGraph checkpoint isolation | Thread ID prefix for alpha (single-org; acceptable); PostgresSaver subclass with org_id in v2 (required before SaaS) |
+| LangGraph checkpoint isolation | `ModuloPostgresSaver` (AsyncPostgresSaver subclass) adds `organisation_id` to all checkpoint tables and enforces it on every read/write; checkpoint JSON encrypted at rest with Fernet |
 | modulo-cloud boundary | Zero coupling to core; would inject CloudPlanContext in V3 SaaS; calls core admin API; deferred to V3 |
 | Org migration | `modulo export-org` / `modulo import-org` CLI; v1 |
 | Org deletion | 30-day soft-delete grace; hard delete after; configurable retention for regulated orgs |

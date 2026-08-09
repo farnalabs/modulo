@@ -29,6 +29,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
+from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     NodeAlreadyCompletedError,
@@ -42,7 +43,7 @@ from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.crud.run import (
     create_run,
-    get_child_runs_cost,
+    get_child_run_rollup,
     get_run,
     get_run_heatmap,
     get_run_io,
@@ -117,16 +118,17 @@ async def _do_get_run(
         return run
 
 
-async def _do_get_child_runs_cost(
+async def _do_get_child_run_rollup(
     factory: async_sessionmaker[AsyncSession],
     principal: TenantPrincipal,
     run_id: uuid.UUID,
-) -> Decimal:
-    """Sum of ``total_cost_usd`` across this run's children (0.000000 if none)."""
+) -> tuple[Decimal, int]:
+    """(child cost, child count) rollup for a single run (0.000000, 0 if none)."""
     async with factory() as session, session.begin():
         await set_rls_org(session, principal.organisation_id)
-        costs = await get_child_runs_cost(session, [run_id])
-        return _quantize_cost_rollup(costs.get(run_id, _COST_ROLLUP_ZERO))
+        rollup = await get_child_run_rollup(session, [run_id])
+        cost, count = rollup.get(run_id, (_COST_ROLLUP_ZERO, 0))
+        return _quantize_cost_rollup(cost), count
 
 
 async def _do_list_runs(
@@ -153,13 +155,14 @@ async def _do_list_runs(
         # Child-run cost rollup: ONE GROUP BY query for the whole page, joined
         # in Python — never a per-row aggregate (avoids N+1).
         run_ids = [run.id for run in result.items]
-        child_costs: dict[uuid.UUID, Decimal] = {}
+        child_rollup: dict[uuid.UUID, tuple[Decimal, int]] = {}
         if run_ids:
-            child_costs = await get_child_runs_cost(session, run_ids)
+            child_rollup = await get_child_run_rollup(session, run_ids)
         items = []
         for run in result.items:
             pipeline_name = run.pipeline.name if run.pipeline else None
-            child_cost = _quantize_cost_rollup(child_costs.get(run.id, _COST_ROLLUP_ZERO))
+            child_cost, child_count = child_rollup.get(run.id, (_COST_ROLLUP_ZERO, 0))
+            child_cost = _quantize_cost_rollup(child_cost)
             own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
             items.append(
                 {
@@ -175,6 +178,7 @@ async def _do_list_runs(
                     "error_code": run.error_code,
                     "total_cost_usd": run.total_cost_usd,
                     "child_runs_cost_usd": child_cost,
+                    "child_runs_count": child_count,
                     "aggregate_cost_usd": _quantize_cost_rollup(own_cost + child_cost),
                     "account_id": str(run.account_id) if run.account_id else None,
                 }
@@ -319,10 +323,11 @@ class RunResponse(BaseModel):
     # derived display fields (0.000000 when no children / all NULL) that never
     # touch the stored column.
     child_runs_cost_usd: Decimal = Decimal("0.000000")
+    child_runs_count: int = 0
     aggregate_cost_usd: Decimal = Decimal("0.000000")
 
 
-def _build_run_response(run: Any, child_cost: Decimal | None = None) -> RunResponse:
+def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count: int = 0) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields."""
     token_consumption: dict[str, Any] | None = None
     if run.total_tokens is not None:
@@ -354,6 +359,7 @@ def _build_run_response(run: Any, child_cost: Decimal | None = None) -> RunRespo
         node_token_usage=_serialize_node_token_usage(run.node_token_usage),
         cost_breakdown=run.cost_breakdown,
         child_runs_cost_usd=child_runs_cost_usd,
+        child_runs_count=child_count,
         aggregate_cost_usd=_quantize_cost_rollup(own_cost + child_runs_cost_usd),
     )
 
@@ -589,7 +595,7 @@ async def get_run_status(
 ) -> RunResponse:
     try:
         run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
-        child_cost = await _run_with_retry(lambda: _do_get_child_runs_cost(factory, principal, run_id))
+        child_cost, child_count = await _run_with_retry(lambda: _do_get_child_run_rollup(factory, principal, run_id))
     except IntegrityError:
         _log.exception("runs.get_run_status")
         raise HTTPException(
@@ -624,7 +630,7 @@ async def get_run_status(
             detail="An unexpected error occurred.",
         ) from None
 
-    return _build_run_response(run, child_cost)
+    return _build_run_response(run, child_cost, child_count)
 
 
 @router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
@@ -1088,6 +1094,62 @@ async def get_run_node_output(
 
     masked = _mask_output_value(node_output)
     return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked)
+
+
+# ---------------------------------------------------------------------------
+# Live run events (live stdout/stderr streaming, FAR-98)
+# ---------------------------------------------------------------------------
+
+
+class RunEventItem(BaseModel):
+    seq: int
+    event_type: str
+    payload: dict[str, Any]
+    ts: str
+
+
+class RunEventsResponse(BaseModel):
+    run_id: uuid.UUID
+    events: list[RunEventItem]
+
+
+@handle_db_errors("runs.get_run_events")
+@router.get("/{run_id}/events", response_model=RunEventsResponse)
+async def get_run_events(
+    run_id: uuid.UUID,
+    since_seq: int = Query(0, ge=0),
+    node_id: str | None = Query(None),
+    factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+) -> RunEventsResponse:
+    """Return live chunk events for a run since a sequence number.
+
+    Only ``node.stdout_chunk`` / ``node.stderr_chunk`` events (the live-output
+    surface published by sandbox_agent nodes) are returned. Optionally filter
+    to a single ``node_id``. The run's org-scoped existence is validated first
+    so callers can never observe another org's run events.
+    """
+    try:
+        run = await _run_with_retry(lambda: _do_get_run(factory, principal, run_id))
+    except RunNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found") from None
+    broker = get_registry().get(run.id)
+    events: list[RunEventItem] = []
+    if broker is not None:
+        for evt in broker.replay_since(since_seq):
+            if evt.event_type not in ("node.stdout_chunk", "node.stderr_chunk"):
+                continue
+            if node_id is not None and evt.payload.get("node_id") != node_id:
+                continue
+            events.append(
+                RunEventItem(
+                    seq=evt.seq,
+                    event_type=evt.event_type,
+                    payload=evt.payload,
+                    ts=evt.timestamp.isoformat(),
+                )
+            )
+    return RunEventsResponse(run_id=run.id, events=events)
 
 
 # ---------------------------------------------------------------------------

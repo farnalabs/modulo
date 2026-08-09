@@ -37,6 +37,27 @@ export default defineConfig({
     environment: 'jsdom',
     exclude: ['tests/e2e/**', 'node_modules/**'],
     setupFiles: ['./src/__tests__/setup.ts'],
+    // FAR-101 test configuration rationale (#817 + follow-up):
+    //
+    // 1. Timeouts (from #817): the suite (641 tests) includes heavy view specs
+    //    whose mount+settle takes >5s under concurrent worker load on the CI
+    //    runner (e.g. AdminRemyView pulls reka-ui + vue-query + many
+    //    subcomponents). The default 5000ms testTimeout caused intermittent
+    //    "Test timed out" flakes that are purely wall-clock, not assertion
+    //    failures. 15000ms is generous but still bounded; fast tests complete
+    //    in milliseconds.
+    testTimeout: 15000,
+    hookTimeout: 15000,
+    // 2. Worker concurrency: the npm `test:unit` script hardcodes
+    //    `--maxWorkers=4`, and CLI flags override anything set here — so the
+    //    concurrency cap is deliberately NOT set in this file. It lives in
+    //    `.github/workflows/ci.yml` (the Frontend and WCAG job), which invokes
+    //    vitest directly with `--pool=threads --maxWorkers=2` to match the
+    //    2-vCPU runner's actual capacity instead of over-subscribing it.
+    // 3. New tests: prefer `vi.waitFor(() => expect(...).toBe(...), { timeout })`
+    //    over `await flushPromises()` chains, give async setImmediate waits an
+    //    adequate timeout, and always tear down timers/mocks in afterEach.
+    //    Never use fixed sleeps to make a test pass.
   },
   css: {
     postcss: {

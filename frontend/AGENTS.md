@@ -1,5 +1,32 @@
 # Frontend — Agent Guidance
 
+## Frontend Unit Tests (vitest) — CI concurrency & timeouts
+
+FAR-101 follow-up on #817. The frontend suite (641 tests, ~94 files) runs on
+GitHub's `ubicloud-standard-2` runner (2 vCPU). Facts and rules:
+
+- **Worker concurrency is capped in CI, not in config.** `npm run test:unit` is
+  `vitest run src --pool=threads --maxWorkers=4`, and vitest CLI flags override
+  anything set in `vite.config.ts`. So `maxWorkers` is deliberately NOT set in
+  the config file — it lives in `.github/workflows/ci.yml` (Frontend and WCAG
+  job), which invokes vitest directly with `--pool=threads --maxWorkers=2`.
+- **Why 2 and not 4:** 4 concurrently-loading jsdom environments (Vue SFCs +
+  ECharts/reka-ui/vue-query) over-subscribe the 2 cores, starving the event
+  loop — `flushPromises()` (setImmediate) was observed blocked 10+ seconds
+  while content was already rendered. 2 workers ≈ 1:1 with CPU capacity. This
+  is a capacity match, not a race-hiding hack; do not reduce it further or
+  add blanket sleeps/pool hacks to "fix" flaky timing.
+- **`testTimeout`/`hookTimeout` are 15000ms** (set in `frontend/vite.config.ts`,
+  from #817). The default 5000ms caused wall-clock "Test timed out" flakes on
+  heavy mount+settle specs under concurrent load. Keep them at 15000 — bounded
+  but generous; fast tests still complete in milliseconds.
+- **Writing new unit tests:** prefer `vi.waitFor(() => expect(...).toBe(...), { timeout })`
+  over bare `await flushPromises()` chains, and always tear down timers/mocks
+  in `afterEach`. Never use fixed sleeps to make a test pass.
+- If you need to run the suite locally in a worktree, run the CI-equivalent:
+  `npx vitest run src --pool=threads --maxWorkers=2` (fewer workers is also
+  much faster on 2-core dev machines).
+
 ## Lessons Learned
 
 ### reka-ui v2.10.1 ships `index.d.cts` but `package.json.types` points to `index.d.ts`

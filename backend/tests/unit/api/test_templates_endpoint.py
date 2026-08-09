@@ -81,7 +81,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -104,7 +104,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     mock_plan = MagicMock()
@@ -193,7 +193,7 @@ def test_list_templates_empty(client: TestClient) -> None:
 
 def test_list_templates_requires_auth(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/templates")
-    assert resp.status_code == 403 or resp.status_code == 401
+    assert resp.status_code in {403, 401}
 
 
 # ---------------------------------------------------------------------------

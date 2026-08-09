@@ -59,3 +59,30 @@ Feature: Schema Migration
     When I POST /api/v1/schemas/migrate with dry_run=true
     Then the response status is 200
     And an audit event "schema_migration_completed" is recorded with dry_run: true
+
+  Scenario: Best-effort migration applies the reachable prefix of a partial chain
+    Given a migration registry with a migration registered from "1.0.0" to "2.0.0"
+    When I apply a partial migration from "1.0.0" to "3.0.0" on data {"name": "Alice"}
+    Then the partial migration applied the steps "1.0.0->2.0.0"
+    And the partial migration reports a chain gap
+
+  Scenario: Best-effort migration applies a complete chain with no gaps
+    Given a migration registry with a migration registered from "1.0.0" to "2.0.0"
+    And a migration registered from "2.0.0" to "3.0.0"
+    When I apply a partial migration from "1.0.0" to "3.0.0" on data {"name": "Alice"}
+    Then the partial migration applied the steps "1.0.0->2.0.0,2.0.0->3.0.0"
+    And the partial migration reports no chain gaps
+
+  Scenario: Best-effort migration passes data through when no chain exists
+    Given a migration registry with no registered migrations
+    When I apply a partial migration from "1.0.0" to "2.0.0" on data {"name": "Alice"}
+    Then the partial migration reports a chain gap
+    And the migrated data still contains "name"
+
+  Scenario: Best-effort migration dry-runs the reachable prefix without mutating data
+    Given a migration registry with a migration registered from "1.0.0" to "2.0.0"
+    And a migration registered from "2.0.0" to "3.0.0"
+    When I dry-run a partial migration from "1.0.0" to "3.0.0" on data {"name": "Alice"}
+    Then the partial migration reports no chain gaps
+    And the dry-run describes "2" steps
+    And the migrated data still contains "name"

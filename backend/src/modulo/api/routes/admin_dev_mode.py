@@ -40,7 +40,8 @@ async def get_dev_mode(
     """
     # 1. Check DB override
     try:
-        config = await get_config(session, "dev_mode")
+        async with session.begin():
+            config = await get_config(session, "dev_mode")
         if config is not None:
             return {"enabled": bool(config.value), "source": "db"}
     except Exception:
@@ -63,7 +64,8 @@ async def set_dev_mode(
 ) -> dict[str, Any]:
     """Enable or disable dev mode. Persisted in SystemConfig."""
     try:
-        await set_config(session, "dev_mode", req.enabled)
+        async with session.begin():
+            await set_config(session, "dev_mode", req.enabled)
         return {"enabled": req.enabled, "source": "db"}
     except Exception:
         logger.exception("Failed to set dev_mode")

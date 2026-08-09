@@ -44,6 +44,7 @@
                 { key: 'actions', label: '' },
               ]"
               :rows="tableRows"
+              :row-clickable="false"
             >
               <template #cell-display_name="{ row }">
                 <div class="flex items-center gap-2">
@@ -74,6 +75,7 @@
                   <input
                     type="checkbox"
                     class="peer sr-only"
+                    :aria-label="$t('views.CostComponentsView.enabled') + ': ' + (row as any).display_name"
                     :checked="(row as any).enabled"
                     @change="toggleEnabled(row as any)"
                   />
@@ -142,7 +144,7 @@
               </div>
               <div v-if="showRateFallback">
                 <label for="costcomponents-fallback" class="mb-1.5 block text-xs font-medium text-muted-foreground">{{ $t('views.CostComponentsView.env_fallback') }}</label>
-                <Select :model-value="form.rate_fallback || undefined" @update:model-value="onFallbackChange">
+                <Select :aria-label="$t('views.CostComponentsView.env_fallback')" :model-value="form.rate_fallback || undefined" @update:model-value="onFallbackChange">
                   <SelectTrigger id="costcomponents-fallback" data-testid="cost-components-fallback" class="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
                     <SelectValue :placeholder="$t('views.CostComponentsView.select_fallback')" />
                   </SelectTrigger>

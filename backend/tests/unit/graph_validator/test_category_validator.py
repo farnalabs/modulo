@@ -51,6 +51,17 @@ def _session_with_category(category: MagicMock | None) -> AsyncMock:
     return session
 
 
+def _snapshot(*, graph_json: dict) -> MagicMock:
+    """Build a PipelineSnapshot stand-in with empty pin collections."""
+    snap = MagicMock()
+    snap.graph_json = graph_json
+    snap.schema_pins_json = []
+    snap.connector_bindings_json = []
+    snap.model_backend_pins_json = []
+    snap.environment_profile_id = None
+    return snap
+
+
 # ---------------------------------------------------------------------------
 # validate_node_categories — no references
 # ---------------------------------------------------------------------------
@@ -70,6 +81,8 @@ async def test_empty_nodes_returns_valid():
     session = _mock_session()
     result = await validate_node_categories(graph, session)
     assert result.is_valid
+    assert not result.issues
+    session.execute.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +179,68 @@ async def test_mixed_valid_and_invalid_ids():
     assert "CATEGORY_NOT_FOUND" not in codes
 
 
+async def test_graph_without_nodes_key_is_valid():
+    """A graph dict without a 'nodes' key is treated as empty (no crash)."""
+    graph = {"edges": []}
+    session = _mock_session()
+    result = await validate_node_categories(graph, session)
+    assert result.is_valid
+    assert not result.issues
+    session.execute.assert_not_called()
+
+
+async def test_non_string_category_id_is_invalid():
+    """A non-string node_category_id is reported as CATEGORY_INVALID_ID
+    without hitting the database."""
+    graph = {
+        "nodes": [{"id": "n1", "node_type": "agent", "node_category_id": 123}],
+        "edges": [],
+    }
+    session = _mock_session()
+    result = await validate_node_categories(graph, session)
+    assert not result.is_valid
+    invalid = [i for i in result.issues if i.code == "CATEGORY_INVALID_ID"]
+    assert invalid
+    assert invalid[0].node_id == "n1"
+    session.execute.assert_not_called()
+
+
+async def test_invalid_category_id_reports_node_id():
+    """CATEGORY_INVALID_ID issues carry the offending node's id."""
+    graph = {
+        "nodes": [_node(nid="my-node", category_id="not-a-uuid")],
+        "edges": [],
+    }
+    session = _mock_session()
+    result = await validate_node_categories(graph, session)
+    invalid = [i for i in result.issues if i.code == "CATEGORY_INVALID_ID"]
+    assert invalid
+    assert invalid[0].node_id == "my-node"
+    assert "not-a-uuid" in invalid[0].message
+
+
+async def test_partial_missing_categories_reported():
+    """A single batch query fetches all referenced categories; only the
+    missing ones are reported (no N+1 lookup per node)."""
+    cat_a = uuid.uuid4()
+    cat_b = uuid.uuid4()
+    category_a = _mock_category(cat_a, name="a")
+    graph = {
+        "nodes": [
+            _node(nid="n1", category_id=str(cat_a)),
+            _node(nid="n2", category_id=str(cat_b)),
+        ],
+        "edges": [],
+    }
+    session = _session_with_category(category_a)
+    result = await validate_node_categories(graph, session)
+    assert not result.is_valid
+    missing = [i for i in result.issues if i.code == "CATEGORY_NOT_FOUND"]
+    assert len(missing) == 1
+    assert missing[0].node_id == "n2"
+    session.execute.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # GraphValidator integration
 # ---------------------------------------------------------------------------
@@ -182,12 +257,7 @@ async def test_validator_passes_through_graph_validator():
 
     session = _session_with_category(category)
 
-    snap = MagicMock()
-    snap.graph_json = graph
-    snap.schema_pins_json = []
-    snap.connector_bindings_json = []
-    snap.model_backend_pins_json = []
-    snap.environment_profile_id = None
+    snap = _snapshot(graph_json=graph)
 
     validator = GraphValidator()
     result = await validator.validate(snap, session)
@@ -204,12 +274,7 @@ async def test_validator_returns_category_error():
 
     session = _session_with_category(None)
 
-    snap = MagicMock()
-    snap.graph_json = graph
-    snap.schema_pins_json = []
-    snap.connector_bindings_json = []
-    snap.model_backend_pins_json = []
-    snap.environment_profile_id = None
+    snap = _snapshot(graph_json=graph)
 
     validator = GraphValidator()
     result = await validator.validate(snap, session)
@@ -227,12 +292,7 @@ async def test_validator_category_check_in_validate_for_run():
 
     session = _session_with_category(None)
 
-    snap = MagicMock()
-    snap.graph_json = graph
-    snap.schema_pins_json = []
-    snap.connector_bindings_json = []
-    snap.model_backend_pins_json = []
-    snap.environment_profile_id = None
+    snap = _snapshot(graph_json=graph)
 
     validator = GraphValidator()
     result = await validator.validate_for_run(snap, {}, session)
@@ -249,12 +309,7 @@ async def test_category_check_does_not_block_topology_errors():
 
     session = _session_with_category(None)
 
-    snap = MagicMock()
-    snap.graph_json = graph
-    snap.schema_pins_json = []
-    snap.connector_bindings_json = []
-    snap.model_backend_pins_json = []
-    snap.environment_profile_id = None
+    snap = _snapshot(graph_json=graph)
 
     validator = GraphValidator()
     result = await validator.validate(snap, session)

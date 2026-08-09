@@ -32,7 +32,8 @@ async def admin_list_config(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ConfigEntry]:
     try:
-        entries = await list_config(session)
+        async with session.begin():
+            entries = await list_config(session)
         return [
             ConfigEntry(
                 key=e.key,
@@ -73,7 +74,8 @@ async def admin_set_config(
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfigEntry:
     try:
-        entry = await set_config(session, key, req.value, updated_by=current_user.account_id)
+        async with session.begin():
+            entry = await set_config(session, key, req.value, updated_by=current_user.account_id)
         return ConfigEntry(
             key=entry.key,
             value=entry.value,
@@ -112,7 +114,8 @@ async def admin_delete_config(
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
-        deleted = await delete_config(session, key)
+        async with session.begin():
+            deleted = await delete_config(session, key)
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

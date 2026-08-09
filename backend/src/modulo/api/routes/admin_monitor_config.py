@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 _KNOWN_BACKENDS = frozenset({"builtin", "sentry", "datadog_rum", "grafana_faro"})
+
+# Required per-backend field (canonical API keys as written by the frontend) when
+# the backend is enabled. Mirrors the field schemas in `frontend/src/monitor/types.ts`.
+_REQUIRED_BACKEND_FIELDS: dict[str, str] = {
+    "sentry": "dsn",
+    "datadog_rum": "clientToken",
+    "grafana_faro": "url",
+}
 
 
 class MonitorConfigBase(BaseModel):
@@ -49,7 +57,16 @@ class MonitorConfigResponse(MonitorConfigBase):
 
 
 class MonitorConfigUpdate(MonitorConfigBase):
-    pass
+    @model_validator(mode="after")
+    def validate_per_backend_fields(self) -> "MonitorConfigUpdate":
+        for backend in self.backends:
+            required_field = _REQUIRED_BACKEND_FIELDS.get(backend)
+            if required_field is None:
+                continue
+            config = getattr(self, backend, None)
+            if config is None or not config.get(required_field):
+                raise ValueError(f"Backend '{backend}' is enabled but missing required field '{required_field}'")
+        return self
 
 
 def _merge(entry: Any | None) -> dict[str, Any]:
@@ -68,7 +85,8 @@ async def get_monitor_config(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-        entry = await get_config(session, _CONFIG_KEY)
+        async with session.begin():
+            entry = await get_config(session, _CONFIG_KEY)
     except ProgrammingError:
         _log.exception("admin.monitor_config.get_monitor_config - table missing")
         raise HTTPException(
@@ -100,12 +118,13 @@ async def set_monitor_config(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     try:
-        entry = await set_config(
-            session,
-            _CONFIG_KEY,
-            req.model_dump(),
-            updated_by=current_user.account_id,
-        )
+        async with session.begin():
+            entry = await set_config(
+                session,
+                _CONFIG_KEY,
+                req.model_dump(),
+                updated_by=current_user.account_id,
+            )
     except ProgrammingError:
         _log.exception("admin.monitor_config.set_monitor_config - table missing")
         raise HTTPException(

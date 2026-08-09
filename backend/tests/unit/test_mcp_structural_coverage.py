@@ -56,6 +56,7 @@ _EXPECTED_TOOLS = frozenset(
         "validate_payload",
         "list_housekeeping",
         "perform_housekeeping",
+        "query_analytics",
     }
 )
 

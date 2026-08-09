@@ -56,7 +56,7 @@ def _make_mock_session() -> MagicMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -71,7 +71,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture()
+@pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     yield TestClient(app)
@@ -850,7 +850,7 @@ class TestCrudUnauthorized:
     """Parametrized: list endpoints return 401 without auth header."""
 
     @pytest.mark.parametrize(
-        ("url",),
+        "url",
         [
             pytest.param("/scim/v2/Users", id="list_users"),
             pytest.param("/scim/v2/Groups", id="list_groups"),

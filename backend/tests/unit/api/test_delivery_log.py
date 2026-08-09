@@ -75,7 +75,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-@pytest.fixture()
+@pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
 
@@ -370,3 +370,21 @@ def test_delivery_log_requires_admin_role(client: TestClient) -> None:
         org_role="admin",
     )
     assert resp.status_code == 403
+
+
+def test_run_stalled_is_available_event() -> None:
+    """run_stalled must be subscribable for webhooks, like run_failed (FAR-98)."""
+    from modulo.api.routes.admin_notifications import AVAILABLE_EVENTS
+
+    assert "run_stalled" in AVAILABLE_EVENTS
+
+
+def test_webhook_create_accepts_run_stalled() -> None:
+    """An org can subscribe a webhook to run_stalled without a 422."""
+    from modulo.api.routes.admin_notifications import WebhookCreate
+
+    model = WebhookCreate(
+        url="https://hooks.example.com/notify",
+        events=["run_stalled"],
+    )
+    assert model.events == ["run_stalled"]

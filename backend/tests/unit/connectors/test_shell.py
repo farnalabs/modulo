@@ -82,17 +82,17 @@ class _FakeRuntimeProvider:
         return "running"
 
 
-@pytest.fixture()
+@pytest.fixture
 def provider() -> _FakeRuntimeProvider:
     return _FakeRuntimeProvider()
 
 
-@pytest.fixture()
+@pytest.fixture
 def provider_ref() -> str:
     return "ws-test-001"
 
 
-@pytest.fixture()
+@pytest.fixture
 def workspace_lease_id() -> uuid.UUID:
     return uuid.uuid4()
 
@@ -167,11 +167,13 @@ async def test_read_file_missing(
         )
 
 
-async def test_read_file_missing_provider_ref(provider: _FakeRuntimeProvider, workspace_lease_id: uuid.UUID) -> None:
+async def test_read_file_without_provider_ref(provider: _FakeRuntimeProvider, workspace_lease_id: uuid.UUID) -> None:
+    """Reading a file does not require a provider_ref — it is optional for direct providers."""
+    provider.store_file("/tmp/x.txt", "world")
     c = _connector(provider, workspace_lease_id)
 
-    with pytest.raises(ValueError, match="Failed to read file"):
-        await c.query(ConnectorQuery(resource="file", filters={"path": "/tmp/x.txt"}))
+    result = await c.query(ConnectorQuery(resource="file", filters={"path": "/tmp/x.txt"}))
+    assert result.records[0]["content"] == "world"
 
 
 # ---------------------------------------------------------------------------
@@ -397,10 +399,11 @@ async def test_write_file(provider: _FakeRuntimeProvider, provider_ref: str) -> 
     assert result["exit_code"] == 0
 
 
-async def test_write_file_missing_provider_ref(
+async def test_write_file_without_provider_ref(
     provider: _FakeRuntimeProvider,
     workspace_lease_id: uuid.UUID,
 ) -> None:
+    """Writing a file does not require a provider_ref — it is optional for direct providers."""
     c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id)
 
     result = await c.write(
@@ -409,7 +412,9 @@ async def test_write_file_missing_provider_ref(
             data={"path": "/tmp/x.txt", "content": "data"},
         )
     )
-    assert result is not None
+    assert result["path"] == "/tmp/x.txt"
+    assert result["bytes_written"] == 4
+    assert result["exit_code"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +473,7 @@ async def test_run_command_without_provider_ref(
     provider: _FakeRuntimeProvider,
     workspace_lease_id: uuid.UUID,
 ) -> None:
-    """Write command without provider_ref should raise ValueError."""
+    """Running a command does not require a provider_ref — it is optional for direct providers."""
     c = ShellConnector(runtime_provider=provider, workspace_lease_id=workspace_lease_id, allowed_commands=["echo"])
 
     result = await c.write(
@@ -477,7 +482,9 @@ async def test_run_command_without_provider_ref(
             data={"command": "echo x"},
         )
     )
-    assert result is not None
+    assert result["exit_code"] == 0
+    assert result["stdout"] == "hello"
+    assert result["masked"] is True
 
 
 async def test_run_command_with_cwd_and_env(provider: _FakeRuntimeProvider, provider_ref: str) -> None:

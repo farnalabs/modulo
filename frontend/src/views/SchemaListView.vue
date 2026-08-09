@@ -4,7 +4,7 @@
     { label: $t('views.SchemaInferenceView.editor'), to: '/schemas/editor' },
     { label: $t('views.SchemaInferenceView.infer'), to: '/schemas/infer' },
   ]" />
-    <div class="page-narrow">
+    <div class="page-wide">
     <PageHeader :title="$t('views.SchemaListView.schemas')" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
 
     <LoadingSpinner v-if="loading" />
@@ -19,7 +19,7 @@
         </p>
       </div>
 
-      <div class="overflow-hidden rounded-lg border">
+      <div class="overflow-x-auto rounded-lg border">
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50">
             <tr>
