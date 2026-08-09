@@ -1,7 +1,7 @@
-﻿def bad_exception_before_sqlalchemy() -> None:
-    # ruleid: exception-mro-ordering
+def bad_exception_before_sqlalchemy() -> None:
     try:
         run_query()
+    # ruleid: exception-mro-ordering
     except SQLAlchemyError:
         pass
     except ProgrammingError:
@@ -9,9 +9,9 @@
 
 
 def bad_exception_before_integrity() -> None:
-    # ruleid: exception-mro-ordering
     try:
         run_query()
+    # ruleid: exception-mro-ordering
     except Exception:
         pass
     except IntegrityError:
@@ -19,9 +19,9 @@ def bad_exception_before_integrity() -> None:
 
 
 def bad_dbapi_before_operational() -> None:
-    # ruleid: exception-mro-ordering
     try:
         run_query()
+    # ruleid: exception-mro-ordering
     except DBAPIError:
         pass
     except OperationalError:

@@ -1,4 +1,4 @@
-﻿rules:
+rules:
   - id: exception-mro-ordering
     patterns:
       - pattern-inside: |
