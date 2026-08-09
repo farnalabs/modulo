@@ -99,6 +99,11 @@ class TestChangePassword:
             patch("modulo.api.routes.me.get_account_by_id", return_value=user) as mock_get,
             patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
             patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                new_callable=AsyncMock,
+            ),
         ):
             resp = client.put(
                 "/api/v1/me/password",
@@ -210,6 +215,11 @@ class TestChangePassword:
                 return_value=[mock_family_1, mock_family_2],
             ) as mock_list,
             patch("modulo.api.routes.me.blacklist_family", return_value=True) as mock_blacklist,
+            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock),
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                new_callable=AsyncMock,
+            ),
         ):
             resp = client.put(
                 "/api/v1/me/password",
@@ -222,3 +232,34 @@ class TestChangePassword:
         assert resp.status_code == 200
         mock_list.assert_called_once()
         assert mock_blacklist.call_count == 2
+
+    def test_password_change_records_audit_event(self, client: TestClient) -> None:
+        user = _make_mock_user(password_hash=hash_password(_STRONG_PW))
+
+        with (
+            patch("modulo.api.routes.me.get_account_by_id", return_value=user),
+            patch("modulo.api.routes.me.list_families_for_account", return_value=[]),
+            patch("modulo.api.routes.me.blacklist_family", return_value=True),
+            patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
+            patch(
+                "modulo.core.audit_logger.append_audit_event",
+                new_callable=AsyncMock,
+            ) as mock_audit,
+        ):
+            resp = client.put(
+                "/api/v1/me/password",
+                json={
+                    "current_password": _STRONG_PW,
+                    "new_password": _NEW_PW,
+                },
+            )
+
+        assert resp.status_code == 200
+        mock_rls.assert_called_once()
+        mock_audit.assert_called_once()
+        _, kwargs = mock_audit.call_args
+        assert kwargs["event_type"] == "password_changed"
+        assert kwargs["org_id"] == _ORG_ID
+        assert kwargs["actor_user_id"] == _USER_ID
+        assert kwargs["resource_type"] == "account"
+        assert kwargs["resource_id"] == _USER_ID
