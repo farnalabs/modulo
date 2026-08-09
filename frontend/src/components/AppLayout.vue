@@ -107,14 +107,14 @@
           :checked="isLight"
         />
       </label>
-      <router-link to="/" class="flex items-center gap-2.5">
+      <router-link to="/" class="flex items-center gap-1.5">
         <div
           class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5"
         >
           <LogoMark :size="24" transparent />
         </div>
-        <h2 class="text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
-        <Badge v-if="planStore.currentTier" variant="outline" class="text-[10px] px-1.5 py-0 leading-none opacity-70">
+        <h2 class="hidden min-[360px]:inline text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
+        <Badge v-if="planStore.currentTier" variant="outline" class="hidden min-[380px]:inline-flex text-[10px] px-1.5 py-0 leading-none opacity-70">
           {{ planStore.getTierLabel(planStore.currentTier) }}
         </Badge>
       </router-link>
