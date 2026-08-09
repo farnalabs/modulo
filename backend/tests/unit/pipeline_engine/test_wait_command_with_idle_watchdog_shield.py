@@ -101,9 +101,10 @@ async def test_idle_stall_kills_and_raises_stalled():
     assert handle.kill_called is True
 
 
-async def test_total_timeout_raises_and_cancels_pending_wait():
+async def test_total_timeout_raises_and_leaves_events_task_uncancelled():
     """When the total timeout elapses the helper raises TimeoutError and the
-    still-pending wait task is cancelled (no 'Task was destroyed' leak)."""
+    E2B events task survives (per-slice shield cancels only the shield, never
+    the long-lived events task the next slice would re-await)."""
     handle = _IdleWatchdogHandle()
 
     with pytest.raises(TimeoutError, match="total timeout"):
@@ -116,4 +117,4 @@ async def test_total_timeout_raises_and_cancels_pending_wait():
         )
 
     assert handle.kill_called is False
-    assert handle.wait().cancelled() is True
+    assert handle.wait().cancelled() is False

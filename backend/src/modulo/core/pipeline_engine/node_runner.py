@@ -897,29 +897,28 @@ async def _wait_command_with_idle_watchdog(
     the agent emits nothing for a long LLM turn. The poll slice is reduced to
     *tick_interval* so on_tick runs frequently enough to keep last_activity fresh.
 
-    ``handle.wait()`` is scheduled ONCE for the whole loop and awaited through
-    ``asyncio.shield`` on every slice. A slice timeout must cancel only the
-    shield, never the underlying task: the E2B SDK awaits a long-lived internal
-    events task (``self._wait``), and if a slice timeout cancelled that task the
-    next slice would re-await a dead task and immediately raise
-    ``CancelledError`` with ``cancelling()==0`` — which LangGraph surfaces as
-    ``NodeCancelledError`` and every sandbox run would fail ~one tick in.
+    Each poll slice shields its own ``handle.wait()`` call: the slice await is
+    ``asyncio.wait_for(asyncio.shield(handle.wait()), timeout=...)``, so a slice
+    timeout cancels only the shield, never the wait. The E2B SDK's
+    ``handle.wait()`` merely awaits a long-lived internal events task
+    (``self._wait``), so the events task survives every slice timeout and the
+    next slice's fresh ``handle.wait()`` still sees it alive. If a slice timeout
+    cancelled that events task, the next slice would re-await a dead task and
+    immediately raise ``CancelledError`` with ``cancelling()==0`` — which
+    LangGraph surfaces as ``NodeCancelledError`` and every sandbox run would
+    fail ~one tick in.
     """
     if tick_interval is None:
         tick_interval = _SANDBOX_TAIL_INTERVAL
     deadline = time.monotonic() + total_timeout
-    wait_task = asyncio.ensure_future(handle.wait())  # nosemgrep: create-task-without-guard
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            wait_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await wait_task
             raise TimeoutError(f"command exceeded total timeout of {total_timeout:.0f}s")
         if on_tick is not None:
             await on_tick()
         try:
-            return await asyncio.wait_for(asyncio.shield(wait_task), timeout=min(tick_interval, remaining))
+            return await asyncio.wait_for(asyncio.shield(handle.wait()), timeout=min(tick_interval, remaining))
         except TimeoutError:
             if time.monotonic() - last_activity() >= idle_timeout:
                 # Kill the command so the still-running agent cannot write a
@@ -928,9 +927,6 @@ async def _wait_command_with_idle_watchdog(
                     await asyncio.wait_for(handle.kill(), timeout=10.0)
                 except Exception:
                     _log.exception("sandbox_agent.idle_watchdog_kill_failed")
-                wait_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await wait_task
                 raise TimeoutError(f"command produced no output for {idle_timeout:.0f}s (stalled)") from None
 
 
