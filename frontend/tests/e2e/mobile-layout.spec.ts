@@ -44,13 +44,13 @@ function enumerateRoutes(): string[] {
       return routes
     }
   } catch (err) {
-    console.log(`[mobile-layout] manifest.yaml enumeration failed (${err instanceof Error ? err.message : String(err)}); using fallback route list`)
+    process.stdout.write(`[mobile-layout] manifest.yaml enumeration failed (${err instanceof Error ? err.message : String(err)}); using fallback route list\n`)
   }
   return FALLBACK_ROUTES
 }
 
 const ROUTES = enumerateRoutes()
-console.log(`[mobile-layout] enumerated ${ROUTES.length} routes from manifest.yaml`)
+process.stdout.write(`[mobile-layout] enumerated ${ROUTES.length} routes from manifest.yaml\n`)
 
 const NARROW_ROUTES = ['/login', '/', '/pipelines', '/stages', '/schemas']
 
@@ -108,7 +108,7 @@ async function preparePage(page: Page, route: string, env: TestEnv): Promise<boo
   const redirectedToLogin = finalUrl.includes('/login') && route !== '/login'
   const differsFromPath = !finalUrl.includes(route)
   if (redirectedToLogin || differsFromPath) {
-    console.log(`  Skipping ${route} — redirected to ${finalUrl} (auth guard)`)
+    process.stdout.write(`  Skipping ${route} — redirected to ${finalUrl} (auth guard)\n`)
     return false
   }
   return true
@@ -149,9 +149,9 @@ async function checkNoHorizontalOverflow(page: Page) {
     return { overflow, scrollWidth: doc.scrollWidth, viewportWidth: vw, culprits }
   })
   if (result.overflow) {
-    console.log(`[mobile-layout] horizontal overflow: scrollWidth=${result.scrollWidth} viewportWidth=${result.viewportWidth}`)
+    process.stdout.write(`[mobile-layout] horizontal overflow: scrollWidth=${result.scrollWidth} viewportWidth=${result.viewportWidth}\n`)
     if (result.culprits.length > 0) {
-      console.log(`[mobile-layout]   suspected width:100vw culprits: ${result.culprits.join(', ')}`)
+      process.stdout.write(`[mobile-layout]   suspected width:100vw culprits: ${result.culprits.join(', ')}\n`)
     }
   }
   expect(result.overflow, `Horizontal page overflow (scrollWidth ${result.scrollWidth} > viewportWidth ${result.viewportWidth})`).toBe(false)
@@ -183,7 +183,7 @@ async function checkAppShellFillsViewport(page: Page) {
     }
     return { appRatio, mainRatio }
   })
-  console.log(`[mobile-layout] ${page.url()} app shell width ratio: ${data.appRatio.toFixed(2)}, widest main container ratio: ${data.mainRatio.toFixed(2)}`)
+  process.stdout.write(`[mobile-layout] ${page.url()} app shell width ratio: ${data.appRatio.toFixed(2)}, widest main container ratio: ${data.mainRatio.toFixed(2)}\n`)
   expect(data.appRatio, `App shell fills ${(data.appRatio * 100).toFixed(0)}% of the viewport width — background likely does not fill the screen`).toBeGreaterThanOrEqual(0.95)
 }
 
@@ -224,7 +224,7 @@ async function checkInteractiveNotClipped(page: Page) {
     const selector = 'button, a, input, select, textarea, [tabindex], [role="button"]'
     const interactives = Array.from(document.querySelectorAll(selector))
     if (interactives.length > 500) {
-      console.log(`[mobile-layout] clipped scan sampled: ${interactives.length} interactives, processing first 500`)
+      process.stdout.write(`[mobile-layout] clipped scan sampled: ${interactives.length} interactives, processing first 500\n`)
     }
     const clipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
     const allowlistedClipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
@@ -271,12 +271,12 @@ async function checkInteractiveNotClipped(page: Page) {
     }
   })
   if (result.skip) {
-    console.log(`[mobile-layout] ${page.url()} has horizontal scroll — skipping clipped-interactive check`)
+    process.stdout.write(`[mobile-layout] ${page.url()} has horizontal scroll — skipping clipped-interactive check\n`)
     return
   }
   if (result.clipped.length > 0) {
     for (const c of result.clipped) {
-      console.log(`[mobile-layout]   clipped interactive: <${c.tag}> class="${c.cls}" text="${c.text}" left=${c.left} right=${c.right}`)
+      process.stdout.write(`[mobile-layout]   clipped interactive: <${c.tag}> class="${c.cls}" text="${c.text}" left=${c.left} right=${c.right}\n`)
     }
   }
   if (result.allowlistedClipped.length > 0) {
@@ -296,15 +296,15 @@ async function checkAxeMobile(page: Page) {
   // thousands of elements; running axe over that DOM exceeds the test timeout.
   const domSize = await page.evaluate(() => document.querySelectorAll('*').length)
   if (domSize > 8000) {
-    console.log(`[mobile-layout] skipping axe on ${page.url()} (DOM too large: ${domSize} elements)`)
+    process.stdout.write(`[mobile-layout] skipping axe on ${page.url()} (DOM too large: ${domSize} elements)\n`)
     return
   }
   const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()
   const violations = filterViolations(results.violations)
   if (violations.length > 0) {
-    console.log(`\n=== ${page.url()} mobile WCAG violations ===`)
+    process.stdout.write(`\n=== ${page.url()} mobile WCAG violations ===\n`)
     for (const v of violations) {
-      console.log(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}`)
+      process.stdout.write(`[${v.impact}] ${v.id} (${v.nodes.length} nodes): ${v.help}\n`)
     }
   }
   expect(violations).toEqual([])
@@ -337,9 +337,9 @@ async function checkCLS(page: Page) {
   if (cls > 0.25) {
     expect(cls, `Cumulative layout shift ${cls.toFixed(3)} > 0.25 on ${page.url()}`).toBeLessThanOrEqual(0.25)
   } else if (cls > 0.1) {
-    console.log(`[mobile-layout] ADVISORY: CLS ${cls.toFixed(3)} on ${page.url()} (0.1 < CLS <= 0.25)`)
+    process.stdout.write(`[mobile-layout] ADVISORY: CLS ${cls.toFixed(3)} on ${page.url()} (0.1 < CLS <= 0.25)\n`)
   } else {
-    console.log(`[mobile-layout] CLS ${cls.toFixed(3)} on ${page.url()}`)
+    process.stdout.write(`[mobile-layout] CLS ${cls.toFixed(3)} on ${page.url()}\n`)
   }
 }
 
@@ -358,9 +358,9 @@ async function checkInputFontSize(page: Page) {
     return found.slice(0, 10)
   })
   if (small.length > 0) {
-    console.log(`[mobile-layout] ADVISORY: inputs with font-size < 16px (iOS auto-zoom risk) on ${page.url()}:`)
+    process.stdout.write(`[mobile-layout] ADVISORY: inputs with font-size < 16px (iOS auto-zoom risk) on ${page.url()}:\n`)
     for (const s of small) {
-      console.log(`[mobile-layout]   ${s}`)
+      process.stdout.write(`[mobile-layout]   ${s}\n`)
     }
   }
 }
@@ -377,7 +377,7 @@ async function runFullSweep(page: Page, route: string, env: TestEnv) {
   await checkInputFontSize(page)
 
   if (isCanvasRoute(route)) {
-    console.log(`[mobile-layout] skipping screenshot for canvas route ${route}`)
+    process.stdout.write(`[mobile-layout] skipping screenshot for canvas route ${route}\n`)
   } else {
     await page.screenshot({ path: path.join(CAPTURE_DIR, `${sanitizePath(route)}.png`) })
   }
