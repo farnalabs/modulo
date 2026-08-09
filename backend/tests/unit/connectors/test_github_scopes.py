@@ -42,12 +42,17 @@ async def test_verify_scopes_missing_both(connector):
 
 
 @respx.mock
-async def test_verify_scopes_no_header(connector):
+async def test_verify_scopes_fine_grained_pat_no_header(connector):
+    """A valid token with no X-OAuth-Scopes header is a fine-grained PAT / app token.
+
+    Its permissions are per-endpoint and enforced by GitHub, so classic OAuth
+    scopes cannot be enumerated and no scope is provably missing.
+    """
     respx.get("https://api.github.com/user").mock(
         return_value=httpx.Response(200, json={"login": "octocat"}),
     )
     missing = await connector.verify_scopes()
-    assert missing == REQUIRED_SCOPES
+    assert missing == set()
 
 
 @respx.mock
@@ -109,3 +114,38 @@ async def test_health_check_reports_missing_scopes(connector):
     assert result.ok is False
     assert "repo" in result.detail
     assert "Required:" in result.detail
+
+
+@respx.mock
+async def test_health_check_fine_grained_pat_passes(connector):
+    """A fine-grained PAT / app token (no X-OAuth-Scopes header) passes health.
+
+    The token is valid but its permissions are per-endpoint, so classic scopes
+    cannot be enumerated — the health check succeeds with an informational note
+    instead of a false missing-scopes failure.
+    """
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"}),
+    )
+    result = await connector.health_check()
+    assert result.ok is True
+    assert "octocat" in result.detail
+    assert "fine-grained" in result.detail
+    assert "X-OAuth-Scopes" in result.detail
+
+
+@respx.mock
+async def test_health_check_classic_pat_empty_scopes_still_fails(connector):
+    """A classic PAT with an empty X-OAuth-Scopes value reports missing scopes.
+
+    The header being present means the token is scope-based, so an empty scope
+    list is a genuine missing-scopes failure — distinct from a fine-grained PAT
+    whose header is absent.
+    """
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": ""}),
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert "missing_scope:repo" in result.detail
+    assert "missing_scope:read:org" in result.detail

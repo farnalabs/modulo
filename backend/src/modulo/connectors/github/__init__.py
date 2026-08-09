@@ -23,6 +23,9 @@ from modulo.connectors.base import (
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
 
+# Classic PAT OAuth scopes. Fine-grained PATs and GitHub App tokens do not use
+# OAuth scopes — their permissions are per-endpoint and enforced server-side, so
+# they cannot be enumerated via the X-OAuth-Scopes header (see health_check).
 REQUIRED_SCOPES = frozenset({"repo", "read:org"})
 
 # Actions accepted by the batch commit resource (write("commit") / write("files"))
@@ -236,6 +239,11 @@ class GitHubConnector(ConnectorBase):
     """Read/write GitHub via the REST API.
 
     Supports configurable ``base_url`` for GHES (default: ``https://api.github.com``).
+    Authenticates with classic PATs (``repo``, ``read:org``) and fine-grained
+    PATs / GitHub App tokens. Fine-grained tokens cannot enumerate classic OAuth
+    scopes (no ``X-OAuth-Scopes`` header); their per-endpoint permissions are
+    enforced by GitHub, so ``health_check()`` passes them with an informational
+    note and ``verify_scopes()`` treats them as having no provably-missing scope.
     Retries 429/502/503/504 with exponential backoff + jitter (max 3 retries).
     Includes random jitter in retry delays to avoid thundering herd.
     Parses Link header for pagination cursor on list endpoints.
@@ -528,6 +536,19 @@ class GitHubConnector(ConnectorBase):
         return cast("dict[str, Any]", await self._parse_json(response))
 
     @staticmethod
+    def _has_scope_header(response: httpx.Response) -> bool:
+        """Whether GitHub reported OAuth scopes on the response.
+
+        ``X-OAuth-Scopes`` is present only for tokens whose permissions are
+        expressible as classic OAuth scopes (classic PATs, OAuth app tokens).
+        It is omitted entirely for fine-grained personal access tokens and
+        GitHub App tokens — those enforce per-endpoint permissions server-side
+        and cannot be enumerated, so ``verify_scopes()``/``health_check()``
+        must not treat the absence of the header as a missing-scope failure.
+        """
+        return "X-OAuth-Scopes" in response.headers
+
+    @staticmethod
     def _parse_scopes_from_headers(response: httpx.Response) -> set[str]:
         header_value = response.headers.get("X-OAuth-Scopes", "")
         if header_value.strip():
@@ -540,9 +561,16 @@ class GitHubConnector(ConnectorBase):
         Returns the set of missing scopes (empty if all present).
         Raises ``GitHubAuthError`` when the token itself is invalid/expired
         (401) or lacks the required permission (403).
+
+        A valid token whose response carries no ``X-OAuth-Scopes`` header is a
+        fine-grained PAT or GitHub App token — its permissions are enforced
+        per-endpoint by GitHub and cannot be enumerated, so no classic scope is
+        provably missing and an empty set is returned.
         """
         r = await self._call_api("GET", "/user")
 
+        if not self._has_scope_header(r):
+            return set()
         token_scopes = self._parse_scopes_from_headers(r)
         # admin:org is a superset of read:org
         if "admin:org" in token_scopes:
@@ -552,9 +580,14 @@ class GitHubConnector(ConnectorBase):
     async def health_check(self) -> HealthResult:
         """Check API access and verify required OAuth scopes via ``X-OAuth-Scopes`` header.
 
-        Required scopes: ``repo``, ``read:org``. Distinguishes expired/invalid
-        tokens (HTTP 401), missing scopes (HTTP 403), rate-limit exhaustion
-        (HTTP 429), and transport failures so the failure mode is actionable.
+        Required scopes: ``repo``, ``read:org`` (classic PATs). Distinguishes
+        expired/invalid tokens (HTTP 401), missing scopes (HTTP 403),
+        rate-limit exhaustion (HTTP 429), and transport failures so the failure
+        mode is actionable. A valid token whose response carries no
+        ``X-OAuth-Scopes`` header is a fine-grained PAT or GitHub App token:
+        classic scopes cannot be enumerated, so the health check passes with an
+        informational note and GitHub's per-endpoint permission enforcement
+        applies.
         """
         try:
             r = await self._call_api("GET", "/user")
@@ -573,6 +606,15 @@ class GitHubConnector(ConnectorBase):
             user_login = (await self._parse_json(r)).get("login", "")
         except ValueError as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
+
+        if not self._has_scope_header(r):
+            return HealthResult(
+                ok=True,
+                detail=(
+                    f"{user_login} — fine-grained PAT or GitHub App token (no X-OAuth-Scopes header); "
+                    "classic OAuth scopes cannot be enumerated, GitHub enforces permissions per-endpoint"
+                ),
+            )
 
         token_scopes = self._parse_scopes_from_headers(r)
         missing = REQUIRED_SCOPES - token_scopes

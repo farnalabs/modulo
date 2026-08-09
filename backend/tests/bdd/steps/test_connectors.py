@@ -1002,6 +1002,22 @@ def step_github_health_missing_scope(scope, ctx):
     ctx["connector"].health_check = mock_health_check
 
 
+@given("a GitHub connector whose health check detects a fine-grained PAT")
+def step_github_health_fine_grained_pat(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(
+            ok=True,
+            detail=(
+                "octocat — fine-grained PAT or GitHub App token (no X-OAuth-Scopes header); "
+                "classic OAuth scopes cannot be enumerated, GitHub enforces permissions per-endpoint"
+            ),
+        )
+
+    ctx["connector"].health_check = mock_health_check
+
+
 @then("the health result detail describes an expired token")
 def step_health_detail_expired_token(ctx):
     result = ctx.get("health_result")

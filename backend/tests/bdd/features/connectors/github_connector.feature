@@ -159,6 +159,13 @@ Feature: GitHub Connector
     Then the health result indicates failure
     And the health result detail contains "missing_scope:repo"
 
+  Scenario: Health check passes for a fine-grained PAT
+    Given a GitHub connector with valid token
+    And a GitHub connector whose health check detects a fine-grained PAT
+    When I perform a health check
+    Then the health result is ok
+    And the health result detail contains "fine-grained"
+
   Scenario: Query surfaces a typed auth error with a machine-readable code
     Given a GitHub connector with valid token
     When the GitHub API returns HTTP 401 with an expired token

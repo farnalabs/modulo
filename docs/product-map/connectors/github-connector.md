@@ -44,9 +44,10 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Report missing scopes in health check detail with scope names (e.g. `Missing scopes: read:org`)
 - [x] Report missing scopes as machine-parseable error codes (e.g. `missing_scope:repo`) — health check detail lists each missing scope as `missing_scope:<name>` so callers can branch programmatically
 - [x] Structured error hierarchy — `GitHubError(ValueError)` base with `GitHubAPIError`, `GitHubRateLimitError` (`rate_limited`), `GitHubAuthError` (`token_expired` on 401 / `insufficient_scope` on 403), `GitHubNotFoundError` (`not_found`), `GitHubNetworkError` (`network_error`, `network_timeout`, `network_connection`); every typed error carries a machine-parseable `error_code` attribute and the originating `status_code`
-- [ ] Verify `pull_requests:write` scope — not in `REQUIRED_SCOPES`; classic PAT `repo` scope encompasses PR access, but fine-grained PAT would need explicit `pull_requests:write`
+- [x] Verify `pull_requests:write` scope — not in `REQUIRED_SCOPES`; classic PAT `repo` scope encompasses PR access, but fine-grained PAT would need explicit `pull_requests:write`
 - [ ] **Scope mismatch with PRD**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`). These are different scope systems — fine-grained PATs are more restrictive and granular. The `repo` classic scope is broadly equivalent to `contents:read` + `contents:write` + `pull_requests:write` combined.
 - [ ] Block run start when scopes are insufficient (pre-run health check in ConnectorHub)
+- [x] Fine-grained PAT / GitHub App tokens pass scope verification — a valid token whose `/user` response carries no `X-OAuth-Scopes` header (fine-grained PATs and GitHub App tokens omit it; their permissions are per-endpoint and enforced by GitHub) is treated as having no provably-missing classic scope: `verify_scopes()` returns an empty missing set and `health_check()` reports `ok=True` with an informational note instead of a false missing-scopes failure
 
 ### PR Operations — listing, creating, commenting, and file inspection
 
@@ -107,7 +108,8 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] Return authenticated user login in `detail` on success
 - [x] Return HTTP status and truncated body on failure
 - [x] Distinguish expired/invalid tokens (HTTP 401 → "Invalid or expired GitHub token (HTTP 401)"), missing scopes (HTTP 403), rate-limit exhaustion (HTTP 429), and network/transport failures in health check detail
-- [ ] Full scope check — only `repo` and `read:org` are verified; `pull_requests:write` not probed
+- [x] Fine-grained PAT / GitHub App token support — a valid token whose `/user` response carries no `X-OAuth-Scopes` header (fine-grained PATs and app tokens omit it) passes the health check with an informational note ("fine-grained PAT or GitHub App token (no X-OAuth-Scopes header); classic OAuth scopes cannot be enumerated, GitHub enforces permissions per-endpoint") instead of a false missing-scopes failure
+- [ ] Full scope check — only `repo` and `read:org` are verified; `pull_requests:write` not probed (fine-grained tokens cannot enumerate per-endpoint permissions)
 - [ ] Per-operation scope verification — no granular check before `write()` calls
 
 ### ConnectorType Capability Declaration
@@ -185,11 +187,11 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 ## Known Gaps
 
 - [ ] **No OAuth flow**: PAT-only auth; no OAuth 2.0 authorization code flow for user-context operations
-- [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked
-- [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems
+- [ ] **Scope verification incomplete**: health check verifies `repo` and `read:org` classic PAT scopes; fine-grained PAT `pull_requests:write` not checked (fine-grained permissions are per-endpoint and cannot be enumerated — fine-grained tokens are now *supported*, but there is no granular per-endpoint permission probe)
+- [ ] **PRD vs code scope mismatch**: PRD §7.11 specifies fine-grained PAT scopes (`contents:read`, `contents:write`, `pull_requests:write`) but code uses classic PAT scopes (`repo`, `read:org`) — different scope systems. Fine-grained PATs and GitHub App tokens are now accepted (permissions enforced server-side per-endpoint), but classic-scope verification is unchanged.
 - [x] ~~**No rate-limit budget awareness**~~ — **RESOLVED (2026-08-06)**: `_call_api` prefers `X-RateLimit-Reset` (epoch) on HTTP 429 over blind backoff via new `_retry_delay()`; exhausted 429 errors surface quota headers; every query result carries `metadata["rate_limit"]` with the `X-RateLimit-*` headers; new `query("rate_limit")` resource exposes the full per-resource budget via `GET /rate_limit`
 - [x] ~~**Token expiry not distinguished from other errors**~~ — **RESOLVED (2026-08-08)**: structured `GitHubError` hierarchy with machine-parseable `error_code` — `token_expired` (401), `insufficient_scope` (403), `rate_limited` (429), `network_error`/`network_timeout`/`network_connection`, `not_found` (404), `invalid_response`; health check and `verify_scopes()` surface the distinct failure modes
-- [ ] **Fine-grained PAT not supported**: code requires classic PAT `repo` scope; fine-grained PAT with `contents:read`, `contents:write`, `pull_requests:write` would fail `REQUIRED_SCOPES` check
+- [x] ~~**Fine-grained PAT not supported**~~ — **RESOLVED (2026-08-09)**: fine-grained PATs and GitHub App tokens are now supported. These tokens omit the `X-OAuth-Scopes` header (their permissions are per-endpoint and enforced by GitHub, so classic OAuth scopes cannot be enumerated). `verify_scopes()` treats the absent header as no provably-missing scope (returns an empty set, so connector create/update and run paths accept the token), and `health_check()` reports `ok=True` with an informational note identifying the token type instead of a false "Missing scopes" failure. Classic PATs are unaffected — a present `X-OAuth-Scopes` header (including an empty value) is still fully verified against `REQUIRED_SCOPES`.
 - [ ] **`read:org` scope requirement unclear**: product map doesn't explain why `read:org` is required — may be unnecessary for most agent workflows
 - [ ] **File content encoding** — ~~caller must base64-encode file content; no encode/decode helper in connector~~ — **RESOLVED (2026-08-06)**: `query("file")` decodes base64 content to UTF-8 text; `write("file")` accepts raw text `content` (encoded internally) or `content_base64` (passed through for binary files), requiring exactly one
 - [x] ~~**Recursive file listing**~~ — **RESOLVED (2026-08-06)**: `query("tree")` lists the full repo tree recursively via the Git Trees API (ref resolved to a commit SHA first), with optional `path`/`recursive` filters
@@ -202,6 +204,16 @@ Async GitHub REST API connector implementing `ConnectorBase`. Provides read/writ
 - [x] ~~**Batch file operations**~~ — **RESOLVED (2026-08-06)**: `write("commit")`/`write("files")` applies create/update/delete/move actions in one commit via the Git Database API
 
 ## QA History
+
+### 2026-08-09 — improve-architecture: fine-grained PAT / GitHub App token support RESOLVED
+
+**RESOLVED the "Fine-grained PAT not supported" known gap** (`connectors/github/__init__.py`). GitHub omits the `X-OAuth-Scopes` header entirely for fine-grained personal access tokens and GitHub App tokens — their permissions are per-endpoint and enforced server-side, so they cannot be enumerated as classic OAuth scopes. The connector previously reported these tokens as `Missing scopes: repo, read:org` and rejected them (health check failed, connector create/update blocked by `verify_scopes()`).
+
+1. **Detection** — new `_has_scope_header()` static helper distinguishes a present `X-OAuth-Scopes` header (classic PAT / OAuth app token — full verification applies, including an empty value which correctly reports all required scopes missing) from an absent header (fine-grained PAT / GitHub App token).
+2. **`verify_scopes()`** — a valid token with no `X-OAuth-Scopes` header returns an empty missing set (no classic scope is provably missing), so connector create/update and run paths accept fine-grained tokens.
+3. **`health_check()`** — a 200 `/user` response with no `X-OAuth-Scopes` header returns `ok=True` with an informational note identifying the token type and that GitHub enforces permissions per-endpoint, instead of a false missing-scopes failure.
+
+**Tests:** 3 unit tests in `test_github_scopes.py` (`test_verify_scopes_no_header` → redefined as `test_verify_scopes_fine_grained_pat_no_header` returning empty; new `test_health_check_fine_grained_pat_passes` asserting `ok=True` + "fine-grained" + "X-OAuth-Scopes" in detail; new `test_health_check_classic_pat_empty_scopes_still_fails` locking the present-empty-header vs absent-header distinction) + 1 BDD scenario in `github_connector.feature` ("Health check passes for a fine-grained PAT") with 1 new step definition. Updated product map (2 behaviours `[ ]`→`[x]`, Known Gap "Fine-grained PAT not supported" → RESOLVED, QA History). 226/226 github connector unit tests + github BDD scenarios pass (8 pre-existing connector-suite BDD failures unchanged), ruff check + format clean, mypy --strict clean. Status: partial (OAuth flow, per-operation scope verification, circuit breaker, pre-run ConnectorHub scope blocking remain).
 
 ### 2026-08-08 — improve-architecture: structured error hierarchy + failure-mode distinction RESOLVED
 
