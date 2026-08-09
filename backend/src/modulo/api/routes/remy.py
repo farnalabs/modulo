@@ -1015,17 +1015,9 @@ async def stream_chat(
             "org_id": str(principal.organisation_id),
             "session_id": session_id_str,
             "exclude_ui_tools": req.exclude_ui_tools,
+            "remy_only": req.exclude_ui_tools,
         },
     )
-    if req.exclude_ui_tools:
-        logger.info(
-            "remy.remy_only_stream_started",
-            extra={
-                "org_id": str(principal.organisation_id),
-                "session_id": session_id_str,
-                "exclude_ui_tools": True,
-            },
-        )
 
     async def event_generator() -> AsyncGenerator[str, None]:
         """SSE event generator — agentic loop with multi-turn LLM + UI commands."""

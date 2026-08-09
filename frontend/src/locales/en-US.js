@@ -2326,6 +2326,7 @@ export default {
         "skills_tab": "Skills",
         "sources_tab": "Sources",
         "sessions_tab": "Sessions",
+        "sub_tabs_label": "Views",
         "no_tabs_yet": "No conversations yet",
         "start_new": "Start a new conversation",
         "select_tab_or_new": "Select a tab above or start a new conversation",

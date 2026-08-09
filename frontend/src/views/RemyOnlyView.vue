@@ -54,39 +54,51 @@
 
     <template v-else>
       <div
+        role="tablist"
+        :aria-label="$t('components.remy.RemyOnlyView.sessions_tab')"
         class="flex items-center gap-1.5 overflow-x-auto border-b px-3 py-1.5"
         data-testid="remy-only-tab-bar"
       >
-        <button
+        <div
           v-for="tab in tabsStore.tabs"
           :key="tab.tabId"
-          class="remy-only-tab"
-          :class="{ active: tab.sessionId === store.activeSessionId }"
-          :data-testid="`remy-only-tab-${tab.tabId}`"
-          :aria-current="tab.sessionId === store.activeSessionId ? 'page' : undefined"
-          :title="sessionTitle(tab.sessionId)"
-          @click="selectTab(tab)"
+          role="presentation"
+          class="flex shrink-0 items-center gap-1"
         >
-          <span class="max-w-[180px] truncate">{{ sessionTitle(tab.sessionId) }}</span>
-          <span
-            v-if="tab.sessionId === store.activeSessionId && store.isStreaming"
-            class="remy-live-dot"
-            :title="$t('components.remy.RemyOnlyView.live')"
-            :aria-label="$t('components.remy.RemyOnlyView.live')"
-          />
-          <span
+          <button
+            :ref="(el) => setTabButtonRef(tab.tabId, el)"
+            class="remy-only-tab"
+            :class="{ active: tab.sessionId === store.activeSessionId }"
+            :data-testid="`remy-only-tab-${tab.tabId}`"
+            :id="`remy-only-tab-button-${tab.tabId}`"
+            role="tab"
+            :aria-selected="tab.sessionId === store.activeSessionId ? 'true' : 'false'"
+            aria-controls="remy-only-panel-chat"
+            :title="sessionTitle(tab.sessionId)"
+            @click="selectTab(tab)"
+            @keydown.left.prevent="onSessionTablistKeydown($event, tab)"
+            @keydown.right.prevent="onSessionTablistKeydown($event, tab)"
+            @keydown.home.prevent="onSessionTablistKeydown($event, tab)"
+            @keydown.end.prevent="onSessionTablistKeydown($event, tab)"
+          >
+            <span class="max-w-[180px] truncate">{{ sessionTitle(tab.sessionId) }}</span>
+            <span
+              v-if="tab.sessionId === store.activeSessionId && store.isStreaming"
+              class="remy-live-dot"
+              :title="$t('components.remy.RemyOnlyView.live')"
+              :aria-label="$t('components.remy.RemyOnlyView.live')"
+            />
+          </button>
+          <button
             class="remy-only-tab-close"
-            role="button"
-            tabindex="0"
+            :data-testid="`remy-only-tab-close-${tab.tabId}`"
             :aria-label="$t('components.remy.RemyOnlyView.close_tab')"
             :title="$t('components.remy.RemyOnlyView.close_tab')"
-            @click.stop="closeTab(tab)"
-            @keydown.enter.prevent="closeTab(tab)"
-            @keydown.space.prevent="closeTab(tab)"
+            @click="closeTab(tab)"
           >
             <X class="h-3 w-3" aria-hidden="true" />
-          </span>
-        </button>
+          </button>
+        </div>
         <button
           class="remy-only-new-tab"
           data-testid="remy-only-new-tab"
@@ -98,34 +110,30 @@
         </button>
       </div>
 
-      <div class="flex items-center gap-1 border-b px-3">
+      <div
+        role="tablist"
+        :aria-label="$t('components.remy.RemyOnlyView.sub_tabs_label')"
+        class="flex items-center gap-1 border-b px-3"
+        data-testid="remy-only-subtab-bar"
+      >
         <button
+          v-for="st in subTabs"
+          :key="st.key"
+          :ref="(el) => setSubTabButtonRef(st.key, el)"
           class="remy-only-subtab"
-          :class="{ active: subTab === 'chat' }"
-          @click="subTab = 'chat'"
+          :class="{ active: subTab === st.key }"
+          :data-testid="`remy-only-subtab-${st.key}`"
+          :id="`remy-only-subtab-${st.key}`"
+          role="tab"
+          :aria-selected="subTab === st.key ? 'true' : 'false'"
+          :aria-controls="`remy-only-panel-${st.key}`"
+          @click="subTab = st.key"
+          @keydown.left.prevent="onSubTablistKeydown($event, st.key)"
+          @keydown.right.prevent="onSubTablistKeydown($event, st.key)"
+          @keydown.home.prevent="onSubTablistKeydown($event, st.key)"
+          @keydown.end.prevent="onSubTablistKeydown($event, st.key)"
         >
-          {{ $t('components.remy.RemyOnlyView.chat_tab') }}
-        </button>
-        <button
-          class="remy-only-subtab"
-          :class="{ active: subTab === 'skills' }"
-          @click="subTab = 'skills'"
-        >
-          {{ $t('components.remy.RemyOnlyView.skills_tab') }}
-        </button>
-        <button
-          class="remy-only-subtab"
-          :class="{ active: subTab === 'sources' }"
-          @click="subTab = 'sources'"
-        >
-          {{ $t('components.remy.RemyOnlyView.sources_tab') }}
-        </button>
-        <button
-          class="remy-only-subtab"
-          :class="{ active: subTab === 'sessions' }"
-          @click="subTab = 'sessions'"
-        >
-          {{ $t('components.remy.RemyOnlyView.sessions_tab') }}
+          {{ $t(`components.remy.RemyOnlyView.${st.labelKey}`) }}
         </button>
       </div>
 
@@ -154,14 +162,40 @@
 
       <div v-else class="flex flex-1 overflow-hidden" data-testid="remy-only-chat">
         <div class="flex flex-1 flex-col overflow-hidden">
-          <RemyChat v-show="subTab === 'chat'" ref="chatRef" remyOnly class="flex-1" />
-          <div v-show="subTab === 'skills'" class="flex flex-1 overflow-hidden">
+          <div
+            v-show="subTab === 'chat'"
+            id="remy-only-panel-chat"
+            role="tabpanel"
+            :aria-labelledby="activeSessionTabId"
+            class="flex flex-1 flex-col overflow-hidden"
+          >
+            <RemyChat ref="chatRef" remyOnly class="flex-1" />
+          </div>
+          <div
+            v-show="subTab === 'skills'"
+            id="remy-only-panel-skills"
+            role="tabpanel"
+            aria-labelledby="remy-only-subtab-skills"
+            class="flex flex-1 overflow-hidden"
+          >
             <RemySkillManager />
           </div>
-          <div v-show="subTab === 'sources'" class="flex flex-1 overflow-hidden">
+          <div
+            v-show="subTab === 'sources'"
+            id="remy-only-panel-sources"
+            role="tabpanel"
+            aria-labelledby="remy-only-subtab-sources"
+            class="flex flex-1 overflow-hidden"
+          >
             <RemyContextSources />
           </div>
-          <div v-show="subTab === 'sessions'" class="flex flex-1 overflow-hidden">
+          <div
+            v-show="subTab === 'sessions'"
+            id="remy-only-panel-sessions"
+            role="tabpanel"
+            aria-labelledby="remy-only-subtab-sessions"
+            class="flex flex-1 overflow-hidden"
+          >
             <RemySessionDrawer @select-session="onSessionSelected" />
           </div>
         </div>
@@ -172,6 +206,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { ArrowLeft, Plus, X } from '@lucide/vue'
@@ -189,7 +224,90 @@ const store = useRemyStore()
 const tabsStore = useRemyTabsStore()
 const planStore = usePlanStore()
 const chatRef = ref<InstanceType<typeof RemyChat> | null>(null)
-const subTab = ref<'chat' | 'skills' | 'sources' | 'sessions'>('chat')
+
+type SubTabKey = 'chat' | 'skills' | 'sources' | 'sessions'
+const subTab = ref<SubTabKey>('chat')
+
+const subTabs = computed<{ key: SubTabKey; labelKey: string }[]>(() => [
+  { key: 'chat', labelKey: 'chat_tab' },
+  { key: 'skills', labelKey: 'skills_tab' },
+  { key: 'sources', labelKey: 'sources_tab' },
+  { key: 'sessions', labelKey: 'sessions_tab' },
+])
+
+const tabButtonRefs = ref<Record<string, HTMLButtonElement | null>>({})
+const subTabButtonRefs = ref<Record<SubTabKey, HTMLButtonElement | null>>({
+  chat: null,
+  skills: null,
+  sources: null,
+  sessions: null,
+})
+
+function setTabButtonRef(tabId: string, el: Element | ComponentPublicInstance | null) {
+  tabButtonRefs.value[tabId] = el as HTMLButtonElement | null
+}
+
+function setSubTabButtonRef(key: SubTabKey, el: Element | ComponentPublicInstance | null) {
+  subTabButtonRefs.value[key] = el as HTMLButtonElement | null
+}
+
+const activeSessionTabId = computed(() => {
+  const active = tabsStore.tabs.find(t => t.sessionId === store.activeSessionId)
+  return active ? `remy-only-tab-button-${active.tabId}` : 'remy-only-subtab-chat'
+})
+
+function onSessionTablistKeydown(event: KeyboardEvent, tab: RemyTab) {
+  const tabs = tabsStore.tabs
+  const index = tabs.findIndex(t => t.tabId === tab.tabId)
+  if (index === -1) return
+  let nextIndex = index
+  switch (event.key) {
+    case 'ArrowRight':
+      nextIndex = (index + 1) % tabs.length
+      break
+    case 'ArrowLeft':
+      nextIndex = (index - 1 + tabs.length) % tabs.length
+      break
+    case 'Home':
+      nextIndex = 0
+      break
+    case 'End':
+      nextIndex = tabs.length - 1
+      break
+    default:
+      return
+  }
+  event.preventDefault()
+  const target = tabs[nextIndex]
+  tabButtonRefs.value[target.tabId]?.focus()
+  selectTab(target)
+}
+
+function onSubTablistKeydown(event: KeyboardEvent, key: SubTabKey) {
+  const index = subTabs.value.findIndex(st => st.key === key)
+  if (index === -1) return
+  let nextIndex = index
+  switch (event.key) {
+    case 'ArrowRight':
+      nextIndex = (index + 1) % subTabs.value.length
+      break
+    case 'ArrowLeft':
+      nextIndex = (index - 1 + subTabs.value.length) % subTabs.value.length
+      break
+    case 'Home':
+      nextIndex = 0
+      break
+    case 'End':
+      nextIndex = subTabs.value.length - 1
+      break
+    default:
+      return
+  }
+  event.preventDefault()
+  const target = subTabs.value[nextIndex]
+  subTabButtonRefs.value[target.key]?.focus()
+  subTab.value = target.key
+}
 
 const remyUnavailable = computed(() => !planStore.devMode)
 
@@ -271,7 +389,7 @@ onMounted(async () => {
   background-color: hsla(var(--primary) / 0.08);
 }
 .remy-only-tab-close {
-  @apply flex items-center justify-center rounded p-0.5 transition-colors shrink-0;
+  @apply flex items-center justify-center rounded p-0.5 transition-colors shrink-0 cursor-pointer border-0 bg-transparent;
   color: hsl(var(--muted-foreground));
 }
 .remy-only-tab-close:hover {
