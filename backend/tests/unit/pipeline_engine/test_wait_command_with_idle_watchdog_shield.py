@@ -68,7 +68,7 @@ async def test_shield_survives_multiple_slice_timeouts():
         if ticks >= 3:
             handle.complete("command-result")
 
-    result = await _wait_command_with_idle_watchdog(
+    result, stall_reason = await _wait_command_with_idle_watchdog(
         handle,
         total_timeout=10.0,
         idle_timeout=5.0,
@@ -78,26 +78,31 @@ async def test_shield_survives_multiple_slice_timeouts():
     )
 
     assert result == "command-result"
+    assert stall_reason is None
     assert ticks >= 3
     assert handle.kill_called is False
 
 
-async def test_idle_stall_kills_and_raises_stalled():
+async def test_idle_stall_kills_and_returns_stall_reason():
     """A command that never completes and never produces activity is killed by
-    the idle watchdog and raises TimeoutError containing 'stalled'."""
+    the idle watchdog; the helper returns ``(None, stall_reason)`` so the
+    runner can surface a distinct stall error instead of a total-timeout
+    (FAR-98)."""
     handle = _IdleWatchdogHandle()
 
     stalled_at = time.monotonic()
 
-    with pytest.raises(TimeoutError, match="stalled"):
-        await _wait_command_with_idle_watchdog(
-            handle,
-            total_timeout=10.0,
-            idle_timeout=0.2,
-            last_activity=lambda: stalled_at,
-            tick_interval=0.05,
-        )
+    result, stall_reason = await _wait_command_with_idle_watchdog(
+        handle,
+        total_timeout=10.0,
+        idle_timeout=0.2,
+        last_activity=lambda: stalled_at,
+        tick_interval=0.05,
+    )
 
+    assert result is None
+    assert stall_reason is not None
+    assert "no output" in stall_reason
     assert handle.kill_called is True
 
 
