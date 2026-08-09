@@ -1085,7 +1085,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Deliberately a plain asyncio task in the WEB process — NOT an SAQ cron —
     # so a total worker outage (both worker machines stopped, 2026-08-08/09)
     # still alerts a human while the web/app process stays up.
-    watchdog_task: asyncio.Task | None = None
+    watchdog_task: asyncio.Task[None] | None = None
     if settings.watchdog_enabled and settings.redis_url:
         from modulo.core.watchdog.worker_liveness import run_worker_liveness_watchdog
 
