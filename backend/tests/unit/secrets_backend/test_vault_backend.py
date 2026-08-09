@@ -291,10 +291,47 @@ class TestVaultSecretsBackend:
         with pytest.raises(ValueError, match="VAULT_ADDR is not set"):
             VaultSecretsBackend()
 
-    async def test_secret_path_normalizes_trailing_slash(self, mock_hvac: MagicMock) -> None:
+    def test_secret_path_normalizes_trailing_slash(self, mock_hvac: MagicMock) -> None:
         backend = _make_backend()
         backend._path_prefix = "modulo/secrets/"
         assert backend._secret_path("my-key") == "modulo/secrets/my-key"
+
+    async def test_custom_mount_point_and_path_prefix_from_env(self, monkeypatch, mock_hvac: MagicMock) -> None:
+        """VAULT_MOUNT_POINT / VAULT_PATH_PREFIX env vars drive every call.
+
+        Also verifies the constructor trims whitespace and the path prefix
+        normalizes a trailing slash.
+        """
+        monkeypatch.setenv("VAULT_MOUNT_POINT", "  custom-mount  ")
+        monkeypatch.setenv("VAULT_PATH_PREFIX", "custom/prefix/")
+        backend = _make_backend()
+        backend._client.secrets.kv.v2.read_secret_version.return_value = {
+            "data": {"data": {"value": "my-value"}},
+        }
+
+        value = await backend.get_secret("my-key")
+
+        assert value == "my-value"
+        backend._client.secrets.kv.v2.read_secret_version.assert_called_once_with(
+            path="custom/prefix/my-key",
+            mount_point="custom-mount",
+        )
+
+        await backend.set_secret("my-key", "my-value")
+        backend._client.secrets.kv.v2.create_or_update_secret.assert_called_once_with(
+            path="custom/prefix/my-key",
+            secret={"value": "my-value"},
+            mount_point="custom-mount",
+        )
+
+    async def test_delete_secret_forbidden_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
+        """A permission-denied delete is a real failure, not a no-op like InvalidPath."""
+        backend = _make_backend()
+        delete_fn = backend._client.secrets.kv.v2.delete_metadata_and_all_versions
+        delete_fn.side_effect = mock_hvac.exceptions.Forbidden()
+
+        with pytest.raises(RuntimeError, match="unexpected error deleting secret"):
+            await backend.delete_secret("my-key")
 
     async def test_ensure_client_auth_failure_raises_runtime_error(self, mock_hvac: MagicMock) -> None:
         backend = VaultSecretsBackend()
