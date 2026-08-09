@@ -155,7 +155,7 @@
         </div>
       </div>
 
-      <div v-if="uiDrivingEnabled && store.pendingPermission" class="remy-permission-card">
+      <div v-if="!remyOnly && uiDrivingEnabled && store.pendingPermission" class="remy-permission-card">
         <div class="remy-permission-header">
           <ShieldAlertIcon class="h-4 w-4" />
           <span>{{ $t('components.remy.RemyChat.permission_request') }}</span>
@@ -196,7 +196,7 @@
         </div>
       </div>
 
-      <div v-if="uiDrivingEnabled && store.isExecutingUi" class="remy-executing-indicator">
+      <div v-if="!remyOnly && uiDrivingEnabled && store.isExecutingUi" class="remy-executing-indicator">
         <LoaderIcon class="h-3 w-3 animate-spin" />
         <span>{{ store.isPaused ? 'Remy is paused. Resume or stop?' : 'Remy is performing actions in the browser...' }}</span>
         <div class="flex gap-2">
@@ -297,7 +297,8 @@ import type { ToolResult } from "@/types/remy";
 
 const store = useRemyStore();
 const planStore = usePlanStore();
-const { connectStream } = useRemyStream();
+const props = defineProps<{ remyOnly?: boolean }>();
+const { connectStream, disconnectStream } = useRemyStream();
 const scrollRef = ref<HTMLDivElement | null>(null);
 const inputText = ref("");
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
@@ -447,6 +448,9 @@ async function deleteCurrentSession() {
   showDeleteConfirm.value = false
   const id = store.activeSessionId
   await store.deleteSession(id)
+  // remy-only mode: never auto-create a new session when none remain — the
+  // tabs store reconciles the empty state.
+  if (props.remyOnly) return
   const sessions = store.sortedSessions
   if (sessions.length > 0) {
     await store.loadSession(sessions[0].id)
@@ -527,6 +531,8 @@ onUnmounted(() => {
   stopNogoCountdown()
 })
 
+defineExpose({ disconnect: disconnectStream })
+
 const userEmail = computed(() => {
   const token = getAccessToken();
   if (!token) return "";
@@ -596,7 +602,7 @@ async function handleSend() {
   await store.sendMessage(text);
   if (store.activeSessionId) {
     try {
-      connectStream(store.activeSessionId);
+      connectStream(store.activeSessionId, { excludeUiTools: !!props.remyOnly });
     } catch (e) {
       console.error("Failed to start Remy stream:", e);
     }

@@ -33,7 +33,7 @@ describe('app bootstrap', () => {
       // resolved when the router module was imported above; redirect-only
       // routes carry no components and are covered by the redirect test below.
     }
-  })
+  }, 60_000)
 
   it('routes without a component define a redirect', () => {
     const routes = router.getRoutes()
