@@ -146,8 +146,10 @@ class TestValidateCurrentAuth:
             client_id="cid1",
         )
         mock_check_family.return_value = True
+        mock_sess = AsyncMock()
+        mock_sess.execute.return_value = MagicMock()
         mock_cm = AsyncMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_sess)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session.return_value = mock_cm
 
@@ -538,8 +540,10 @@ class TestMcpAuthMiddlewareContext:
         """Verify the middleware flow sets _ctx_auth_token and _ctx_auth_type."""
         mock_validate_api_key.return_value = MagicMock(role="operator", id=uuid.uuid4())
         mock_resolve_role.return_value = "operator"
+        mock_auth_sess = AsyncMock()
+        mock_auth_sess.execute.return_value = MagicMock()
         mock_cm = AsyncMock()
-        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_auth_sess)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_session.return_value = mock_cm
         mock_result = MagicMock()

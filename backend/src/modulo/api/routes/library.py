@@ -661,7 +661,7 @@ async def copy_to_adapt_endpoint(
 @router.post("/export/{pipeline_id}")
 async def export_pipeline_endpoint(
     pipeline_id: uuid.UUID,
-    format: str = Query("v1", regex="^(v1|v2)$"),
+    format: str = Query("v1", pattern="^(v1|v2)$"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("library.manage"),
 ) -> Response:
