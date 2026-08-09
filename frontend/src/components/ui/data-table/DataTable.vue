@@ -19,9 +19,11 @@ const props = withDefaults(defineProps<{
   rows: DataTableRow[]
   loading?: boolean
   loadingRows?: number
+  rowClickable?: boolean
 }>(), {
   loading: false,
   loadingRows: 5,
+  rowClickable: true,
 })
 
 const emit = defineEmits<{
@@ -68,6 +70,18 @@ const sortedRows = computed(() => {
     return aStr.localeCompare(bStr) * dir
   })
 })
+
+function onRowClick(row: DataTableRow) {
+  if (props.rowClickable) emit('row-click', row)
+}
+
+function onRowKeydown(event: KeyboardEvent, row: DataTableRow) {
+  if (!props.rowClickable) return
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    emit('row-click', row)
+  }
+}
 </script>
 
 <template>
@@ -110,12 +124,12 @@ const sortedRows = computed(() => {
         <tr
           v-for="(row, index) in sortedRows"
           :key="index"
-          class="transition-colors hover:bg-muted/30 cursor-pointer"
-          role="button"
-          tabindex="0"
-          @click="emit('row-click', row)"
-          @keydown.enter="emit('row-click', row)"
-          @keydown.space.prevent="emit('row-click', row)"
+          class="transition-colors hover:bg-muted/30"
+          :class="props.rowClickable && 'cursor-pointer'"
+          :role="props.rowClickable ? 'button' : undefined"
+          :tabindex="props.rowClickable ? 0 : undefined"
+          @click="onRowClick(row)"
+          @keydown="onRowKeydown($event, row)"
         >
           <td
             v-for="col in columns"

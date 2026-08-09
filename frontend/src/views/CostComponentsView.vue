@@ -44,6 +44,7 @@
                 { key: 'actions', label: '' },
               ]"
               :rows="tableRows"
+              :row-clickable="false"
             >
               <template #cell-display_name="{ row }">
                 <div class="flex items-center gap-2">
