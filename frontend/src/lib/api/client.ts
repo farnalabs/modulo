@@ -17,6 +17,25 @@ export {
   getAuthHeaders,
 } from './auth'
 
+// Decides the app's initial auth state at startup (used by App.vue). An
+// existing stored token means the user is already authenticated; auto-login
+// only runs when no session exists yet. Auto-login config is deliberately not
+// consulted here so a configured auto-login can never force a false-negative
+// start for a user who already has a valid token.
+export function getInitialAuthState(hasToken: boolean): boolean {
+  return hasToken
+}
+
+// Decides whether the auto-login flow must re-run after an auth-state change
+// (used by App.vue). Recovery only triggers on the authenticated→cleared
+// transition — an expired stored token whose refresh failed — and only when
+// auto-login is configured. A fresh unauthenticated start (first mount) or a
+// successful re-authentication must never re-run it, otherwise the login
+// endpoint would be hammered in a loop.
+export function shouldReRunAutoLogin(wasAuthenticated: boolean, hasToken: boolean, hasAutoLogin: boolean): boolean {
+  return wasAuthenticated && !hasToken && hasAutoLogin
+}
+
 export const api = createClient<paths>({
   baseUrl: '',
   headers: getAuthHeaders(),
