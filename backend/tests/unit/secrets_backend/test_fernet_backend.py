@@ -1,7 +1,6 @@
 """Unit tests for FernetSecretsBackend."""
 
 import asyncio
-import binascii
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -163,13 +162,13 @@ class TestSetSecret:
         with pytest.raises(ValueError, match="non-empty"):
             await backend.set_secret("", _SECRET_VALUE)
 
-    async def test_invalid_fernet_key_at_construction_raises(self):
-        with pytest.raises((ValueError, binascii.Error)):
+    def test_invalid_fernet_key_at_construction_raises(self) -> None:
+        with pytest.raises(ValueError, match="base64-encoded"):
             FernetSecretsBackend(fernet_key="not-a-valid-base64-key")
 
-    async def test_invalid_old_key_at_construction_raises(self):
+    def test_invalid_old_key_at_construction_raises(self) -> None:
         """An invalid rotation key must fail fast at construction, like the primary key."""
-        with pytest.raises((ValueError, binascii.Error)):
+        with pytest.raises(ValueError, match="base64-encoded"):
             FernetSecretsBackend(fernet_key=_KEY, old_key="not-a-valid-base64-key")
 
     async def test_no_rls_context_raises(self):

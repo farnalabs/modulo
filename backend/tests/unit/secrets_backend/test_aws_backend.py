@@ -251,6 +251,15 @@ class TestEnsureClient:
 
         mock_boto3.Session.assert_called_once_with(region_name="us-east-1")
 
+    async def test_partial_static_credentials_are_omitted(self, monkeypatch, mock_boto3):
+        """Only one of access key / secret key set -> neither is passed to the session."""
+        monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+        backend = AWSSecretsManagerBackend()
+
+        await backend._ensure_client()
+
+        mock_boto3.Session.assert_called_once_with(region_name="us-east-1")
+
     async def test_caches_client_across_calls(self, mock_boto3):
         backend = AWSSecretsManagerBackend()
 
@@ -317,6 +326,14 @@ class TestErrorPaths:
     async def test_delete_secret_unexpected_error_wraps_as_runtime_error(self, mock_boto3):
         backend = _make_backend()
         backend._client.delete_secret.side_effect = ConnectionError("connection refused")
+
+        with pytest.raises(RuntimeError, match="unexpected error deleting secret"):
+            await backend.delete_secret("my-key")
+
+    async def test_delete_secret_access_denied_wraps_as_runtime_error(self, mock_boto3):
+        """A permission-denied delete is a real failure, not a no-op like ResourceNotFound."""
+        backend = _make_backend()
+        backend._client.delete_secret.side_effect = backend._client.exceptions.AccessDeniedException()
 
         with pytest.raises(RuntimeError, match="unexpected error deleting secret"):
             await backend.delete_secret("my-key")
