@@ -50,6 +50,7 @@ __all__ = [
     "EVENT_HITL_AWAITING",
     "EVENT_HITL_OVERDUE",
     "EVENT_RUN_FAILED",
+    "EVENT_RUN_STALLED",
     "EVENT_SYSTEM_ANNOUNCEMENT",
     "MAX_ATTEMPTS",
     "MAX_DEAD_LETTERS",
@@ -94,6 +95,7 @@ RETRY_DELAYS = [1.0, 5.0, 30.0]
 # Event type constants — single source of truth
 EVENT_HITL_AWAITING = "hitl_awaiting"
 EVENT_RUN_FAILED = "run_failed"
+EVENT_RUN_STALLED = "run_stalled"
 EVENT_BUDGET_EXCEEDED = "budget_exceeded"
 EVENT_CIRCUIT_BREAKER_TRIPPED = "circuit_breaker_tripped"
 EVENT_CLAIM_EXPIRED = "claim_expired"

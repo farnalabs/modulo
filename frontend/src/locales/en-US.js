@@ -1056,6 +1056,7 @@ export default {
       "live_output": "Live Output",
       "agent_stdout": "Agent Stdout",
       "agent_stderr": "Agent Stderr",
+      "agent_stalled": "Agent stalled: {reason}",
       "no_agent_logs": "No agent logs for this node.",
       "runs": "Runs",
       "gate_label": "Gate:",

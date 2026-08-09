@@ -3,6 +3,7 @@
 Event categories and their notification config:
   - hitl_awaiting     → level: info,   scope: org,   category: "hitl.awaiting"
   - run_failed        → level: error,  scope: org,   category: "run.failed"
+  - run_stalled       → level: warning, scope: org,   category: "run.stalled"
   - budget_exceeded   → level: warning, scope: org,   category: "run.budget_exceeded"
   - claim_expired     → level: info,   scope: org,   category: "hitl.claim_expired"
   - hitl_overdue      → level: warning, scope: admin
@@ -30,6 +31,7 @@ from modulo.core.notifier import (
     EVENT_HITL_AWAITING,
     EVENT_HITL_OVERDUE,
     EVENT_RUN_FAILED,
+    EVENT_RUN_STALLED,
     EVENT_SYSTEM_ANNOUNCEMENT,
 )
 from modulo.db.crud.notifications import create_notification
@@ -59,6 +61,14 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
         "dismiss_strategy": "any_scope",
         "dismissible_at_scope": True,
         "ttl_hours": 168,
+    },
+    EVENT_RUN_STALLED: {
+        "level": "warning",
+        "scope": "org",
+        "category": "run.stalled",
+        "dismiss_strategy": "any_scope",
+        "dismissible_at_scope": True,
+        "ttl_hours": 72,
     },
     EVENT_BUDGET_EXCEEDED: {
         "level": "warning",
@@ -137,6 +147,7 @@ _EVENT_CONFIG: dict[str, dict[str, Any]] = {
 _TITLE_TEMPLATES: dict[str, str] = {
     EVENT_HITL_AWAITING: "HITL review needed — {pipeline_name}",
     EVENT_RUN_FAILED: "Run failed — {pipeline_name}",
+    EVENT_RUN_STALLED: "Run stalled — {pipeline_name}",
     EVENT_BUDGET_EXCEEDED: "Budget exceeded — {pipeline_name}",
     EVENT_CLAIM_EXPIRED: "HITL claim expired — {pipeline_name}",
     EVENT_HITL_OVERDUE: "HITL overdue — {pipeline_name}",
@@ -151,6 +162,9 @@ _TITLE_TEMPLATES: dict[str, str] = {
 _BODY_TEMPLATES: dict[str, str] = {
     EVENT_HITL_AWAITING: 'Pipeline "{pipeline_name}" is waiting for human review.',
     EVENT_RUN_FAILED: 'Run for "{pipeline_name}" failed with error: {error_code}.',
+    EVENT_RUN_STALLED: (
+        'Run for "{pipeline_name}" stalled — the agent produced no output for the configured stall timeout.'
+    ),
     EVENT_BUDGET_EXCEEDED: 'Run for "{pipeline_name}" exceeded its token budget.',
     EVENT_CLAIM_EXPIRED: 'A HITL claim on "{pipeline_name}" has expired.',
     EVENT_HITL_OVERDUE: 'Pipeline "{pipeline_name}" has been awaiting human review for {minutes_overdue} minutes.',
@@ -165,6 +179,7 @@ _BODY_TEMPLATES: dict[str, str] = {
 _ACTION_URL_TEMPLATES: dict[str, str | None] = {
     EVENT_HITL_AWAITING: "/runs/{run_id}",
     EVENT_RUN_FAILED: "/runs/{run_id}",
+    EVENT_RUN_STALLED: "/runs/{run_id}",
     EVENT_BUDGET_EXCEEDED: "/runs/{run_id}",
     EVENT_CLAIM_EXPIRED: "/runs/{run_id}",
     EVENT_HITL_OVERDUE: "/runs/{run_id}",

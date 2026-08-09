@@ -232,6 +232,42 @@ def test_sandbox_string_timeout_in_range_is_valid():
     assert "SANDBOX_TIMEOUT_INVALID" not in _codes(result)
 
 
+def test_sandbox_float_stall_timeout_is_valid():
+    """A fractional stall_timeout_seconds (e.g. 2.5) validates as a positive
+    number — it must NOT be truncated by int() (FAR-98 type consistency)."""
+    graph = {"nodes": [_sandbox_node(stall_timeout_seconds=2.5)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_STALL_TIMEOUT_INVALID" not in _codes(result)
+    assert "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT" not in _codes(result)
+    assert result.is_valid
+
+
+def test_sandbox_float_stall_timeout_exceeding_timeout_warns():
+    """A float stall timeout larger than timeout_seconds still trips the bound check."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds=600, stall_timeout_seconds=600.5)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT" in _codes(result)
+
+
+def test_sandbox_non_positive_stall_timeout_warns():
+    """Zero / negative stall_timeout_seconds is not a positive number."""
+    for bad in (0, -5):
+        graph = {"nodes": [_sandbox_node(stall_timeout_seconds=bad)], "edges": []}
+        result = ValidationResult()
+        GraphValidator._check_sandbox_agent_config(graph, result)
+        assert "SANDBOX_STALL_TIMEOUT_INVALID" in _codes(result)
+
+
+def test_sandbox_non_numeric_stall_timeout_warns():
+    """A non-numeric stall_timeout_seconds is flagged as invalid."""
+    graph = {"nodes": [_sandbox_node(stall_timeout_seconds="abc")], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    assert "SANDBOX_STALL_TIMEOUT_INVALID" in _codes(result)
+
+
 def test_sandbox_non_dict_context_files_is_valid():
     """context_files that is not a dict (e.g. a list) is skipped safely."""
     graph = {"nodes": [_sandbox_node(context_files=[])], "edges": []}

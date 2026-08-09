@@ -437,11 +437,18 @@ jobs:
 
   notify-pr-review:
     name: Trigger PR Reviewer
-    if: github.event_name == 'pull_request' && success()
+    # Mirror the notify-pr-failure pattern above: a job-level `success()`
+    # surfaces this check as "skipped" in the check-runs API whenever any
+    # needed job fails or is cancelled (e.g. a runner outage), and the PR
+    # Reviewer flags that as a non-green signal. The check itself always
+    # reports success on pull_request events; the "only dispatch when all
+    # needed checks are green" logic lives on the webhook step below.
+    if: github.event_name == 'pull_request' && always()
     needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Send webhook to Modulo PR Review Agent
+        if: success()
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}

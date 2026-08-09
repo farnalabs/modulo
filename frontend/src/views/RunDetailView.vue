@@ -208,6 +208,14 @@
               <td class="py-3 pr-4 font-medium">{{ node.name }}</td>
               <td class="py-3 pr-4">
                 <span :class="[nodeStatusBadgeClass(node), 'capitalize']">{{ node.status }}</span>
+                <span
+                  v-if="node.stallReason"
+                  data-testid="run-detail-node-stalled"
+                  class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                  :title="node.stallReason"
+                >
+                  {{ $t('views.RunDetailView.agent_stalled', { reason: node.stallReason }) }}
+                </span>
               </td>
               <td class="py-3 pr-4 tabular-nums text-muted-foreground">{{ node.duration }}</td>
               <td class="py-3 pr-4 tabular-nums">{{ node.inputTokens ?? '—' }}</td>
@@ -517,6 +525,7 @@ interface NodeEntry {
   traceId: string | null
   io: { input: unknown; output: unknown } | null
   hasLogs: boolean
+  stallReason: string | null
 }
 
 interface WorkspaceLeaseInfo {
@@ -1014,6 +1023,9 @@ const nodeEntries = computed<NodeEntry[]>(() => {
     const nodeOutput = outputs[name] as Record<string, unknown> | undefined
     const outputValue = (nodeOutput?.output as Record<string, unknown>) ?? {}
     const hasLogs = !!(outputValue.agent_stdout || outputValue.agent_stderr)
+    const stallReason = typeof outputValue.stall_reason === 'string' && outputValue.stall_reason.length > 0
+      ? outputValue.stall_reason
+      : null
 
     return {
       name,
@@ -1030,6 +1042,7 @@ const nodeEntries = computed<NodeEntry[]>(() => {
           }
         : null,
       hasLogs,
+      stallReason,
     }
   })
 })
