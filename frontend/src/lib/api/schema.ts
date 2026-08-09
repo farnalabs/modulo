@@ -12737,8 +12737,9 @@ export interface components {
             /**
              * Exclude Ui Tools
              * @description Exclude the UI-driving tool family (remy-only mode — no browser automation).
+             * @default false
              */
-            exclude_ui_tools?: boolean;
+            exclude_ui_tools: boolean;
         };
         /** TargetInjection */
         TargetInjection: {
