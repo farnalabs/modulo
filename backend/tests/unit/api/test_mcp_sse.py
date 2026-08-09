@@ -333,10 +333,10 @@ class TestHandlerPerEventAuth:
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.db.crud.run.get_child_runs_cost")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
     async def test_resource_run_includes_cost_rollup(
         self,
-        mock_get_child_runs_cost: AsyncMock,
+        mock_get_child_run_rollup: AsyncMock,
         mock_get_run: AsyncMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -354,7 +354,7 @@ class TestHandlerPerEventAuth:
         run.created_at = MagicMock()
         run.created_at.isoformat.return_value = "2026-06-20T14:30:00+00:00"
         mock_get_run.return_value = run
-        mock_get_child_runs_cost.return_value = {run_id: Decimal("0.125000")}
+        mock_get_child_run_rollup.return_value = {run_id: (Decimal("0.125000"), 2)}
 
         mock_sess = AsyncMock()
         mock_cm = AsyncMock()
@@ -366,17 +366,18 @@ class TestHandlerPerEventAuth:
 
         assert "Total cost: $0.075000" in result
         assert "Child runs cost: $0.125000" in result
+        assert "Child runs count: 2" in result
         assert "Aggregate cost: $0.200000" in result
-        mock_get_child_runs_cost.assert_awaited_once()
+        mock_get_child_run_rollup.assert_awaited_once()
         mock_get_run.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.api.mcp_server.get_run")
-    @patch("modulo.db.crud.run.get_child_runs_cost")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
     async def test_resource_run_no_children_shows_zero_rollup(
         self,
-        mock_get_child_runs_cost: AsyncMock,
+        mock_get_child_run_rollup: AsyncMock,
         mock_get_run: AsyncMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -394,7 +395,7 @@ class TestHandlerPerEventAuth:
         run.created_at = MagicMock()
         run.created_at.isoformat.return_value = "2026-06-20T14:30:00+00:00"
         mock_get_run.return_value = run
-        mock_get_child_runs_cost.return_value = {}
+        mock_get_child_run_rollup.return_value = {}
 
         mock_sess = AsyncMock()
         mock_cm = AsyncMock()
@@ -405,9 +406,10 @@ class TestHandlerPerEventAuth:
         result = await resource_run(run_id=str(run_id))
 
         assert "Child runs cost: $0.000000" in result
+        assert "Child runs count: 0" in result
         assert "Aggregate cost: $0.000000" in result
         assert "Total cost:" not in result
-        mock_get_child_runs_cost.assert_awaited_once()
+        mock_get_child_run_rollup.assert_awaited_once()
         mock_get_run.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
