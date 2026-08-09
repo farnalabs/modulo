@@ -32,9 +32,14 @@ test.describe('Sidebar Navigation', () => {
     await page.goto('/')
 
     const sidebar = page.locator('nav[aria-label="Main navigation"]').first()
+    await expect(sidebar).toBeVisible()
+
+    // Sidebar groups/links render only after the plan/tier fetch resolves —
+    // wait for a group header so the counts below are not taken pre-render.
+    const groupHeaders = sidebar.locator('button.sidebar-group-header')
+    await expect(groupHeaders.first()).toBeVisible()
 
     // Expand every collapsed group so all links are visible before asserting
-    const groupHeaders = sidebar.locator('button.sidebar-group-header')
     const headerCount = await groupHeaders.count()
     for (let i = 0; i < headerCount; i++) {
       const header = groupHeaders.nth(i)
