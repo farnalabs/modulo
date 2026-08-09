@@ -167,7 +167,7 @@ class TestSetMonitorConfig:
         session = _make_mock_session()
         payload = {
             "backends": ["datadog_rum"],
-            "datadog_rum": {"client_token": "tok"},
+            "datadog_rum": {"clientToken": "tok"},
             "sentry": None,
             "grafana_faro": None,
         }
@@ -188,7 +188,94 @@ class TestSetMonitorConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["backends"] == ["datadog_rum"]
-        assert body["datadog_rum"] == {"client_token": "tok"}
+        assert body["datadog_rum"] == {"clientToken": "tok"}
+
+    @pytest.mark.anyio
+    async def test_sentry_enabled_without_dsn_rejected_422(self):
+        session = _make_mock_session()
+        async with _make_client(session, _admin_principal()) as client:
+            resp = await client.put(
+                "/api/v1/admin/monitor-config",
+                json={"backends": ["sentry"], "sentry": {}},
+            )
+        assert resp.status_code == 422
+        assert "dsn" in str(resp.json()["detail"])
+
+    @pytest.mark.anyio
+    async def test_sentry_enabled_with_null_config_rejected_422(self):
+        session = _make_mock_session()
+        async with _make_client(session, _admin_principal()) as client:
+            resp = await client.put(
+                "/api/v1/admin/monitor-config",
+                json={"backends": ["sentry"], "sentry": None},
+            )
+        assert resp.status_code == 422
+
+    @pytest.mark.anyio
+    async def test_datadog_enabled_without_client_token_rejected_422(self):
+        session = _make_mock_session()
+        async with _make_client(session, _admin_principal()) as client:
+            resp = await client.put(
+                "/api/v1/admin/monitor-config",
+                json={"backends": ["datadog_rum"], "datadog_rum": {"site": "datadoghq.com"}},
+            )
+        assert resp.status_code == 422
+        assert "clientToken" in str(resp.json()["detail"])
+
+    @pytest.mark.anyio
+    async def test_grafana_enabled_without_url_rejected_422(self):
+        session = _make_mock_session()
+        async with _make_client(session, _admin_principal()) as client:
+            resp = await client.put(
+                "/api/v1/admin/monitor-config",
+                json={"backends": ["grafana_faro"], "grafana_faro": {"apiKey": "k"}},
+            )
+        assert resp.status_code == 422
+        assert "url" in str(resp.json()["detail"])
+
+    @pytest.mark.anyio
+    async def test_sentry_enabled_with_dsn_accepted(self):
+        session = _make_mock_session()
+        payload = {
+            "backends": ["sentry", "builtin"],
+            "sentry": {"dsn": "https://key@sentry.io/1"},
+        }
+
+        async def fake_set_config(session, key, value, updated_by=None):
+            return _make_entry(value)
+
+        with patch(
+            "modulo.api.routes.admin_monitor_config.set_config",
+            new_callable=AsyncMock,
+            side_effect=fake_set_config,
+        ):
+            async with _make_client(session, _admin_principal()) as client:
+                resp = await client.put(
+                    "/api/v1/admin/monitor-config",
+                    json=payload,
+                )
+        assert resp.status_code == 200
+        assert resp.json()["backends"] == ["sentry", "builtin"]
+
+    @pytest.mark.anyio
+    async def test_builtin_only_config_still_accepted(self):
+        session = _make_mock_session()
+
+        async def fake_set_config(session, key, value, updated_by=None):
+            return _make_entry(value)
+
+        with patch(
+            "modulo.api.routes.admin_monitor_config.set_config",
+            new_callable=AsyncMock,
+            side_effect=fake_set_config,
+        ):
+            async with _make_client(session, _admin_principal()) as client:
+                resp = await client.put(
+                    "/api/v1/admin/monitor-config",
+                    json={"backends": ["builtin"]},
+                )
+        assert resp.status_code == 200
+        assert resp.json()["backends"] == ["builtin"]
 
     @pytest.mark.anyio
     async def test_unknown_backend_rejected_422(self):

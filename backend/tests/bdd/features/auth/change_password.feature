@@ -30,3 +30,8 @@ Feature: Password Change
     Given I am authenticated in org "acme"
     When I change my password from "correct-horse-battery" to "new-strong-password-42"
     Then all token families for my user are blacklisted
+
+  Scenario: Password change is recorded in the audit trail
+    Given I am authenticated in org "acme"
+    When I change my password from "correct-horse-battery" to "new-strong-password-42"
+    Then the password change is recorded in the audit trail
