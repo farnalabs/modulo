@@ -5,7 +5,8 @@ langgraph wraps the node body's ``asyncio.CancelledError`` into
 ``langgraph.errors.NodeCancelledError``. The executor must NOT terminal-fail
 such runs: it resets the run to ``pending``, releases the E2B idempotency
 fence (so the successor claim can re-dispatch), and re-raises so the SAQ job
-retries — bounded by ``SAQ_RUN_RETRIES`` / the run's claim count.
+retries — bounded by ``SAQ_RUN_RETRIES`` / the run's node-attempt count (NOT
+the claim count, which capacity-deferred / non-executing claims inflate).
 
 Mock/fake based — no Postgres required (mirrors test_executor.py).
 """
@@ -36,6 +37,7 @@ def _make_run(
     snapshot_id: uuid.UUID | None = None,
     status: str = "pending",
     claim_count: int = 0,
+    node_attempt_count: int = 0,
     claim_token: str | None = None,
 ) -> MagicMock:
     run = MagicMock()
@@ -45,6 +47,7 @@ def _make_run(
     run.langgraph_thread_id = str(uuid.uuid4())
     run.status = status
     run.claim_count = claim_count
+    run.node_attempt_count = node_attempt_count
     run.claim_token = claim_token
     return run
 
@@ -154,8 +157,9 @@ async def _bypass_capacity(mock_self, **kwargs):
 async def test_execute_resets_to_pending_and_reraises_node_cancellation():
     """A transient node cancellation under the retry cap resets the run to
     pending, releases the E2B fence with the run's claim token, and re-raises
-    so the SAQ job retries — it must NOT terminal-fail via finalize_cost."""
-    run = _make_run(claim_count=1, claim_token="tok-claim-abc")
+    so the SAQ job retries — it must NOT terminal-fail via finalize_cost.
+    claim_count (10) exceeds the budget — only node_attempt_count gates."""
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
@@ -197,7 +201,7 @@ async def test_execute_resets_to_pending_and_reraises_node_cancellation():
 async def test_execute_skips_fence_when_e2b_idempotency_disabled():
     """When the E2B idempotency knob is off the retry path still resets to
     pending and re-raises, but the fence release is skipped."""
-    run = _make_run(claim_count=1, claim_token="tok-claim-abc")
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
     session = _make_session(snapshot)
     factory = _make_session_factory(session)
@@ -228,14 +232,16 @@ async def test_execute_skips_fence_when_e2b_idempotency_disabled():
 
 
 async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted():
-    """Once the claim count reaches the SAQ retry cap the run terminal-fails
-    with error_code 'node_cancelled' (NOT the raw langgraph class name) and is
-    NOT reset to pending."""
-    run = _make_run(claim_count=5, claim_token="tok-claim-abc")
+    """Once the node-attempt count reaches the SAQ retry cap the run
+    terminal-fails with error_code 'node_cancelled' (NOT the raw langgraph
+    class name), publishes a run_failed broker event for WS subscribers, and
+    is NOT reset to pending."""
+    run = _make_run(claim_count=20, node_attempt_count=5, claim_token="tok-claim-abc")
     final_run = _make_run(
         run_id=run.id,
         status="failed",
-        claim_count=5,
+        claim_count=20,
+        node_attempt_count=5,
         claim_token="tok-claim-abc",
     )
     snapshot = _make_snapshot()
@@ -243,6 +249,7 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
+    broker = registry.get_or_create.return_value
     settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
 
     with (
@@ -269,19 +276,68 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     assert call.kwargs.get("error_code") == "node_cancelled"
     assert call.kwargs["is_terminal"] is True
     assert call.kwargs["error_detail"].startswith("Sandbox node cancelled (transient) after retries exhausted")
+    # Retry exhaustion publishes a live run_failed broker event for WS
+    # subscribers — consistent with every other terminal-failure path.
+    publish_call = broker.publish.call_args
+    assert publish_call is not None
+    assert publish_call.args[0] == "run_failed"
+    payload = publish_call.args[1]
+    assert payload["error"] == "node_cancelled"
+    assert payload["detail"].startswith("Sandbox node cancelled (transient) after retries exhausted")
     # No reset, no fence release once retries are exhausted.
     mock_update.assert_not_awaited()
     mock_release.assert_not_awaited()
 
 
+async def test_execute_retry_budget_ignores_non_executing_claims():
+    """Capacity-deferred / non-executing claims do NOT consume the retry
+    budget. Here claim_count (5) is AT the old saq_run_retries=5 cap — a pure
+    claim-count gate would terminal-fail — but only ONE real node-execution
+    attempt happened (node_attempt_count=1), so the executor must still reset
+    to pending and re-raise for the SAQ retry."""
+    run = _make_run(claim_count=5, node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+        patch("modulo.core.pipeline_execution.e2b_idempotency_enabled", return_value=True),
+        patch("modulo.core.pipeline_execution.e2b_dispatch_release_fenced", new=AsyncMock()) as mock_release,
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(NodeCancelledError):
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    # Retried, not terminal-failed: reset to pending, no finalize, no run_failed.
+    assert mock_update.await_args.args[2] == "pending"
+    mock_finalize.assert_not_awaited()
+    broker.publish.assert_not_called()
+    mock_release.assert_awaited_once_with(str(run.id), "tok-claim-abc")
+
+
 async def test_execute_non_cancellation_exception_still_terminal_fails():
     """Regression guard: a NON-cancellation exception keeps the existing
     behaviour — terminal failure with error_code = exception type name."""
-    run = _make_run(claim_count=1, claim_token="tok-claim-abc")
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     final_run = _make_run(
         run_id=run.id,
         status="failed",
-        claim_count=1,
+        claim_count=10,
+        node_attempt_count=1,
         claim_token="tok-claim-abc",
     )
     snapshot = _make_snapshot()

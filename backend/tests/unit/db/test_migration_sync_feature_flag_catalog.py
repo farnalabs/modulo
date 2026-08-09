@@ -5,7 +5,9 @@ The migration upserts flags into ``feature_flag_catalog`` that the seed catalog
 to ``_KNOWN_FLAGS`` (or to ``catalog.FLAGS``) without updating the migration's
 ``_FLAGS`` dict, existing deployments seeded with ``ON CONFLICT DO NOTHING``
 never pick it up. This test keeps the migration's flag list in sync with the
-source of truth.
+source of truth. The head check targets ``0073_run_node_attempt_count`` — the
+migration this branch adds on top of 0072 — so the head property holds against
+the current chain.
 """
 
 import importlib.util
@@ -21,6 +23,18 @@ from modulo.core.seed_data.catalog import FLAGS
 _MIGRATION_NAME = "0072_sync_feature_flag_catalog"
 _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
+)
+
+# The migration this branch introduces — the current head of the chain.
+_HEAD_MIGRATION_NAME = "0073_run_node_attempt_count"
+_HEAD_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "modulo"
+    / "db"
+    / "migrations"
+    / "versions"
+    / (f"{_HEAD_MIGRATION_NAME}.py")
 )
 
 # Flags the migration must upsert (the FAR-114 sync set).
@@ -45,15 +59,24 @@ _EXPECTED_FLAGS: set[str] = {
 }
 
 
-@pytest.fixture(scope="module")
-def migration() -> ModuleType:
-    assert _MIGRATION_PATH.exists(), f"Migration file missing: {_MIGRATION_PATH}"
-    spec = importlib.util.spec_from_file_location(f"migration_{_MIGRATION_NAME}", _MIGRATION_PATH)
+def _load_migration(name: str, path: Path) -> ModuleType:
+    assert path.exists(), f"Migration file missing: {path}"
+    spec = importlib.util.spec_from_file_location(f"migration_{name}", path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(scope="module")
+def migration() -> ModuleType:
+    return _load_migration(_MIGRATION_NAME, _MIGRATION_PATH)
+
+
+@pytest.fixture(scope="module")
+def head_migration() -> ModuleType:
+    return _load_migration(_HEAD_MIGRATION_NAME, _HEAD_MIGRATION_PATH)
 
 
 def _versions_dir() -> Path:
@@ -88,13 +111,24 @@ class TestMigrationFlagSync:
         unknown = sorted(set(migration._FLAGS) - known)
         assert not unknown, f"migration references flags removed from _KNOWN_FLAGS: {unknown}"
 
-    def test_migration_is_head_and_revises_existing_revision(self, migration: ModuleType) -> None:
+    def test_migration_is_head_and_revises_existing_revision(self, head_migration: ModuleType) -> None:
         script = _script()
-        assert migration.revision in script.get_heads(), (
-            f"migration {migration.revision} must be a head (no other migration revises it)"
+        assert head_migration.revision in script.get_heads(), (
+            f"migration {head_migration.revision} must be a head (no other migration revises it)"
         )
         existing = {rev.revision for rev in script.walk_revisions()}
-        assert migration.down_revision in existing, (
+        assert head_migration.down_revision in existing, (
+            f"down_revision {head_migration.down_revision!r} must reference an existing migration revision"
+        )
+
+    def test_migration_is_in_chain_and_revises_existing_revision(self, migration: ModuleType) -> None:
+        script = _script()
+        chain = {rev.revision for rev in script.walk_revisions()}
+        assert migration.revision in chain, (
+            f"migration {migration.revision} must be reachable from the migration graph head "
+            f"(heads: {sorted(script.get_heads())})"
+        )
+        assert migration.down_revision in chain, (
             f"down_revision {migration.down_revision!r} must reference an existing migration revision"
         )
 
