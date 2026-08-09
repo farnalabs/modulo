@@ -3,7 +3,7 @@
 import contextlib
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import parsers, scenarios, then, when
@@ -46,11 +46,11 @@ def step_change_password(
     from modulo.auth.passwords import hash_password
 
     with (
-        patch("modulo.api.routes.me.get_account_by_id") as mock_get_user,
-        patch("modulo.api.routes.me.list_families_for_account") as mock_list,
-        patch("modulo.api.routes.me.blacklist_family") as mock_blacklist,
-        patch("modulo.api.routes.me.set_rls_org") as mock_rls,
-        patch("modulo.core.audit_logger.append_audit_event") as mock_audit,
+        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
+        patch("modulo.api.routes.me.set_rls_org", new_callable=AsyncMock) as mock_rls,
+        patch("modulo.core.audit_logger.append_audit_event", new_callable=AsyncMock) as mock_audit,
     ):
         mock_user = MagicMock()
         mock_user.password_hash = hash_password("correct-horse-battery")
@@ -81,9 +81,9 @@ def step_change_password_no_local(
     ctx: dict[str, Any],
 ) -> None:
     with (
-        patch("modulo.api.routes.me.get_account_by_id") as mock_get_user,
-        patch("modulo.api.routes.me.list_families_for_account") as mock_list,
-        patch("modulo.api.routes.me.blacklist_family") as mock_blacklist,
+        patch("modulo.api.routes.me.get_account_by_id", new_callable=AsyncMock) as mock_get_user,
+        patch("modulo.api.routes.me.list_families_for_account", new_callable=AsyncMock) as mock_list,
+        patch("modulo.api.routes.me.blacklist_family", new_callable=AsyncMock) as mock_blacklist,
     ):
         mock_user = MagicMock()
         mock_user.password_hash = None
