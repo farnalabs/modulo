@@ -281,6 +281,15 @@ The Remy in-memory event registries (`_pending_ui_results`, `_pending_permission
 
 - `asyncio.wait_for(coro.wait(), ...)` where `coro.wait()` internally awaits a long-lived task created ONCE at construction (e.g. an SDK event loop like E2B's `self._wait = asyncio.create_task(self._handle_events())`) is dangerous: the timeout CANCELS that long-lived internal task, and any subsequent call that re-awaits it raises `asyncio.CancelledError` with `cancelling()==0` (which LangGraph surfaces as `NodeCancelledError`). The 2026-08-09 app.modulo.run outage (fixed in #933) was exactly this: `_wait_command_with_idle_watchdog` in `core/pipeline_engine/node_runner.py` polled `handle.wait()` per slice with `asyncio.wait_for(..., timeout=5s)`; the first slice timeout killed the E2B events task, and every later slice re-awaited the dead task → every pipeline run failed ~7s in. Fix: `asyncio.wait_for(asyncio.shield(handle.wait()), timeout=...)` — the shield absorbs the cancellation while the internal task keeps running — or create the task once and shield it per slice. Only `wait_for` on single-shot operations (sandbox creation, file reads/writes, command start/kill, `Event.wait()`, `Lock.acquire()`, DB queries) is safe to cancel, because each call creates a fresh coroutine/future that is discarded after cancellation. Audit rule: any `asyncio.wait_for(X.wait(), ...)` where `X` is a long-lived object must be verified against this pattern before merging.
 
+### LangGraph state must be msgpack-serializable — never seed live objects
+
+LangGraph checkpoints serialize state via msgpack (`JsonPlusSerializer.dumps_typed` in `modulo_saver.py`). Seeding a live runtime object in `initial_state` (e.g. the `RunEventBroker` in PR #895) raises `TypeError: Type is not msgpack serializable` on the FIRST checkpoint write and kills every run of that pipeline.
+
+Rules:
+- Only primitives and collections of primitives (str/int/float/bool/None, lists, dicts) belong in LangGraph state — never live objects, connections, or handles.
+- If a node needs a runtime object (broker, connection, handle), look it up at run time via a registry keyed by `run_id` (the `BrokerRegistry` pattern) instead of carrying it in state.
+- Enforced by the semgrep rule `.semgrep/non_serializable_in_langgraph_state.yml` — do not bypass it.
+
 ### `**env_vars_extra` must stay AFTER system env vars in the sandbox envs dict
 
 - In `node_runner.py` the sandbox `envs={...}` dict is ordered: system env vars first (`MODULO_*`, `APP_MODULO_OPENCODE_API_KEY`, `GITHUB_TOKEN`), then `**env_vars_extra` last. This is DELIBERATE — pipelines must be able to override system defaults for identity separation (e.g. PR Reviewer injects its own `modulo-reviewbot` PAT via `env_vars_extra`, not the system's `farnalabs` bot token). Commit b0c4bde97 reverted an earlier "env_vars_extra first" change for exactly this reason; do not move it back. The reserved-prefix validator prevents pipelines from overriding `MODULO_*` vars.
