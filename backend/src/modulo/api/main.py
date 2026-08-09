@@ -1081,6 +1081,17 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Start the run retention background loop.
     retention_task = asyncio.create_task(_run_retention_loop())
 
+    # Start the in-process worker-liveness watchdog (postmortem FAR-121).
+    # Deliberately a plain asyncio task in the WEB process — NOT an SAQ cron —
+    # so a total worker outage (both worker machines stopped, 2026-08-08/09)
+    # still alerts a human while the web/app process stays up.
+    watchdog_task: asyncio.Task[None] | None = None
+    if settings.watchdog_enabled and settings.redis_url:
+        from modulo.core.watchdog.worker_liveness import run_worker_liveness_watchdog
+
+        watchdog_task = asyncio.create_task(run_worker_liveness_watchdog(settings))
+        logger.info("startup.worker_liveness_watchdog_started")
+
     # Register SQLAlchemy event listeners for resource-change events.
     register_listeners()
 
@@ -1116,11 +1127,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await mcp_tg.__aexit__(None, None, None)
     retention_task.cancel()
     trigger_event_cleanup_task.cancel()
+    if watchdog_task is not None:
+        watchdog_task.cancel()
     await claim_expiry_job.stop()
     with suppress(asyncio.CancelledError):
         await retention_task
     with suppress(asyncio.CancelledError):
         await trigger_event_cleanup_task
+    if watchdog_task is not None:
+        with suppress(asyncio.CancelledError):
+            await watchdog_task
     await _shutdown_manager.shutdown()
 
 
