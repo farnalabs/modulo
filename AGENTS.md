@@ -587,6 +587,28 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Reserved LogRecord keys in `logging.extra={...}` crash at INFO level
+
+Keys like `name`, `msg`, `args`, `exc_info`, `filename`, `module`,
+`funcName`, `created`, `msecs`, `relativeCreated`, `thread`, `process`,
+`levelname`, `lineno`, `pathname`, `stack_info`, `taskName`, `asctime`,
+`message` are reserved attributes on `logging.LogRecord`. Passing one in
+`extra={...}` raises `KeyError: Attempt to overwrite 'name'` the moment the
+record is actually built. At WARNING (the pytest default) the INFO path is
+never exercised, so unit tests stay green while production (INFO) crashes —
+FAR-113: `_log.info("cost_components.seeded", extra={"name": ...})` silently
+skipped every org's seed for weeks, yielding $0 runs. Enforced by the
+`.semgrep/logging_reserved_extra_key.yml` rule.
+
+Rules:
+1. Use a non-reserved key in `extra=` (e.g. `component_name`, `schema_name`).
+2. Unit tests that assert log records must `caplog.set_level(logging.INFO,
+   logger="<module>")` so the production INFO path actually executes — WARNING
+   masks INFO-path crashes.
+3. Boot-time seeds emit `[boot] seed <name>: ok/FAILED` to stdout via
+   `_boot_seed` in `main.py` — the structured JsonFormatter logger lines do
+   not render in `fly logs`, so stdout is the only reliable boot signal.
+
 ### Multi-PR delivery: merge the first PR manually, then branch the next PR off main
 
 When delivering a feature as multiple PRs (e.g. PR A -> PR B -> PR C), once PR N is green on CI and APPROVED by the reviewer, MERGE IT MANUALLY (`gh pr merge --squash`) rather than waiting for the merge queue. Then branch PR N+1 off the updated main. Waiting for the merge queue on a fast-moving main means the next PR's branch base goes stale while it waits, forcing repeated rebases. Manual merge after approval is the single biggest accelerator for multi-PR delivery. Only wait for the merge queue when you are NOT chaining PRs (single independent PR).
