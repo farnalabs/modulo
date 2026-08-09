@@ -8,10 +8,33 @@ indirect paths exercised through the backends.
 
 import asyncio
 import threading
+from collections.abc import Callable
 
 import pytest
 
 from modulo.core.secrets_backend import DEFAULT_TIMEOUT, run_sync
+
+
+def _blocking_callable() -> tuple[Callable[[], None], threading.Event, threading.Event]:
+    """Return a callable that blocks until released, plus the release/done events.
+
+    The underlying worker thread keeps running even after ``run_sync`` times out
+    or is cancelled, so tests must release it and wait for it to finish.
+    """
+    release = threading.Event()
+    done = threading.Event()
+
+    def block_until_released() -> None:
+        release.wait(5)
+        done.set()
+
+    return block_until_released, release, done
+
+
+async def _unwind_worker_thread(release: threading.Event, done: threading.Event) -> None:
+    """Let a leaked worker thread finish so it does not outlive the test."""
+    release.set()
+    await asyncio.to_thread(done.wait, 5)
 
 
 class TestRunSync:
@@ -46,35 +69,21 @@ class TestRunSync:
             await run_sync(boom)
 
     async def test_timeout_raises_timeout_error(self) -> None:
-        release = threading.Event()
-        done = threading.Event()
-
-        def slow() -> None:
-            release.wait(5)
-            done.set()
+        block_until_released, release, done = _blocking_callable()
 
         with pytest.raises(TimeoutError):
-            await run_sync(slow, timeout_seconds=0.05)
-        # Let the worker thread unwind so it does not outlive the test.
-        release.set()
-        await asyncio.to_thread(done.wait, 5)
+            await run_sync(block_until_released, timeout_seconds=0.05)
+        await _unwind_worker_thread(release, done)
 
     async def test_cancellation_propagates(self) -> None:
-        release = threading.Event()
-        done = threading.Event()
+        block_until_released, release, done = _blocking_callable()
 
-        def long_running() -> None:
-            release.wait(5)
-            done.set()
-
-        task = asyncio.create_task(run_sync(long_running))
+        task = asyncio.create_task(run_sync(block_until_released))
         await asyncio.sleep(0.01)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        # Let the worker thread unwind so it does not outlive the test.
-        release.set()
-        await asyncio.to_thread(done.wait, 5)
+        await _unwind_worker_thread(release, done)
 
     def test_default_timeout_is_sane(self) -> None:
         # Intentional invariant: run_sync must have a non-zero default timeout so

@@ -13,6 +13,8 @@ export interface PermissionRequest {
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000
 
+const NARROW_VIEWPORT_PX = 640
+
 export function extractErrorMessage(err: unknown): string {
   return formatApiError(err)
 }
@@ -186,6 +188,16 @@ export const useRemyStore = defineStore('remy', () => {
     panelState.value = state
   }
 
+  function collapseIfNarrow() {
+    if (window.innerWidth < NARROW_VIEWPORT_PX && panelState.value !== 'closed') {
+      panelState.value = 'closed'
+    }
+  }
+
+  function disposeResponsive() {
+    window.removeEventListener('resize', collapseIfNarrow)
+  }
+
   function reclampPosition() {
     panelPosition.value = {
       x: Math.max(8, Math.min(panelPosition.value.x, window.innerWidth - 340)),
@@ -301,6 +313,9 @@ export const useRemyStore = defineStore('remy', () => {
     }))
   }
 
+  collapseIfNarrow()
+  window.addEventListener('resize', collapseIfNarrow)
+
   return {
     sessions,
     activeSessionId,
@@ -329,6 +344,8 @@ export const useRemyStore = defineStore('remy', () => {
     deleteSession,
     sendMessage,
     setPanelState,
+    collapseIfNarrow,
+    disposeResponsive,
     reclampPosition,
     updatePosition,
     updateSize,

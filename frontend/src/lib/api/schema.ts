@@ -1226,9 +1226,42 @@ export interface paths {
         };
         /**
          * Analytics Query
-         * @description Bucketed run-facts series over the requested range, grouped day or ISO-week.
+         * @description Bucketed run-facts series over the requested range, grouped hour/day/ISO-week.
+         *
+         *     ``pipeline_id`` may be repeated for "A vs B" comparisons in a single
+         *     request. ``error_code`` filters to a specific failure code and doubles as a
+         *     group-by dimension (``dimension=error_code``). ``date_from``/``date_to``
+         *     accept bare dates ("2026-08-06", parsed as midnight UTC) or ISO datetimes
+         *     ("2026-08-06T14:00:00Z"). ``auto_granularity=true`` overrides ``group_by``
+         *     from the effective range span (hour ≤3d, day ≤90d, week otherwise).
          */
         get: operations["analytics_query_api_v1_analytics_query_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Export
+         * @description Raw fact rows (no bucketing) filtered by the same typed params.
+         *
+         *     Paginated via ``offset``/``limit`` (default 500, max 5000), ordered by
+         *     ``run_date``/``created_at``. ``format=json`` (default) returns structured
+         *     rows; ``format=csv`` returns a Content-Disposition attachment with one row
+         *     per fact and one column per fact field. ``dimension`` is accepted for
+         *     surface parity but ignored — export has no bucketing.
+         */
+        get: operations["analytics_export_api_v1_analytics_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7114,17 +7147,104 @@ export interface components {
             avg_duration_ms?: number | null;
             /** Success Rate */
             success_rate?: number | null;
+            /**
+             * Failure Count
+             * @default 0
+             */
+            failure_count: number;
+            /**
+             * Stall Count
+             * @default 0
+             */
+            stall_count: number;
+            /** Avg Queue Wait Ms */
+            avg_queue_wait_ms?: number | null;
+            /** Avg Final Idle Ms */
+            avg_final_idle_ms?: number | null;
+            /** Avg Output Bytes */
+            avg_output_bytes?: number | null;
         };
         /**
          * AnalyticsDimension
          * @enum {string}
          */
-        AnalyticsDimension: "trigger_type" | "status" | "pipeline" | "folder" | "team";
+        AnalyticsDimension: "trigger_type" | "status" | "pipeline" | "folder" | "team" | "error_code";
+        /**
+         * AnalyticsExportItem
+         * @description One raw fact row — all fact columns, serialised to JSON-safe values.
+         */
+        AnalyticsExportItem: {
+            /** Run Id */
+            run_id: string;
+            /** Run Date */
+            run_date: string;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Name */
+            team_name?: string | null;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** Pipeline Name */
+            pipeline_name?: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
+            /** Trigger Type */
+            trigger_type: string;
+            /** Status */
+            status: string;
+            /** Total Cost Usd */
+            total_cost_usd?: number | null;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Error Code */
+            error_code?: string | null;
+            /** Claim Count */
+            claim_count?: number | null;
+            /** Queue Wait Ms */
+            queue_wait_ms?: number | null;
+            /** Final Idle Ms */
+            final_idle_ms?: number | null;
+            /** Cancellation Requested */
+            cancellation_requested?: boolean | null;
+            /** Dispatcher */
+            dispatcher?: string | null;
+            /** Node Count */
+            node_count?: number | null;
+            /** Sandbox Agent Node Count */
+            sandbox_agent_node_count?: number | null;
+            /** Max Node Timeout Seconds */
+            max_node_timeout_seconds?: number | null;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Run Number */
+            run_number?: number | null;
+            /** Output Bytes */
+            output_bytes?: number | null;
+            /** Rate Limited */
+            rate_limited?: boolean | null;
+            /** Created At */
+            created_at: string;
+        };
+        /** AnalyticsExportResponse */
+        AnalyticsExportResponse: {
+            /** Items */
+            items: components["schemas"]["AnalyticsExportItem"][];
+            /** Total */
+            total: number;
+            /** Offset */
+            offset: number;
+            /** Limit */
+            limit: number;
+        };
         /**
          * AnalyticsGroupBy
          * @enum {string}
          */
-        AnalyticsGroupBy: "day" | "week";
+        AnalyticsGroupBy: "hour" | "day" | "week";
         /** AnalyticsResponse */
         AnalyticsResponse: {
             /** Group By */
@@ -11538,6 +11658,11 @@ export interface components {
              */
             child_runs_cost_usd: string;
             /**
+             * Child Runs Count
+             * @default 0
+             */
+            child_runs_count: number;
+            /**
              * Aggregate Cost Usd
              * @default 0.000000
              */
@@ -12609,6 +12734,11 @@ export interface components {
              * @description System prompt override.
              */
             system_prompt?: string | null;
+            /**
+             * Exclude Ui Tools
+             * @description Exclude the UI-driving tool family (remy-only mode — no browser automation).
+             */
+            exclude_ui_tools?: boolean;
         };
         /** TargetInjection */
         TargetInjection: {
@@ -12911,9 +13041,9 @@ export interface components {
             /** Circuit Breaker Enabled */
             circuit_breaker_enabled?: boolean | null;
             /** Currency */
-            currency?: "USD" | "EUR" | "GBP" | null;
+            currency?: ("USD" | "EUR" | "GBP") | null;
             /** Billing Period */
-            billing_period?: "monthly" | "quarterly" | "annual" | null;
+            billing_period?: ("monthly" | "quarterly" | "annual") | null;
         };
         /** UpdateEvalRequest */
         UpdateEvalRequest: {
@@ -16812,7 +16942,8 @@ export interface operations {
                 dimension?: components["schemas"]["AnalyticsDimension"] | null;
                 trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
                 status?: components["schemas"]["AnalyticsStatus"] | null;
-                pipeline_id?: string | null;
+                pipeline_id?: string[] | null;
+                error_code?: string | null;
                 folder_id?: string | null;
                 date_from?: string | null;
                 date_to?: string | null;
@@ -16832,6 +16963,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyticsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_export_api_v1_analytics_export_get: {
+        parameters: {
+            query?: {
+                format?: string;
+                offset?: number;
+                limit?: number;
+                dimension?: components["schemas"]["AnalyticsDimension"] | null;
+                trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
+                status?: components["schemas"]["AnalyticsStatus"] | null;
+                pipeline_id?: string[] | null;
+                error_code?: string | null;
+                folder_id?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsExportResponse"];
                 };
             };
             /** @description Validation Error */

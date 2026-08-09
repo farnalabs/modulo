@@ -1,6 +1,6 @@
 <template>
   <FeatureGate feature-name="model_backend_management" show-disabled>
-    <div class="page-narrow">
+    <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.AdminModelBackendsView.model_backends')" :subtitle="$t('views.AdminModelBackendsView.manage_llm_backend_connections_and_credentials')" />
         <Button

@@ -54,7 +54,7 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 - [x] Current password required to authorize change (prevents hijacked-session abuse)
 - [x] Password strength validation (entropy-based rejection of weak passwords)
 - [x] SSO users without local password cannot change password via this endpoint
-- [ ] Password change logged to audit trail (not yet implemented — audit trail scope gap)
+- [x] Password change logged to audit trail (fail-open `password_changed` event on the audit chain)
 
 ## Error Handling
 - [x] PUT /api/v1/me/password returns 501 Not Implemented when DB table is missing (ProgrammingError) — fixed in QA (2026-07-06)
@@ -66,11 +66,13 @@ Logged-in users can change their own password via the My Profile page. Admins ca
 
 ## Known Gaps
 
-- Password change is not logged to the audit trail yet — the audit system currently covers admin actions but not user self-service actions
 - Website docs page for password change does not exist — no stub at `Website/modulo-website/src/docs/auth/password-change.md`
 - PUT /api/v1/me/password does not validate that `new_password` differs from `current_password` — no `!=` check between old and new (minor: user can "change" to same password)
 
 ## QA History
+### 2026-08-08 — improve-architecture (product-map walk)
+- Fixed the audit-trail gap: `PUT /api/v1/me/password` now appends a fail-open `password_changed` audit event (`resource_type="account"`, actor = the changing user) inside the same transaction, after token families are blacklisted. Follows the `admin_orgs.py` pattern — `set_rls_org` runs in the outer transaction before the append, and any audit write failure is loudly logged without rolling back the password change. Added unit test `test_password_change_records_audit_event` + a BDD scenario ("Password change is recorded in the audit trail"). Updated product map (Security behaviour `[ ]`→`[x]`, Known Gap removed, QA History).
+
 ### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
 - Verified `@handle_db_errors` decorator provides complete CancelledError/IntegrityError/ProgrammingError/SQLAlchemyError coverage for all endpoints in me.py
 - Verified all internal ProgrammingError handlers use `from None` (B904)

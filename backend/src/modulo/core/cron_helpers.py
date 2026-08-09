@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import threading
@@ -118,8 +119,57 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
 
 
 def get_dispatcher_reconcile_stats() -> dict[str, Any]:
-    """Read the last dispatcher_reconcile outcome (thread-safe)."""
+    """Read the last dispatcher_reconcile outcome (thread-safe).
+
+    In-process only: this returns the dict of THIS process. The system cron
+    writes it in the system-worker process; the web process /healthz/ready
+    reads the shared Redis key (see ``read_dispatcher_reconcile_stats``).
+    """
     return dict(_dispatcher_reconcile_stats)
+
+
+# Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
+# The dispatcher_reconcile cron runs in the SYSTEM WORKER process; /healthz/ready
+# runs in the WEB process (PR dist/separate-workers: workers on ``worker``
+# machines, uvicorn on ``app`` machines). The in-process dict above is invisible
+# to the health check, so the cron persists its outcome here every tick and the
+# health check reads this key.
+DISPATCHER_RECONCILE_STATS_KEY = "saq:cron:stats:dispatcher_reconcile"
+
+
+async def write_dispatcher_reconcile_stats(redis_client: AsyncRedis, stats: dict[str, Any]) -> None:
+    """Persist the last dispatcher_reconcile outcome to the shared Redis store.
+
+    The system worker (which runs the cron) and the web process (which serves
+    /healthz/ready) are SEPARATE processes, so a process-local dict can never be
+    observed by the health check. Writing the outcome — including a fresh
+    ``last_run_at`` — to Redis lets any process see whether the cron actually
+    ran. Best-effort: a persistence failure must never crash the reconcile tick.
+    """
+    payload: dict[str, Any] = dict(stats)
+    payload["last_run_at"] = datetime.now(UTC).isoformat()
+    try:
+        await redis_client.set(DISPATCHER_RECONCILE_STATS_KEY, json.dumps(payload))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.dispatcher_reconcile stats persist failed")
+
+
+async def read_dispatcher_reconcile_stats(redis_client: AsyncRedis) -> dict[str, Any] | None:
+    """Read the persisted reconcile outcome; ``None`` when the cron has never
+    run (or its persistence failed / the payload is unparsable).
+
+    Raises on Redis errors — the health check decides fail-open behaviour.
+    """
+    raw = await redis_client.get(DISPATCHER_RECONCILE_STATS_KEY)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 _ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
@@ -1718,16 +1768,6 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "capacity_deferred": 0,
     }
 
-    async with factory() as session, session.begin():
-        result = await session.execute(select(Organisation.id))
-        org_ids: list[uuid.UUID] = list(result.scalars())
-
-    if not org_ids:
-        # Still record the run so /healthz/ready sees a fresh last_run_at even
-        # in an empty-org environment (the cron keeps ticking every 60s).
-        set_dispatcher_reconcile_stats(summary)
-        return summary
-
     redis_client = AsyncRedis.from_url(
         settings.redis_url,
         socket_connect_timeout=10,
@@ -1735,6 +1775,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         max_connections=settings.saq_redis_pool_size,
     )
     try:
+        async with factory() as session, session.begin():
+            result = await session.execute(select(Organisation.id))
+            org_ids: list[uuid.UUID] = list(result.scalars())
+
+        if not org_ids:
+            # Still record the run so /healthz/ready sees a fresh last_run_at
+            # even in an empty-org environment (the cron keeps ticking every 60s).
+            set_dispatcher_reconcile_stats(summary)
+            await write_dispatcher_reconcile_stats(redis_client, summary)
+            return summary
         q = RedisQueue(redis_client, name=queue_name)
         re_dispatch_predicate = or_(
             _build_re_dispatch_predicate(
@@ -1950,12 +2000,15 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                             message=f"dispatcher_reconcile: re-enqueue failed for run {row.id}",
                             context={"run_id": str(row.id), "job_type": job_type},
                         )
+        # Record the outcome for /healthz/ready BEFORE the client is closed:
+        # the shared Redis key is what the WEB process reads (the in-process
+        # dict lives only in this worker process).
+        set_dispatcher_reconcile_stats(summary)
+        await write_dispatcher_reconcile_stats(redis_client, summary)
+        return summary
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
-
-    set_dispatcher_reconcile_stats(summary)
-    return summary
 
 
 async def _re_enqueue_run(

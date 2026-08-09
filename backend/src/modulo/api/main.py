@@ -2,11 +2,11 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 import anyio
 from fastapi import FastAPI
@@ -447,6 +447,7 @@ async def _ensure_default_org(settings: Settings) -> None:
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+    from modulo.core.seed_data.cost_components import seed_cost_components_for_org
     from modulo.db.models.organisation import Organisation
 
     engine = get_or_create_engine(settings)
@@ -465,6 +466,32 @@ async def _ensure_default_org(settings: Settings) -> None:
         session.add(org)
         await session.flush()
         logger.info("startup.default_org_created", extra={"org_id": str(org.id)})
+
+        # Seed default cost components for the new org in the SAME transaction
+        # (idempotent; the per-boot _seed_cost_components also covers it, but a
+        # fresh org gets its components here immediately). Fail-open: a seed
+        # failure must never block default-org creation.
+        try:
+            await seed_cost_components_for_org(session, org.id)
+        except Exception:
+            logger.warning("startup.default_org_cost_components_seed_failed", exc_info=True)
+
+
+async def _boot_seed(name: str, coro: Awaitable[Any]) -> None:
+    """Await a startup seed and print a permanent boot summary to stdout.
+
+    The structured JsonFormatter logger lines do not render in ``fly logs``, so
+    a seed that silently failed at boot was invisible for weeks (FAR-113). This
+    helper always prints an ok/FAILED line so every boot records each seed's
+    outcome. Failures remain non-fatal (the seed never blocks startup).
+    """
+    try:
+        result = await coro
+        detail = f" ({result})" if result is not None else ""
+        print(f"[boot] seed {name}: ok{detail}", flush=True)  # noqa: T201
+    except Exception as exc:
+        print(f"[boot] seed {name}: FAILED ({exc!r})", flush=True)  # noqa: T201
+        logger.exception("startup.seed_failed", extra={"seed": name})
 
 
 async def _seed_modulo_users(settings: Settings) -> None:
@@ -989,47 +1016,26 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Seed MODULO_USERS env var entries into the user table (idempotent).
     # Non-fatal: if tables are missing, seeding is retried on next restart.
-    try:
-        await _seed_modulo_users(settings)
-    except Exception:
-        logger.warning("startup.user_seed_failed", exc_info=True)
+    await _boot_seed("modulo_users", _seed_modulo_users(settings))
 
     # Seed demo data if MODULO_SEED_DEMO_DATA is enabled.
-    try:
-        await _seed_demo_data(settings)
-    except Exception:
-        logger.warning("startup.demo_seed_failed", exc_info=True)
+    await _boot_seed("demo_data", _seed_demo_data(settings))
 
     # Seed SSO providers from deprecated env vars into the DB table (idempotent).
-    try:
-        await _seed_sso_providers(settings)
-    except Exception:
-        logger.warning("startup.sso_providers_seed_failed", exc_info=True)
+    await _boot_seed("sso_providers", _seed_sso_providers(settings))
 
     # Seed system schemas for all existing organisations (idempotent).
-    try:
-        await _seed_system_schemas(settings)
-    except Exception:
-        logger.warning("startup.system_schemas_seed_failed", exc_info=True)
+    await _boot_seed("system_schemas", _seed_system_schemas(settings))
 
     # Seed the default modulo-dev EnvironmentProfile for the dogfood pipeline.
-    try:
-        await _seed_environment_profiles(settings)
-    except Exception:
-        logger.warning("startup.env_profile_seed_failed", exc_info=True)
+    await _boot_seed("environment_profiles", _seed_environment_profiles(settings))
 
     # Seed the tier catalog and feature flag definitions (idempotent).
-    try:
-        await _seed_tier_catalog()
-    except Exception:
-        logger.warning("startup.tier_catalog_seed_failed", exc_info=True)
+    await _boot_seed("tier_catalog", _seed_tier_catalog())
 
     # Seed the default cost components for every org (idempotent; system-
     # context org enumeration, per-org set_rls_org on the inserts).
-    try:
-        await _seed_cost_components(settings)
-    except Exception:
-        logger.warning("startup.cost_components_seed_failed", exc_info=True)
+    await _boot_seed("cost_components", _seed_cost_components(settings))
 
     # Initialise the LangGraph checkpointer schema (langgraph.* tables).
     try:

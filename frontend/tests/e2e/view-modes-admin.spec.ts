@@ -98,13 +98,24 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await page.getByTestId('admin-views-add').click()
     await expect(page.locator('text=New View')).toBeVisible()
 
-    await page.getByTestId('admin-views-name-input').fill('My Test View')
+    // Guard the form fields explicitly — an intercepted/slow interaction (e.g.
+    // a floating overlay capturing the first click) previously timed out here.
+    const nameInput = page.getByTestId('admin-views-name-input')
+    await expect(nameInput).toBeVisible()
+    await expect(nameInput).toBeEnabled()
+    await nameInput.fill('My Test View')
+    const typeSelect = page.getByTestId('admin-views-type-select')
+    await expect(typeSelect).toBeVisible()
     await page.getByTestId('admin-views-type-select').selectOption('grid')
     await page.getByTestId('admin-views-filters-input').fill('{"status": "active", "env": "prod"}')
     await page.getByTestId('admin-views-columns-input').fill('name, status, created_at')
     await page.getByTestId('admin-views-sort-by-input').fill('created_at')
+    const sortOrderSelect = page.getByTestId('admin-views-sort-order-select')
+    await expect(sortOrderSelect).toBeVisible()
     await page.getByTestId('admin-views-sort-order-select').selectOption('asc')
 
+    const saveButton = page.getByTestId('admin-views-save')
+    await expect(saveButton).toBeVisible()
     await page.getByTestId('admin-views-save').click()
 
     expect(createdPayload).toEqual({
@@ -126,7 +137,12 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await page.goto('/admin/views', { timeout: 120000 })
 
     await page.getByTestId('admin-views-add').click()
+    const emptyNameInput = page.getByTestId('admin-views-name-input')
+    await expect(emptyNameInput).toBeVisible()
+    await expect(emptyNameInput).toBeEnabled()
     await page.getByTestId('admin-views-name-input').fill('')
+    const emptyNameSave = page.getByTestId('admin-views-save')
+    await expect(emptyNameSave).toBeVisible()
     await page.getByTestId('admin-views-save').click()
 
     const validationMessage = await page.getByTestId('admin-views-name-input').evaluate((el: HTMLInputElement) => el.validationMessage)
@@ -144,7 +160,12 @@ test.describe('View Modes Admin CRUD', { tag: "@regression" }, () => {
     await page.getByTestId('admin-views-add').click()
     await expect(page.locator('text=New View')).toBeVisible()
 
+    const cancelNameInput = page.getByTestId('admin-views-name-input')
+    await expect(cancelNameInput).toBeVisible()
+    await expect(cancelNameInput).toBeEnabled()
     await page.getByTestId('admin-views-name-input').fill('Temporary View')
+    const cancelButton = page.getByTestId('admin-views-cancel')
+    await expect(cancelButton).toBeVisible()
     await page.getByTestId('admin-views-cancel').click()
 
     await expect(page.locator('text=New View')).not.toBeVisible({ timeout: 3000 })

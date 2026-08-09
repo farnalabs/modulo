@@ -587,6 +587,28 @@ Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just con
 
 ## Lessons Learned
 
+### Reserved LogRecord keys in `logging.extra={...}` crash at INFO level
+
+Keys like `name`, `msg`, `args`, `exc_info`, `filename`, `module`,
+`funcName`, `created`, `msecs`, `relativeCreated`, `thread`, `process`,
+`levelname`, `lineno`, `pathname`, `stack_info`, `taskName`, `asctime`,
+`message` are reserved attributes on `logging.LogRecord`. Passing one in
+`extra={...}` raises `KeyError: Attempt to overwrite 'name'` the moment the
+record is actually built. At WARNING (the pytest default) the INFO path is
+never exercised, so unit tests stay green while production (INFO) crashes —
+FAR-113: `_log.info("cost_components.seeded", extra={"name": ...})` silently
+skipped every org's seed for weeks, yielding $0 runs. Enforced by the
+`.semgrep/logging_reserved_extra_key.yml` rule.
+
+Rules:
+1. Use a non-reserved key in `extra=` (e.g. `component_name`, `schema_name`).
+2. Unit tests that assert log records must `caplog.set_level(logging.INFO,
+   logger="<module>")` so the production INFO path actually executes — WARNING
+   masks INFO-path crashes.
+3. Boot-time seeds emit `[boot] seed <name>: ok/FAILED` to stdout via
+   `_boot_seed` in `main.py` — the structured JsonFormatter logger lines do
+   not render in `fly logs`, so stdout is the only reliable boot signal.
+
 ### Multi-PR delivery: merge the first PR manually, then branch the next PR off main
 
 When delivering a feature as multiple PRs (e.g. PR A -> PR B -> PR C), once PR N is green on CI and APPROVED by the reviewer, MERGE IT MANUALLY (`gh pr merge --squash`) rather than waiting for the merge queue. Then branch PR N+1 off the updated main. Waiting for the merge queue on a fast-moving main means the next PR's branch base goes stale while it waits, forcing repeated rebases. Manual merge after approval is the single biggest accelerator for multi-PR delivery. Only wait for the merge queue when you are NOT chaining PRs (single independent PR).
@@ -734,9 +756,33 @@ Agents run targeted files only (see §2 impact consideration) — never the full
 ### Frontend worktrees and node_modules
 
 `git worktree add` creates a new working tree with no installed dependencies.
-Frontend Workers cannot reliably run `npm run lint`, `npx vue-tsc`, or `npm test`
-inside worktrees. Workers implement and commit without frontend tooling;
+Fast path on Windows — junction the main repo's `frontend/node_modules` into the
+worktree (validated FAR-115/117/118/119, 2026-08-08). If the main repo's
+node_modules is current (lockfiles match):
+
+```powershell
+Test-Path "<worktree>\frontend\node_modules"   # expect False
+cmd /c mklink /J "<worktree>\frontend\node_modules" "<main-repo>\frontend\node_modules"
+```
+
+The junction is gitignored and harmless. With it, Workers can run `npm run lint`,
+`npx vue-tsc --noEmit`, and `npx vitest run <spec> --pool=threads --maxWorkers=2`
+in the worktree — and the pre-commit `eslint` hook passes on commit (without it,
+`git commit` fails at eslint with `'eslint' is not recognized`, even for
+CSS-only changes). Remove the junction before `git worktree remove` if desired
+(leftover is harmless). If lockfiles differ, `npm install --force` in the
+worktree instead.
+
+Without a junction, Workers implement and commit without frontend tooling;
 verification happens via GitHub CI on the PR.
+
+**Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
+admin-view gaps whenever an `Admin*.vue` file is touched — every
+`frontend/src/views/Admin*.vue` must contain a `<FeatureGate>` wrapper. If your
+change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
+FAR-117), the commit is blocked — add the wrapper with the correct feature name
+(match sibling views) rather than bypassing the hook.
+- **`npm install --force` in a worktree can yield node_modules WITHOUT the `.bin` shims** (2026-08-08) — `npm run test:unit` then fails with 'vitest is not recognized' (and `npx` fails too, and `node node_modules/vitest/vitest.mjs` fails with `ERR_MODULE_NOT_FOUND`). Worktree frontend tooling is therefore unreliable even when node_modules appears present. Don't burn time reinstalling in the worktree: use the main tree's node_modules junction (see the junction lesson) when it exists, otherwise skip worktree frontend checks and let GitHub CI (PR) + `gate.ps1`/`smoke-test.ps1` (post-merge, main tree) be the verification gates.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
@@ -1026,6 +1072,18 @@ Remy was descoped from MVP and gated behind dev mode. BOTH /admin/remy and /sett
 
 Sidebar tests that check group header counts must account for preview-hidden groups. In simple mode with dev mode off, only core and settings groups are guaranteed visible. Test assertions should use 	oBeGreaterThanOrEqual(2) not 3.
 
+### Manifest dev-gating field is `visibility: private_preview`, and the `<<: *community` anchor is required
+
+The current manifest field for dev-mode-only routes is `visibility: private_preview` (the old `preview: true` boolean no longer exists). A `private_preview` entry MUST also carry the `<<: *community` tier anchor — without it, `required_tier` is undefined and the router's dev-mode guard (`if (to.meta?.visibility === 'private_preview' && !planStore.devMode) return { name: 'dashboard' }`) never runs because the guard only enters that branch when `requiredTier || private_preview` is set and the meta is hydrated from the manifest entry. Omitting the anchor makes the route reachable in production — dead-code protection. `/remy` (remy-only mode) and `/admin/remy` + `/settings/remy` are the canonical examples.
+
+### Remy-only mode renders no permission UI — MCP tools execute un-gated
+
+In the full-screen remy-only ingress (`/remy`), the UI-driving tool family is excluded server-side via `exclude_ui_tools` on the stream request. The frontend therefore renders **no permission card at all**: only UI-driving had a permission/NOGO flow; MCP tools execute server-side without a frontend approval step. When adding a new Remy UI feature, do not assume a permission prompt exists — check whether it runs through the `ui_command_batch`/permission path (gated) or the MCP tool path (ungated).
+
+### Cross-tab/shared `activeSessionId` in remy-only mode is accepted, not solved
+
+The remy-only tabs store persists `{ tabId, sessionId }` pairs in localStorage while titles and the active tab are derived from the shared `useRemyStore.activeSessionId`. The store never introduces a separate `activeTabId` — tab state is reconciled from the shared session state on every sessions fetch (prune dead tabs, reseed on first mount, reassign active on close). This coupling means the panel and the full-screen view intentionally share one active session; divergence is accepted (same as the existing no-cross-tab-sync stance in PRD §8.23).
+
 ## Modulo Pipeline Configuration (E2B Sandbox Agents)
 
 All Modulo agent pipelines (Branch Fixer, PR Reviewer, Improve Tests, Improve Architecture, Codebase Improver, Daily Watcher) use a single `sandbox_agent` node type that runs an opencode agent inside an E2B sandbox. The sandbox is ephemeral — created per-run, destroyed after completion.
@@ -1152,3 +1210,190 @@ The Conductor MUST verify footprint at commit time, not trust the report. After 
 If the footprint exceeds the allowlist or deletes anything, the branch is DISCARDED (worktree removed, branch deleted) and the task is respawned with a tighter contract. Never merge a branch whose footprint was not verified.
 
 Learned on 2026-08-03 when the first Worker attempt at the break-glass deliverable A catastrophically exceeded scope: it deleted ~2736 lines of unrelated tests (test_trigger_crud_tools.py -488, test_executor.py -205, test_linear.py -195), deleted PRD product features (get/update/delete_trigger sections), and modified files across Linear, determination, rate_limiter, and MCP subsystems - all invisible from its commit message. The entire branch was discarded and the work redone by a Worker given a strict scope contract (18-file allowlist), which stayed clean and merged as PR #591. Skipping this contract silently deletes thousands of lines of tests and features, wastes hours, and ends in a discarded branch.
+
+
+## Reviewer first-pass quality: contract round-trip, prove-the-fix, scope-diff
+
+Analysis of 180 CHANGES_REQUESTED review bodies across 792 merged PRs
+(2026-08-08) shows three recurring agent mistakes that cost a review cycle.
+First-pass approval is ~82% in August; these three checks are the highest-value
+ways to push it higher. Apply all three before pushing a branch.
+
+### 1. Verify the frontend-backend contract round-trip, not just mocked tests
+
+The costliest recurring bug: frontend sends camelCase keys the backend Pydantic
+model silently ignores (snake_case), so the setting never persists — found
+twice independently (PR #784, #796: `circuitBreakerEnabled` vs
+`circuit_breaker_enabled`). CI stayed green because backend tests sent
+snake_case and frontend tests mocked `api.GET`.
+
+Rules:
+- When a PR touches both frontend and backend (or changes any API
+  request/response shape), verify the wire shape against the generated OpenAPI
+  types (`frontend/src/lib/api/schema.ts`; regenerate with `npm run
+  generate:api`). Frontend keys must match backend field names unless the
+  Pydantic model has aliases / `populate_by_name`.
+- A test that mocks `api.GET` / `api.POST` / `httpx.Response` does NOT
+  validate the contract. Add at least one test that round-trips through the
+  real endpoint with the real payload shape (integration or BDD scenario).
+- When adding a frontend param/query value, confirm the backend accepts that
+  exact value (enum, range, type) in the same PR (PR #767 sent `days=3` and
+  `group_by=hour` the backend rejected → 422 at runtime; CI passed only
+  because tests mocked `api.GET`).
+- Backend tests must exercise the same payload shape the frontend actually
+  sends — not an idealized snake_case-only shape.
+
+### 2. Prove the fix actually fixes it — trace the code path, no no-op fixes
+
+The most common single finding: the change does not change behaviour. Trace
+the exact code path your change affects and verify observable effect before
+pushing. Recurring no-op traps the reviewer has caught:
+- Exit-code capture order: `RUNS_EXIT=$?` after a command substitution
+  captures the substitution's status (0), not the command's (PR #729).
+- Exception MRO ordering: `except ProgrammingError` after `except
+  DBAPIError` is unreachable (ProgrammingError subclasses DatabaseError →
+  DBAPIError) — order specific exceptions before their bases (PR #740).
+- Self-referencing measurements: a throttle measuring against its own
+  in-progress run is always "just ran" — exclude the current run (PR #865,
+  #570).
+- Cache keys must include every input that changes the cached value:
+  `(pipeline_id, snapshot_id, node_timeout_seconds)`, not just the first two
+  (PR #382).
+- Boundary clamps must preserve the invariant they guard: `max(pool_size - 5,
+  5)` exceeds a pool of size < 5, reintroducing the exact bug (PR #701).
+- Grep patterns must match what the CLI actually emits — `grep -q
+  "PreconditionError"` never matches when the CLI prints `error: ...` (PR
+  #668).
+- The thing being compared must be the thing that runs: jq comparing a number
+  field to a quoted string literal is always unequal (PR #865).
+
+Write the test that fails without your fix and passes with it. If you cannot
+write such a test, the fix may be a no-op — reconsider.
+
+### 3. Scope-diff before pushing — no silent reverts or deleted tests
+
+"tests:" and "improve:" PRs repeatedly ship silent reverts of production
+hardening and deletions of passing coverage (PR #792, #775, #759, #391,
+#518). Before pushing any PR whose title scopes it to tests/docs/improve:
+- Run `git diff main...HEAD --stat` and confirm every changed file is within
+  the stated scope.
+- After resolving any merge/rebase conflict, re-check the diff — never let a
+  conflict resolution drop the other side's production work. A botched merge
+  that reverts a security advisory fix or a production guard is a CRITICAL
+  review finding even when CI is green.
+- Never delete passing tests or gut behavioural assertions as part of a
+  stylistic refactor. If a test conflicts, fix it in place; if a deletion is
+  genuinely required, justify it in the PR description.
+
+### 4. Migration heads: branch off the current head, never edit shipped migrations
+
+Migration problems appear in 15 PRs (divergent Alembic heads, editing shipped
+migrations in place, deleting applied migrations). Rules:
+- Before creating a migration, verify `down_revision` points at the CURRENT
+  head — not a mid-chain revision. A migration branching off an old revision
+  creates a second Alembic head and a permanent fork every future migration
+  must merge around (PR #381). Run `alembic heads` (or the `check-migration-heads`
+  pre-commit hook, which fires when migration files are staged) before committing.
+- NEVER edit a migration that has already shipped/merged. Alembic records it
+  as applied, so the change only lands on fresh DBs — existing deployments
+  never execute it (PR #367 edited migration 0022 in place). Add a NEW
+  migration on top instead.
+- NEVER delete a migration file that has been applied. `alembic_version`
+  points at a now-missing revision, breaking the next `alembic upgrade` on
+  every existing environment (PR #518).
+- If `check-migration-heads.ps1` blocks you: renumber your migration to the
+  next free sequential number and fix its `down_revision` to point at the
+  current head.
+
+### 5. i18n: no hardcoded user-facing strings in frontend views
+
+The reviewer flags hardcoded English in `.vue` views that otherwise use
+`$t()` (16 reviews). Rules:
+- Every new user-facing string in a view that already uses
+  `$t()`/`t()`/`useI18n` must use a locale key — a hardcoded string is a
+  major finding (PR #816, #775, #784, #371).
+- Add the key in the CORRECT namespace. A key under the wrong namespace
+  silently fails to resolve (PR #438). Keys live in
+  `frontend/src/locales/en-US.js` under the view's namespace
+  (`views.<ViewName>...`) unless a shared namespace already exists.
+- Add the key to ALL locale files, not just `en-US` — a missing key in a
+  secondary locale is a silent UI gap.
+- Never put JS expressions inside translation values — the vue-i18n message
+  compiler cannot parse ternaries; use pluralization syntax
+  (`"key | key_plural"`) or simplify the message.
+- If the change removes a `$t(w.labelKey)` pattern, re-add the keys to the
+  locale file — deleting keys orphans every other locale that references them.
+
+### 6. A11y: dynamic status needs aria-live, icon buttons need labels, keyboards stay usable
+
+The reviewer applies the ux-conformance criteria (A11Y-1/2/4, STATE-1/2/6) to
+every frontend diff (33 reviews). Self-check these before pushing:
+- Dynamic status messages that appear/disappear (banners, toggle labels
+  swapping between "Pause all"/"Resume") need `role="status"` /
+  `aria-live="polite"` — WCAG 4.1.3 Status Messages, Level AA (PR #674).
+- Error feedback regions need `aria-live="assertive"` (or `role="alert"`) and
+  should be wired via `aria-describedby` to the controls they describe (PR
+  #784).
+- Icon-only buttons need `aria-label` (or visible text). Check every new icon
+  button in the diff.
+- Keyboard handlers on a container must not break editable children:
+  `@keydown.left/right.prevent` on a titlebar fires on bubbled events from a
+  child `<input>`, breaking text-cursor movement — ignore events originating
+  from `INPUT`/`TEXTAREA` (PR #634).
+- Follow `ux-conformance/criteria.yaml` — the same criteria the reviewer
+  loads. If a new interactive element lacks `data-testid`, `aria-label`,
+  focus-visible ring, or keyboard equivalent, the reviewer will request
+  changes.
+
+### 7. A mock or hand-built fixture is not coverage of the changed path
+
+Test-quality findings are the largest single CR category (89 reviews). The
+recurring failure: the test exercises a mock or a hand-built fixture that
+bypasses the function under test, so the bug lives in the untested real path.
+Rules:
+- The test must exercise the function under test with the REAL payload shape.
+  If you fix `build_facts_query`, the test must go through
+  `build_facts_query` — not feed a pre-shaped `SimpleNamespace` row that
+  skips the SQL (PR #740). If you fix a percentage conversion, the test
+  fixture must use raw values that round-trip through the conversion (PR
+  #747).
+- "Passes for the wrong reason" check: if you delete the code under test and
+  the test still passes, the test is not testing the code (PR #587, #740).
+  Assert on behaviour that only the real path can produce.
+- Every new behaviour ships with a test that FAILS without the change and
+  PASSES with it. This is the feature analogue of the prove-the-fix rule in
+  check 2: no new behaviour without a regression test (PR #382, #381, #701).
+- When reporting "tests pass", name the actual files run and confirm they are
+  wired into CI. A test excluded by a `-m` marker, or that only runs in a
+  deploy-only job, is not evidence (PR #547, #518). Check the test is in a
+  path CI actually runs.
+- A test that mocks `api.GET`/`api.POST`/`httpx.Response` validates the
+  mock's opinion, not the endpoint — see check 1 (PR #767, #538).
+
+### 8. The error path must survive the error it guards
+
+Error-handling findings are the second-largest CR category (50 reviews). The
+recurring failure: the defensive code itself is broken — the guard raises the
+very error it protects against, or the failure path is dead/silent/fail-open.
+Rules:
+- For every `try/except` you add or touch: is the except reachable? Order
+  specific exceptions BEFORE their bases (`except ProgrammingError` before
+  `except SQLAlchemyError`); a base clause first makes the specific clause
+  dead code (PR #740). Follow the route convention: ProgrammingError->501,
+  SQLAlchemyError->503, IntegrityError->409, HTTPException->re-raise,
+  Exception->500.
+- Does the except do something observable? Log with `_log.exception(...)`,
+  return a status, or set a fallback. A catch that silently swallows (bare
+  `pass` or unreachable code) hides the failure — the semgrep rule
+  `empty-catch-block` and `exception-mro-ordering` enforce this.
+- Fail-open vs fail-closed: security/safety operations (auth, RLS, gate
+  enforcement, permission checks) fail CLOSED — deny on error (PR #436,
+  #470). Best-effort operations (audit, metrics, telemetry) fail open WITH a
+  log (PR #497).
+- Commit-then-error ordering: if a best-effort step fails AFTER the main
+  mutation committed, return the success response and log the failure — do
+  not turn a successful operation into a 500 (PR #497).
+- Guard the guard: the code that checks the error must itself not raise
+  (e.g. `_read_alert_thresholds` overflowed on the very huge ints it guarded
+  against, PR #796). If the guard can throw, the failure path is untested —
+  add a test for the corruption case the guard is meant to handle.

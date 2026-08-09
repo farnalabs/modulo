@@ -68,7 +68,7 @@ describe('AdminViewsView', () => {
   it('renders without crashing', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -79,7 +79,7 @@ describe('AdminViewsView', () => {
   it('displays views in a table after loading', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -93,7 +93,7 @@ describe('AdminViewsView', () => {
     mockFetchOk({ items: [] })
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -103,7 +103,7 @@ describe('AdminViewsView', () => {
   it('opens create form on button click', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -115,7 +115,7 @@ describe('AdminViewsView', () => {
   it('shows delete confirmation on delete button click', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()
@@ -128,7 +128,7 @@ describe('AdminViewsView', () => {
   it('sends POST request on duplicate button click', async () => {
     const wrapper = mount(AdminViewsView, {
       global: {
-        stubs: { LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
+        stubs: { FeatureGate: { template: '<div><slot /></div>' }, LoadingSpinner: true, ErrorAlert: true, Tooltip: { template: '<div><slot /></div>' }, TooltipTrigger: { template: '<div><slot /></div>' }, TooltipContent: { template: '<div><slot /></div>' } },
       },
     })
     await flush()

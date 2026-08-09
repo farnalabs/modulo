@@ -34,7 +34,7 @@ from decimal import Decimal
 from typing import Any
 
 from langchain_core.messages import BaseMessage
-from langgraph.errors import GraphInterrupt
+from langgraph.errors import GraphInterrupt, NodeCancelledError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -221,6 +221,23 @@ def _sandbox_agent_for_snapshot(snapshot_id: uuid.UUID, graph_json: dict[str, An
         _SANDBOX_AGENT_CACHE.clear()
     _SANDBOX_AGENT_CACHE[key] = result
     return result
+
+
+def _node_output_stall_reason(node_output: Any) -> str | None:
+    """Return the stall_reason carried by a captured sandbox-agent node output.
+
+    Sandbox-agent nodes return ``{"artifacts": [...], "output": {...}}`` where
+    the inner ``output`` dict carries ``stall_reason`` when the idle watchdog
+    fired (FAR-98). Returns None for non-dict / garbage output and for nodes
+    that did not stall, so non-sandbox node outputs are never misread.
+    """
+    if not isinstance(node_output, dict):
+        return None
+    inner = node_output.get("output")
+    if not isinstance(inner, dict):
+        return None
+    reason = inner.get("stall_reason")
+    return reason if isinstance(reason, str) and reason else None
 
 
 async def org_sandbox_capacity_free(
@@ -1114,6 +1131,57 @@ class PipelineExecutor:
                 )
         except asyncio.CancelledError:
             raise
+        except NodeCancelledError as exc:
+            # Transient node cancellation (e.g. an E2B sandbox command wait
+            # cancelled from outside — langgraph wraps the node body's
+            # asyncio.CancelledError into NodeCancelledError). Do NOT
+            # terminal-fail: the run is still retryable. Bounded by the SAQ
+            # claim count; releases the E2B idempotency fence so the retry
+            # claim can re-dispatch; then re-raises so the SAQ job retries.
+            _log.warning("pipeline.node_cancelled_transient", extra={"run_id": str(run_id)})
+            from modulo.core.pipeline_execution import (
+                e2b_dispatch_release_fenced,
+                e2b_idempotency_enabled,
+            )
+            from modulo.settings import get_settings
+
+            retries = int(get_settings().saq_run_retries)
+            claim_count = 0
+            claim_token: str | None = None
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                current_run = await get_run(session, run_id)
+                if current_run is not None:
+                    claim_count = int(current_run.claim_count or 0)
+                    claim_token = current_run.claim_token
+
+            if claim_count < retries:
+                # Release the E2B dispatch fence held by THIS claim so the
+                # successor claim's e2b_dispatch_acquire SETNX can win.
+                if e2b_idempotency_enabled() and claim_token is not None:
+                    await e2b_dispatch_release_fenced(str(run_id), claim_token)
+                # Reset to pending so the retry claim (status='pending') succeeds.
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    await update_run_status(session, run_id, "pending", clear_error_code=True)
+                # The re-raise below propagates out of execute() BEFORE the
+                # post-stream try/finally, so run its cleanup here: clear the
+                # cancellation check + hubs and close the run's broker so the
+                # retry re-entry gets a fresh broker and no stale contextvars.
+                set_cancellation_check(None)
+                set_model_backend_hub(None)
+                set_connector_hub(None)
+                if model_backend_hub is not None:
+                    await model_backend_hub.__aexit__(None, None, None)
+                if connector_hub is not None:
+                    await connector_hub.__aexit__(None, None, None)
+                get_registry().close(run_id)
+                raise
+            # Retries exhausted — terminal failure with a MEANINGFUL code
+            # (not the raw langgraph class name).
+            final_status = "failed"
+            error_code = "node_cancelled"
+            error_detail = "Sandbox node cancelled (transient) after retries exhausted: " + str(exc)[:500]
         except Exception as exc:
             import traceback
 
@@ -1475,6 +1543,12 @@ class PipelineExecutor:
                             output = data.get("output") if isinstance(data, dict) else None
                             if output is not None:
                                 completed_node_outputs[name] = output
+                                stall_reason = _node_output_stall_reason(output)
+                                if stall_reason:
+                                    broker.publish(
+                                        "run_stalled",
+                                        {"node_id": name, "stall_reason": stall_reason},
+                                    )
 
                 if event_kind == "on_chat_model_end":
                     metadata = lg_event.get("metadata") or {}
@@ -1595,6 +1669,12 @@ class PipelineExecutor:
             )
             return "failed", "node_timeout", error_detail, node_token_usage or None
         except asyncio.CancelledError:
+            raise
+        except NodeCancelledError:
+            # Transient node cancellation (langgraph wraps a node body's
+            # asyncio.CancelledError). Do NOT swallow into a terminal failure
+            # tuple here — propagate so execute() can decide: retry (reset to
+            # pending + re-raise) or terminal-fail once retries are exhausted.
             raise
         except Exception as exc:
             import traceback

@@ -28,7 +28,7 @@ def mock_hvac() -> MagicMock:
         yield mh
 
 
-def _make_backend(mock_hvac: MagicMock) -> VaultSecretsBackend:
+def _make_backend() -> VaultSecretsBackend:
     backend = VaultSecretsBackend()
     backend._client = MagicMock()
     return backend
@@ -36,12 +36,12 @@ def _make_backend(mock_hvac: MagicMock) -> VaultSecretsBackend:
 
 class TestVaultSecretsBackend:
     async def test_empty_key_raises_value_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         with pytest.raises(ValueError, match="non-empty"):
             await backend.get_secret("")
 
     async def test_get_secret_reads_from_vault(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.return_value = {
             "data": {"data": {"value": "my-value"}},
         }
@@ -55,7 +55,7 @@ class TestVaultSecretsBackend:
         )
 
     async def test_get_secret_unknown_key_raises_key_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.side_effect = mock_hvac.exceptions.InvalidPath()
 
         with pytest.raises(KeyError):
@@ -63,7 +63,7 @@ class TestVaultSecretsBackend:
 
     async def test_get_secret_missing_value_raises_key_error(self, mock_hvac: MagicMock) -> None:
         """A response with no ``value`` under data.data is treated as missing."""
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.return_value = {"data": {"data": {}}}
 
         with pytest.raises(KeyError):
@@ -71,15 +71,25 @@ class TestVaultSecretsBackend:
 
     async def test_get_secret_non_string_value_coerced(self, mock_hvac: MagicMock) -> None:
         """A non-string stored value is coerced with str() rather than rejected."""
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.return_value = {"data": {"data": {"value": 123}}}
 
         value = await backend.get_secret("numeric-key")
 
         assert value == "123"
 
+    async def test_set_secret_empty_key_raises_value_error(self, mock_hvac: MagicMock) -> None:
+        backend = _make_backend()
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.set_secret("", "my-value")
+
+    async def test_delete_secret_empty_key_raises_value_error(self, mock_hvac: MagicMock) -> None:
+        backend = _make_backend()
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.delete_secret("")
+
     async def test_set_secret_writes_to_vault(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
 
         await backend.set_secret("my-key", "my-value")
 
@@ -90,7 +100,7 @@ class TestVaultSecretsBackend:
         )
 
     async def test_set_secret_rate_limited_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         rate_limit_error = mock_hvac.exceptions.VaultError("rate limited")
         rate_limit_error.status_code = 503
         backend._client.secrets.kv.v2.create_or_update_secret.side_effect = rate_limit_error
@@ -99,7 +109,7 @@ class TestVaultSecretsBackend:
             await backend.set_secret("my-key", "my-value")
 
     async def test_delete_secret_removes_from_vault(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
 
         await backend.delete_secret("my-key")
 
@@ -109,7 +119,7 @@ class TestVaultSecretsBackend:
         )
 
     async def test_delete_secret_rate_limited_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         rate_limit_error = mock_hvac.exceptions.VaultError("rate limited")
         rate_limit_error.status_code = 429
         backend._client.secrets.kv.v2.delete_metadata_and_all_versions.side_effect = rate_limit_error
@@ -118,14 +128,14 @@ class TestVaultSecretsBackend:
             await backend.delete_secret("my-key")
 
     async def test_delete_secret_noop_when_missing(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.delete_metadata_and_all_versions.side_effect = mock_hvac.exceptions.InvalidPath()
 
         await backend.delete_secret("missing-key")
         backend._client.secrets.kv.v2.delete_metadata_and_all_versions.assert_called_once()
 
     async def test_get_secret_timeout_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
 
         with (
             patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
@@ -134,14 +144,14 @@ class TestVaultSecretsBackend:
             await backend.get_secret("my-key")
 
     async def test_get_secret_network_error_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.side_effect = ConnectionError("connection refused")
 
         with pytest.raises(RuntimeError, match="unexpected error reading secret"):
             await backend.get_secret("my-key")
 
     async def test_get_secret_rate_limited_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         rate_limit_error = mock_hvac.exceptions.VaultError("rate limited")
         rate_limit_error.status_code = 429
         backend._client.secrets.kv.v2.read_secret_version.side_effect = rate_limit_error
@@ -150,14 +160,14 @@ class TestVaultSecretsBackend:
             await backend.get_secret("my-key")
 
     async def test_get_secret_vault_error_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.side_effect = mock_hvac.exceptions.VaultError("bad request")
 
         with pytest.raises(RuntimeError, match="unexpected error reading secret"):
             await backend.get_secret("my-key")
 
     async def test_set_secret_timeout_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
 
         with (
             patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
@@ -166,14 +176,14 @@ class TestVaultSecretsBackend:
             await backend.set_secret("my-key", "my-value")
 
     async def test_set_secret_network_error_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.create_or_update_secret.side_effect = ConnectionError("connection refused")
 
         with pytest.raises(RuntimeError, match="unexpected error writing secret"):
             await backend.set_secret("my-key", "my-value")
 
     async def test_set_secret_vault_error_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.create_or_update_secret.side_effect = mock_hvac.exceptions.VaultError(
             "bad request"
         )
@@ -182,14 +192,14 @@ class TestVaultSecretsBackend:
             await backend.set_secret("my-key", "my-value")
 
     async def test_set_secret_cancelled_error_propagates(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.create_or_update_secret.side_effect = asyncio.CancelledError()
 
         with pytest.raises(asyncio.CancelledError):
             await backend.set_secret("my-key", "my-value")
 
     async def test_delete_secret_timeout_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
 
         with (
             patch.object(asyncio, "wait_for", side_effect=TimeoutError()),
@@ -198,7 +208,7 @@ class TestVaultSecretsBackend:
             await backend.delete_secret("my-key")
 
     async def test_delete_secret_network_error_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         delete_fn = backend._client.secrets.kv.v2.delete_metadata_and_all_versions
         delete_fn.side_effect = ConnectionError("connection refused")
 
@@ -206,7 +216,7 @@ class TestVaultSecretsBackend:
             await backend.delete_secret("my-key")
 
     async def test_delete_secret_vault_error_wraps_as_runtime_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         delete_fn = backend._client.secrets.kv.v2.delete_metadata_and_all_versions
         delete_fn.side_effect = mock_hvac.exceptions.VaultError("bad request")
 
@@ -214,7 +224,7 @@ class TestVaultSecretsBackend:
             await backend.delete_secret("my-key")
 
     async def test_delete_secret_cancelled_error_propagates(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         delete_fn = backend._client.secrets.kv.v2.delete_metadata_and_all_versions
         delete_fn.side_effect = asyncio.CancelledError()
 
@@ -222,48 +232,58 @@ class TestVaultSecretsBackend:
             await backend.delete_secret("my-key")
 
     async def test_get_secret_cancelled_error_propagates(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.side_effect = asyncio.CancelledError()
 
         with pytest.raises(asyncio.CancelledError):
             await backend.get_secret("my-key")
 
     async def test_secret_path_rejects_dot_dot(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.get_secret("../../etc/passwd")
 
     async def test_secret_path_rejects_leading_slash(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.get_secret("/absolute/path")
 
     async def test_get_secret_forbidden_raises_permission_error(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._client.secrets.kv.v2.read_secret_version.side_effect = mock_hvac.exceptions.Forbidden()
 
         with pytest.raises(PermissionError, match="permission denied"):
             await backend.get_secret("restricted-key")
 
     async def test_get_secret_key_path_contains_dot_dot_raises(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.get_secret("key/../subkey")
 
     async def test_get_secret_key_contains_only_dot_dot_raises(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.get_secret("..")
 
     async def test_set_secret_rejects_dot_dot_path(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.set_secret("../traversal", "value")
 
+    async def test_set_secret_rejects_leading_slash(self, mock_hvac: MagicMock) -> None:
+        backend = _make_backend()
+        with pytest.raises(ValueError, match="invalid secret key"):
+            await backend.set_secret("/absolute/path", "value")
+
     async def test_delete_secret_rejects_dot_dot_path(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         with pytest.raises(ValueError, match="invalid secret key"):
             await backend.delete_secret("../traversal")
+
+    async def test_delete_secret_rejects_leading_slash(self, mock_hvac: MagicMock) -> None:
+        backend = _make_backend()
+        with pytest.raises(ValueError, match="invalid secret key"):
+            await backend.delete_secret("/absolute/path")
 
     async def test_missing_addr_raises_value_error(self, monkeypatch, mock_hvac: MagicMock) -> None:
         monkeypatch.delenv("VAULT_ADDR", raising=False)
@@ -272,7 +292,7 @@ class TestVaultSecretsBackend:
             VaultSecretsBackend()
 
     async def test_secret_path_normalizes_trailing_slash(self, mock_hvac: MagicMock) -> None:
-        backend = _make_backend(mock_hvac)
+        backend = _make_backend()
         backend._path_prefix = "modulo/secrets/"
         assert backend._secret_path("my-key") == "modulo/secrets/my-key"
 

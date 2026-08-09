@@ -44,6 +44,7 @@
                 { key: 'actions', label: '' },
               ]"
               :rows="tableRows"
+              :row-clickable="false"
             >
               <template #cell-display_name="{ row }">
                 <div class="flex items-center gap-2">
@@ -74,6 +75,7 @@
                   <input
                     type="checkbox"
                     class="peer sr-only"
+                    :aria-label="$t('views.CostComponentsView.enabled') + ': ' + (row as any).display_name"
                     :checked="(row as any).enabled"
                     @change="toggleEnabled(row as any)"
                   />

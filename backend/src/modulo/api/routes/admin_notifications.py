@@ -26,6 +26,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.notifier import (
     EVENT_BUDGET_EXCEEDED,
     EVENT_CIRCUIT_BREAKER_TRIPPED,
+    EVENT_RUN_STALLED,
 )
 from modulo.db.models.notification_delivery import NotificationDeliveryLog
 from modulo.db.models.notification_endpoint import NotificationEndpoint
@@ -39,6 +40,7 @@ router = APIRouter(prefix="/api/v1/admin/notifications", tags=["admin-notificati
 AVAILABLE_EVENTS = [
     "hitl_awaiting",
     "run_failed",
+    EVENT_RUN_STALLED,
     "claim_expired",
     "hitl_overdue",
     EVENT_BUDGET_EXCEEDED,

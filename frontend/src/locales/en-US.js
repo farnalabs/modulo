@@ -1056,6 +1056,7 @@ export default {
       "live_output": "Live Output",
       "agent_stdout": "Agent Stdout",
       "agent_stderr": "Agent Stderr",
+      "agent_stalled": "Agent stalled: {reason}",
       "no_agent_logs": "No agent logs for this node.",
       "runs": "Runs",
       "gate_label": "Gate:",
@@ -2313,6 +2314,25 @@ export default {
         "legend_always_on": "Always-on = injected into every conversation",
         "legend_tool": "Tool = Remy loads on demand",
         "legend_off": "Off = disabled"
+      },
+      "RemyOnlyView": {
+        "remy_title": "Remy",
+        "remy_only_mode": "Remy Only Mode",
+        "banner": "This is a chat-only view — Remy can answer questions and use your skills, but cannot drive the browser here.",
+        "return_home": "Return home",
+        "new_tab": "New tab",
+        "close_tab": "Close tab",
+        "live": "Live",
+        "chat_tab": "Chat",
+        "skills_tab": "Skills",
+        "sources_tab": "Sources",
+        "sessions_tab": "Sessions",
+        "sub_tabs_label": "Views",
+        "no_tabs_yet": "No conversations yet",
+        "start_new": "Start a new conversation",
+        "select_tab_or_new": "Select a tab above or start a new conversation",
+        "remy_unavailable": "Remy is unavailable",
+        "remy_unavailable_desc": "Remy Only mode is not enabled for your workspace. Enable dev mode to use it."
       }
     },
     "SsoProviderForm": {
@@ -2370,6 +2390,7 @@ export default {
       "item_eval_proposals": "Eval Proposals",
       "item_variants": "Variants",
       "item_ab_test_models": "AB Test Models",
+      "item_schemas": "Schemas",
       "item_browse": "Browse",
       "item_editor": "Editor",
       "item_infer": "Infer",

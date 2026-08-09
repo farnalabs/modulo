@@ -12,7 +12,7 @@ test.describe('Navigation Flow', { tag: "@regression" }, () => {
     await pipelinesLink.click()
 
     await expect(page).toHaveURL(/\/pipelines/)
-    await expect(page.locator('h1')).toBeVisible()
+    await expect(page.locator('h1')).toContainText('Pipelines')
   })
 
   test('current page indicator is shown on active sidebar link', { tag: "@regression" }, async ({ page, env }) => {

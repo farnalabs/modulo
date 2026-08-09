@@ -126,13 +126,7 @@
                   </template>
                   <h3
                     v-else
-                    role="button"
-                    tabindex="0"
-                    class="truncate cursor-pointer font-semibold hover:text-primary"
-                    @click.stop="startEditingName(stage)"
-                    @keydown.enter.prevent="startEditingName(stage)"
-                    @keydown.space.prevent="startEditingName(stage)"
-                    :title="'Click to rename'"
+                    class="truncate font-semibold"
                   >{{ stage.name }}</h3>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">

@@ -26,11 +26,12 @@ def mock_boto3():
 
 
 def _make_backend():
+    """Build a backend whose client is a mock with the exception classes it references."""
     backend = AWSSecretsManagerBackend()
     mock_client = MagicMock()
-    mock_client.exceptions.ResourceNotFoundException = type("RNF", (Exception,), {})
-    mock_client.exceptions.AccessDeniedException = type("ADE", (Exception,), {})
-    mock_client.exceptions.ResourceExistsException = type("REE", (Exception,), {})
+    mock_client.exceptions.ResourceNotFoundException = type("ResourceNotFoundException", (Exception,), {})
+    mock_client.exceptions.AccessDeniedException = type("AccessDeniedException", (Exception,), {})
+    mock_client.exceptions.ResourceExistsException = type("ResourceExistsException", (Exception,), {})
     backend._client = mock_client
     return backend
 
@@ -83,6 +84,26 @@ class TestAWSSecretsManagerBackend:
 
         with pytest.raises(KeyError):
             await backend.get_secret("numeric-key")
+
+    async def test_get_secret_non_bytes_binary_raises_key_error(self, mock_boto3):
+        """A non-bytes SecretBinary is not trusted — treated as a missing secret."""
+        backend = _make_backend()
+        backend._client.get_secret_value.return_value = {"SecretBinary": "not-bytes"}
+
+        with pytest.raises(KeyError):
+            await backend.get_secret("binary-key")
+
+    async def test_set_secret_empty_key_raises_value_error(self, mock_boto3):
+        backend = _make_backend()
+
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.set_secret("", "my-value")
+
+    async def test_delete_secret_empty_key_raises_value_error(self, mock_boto3):
+        backend = _make_backend()
+
+        with pytest.raises(ValueError, match="non-empty"):
+            await backend.delete_secret("")
 
     async def test_set_secret_creates_new(self, mock_boto3):
         backend = _make_backend()

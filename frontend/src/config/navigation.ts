@@ -36,7 +36,7 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'eval-proposals-queue': { icon: 'Clipboard', labelKey: 'components.SidebarNav.item_eval_proposals' },
   'variant-compare': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_variants' },
   'ab-test-models': { icon: 'FlaskConical', labelKey: 'components.SidebarNav.item_ab_test_models' },
-  schemas: { icon: 'Database', labelKey: 'components.SidebarNav.item_browse' },
+  schemas: { icon: 'Database', labelKey: 'components.SidebarNav.item_schemas' },
   'schema-editor': { icon: 'FileText', labelKey: 'components.SidebarNav.item_editor' },
   'schema-infer': { icon: 'Search', labelKey: 'components.SidebarNav.item_infer' },
   'settings-remy': { icon: 'Bot', labelKey: 'components.SidebarNav.item_my_skills' },

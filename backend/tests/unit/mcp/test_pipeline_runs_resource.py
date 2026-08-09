@@ -108,12 +108,12 @@ class TestResourcePipelineRunsSuccess:
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_pipeline")
     @patch("modulo.db.crud.run.list_runs")
-    @patch("modulo.db.crud.run.get_child_runs_cost")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
     @patch("modulo.api.mcp_server._session")
     async def test_returns_runs_for_pipeline(
         self,
         mock_session: AsyncMock,
-        mock_get_child_runs_cost: AsyncMock,
+        mock_get_child_run_rollup: AsyncMock,
         mock_list_runs: AsyncMock,
         mock_get_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -139,8 +139,8 @@ class TestResourcePipelineRunsSuccess:
             total_cost_usd=None,
         )
         mock_list_runs.return_value = _make_page_result(items=[run1, run2], total=2)
-        # run1 has one child run worth 0.125000; run2 has none.
-        mock_get_child_runs_cost.return_value = {run1.id: Decimal("0.125000")}
+        # run1 has two child runs worth 0.125000 in total; run2 has none.
+        mock_get_child_run_rollup.return_value = {run1.id: (Decimal("0.125000"), 2)}
 
         result = await resource_pipeline_runs(pipeline_id=str(_PIPELINE_ID))
 
@@ -155,26 +155,28 @@ class TestResourcePipelineRunsSuccess:
         assert "0.075" in result or "$0.075" in result
         assert "2026-06-20T14:30:00+00:00" in result
         # Rollup fields are rendered per run, matching the REST API semantics.
+        assert "child_count=2" in result
         assert "child_cost=$0.125000" in result
         assert "aggregate_cost=$0.200000" in result
+        assert "child_count=0" in result
         assert "child_cost=$0.000000" in result
         assert "aggregate_cost=$0.000000" in result
         # The query must be scoped to the requested pipeline.
         mock_list_runs.assert_awaited_once()
         assert mock_list_runs.await_args.kwargs["pipeline_id"] == _PIPELINE_ID
         # ONE GROUP BY query for the whole page — never a per-run aggregate.
-        mock_get_child_runs_cost.assert_awaited_once()
-        assert set(mock_get_child_runs_cost.await_args.args[1]) == {run1.id, run2.id}
+        mock_get_child_run_rollup.assert_awaited_once()
+        assert set(mock_get_child_run_rollup.await_args.args[1]) == {run1.id, run2.id}
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_pipeline")
     @patch("modulo.db.crud.run.list_runs")
-    @patch("modulo.db.crud.run.get_child_runs_cost")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
     @patch("modulo.api.mcp_server._session")
     async def test_run_without_children_shows_zero_rollup(
         self,
         mock_session: AsyncMock,
-        mock_get_child_runs_cost: AsyncMock,
+        mock_get_child_run_rollup: AsyncMock,
         mock_list_runs: AsyncMock,
         mock_get_pipeline: AsyncMock,
         mock_validate_auth: AsyncMock,
@@ -186,13 +188,14 @@ class TestResourcePipelineRunsSuccess:
 
         run1 = _make_mock_run(run_id=uuid.uuid4(), total_cost_usd=0.075)
         mock_list_runs.return_value = _make_page_result(items=[run1], total=1)
-        mock_get_child_runs_cost.return_value = {}
+        mock_get_child_run_rollup.return_value = {}
 
         result = await resource_pipeline_runs(pipeline_id=str(_PIPELINE_ID))
 
+        assert "child_count=0" in result
         assert "child_cost=$0.000000" in result
         assert "aggregate_cost=$0.075000" in result
-        mock_get_child_runs_cost.assert_awaited_once()
+        mock_get_child_run_rollup.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_pipeline")
