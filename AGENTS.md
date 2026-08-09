@@ -1072,6 +1072,18 @@ Remy was descoped from MVP and gated behind dev mode. BOTH /admin/remy and /sett
 
 Sidebar tests that check group header counts must account for preview-hidden groups. In simple mode with dev mode off, only core and settings groups are guaranteed visible. Test assertions should use 	oBeGreaterThanOrEqual(2) not 3.
 
+### Manifest dev-gating field is `visibility: private_preview`, and the `<<: *community` anchor is required
+
+The current manifest field for dev-mode-only routes is `visibility: private_preview` (the old `preview: true` boolean no longer exists). A `private_preview` entry MUST also carry the `<<: *community` tier anchor — without it, `required_tier` is undefined and the router's dev-mode guard (`if (to.meta?.visibility === 'private_preview' && !planStore.devMode) return { name: 'dashboard' }`) never runs because the guard only enters that branch when `requiredTier || private_preview` is set and the meta is hydrated from the manifest entry. Omitting the anchor makes the route reachable in production — dead-code protection. `/remy` (remy-only mode) and `/admin/remy` + `/settings/remy` are the canonical examples.
+
+### Remy-only mode renders no permission UI — MCP tools execute un-gated
+
+In the full-screen remy-only ingress (`/remy`), the UI-driving tool family is excluded server-side via `exclude_ui_tools` on the stream request. The frontend therefore renders **no permission card at all**: only UI-driving had a permission/NOGO flow; MCP tools execute server-side without a frontend approval step. When adding a new Remy UI feature, do not assume a permission prompt exists — check whether it runs through the `ui_command_batch`/permission path (gated) or the MCP tool path (ungated).
+
+### Cross-tab/shared `activeSessionId` in remy-only mode is accepted, not solved
+
+The remy-only tabs store persists `{ tabId, sessionId }` pairs in localStorage while titles and the active tab are derived from the shared `useRemyStore.activeSessionId`. The store never introduces a separate `activeTabId` — tab state is reconciled from the shared session state on every sessions fetch (prune dead tabs, reseed on first mount, reassign active on close). This coupling means the panel and the full-screen view intentionally share one active session; divergence is accepted (same as the existing no-cross-tab-sync stance in PRD §8.23).
+
 ## Modulo Pipeline Configuration (E2B Sandbox Agents)
 
 All Modulo agent pipelines (Branch Fixer, PR Reviewer, Improve Tests, Improve Architecture, Codebase Improver, Daily Watcher) use a single `sandbox_agent` node type that runs an opencode agent inside an E2B sandbox. The sandbox is ephemeral — created per-run, destroyed after completion.
