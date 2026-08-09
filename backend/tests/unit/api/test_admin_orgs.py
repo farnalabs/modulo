@@ -45,9 +45,12 @@ def mock_session():
     session.begin = MagicMock()
     session.begin.return_value.__aenter__.return_value = session
     session.begin.return_value.__aexit__.return_value = None
+    session.in_transaction = MagicMock(return_value=True)
+    session.execute.return_value = MagicMock()
     session.execute.return_value.scalar_one_or_none.return_value = None
     session.execute.return_value.scalar_one.return_value = 0
     session.execute.return_value.scalars.return_value.all.return_value = []
+    session.add = MagicMock()
     session.flush.return_value = None
     return session
 
