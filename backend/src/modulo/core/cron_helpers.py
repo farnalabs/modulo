@@ -2470,9 +2470,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                             except asyncio.CancelledError:
                                 raise
                             except Exception:
+                                summary["skipped"] += 1
                                 # Redis down — do NOT terminal-fail; keep pending
                                 # for a later tick.
-                                summary["skipped"] += 1
                                 continue
                             await _fail_run_dispatch_failed(session, row.id, org_id)
                             summary["dispatch_failed_terminalized"] += 1
