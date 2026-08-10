@@ -1,0 +1,269 @@
+"""Unit tests for the pipeline retry_policy decision logic in the executor.
+
+The primary contract is ``_retry_after_policy`` — the pure decision function
+that maps a terminal (final_status, error_code) outcome to a retry budget.
+These tests assert the matching rules directly; the execute() integration path
+(reset-to-pending + re-raise) is covered by the executor's fenced-retry tests.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from modulo.core.pipeline_engine.executor import (
+    PipelineExecutor,
+    RunRetryPolicyError,
+    _retry_after_policy,
+)
+
+
+def _make_run(
+    *,
+    run_id: uuid.UUID | None = None,
+    pipeline_id: uuid.UUID | None = None,
+    snapshot_id: uuid.UUID | None = None,
+    status: str = "running",
+    node_attempt_count: int = 1,
+    claim_token: str | None = "tok-claim-abc",
+) -> MagicMock:
+    run = MagicMock()
+    run.id = run_id or uuid.uuid4()
+    run.pipeline_id = pipeline_id or uuid.uuid4()
+    run.snapshot_id = snapshot_id or uuid.uuid4()
+    run.langgraph_thread_id = str(uuid.uuid4())
+    run.status = status
+    run.node_attempt_count = node_attempt_count
+    run.claim_token = claim_token
+    run.claim_count = 10
+    return run
+
+
+def _make_snapshot(graph_json: dict[str, Any] | None = None) -> MagicMock:
+    snap = MagicMock()
+    snap.graph_json = graph_json or {
+        "nodes": [{"id": "node-a", "role": None}],
+        "edges": [],
+    }
+    snap.run_context_defaults = {"context_key": "context_val"}
+    return snap
+
+
+def _make_pipeline(*, retry_policy: Any = None) -> MagicMock:
+    pipeline = MagicMock()
+    pipeline.max_concurrent_runs = 5
+    pipeline.lock_wait_timeout_seconds = 30
+    pipeline.max_duration_seconds = 3600
+    pipeline.max_steps = 100
+    pipeline.token_budget = None
+    pipeline.node_timeout_seconds = 300
+    pipeline.retry_policy = retry_policy if retry_policy is not None else {}
+    return pipeline
+
+
+def _make_session(snapshot: MagicMock, statements: list[str] | None = None, retry_policy: Any = None) -> AsyncMock:
+    pipeline = _make_pipeline(retry_policy=retry_policy)
+
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one.return_value = pipeline
+
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one.return_value = snapshot
+
+    eval_result = MagicMock()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    eval_result.scalars.return_value = scalars_mock
+
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+
+    execute_results = iter([pipeline_result, snapshot_result, eval_result, count_result])
+
+    recorded = statements if statements is not None else []
+
+    async def _execute(*_args: Any, **_kwargs: Any) -> Any:
+        recorded.append(str(_args[0]) if _args else "")
+        try:
+            return next(execute_results)
+        except StopIteration:
+            return count_result
+
+    session = AsyncMock(spec=object)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.add = MagicMock()
+    session.execute = _execute
+    return session
+
+
+def _make_session_factory(session: AsyncMock) -> MagicMock:
+    @asynccontextmanager
+    async def _ctx() -> AsyncIterator[AsyncMock]:
+        yield session
+
+    return MagicMock(side_effect=lambda: _ctx())
+
+
+def _mock_graph_validator() -> MagicMock:
+    validation = MagicMock()
+    validation.is_valid = True
+    mock_cls = MagicMock()
+    mock_cls.return_value.validate_for_run = AsyncMock(return_value=validation)
+    mock_cls.check_retry_policy = MagicMock()
+    return mock_cls
+
+
+def _mock_compiled_raising(exc: Exception) -> MagicMock:
+    async def _astream(state: Any, config: Any, *, version: str = "v1") -> Any:
+        raise exc
+        yield  # pragma: no cover  # makes this an async generator
+
+    c = MagicMock()
+    c.astream_events = _astream
+    return c
+
+
+def _mock_registry() -> MagicMock:
+    broker = MagicMock()
+    broker.publish = MagicMock()
+    broker.is_closed = False
+    registry = MagicMock()
+    registry.get_or_create.return_value = broker
+    registry.close = MagicMock()
+    return registry
+
+
+async def _bypass_capacity(mock_self, **kwargs):
+    run = MagicMock()
+    run.status = "running"
+    return run
+
+
+# ---------------------------------------------------------------------------
+# _retry_after_policy — pure decision logic (the extensible matching contract)
+# ---------------------------------------------------------------------------
+
+
+def test_retry_after_policy_stall_match():
+    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "stalled", "executor_stalled") == 2
+
+
+def test_retry_after_policy_stall_does_not_match_timeout():
+    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "node_timeout") is None
+
+
+def test_retry_after_policy_timeout_match():
+    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "node_timeout") == 1
+
+
+def test_retry_after_policy_timeout_error_code_match():
+    assert _retry_after_policy({"on": ["timeout"], "max_retries": 1}, "failed", "TimeoutError") == 1
+
+
+def test_retry_after_policy_failure_match():
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 1}, "failed", "some_other_error") == 1
+
+
+def test_retry_after_policy_no_policy_returns_none():
+    assert _retry_after_policy({}, "stalled", "executor_stalled") is None
+    assert _retry_after_policy(None, "failed", "boom") is None
+
+
+def test_retry_after_policy_malformed_on_returns_none():
+    assert _retry_after_policy({"on": ["bogus"], "max_retries": 2}, "failed", "boom") is None
+    assert _retry_after_policy({"on": "stall", "max_retries": 2}, "stalled", "executor_stalled") is None
+
+
+def test_retry_after_policy_zero_budget_returns_none():
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 0}, "failed", "boom") is None
+
+
+def test_retry_after_policy_failure_excludes_timeout_outcome():
+    # A "failure"-only policy must not retry a node_timeout outcome.
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_timeout") is None
+
+
+def test_retry_after_policy_stall_error_code_on_failed_status():
+    # A stall surfaces as status "failed" with error_code "executor_stalled"
+    # (the zombie watchdog path) — the "stall" event must still match it.
+    assert _retry_after_policy({"on": ["stall"], "max_retries": 2}, "failed", "executor_stalled") == 2
+
+
+# ---------------------------------------------------------------------------
+# RunRetryPolicyError — subclasses NodeCancelledError (transient to the caller)
+# ---------------------------------------------------------------------------
+
+
+def test_run_retry_policy_error_subclasses_node_cancelled():
+    from langgraph.errors import NodeCancelledError
+
+    exc = RunRetryPolicyError("failed", 2)
+    assert isinstance(exc, NodeCancelledError)
+    assert exc.status == "failed"
+    assert exc.max_retries == 2
+
+
+# ---------------------------------------------------------------------------
+# PipelineExecutor.execute — terminal failure under a retry policy resets the
+# run to pending and re-raises RunRetryPolicyError (not a terminal fail)
+# ---------------------------------------------------------------------------
+
+
+async def test_execute_retry_policy_resets_pending_and_reraises():
+    """A terminal 'failed' outcome that the pipeline's retry_policy says to
+    retry (with budget remaining) resets the run to pending via the fenced
+    conditional UPDATE and re-raises RunRetryPolicyError so SAQ re-dispatches."""
+
+    run = _make_run(node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    retry_policy = {"on": ["failure"], "max_retries": 2}
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+
+    # _stream_graph raises a transient NodeCancelledError — the run's terminal
+    # state then goes through the retry-policy decision point. But a
+    # NodeCancelledError with retry budget left is handled by the EXISTING
+    # NodeCancelledError path, not the retry-policy path. To exercise the
+    # retry-policy path we must produce a terminal (final_status, error_code)
+    # tuple WITHOUT a NodeCancelledError — a generic exception whose class name
+    # becomes the error_code, matching "failure".
+    class _GenericFailureError(Exception):
+        pass
+
+    compiled = _mock_compiled_raising(_GenericFailureError("boom"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(RunRetryPolicyError) as exc_info:
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+    assert exc_info.value.status == "failed"
+    assert exc_info.value.max_retries == 2
+    # Fenced pending-reset issued (claim_token guarded).
+    reset_stmt = next(s for s in statements if "status='pending'" in s)
+    assert "claim_token=:tok" in reset_stmt
+    # The run must NOT be terminal-failed via finalize_cost.
+    mock_finalize.assert_not_awaited()
+    # The broker is closed so the retry re-entry gets a fresh one.
+    registry.close.assert_called()

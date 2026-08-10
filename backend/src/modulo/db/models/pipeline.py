@@ -55,6 +55,12 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     )
     default_feedback_handler: Mapped[str | None] = mapped_column(String(50))
     rate_limit_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    retry_policy: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::json"),
+    )
     stale_run_timeout_minutes: Mapped[int] = mapped_column(
         Integer, nullable=False, default=30, server_default=text("'30'")
     )

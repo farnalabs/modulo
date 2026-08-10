@@ -234,6 +234,7 @@ async def export_pipeline_bundle(
                 "graph_nodes_json": pipeline.graph_nodes_json or [],
                 "run_context_defaults": dict(pipeline.run_context_defaults or {}),
                 "node_timeout_seconds": pipeline.node_timeout_seconds,
+                "retry_policy": dict(pipeline.retry_policy or {}),
                 "visibility": "org",  # Always strip team scoping
             },
             "agents": agents_list,
@@ -1010,6 +1011,9 @@ async def materialize_import(
         raise RuntimeError(f"Failed to create pipeline '{pname}' after {_MAX_NAME_RETRIES} attempts")
 
     pipeline.graph_nodes_json = list(graph_nodes)
+    imported_retry_policy = pipeline_info.get("retry_policy")
+    if isinstance(imported_retry_policy, dict):
+        pipeline.retry_policy = imported_retry_policy
     await session.flush()
 
     # --- Step 4: Create edges ---

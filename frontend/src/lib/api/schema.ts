@@ -10549,6 +10549,13 @@ export interface components {
             rate_limit_config?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Retry Policy
+             * @description Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. When a run ends in a configured state and retries remain, the run is re-dispatched automatically instead of terminal-failing.
+             */
+            retry_policy?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** PipelineFolderMoveRequest */
         PipelineFolderMoveRequest: {
@@ -10772,6 +10779,10 @@ export interface components {
             rate_limit_config?: {
                 [key: string]: unknown;
             } | null;
+            /** Retry Policy */
+            retry_policy: {
+                [key: string]: unknown;
+            };
             /**
              * Snapshot Count
              * @default 0
@@ -10850,6 +10861,13 @@ export interface components {
              * @description Rate limit config. Set to {} to clear.
              */
             rate_limit_config?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Retry Policy
+             * @description Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. Set to {} to clear.
+             */
+            retry_policy?: {
                 [key: string]: unknown;
             } | null;
             /** @description Replace the pipeline graph (nodes + edges). Creates a new snapshot. */

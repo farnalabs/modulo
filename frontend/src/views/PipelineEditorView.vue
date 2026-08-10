@@ -115,6 +115,78 @@
             />
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
+          <div class="relative">
+            <button
+              class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
+              @click="retryPolicyOpen = !retryPolicyOpen"
+              :aria-expanded="retryPolicyOpen"
+              aria-haspopup="dialog"
+              data-testid="pipeline-editor-retry-policy-toggle"
+            >
+              Retry policy
+            </button>
+            <div
+              v-if="retryPolicyOpen"
+              class="absolute right-0 top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
+              role="dialog"
+              aria-label="Retry policy"
+              data-testid="pipeline-editor-retry-policy-panel"
+            >
+              <div class="mb-1 text-xs font-medium text-foreground">Retry policy</div>
+              <div class="mb-2 text-[10px] text-muted-foreground">
+                Automatically re-dispatch a run that ends in a selected state (up to the retry budget).
+              </div>
+              <div class="space-y-1">
+                <label
+                  v-for="opt in retryPolicyOptions"
+                  :key="opt.value"
+                  class="flex items-center gap-2 text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    :value="opt.value"
+                    v-model="retryPolicyEvents"
+                    class="h-3.5 w-3.5"
+                    :data-testid="`pipeline-editor-retry-event-${opt.value}`"
+                  />
+                  {{ opt.label }}
+                </label>
+              </div>
+              <div class="mt-3 flex items-center gap-2">
+                <label for="retry-policy-max" class="text-[10px] text-muted-foreground whitespace-nowrap">
+                  Max retries:
+                </label>
+                <input
+                  id="retry-policy-max"
+                  v-model.number="retryPolicyMaxRetries"
+                  type="number"
+                  min="0"
+                  max="5"
+                  class="w-14 rounded border border-input bg-background px-1.5 py-1 text-xs"
+                  data-testid="pipeline-editor-retry-policy-max"
+                />
+              </div>
+              <div v-if="retryPolicyError" class="mt-2 text-xs text-destructive" data-testid="pipeline-editor-retry-policy-error">
+                {{ retryPolicyError }}
+              </div>
+              <div class="mt-3 flex justify-end gap-2">
+                <button
+                  class="rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                  @click="retryPolicyOpen = false"
+                >
+                  Cancel
+                </button>
+                <button
+                  class="rounded border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90"
+                  @click="saveRetryPolicy"
+                  data-testid="pipeline-editor-retry-policy-save"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+          <span class="mx-2 h-4 w-px bg-border" />
           <button
             class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
             @click="addNode"
@@ -1021,6 +1093,51 @@ watch(runPrompt, () => {
 
 const maxDurationInput = ref<number | undefined>(undefined)
 
+const retryPolicyOpen = ref(false)
+const retryPolicyEvents = ref<string[]>([])
+const retryPolicyMaxRetries = ref(0)
+const retryPolicyError = ref<string | null>(null)
+const retryPolicyOptions = [
+  { value: 'stall', label: 'Stall (executor_stalled)' },
+  { value: 'timeout', label: 'Timeout (node_timeout)' },
+  { value: 'failure', label: 'Failure' },
+]
+
+function syncRetryPolicyFromPipeline() {
+  const rp = (pipeline.value as any)?.retry_policy
+  if (rp && typeof rp === 'object') {
+    const events = Array.isArray(rp.on) ? rp.on.filter((e: string) => ['stall', 'timeout', 'failure'].includes(e)) : []
+    retryPolicyEvents.value = events
+    const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
+    retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
+  } else {
+    retryPolicyEvents.value = []
+    retryPolicyMaxRetries.value = 0
+  }
+  retryPolicyError.value = null
+}
+
+async function saveRetryPolicy() {
+  retryPolicyError.value = null
+  const max = Math.min(5, Math.max(0, Number(retryPolicyMaxRetries.value) || 0))
+  const on = [...retryPolicyEvents.value]
+  const body: { retry_policy: Record<string, unknown> } = {
+    retry_policy: on.length > 0 ? { on, max_retries: max } : {},
+  }
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body,
+      signal,
+    }))
+    await loadPipeline()
+    retryPolicyOpen.value = false
+    saveGraphError.value = null
+  } catch (e) {
+    retryPolicyError.value = `Failed to update retry policy: ${formatApiError(e)}`
+  }
+}
+
 const folders = ref<any[]>([])
 const linkedLifecycleMaps = ref<any[]>([])
 
@@ -1579,6 +1696,7 @@ async function loadPipeline() {
     }))
     pipeline.value = data as any
     maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
+    syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = `Failed to load pipeline: ${formatApiError(e)}`
   }
