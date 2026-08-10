@@ -18,11 +18,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core.cost_controller.probe import (
+    _assert_sample_query_index,
     _duplicate_flood_trigger,
     _evaluate_run,
     _evaluate_trigger,
     _org_row_watch,
+    _sample_runs,
     run_probe,
+    set_duplicate_terminal_cooldown,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -61,15 +64,15 @@ def _make_session() -> AsyncMock:
 def _make_sampled_run(
     *,
     run_id: uuid.UUID | None = None,
-    total: str = "10.000000",
-    breakdown: list[dict[str, Any]] | None = None,
+    total: str | None = "10.000000",
+    breakdown: list[Any] | None = None,
     started_at: datetime | None = None,
     ledger_written: bool = True,
     ledger_refused_at: Any = None,
 ) -> MagicMock:
     run = MagicMock()
     run.id = run_id or uuid.uuid4()
-    run.total_cost_usd = Decimal(total)
+    run.total_cost_usd = Decimal(total) if total is not None else None
     run.cost_breakdown = breakdown if breakdown is not None else [{"component": "x", "amount_usd": total}]
     run.started_at = started_at or _NOW
     run.ledger_written = ledger_written
@@ -105,11 +108,128 @@ def test_evaluate_run_malformed_amount_drops_run() -> None:
     assert _evaluate_run(run) == "malformed"
 
 
+def test_evaluate_run_none_total_drops_run() -> None:
+    run = _make_sampled_run(total=None)
+    assert _evaluate_run(run) == "malformed"
+
+
+def test_evaluate_run_none_breakdown_drops_run() -> None:
+    run = MagicMock()
+    run.total_cost_usd = Decimal("1.000000")
+    run.cost_breakdown = None
+    assert _evaluate_run(run) == "malformed"
+
+
+def test_evaluate_run_malformed_total_drops_run() -> None:
+    run = MagicMock()
+    run.total_cost_usd = "not-a-number"
+    run.cost_breakdown = [{"component": "x", "amount_usd": "1.000000"}]
+    assert _evaluate_run(run) == "malformed"
+
+
+def test_evaluate_run_skips_non_dict_entries() -> None:
+    """Non-dict entries are ignored in the sum."""
+    run = _make_sampled_run(
+        total="2.000000",
+        breakdown=[
+            {"component": "x", "amount_usd": "2.000000"},
+            "garbage",
+            {"amount_usd": None},
+        ],
+    )
+    assert _evaluate_run(run) == "ok"
+
+
+def test_evaluate_run_any_clamped_marker_short_circuits_to_clamped() -> None:
+    """A single total_clamped entry marks the whole run as clamped."""
+    run = _make_sampled_run(
+        total="2.000000",
+        breakdown=[
+            {"component": "x", "amount_usd": "2.000000"},
+            {"amount_usd": "5.000000", "total_clamped": True},
+        ],
+    )
+    assert _evaluate_run(run) == "clamped"
+
+
+# ---------------------------------------------------------------------------
+# _sample_runs — the N=50 most recent terminal runs
+# ---------------------------------------------------------------------------
+
+
+async def test_sample_runs_returns_all_rows() -> None:
+    session = AsyncMock()
+    rows = [object(), object()]
+    session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
+    assert await _sample_runs(session, _ORG_ID) == rows
+    session.execute.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _assert_sample_query_index — the one-per-process EXPLAIN gate
+# ---------------------------------------------------------------------------
+
+
+async def test_explain_gate_uses_reset_on_success() -> None:
+    session = AsyncMock()
+    plan_rows = MagicMock()
+    plan_rows.all.return_value = [("Index Scan using ix_runs_probe",)]
+    session.execute = AsyncMock(return_value=plan_rows)
+    session.execute.side_effect = [AsyncMock(), plan_rows, AsyncMock()] * 2
+    with patch("modulo.core.cost_controller.probe._explain_checked", False):
+        await _assert_sample_query_index(session, _ORG_ID)
+    executed = [call.args[0] for call in session.execute.await_args_list]
+    assert any("SET enable_seqscan = off" in str(cmd) for cmd in executed)
+    assert any("RESET enable_seqscan" in str(cmd) for cmd in executed)
+    assert any("EXPLAIN" in str(cmd) for cmd in executed)
+    with patch("modulo.core.cost_controller.probe._explain_checked", False):
+        await _assert_sample_query_index(session, _ORG_ID)
+    assert len(session.execute.await_args_list) == 6  # run twice, not once
+
+
+async def test_explain_gate_resets_on_missing_index() -> None:
+    """A plan without the index still RESETs seqscan and warns (never crashes)."""
+    session = AsyncMock()
+    plan_rows = MagicMock()
+    plan_rows.all.return_value = [("Seq Scan on runs",)]
+    session.execute = AsyncMock(return_value=plan_rows)
+    session.execute.side_effect = [AsyncMock(), plan_rows, AsyncMock()]
+    with (
+        patch("modulo.core.cost_controller.probe._explain_checked", False),
+        patch("modulo.core.cost_controller.probe._log") as mock_log,
+    ):
+        await _assert_sample_query_index(session, _ORG_ID)
+    executed = [call.args[0] for call in session.execute.await_args_list]
+    assert any("RESET enable_seqscan" in str(cmd) for cmd in executed)
+    mock_log.warning.assert_called_once()
+
+
+async def test_explain_gate_reset_on_failure() -> None:
+    """A failed EXPLAIN still runs RESET via finally, then logs."""
+    session = AsyncMock()
+    session.execute = AsyncMock()
+    session.execute.side_effect = [AsyncMock(), RuntimeError("boom"), AsyncMock()]
+    with (
+        patch("modulo.core.cost_controller.probe._explain_checked", False),
+        patch("modulo.core.cost_controller.probe._log") as mock_log,
+    ):
+        await _assert_sample_query_index(session, _ORG_ID)
+    executed = [call.args[0] for call in session.execute.await_args_list]
+    assert any("RESET enable_seqscan" in str(cmd) for cmd in executed)
+    mock_log.exception.assert_called_once()
+
+
+async def test_explain_gate_short_circuits_after_first_success() -> None:
+    """Once checked, the EXPLAIN gate does not re-run in the same process."""
+    session = AsyncMock()
+    with patch("modulo.core.cost_controller.probe._explain_checked", True):
+        await _assert_sample_query_index(session, _ORG_ID)
+    session.execute.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # _org_row_watch — the org-row existence WATCH
 # ---------------------------------------------------------------------------
-
-
 async def test_org_row_watch_missing_row_counts() -> None:
     runs = [_make_sampled_run(ledger_written=True, ledger_refused_at=None)]
     session = AsyncMock()
@@ -163,6 +283,55 @@ async def test_org_row_watch_null_team_and_refused_runs_excluded() -> None:
     assert await _org_row_watch(session, _ORG_ID, runs) == 1
 
 
+async def test_org_row_watch_no_watched_runs_returns_zero() -> None:
+    """No watched runs (all refused/unwritten) short-circuits without a query."""
+    runs = [
+        _make_sampled_run(ledger_written=False, ledger_refused_at=None),
+        _make_sampled_run(ledger_written=True, ledger_refused_at=_NOW),
+    ]
+    session = AsyncMock()
+    assert await _org_row_watch(session, _ORG_ID, runs) == 0
+    session.execute.assert_not_awaited()
+
+
+async def test_org_row_watch_none_started_at_skipped() -> None:
+    """A watched run with no started_at contributes nothing to any date bucket."""
+    run = _make_sampled_run(ledger_written=True, ledger_refused_at=None)
+    run.started_at = None
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    assert await _org_row_watch(session, _ORG_ID, [run]) == 0
+
+
+async def test_org_row_watch_malformed_total_skipped() -> None:
+    """A watched run whose total cannot be decimal-parsed is skipped, not fatal."""
+    run = MagicMock()
+    run.id = uuid.uuid4()
+    run.total_cost_usd = "not-a-number"
+    run.cost_breakdown = [{"component": "x", "amount_usd": "1.000000"}]
+    run.started_at = _NOW
+    run.ledger_written = True
+    run.ledger_refused_at = None
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    assert await _org_row_watch(session, _ORG_ID, [run]) == 0
+
+
+async def test_org_row_watch_single_date_grouped_across_runs() -> None:
+    """Two watched runs on the same date sum into ONE date bucket (1 row expected)."""
+    runs = [
+        _make_sampled_run(total="3.000000", ledger_written=True, ledger_refused_at=None),
+        _make_sampled_run(total="4.000000", ledger_written=True, ledger_refused_at=None),
+    ]
+    row = MagicMock()
+    row.run_date = _NOW.date()
+    row.total_spend_usd = Decimal("7.000000")
+    row.clamped = False
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[row])))
+    assert await _org_row_watch(session, _ORG_ID, runs) == 0
+
+
 # ---------------------------------------------------------------------------
 # _evaluate_trigger — the canonical probe rule
 # ---------------------------------------------------------------------------
@@ -210,6 +379,18 @@ async def test_trigger_temporal_adjacency_resets_after_gap() -> None:
     assert await _trigger(["r1", "r2"], sampled=5, blob=_blob(["r9", "r8"], age_minutes=15)) is False
 
 
+async def test_trigger_malformed_blob_timestamp_treated_as_no_chain() -> None:
+    """A corrupt persisted timestamp resets the chain (fail-safe, never crashes)."""
+    blob = {"last_cadence_mismatch_runs": ["r9", "r8"], "last_cadence_at": "not-a-date"}
+    assert await _trigger(["r1", "r2"], sampled=5, blob=blob) is False
+
+
+async def test_trigger_non_list_prior_runs_treated_as_zero_chain() -> None:
+    """A persisted blob whose mismatch list is not a list counts as no prior chain."""
+    blob = {"last_cadence_mismatch_runs": "r9,r8", "last_cadence_at": (_NOW - timedelta(minutes=4)).isoformat()}
+    assert await _trigger(["r1", "r2"], sampled=5, blob=blob) is False
+
+
 # ---------------------------------------------------------------------------
 # _duplicate_flood_trigger — the flood hard-gate input + cooldown
 # ---------------------------------------------------------------------------
@@ -251,6 +432,29 @@ async def test_flood_expired_cooldown_does_not_suppress() -> None:
     events = [{"run_id": f"r{i}", "ts": _NOW.isoformat()} for i in range(6)]
     expired = (_NOW - timedelta(minutes=20)).isoformat()
     assert await _flood(events, suppressed_until=expired) is True
+
+
+async def test_flood_malformed_cooldown_ignored() -> None:
+    """A corrupt suppressed-until value expires by fallthrough — never raises."""
+    events = [{"run_id": f"r{i}", "ts": _NOW.isoformat()} for i in range(6)]
+    assert await _flood(events, suppressed_until="garbage") is True
+
+
+async def test_flood_non_list_events_no_fire() -> None:
+    """A corrupt (non-list) event store must never crash the probe."""
+    assert await _flood(events="not-a-list") is False
+
+
+async def test_flood_ignores_malformed_events_and_missing_run_ids() -> None:
+    """Events with corrupt/missing timestamps or run_ids are skipped, not counted."""
+    events = [
+        {"run_id": "r1", "ts": _NOW.isoformat()},
+        {"run_id": "r2", "ts": "not-a-date"},
+        {"ts": _NOW.isoformat()},  # no run_id
+        {"run_id": "r3"},  # no ts
+        "garbage",  # not a dict
+    ]
+    assert await _flood(events) is False
 
 
 # ---------------------------------------------------------------------------
@@ -323,3 +527,63 @@ async def test_run_probe_all_orgs_failed_does_not_advance() -> None:
     assert summary["orgs_failed"] == 1
     assert summary["advanced_heartbeat"] is False
     mock_ts.assert_not_called()
+
+
+async def test_run_probe_enumeration_failure_reports_error() -> None:
+    """Org enumeration failure aborts before sampling; summary carries the error."""
+    session = _make_session()
+    session.execute = AsyncMock(side_effect=RuntimeError("boom"))
+    with patch("modulo.core.cost_controller.probe.set_probe_last_success_ts") as mock_ts:
+        summary = await run_probe(_make_factory(session))
+    assert summary["error"] == "enumeration_failed"
+    assert summary["orgs_enumerated"] == 0
+    assert summary["advanced_heartbeat"] is False
+    mock_ts.assert_not_called()
+
+
+async def test_run_probe_zero_org_enumerated_is_quiet_success() -> None:
+    """A zero-org install returns before sampling with no heartbeat advance."""
+    session = _make_session()
+    session.execute = AsyncMock(return_value=MagicMock())
+    session.execute.return_value.scalars.return_value.all.return_value = []
+    with patch("modulo.core.cost_controller.probe._probe_org", new=AsyncMock()) as mock_probe:
+        summary = await run_probe(_make_factory(session))
+    assert summary == {
+        "orgs_enumerated": 0,
+        "orgs_succeeded": 0,
+        "orgs_failed": 0,
+        "advanced_heartbeat": False,
+    }
+    mock_probe.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# set_duplicate_terminal_cooldown — the flood cooldown writer
+# ---------------------------------------------------------------------------
+
+
+async def test_cooldown_writes_suppression_until() -> None:
+    """Writes a future isoformat timestamp under the system_config key."""
+    session = _make_session()
+    written: dict[str, str] = {}
+
+    async def _fake_write(s: Any, key: str, value: Any) -> None:
+        written[key] = value
+
+    with patch("modulo.core.cost_controller.probe.write_system_config", side_effect=_fake_write):
+        await set_duplicate_terminal_cooldown(_make_factory(session))
+    raw = written.get("duplicate_terminal_suppressed_until")
+    assert raw is not None
+    parsed = datetime.fromisoformat(raw)
+    assert parsed > _NOW
+
+
+async def test_cooldown_survives_underlying_failure() -> None:
+    """A DB failure is logged and swallowed — the worker must not crash on write."""
+    session = _make_session()
+    with (
+        patch("modulo.core.cost_controller.probe.write_system_config", side_effect=RuntimeError("boom")),
+        patch("modulo.core.cost_controller.probe._log") as mock_log,
+    ):
+        await set_duplicate_terminal_cooldown(_make_factory(session))
+    mock_log.exception.assert_called_once()
