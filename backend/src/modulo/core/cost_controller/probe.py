@@ -171,7 +171,7 @@ async def _assert_sample_query_index(session: AsyncSession, org_id: uuid.UUID) -
         await session.execute(text("SET enable_seqscan = off"))
         try:
             query = _SAMPLE_QUERY_EXPLAIN_TEMPLATE.format(org_id=str(org_id))
-            plan_rows = await session.execute(text(f"EXPLAIN {query}"))
+            plan_rows = await session.execute(text("EXPLAIN " + query))
             plan = "\n".join(str(r[0]) for r in plan_rows.all())
             if "ix_runs_probe" not in plan:
                 _log.warning("cost_probe.sample_index_not_used", extra={"plan": plan[:800]})
