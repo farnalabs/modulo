@@ -26,6 +26,7 @@ vi.mock('../lib/api/client', () => {
 })
 
 import RunsListView from '../views/RunsListView.vue'
+import { api } from '../lib/api/client'
 
 const baseRun = {
   run_id: 'run1',
@@ -160,5 +161,73 @@ describe('RunsListView', () => {
     expect(wrapper.text()).toContain('0.5000')
     expect(wrapper.text()).not.toContain('NaN')
     expect(wrapper.text()).not.toContain('(+child)')
+  })
+
+  it('renders a stop button for non-terminal runs', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    expect(stopBtn.exists()).toBe(true)
+    expect(stopBtn.text()).toContain('Stop')
+    wrapper.unmount()
+  })
+
+  it('renders no stop button for terminal runs', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'complete' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="runs-list-cancel-run1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('calls the cancel endpoint after a two-step confirm and updates the row status', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+    ;(api.POST as any).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/runs/{run_id}/cancel') {
+        mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'cancelled' }])
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    expect(stopBtn.text()).toContain('Confirm')
+
+    await stopBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/runs/{run_id}/cancel', {
+      params: { path: { run_id: 'run1' } },
+    })
+    expect(wrapper.text()).toContain('cancelled')
+    wrapper.unmount()
+  })
+
+  it('shows an inline error when the cancel request fails', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'running' }])
+    ;(api.POST as any).mockResolvedValue({ data: null, error: { detail: 'run_already_terminal' } })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    await stopBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const errorEl = wrapper.find('[data-testid="runs-list-cancel-error-run1"]')
+    expect(errorEl.exists()).toBe(true)
+    expect(errorEl.text()).toContain('run_already_terminal')
+    wrapper.unmount()
   })
 })

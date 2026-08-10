@@ -319,4 +319,28 @@ describe('RunDetailView', () => {
     expect(wrapper.find('[data-testid="run-detail-aggregate-cost"]').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('shows the cancel button for awaiting_human runs', async () => {
+    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'awaiting_human' })
+    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows the cancel button for claimed runs', async () => {
+    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'claimed' })
+    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows the cancel button for waiting_for_lock runs', async () => {
+    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'waiting_for_lock' })
+    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('hides the cancel button for terminal runs', async () => {
+    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'complete' })
+    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })

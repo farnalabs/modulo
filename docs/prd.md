@@ -1206,7 +1206,7 @@ pending
 
 **Cancel from `waiting_for_lock`**: immediately releases the advisory lock via `pg_advisory_unlock` and transitions to `cancelled`.
 
-**UI behaviour**: the run detail page shows a "Cancel" button for non-terminal runs. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
+**UI behaviour**: the run detail page shows a "Cancel" button for all non-terminal runs (`pending`, `running`, `awaiting_human`, `claimed`, `waiting_for_lock`). The runs list page shows a per-row Stop action (two-step inline confirm) for the same non-terminal statuses; terminal rows show no action. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
 
 #### HITL Gate Definition
 Each gate carries:
