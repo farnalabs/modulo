@@ -301,6 +301,7 @@ class TestConstants:
             "list_secrets",
             "list_trigger_events",
             "query_analytics",
+            "query_analytics_concurrency",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 

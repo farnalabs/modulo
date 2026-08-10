@@ -115,6 +115,10 @@ async def _insert_fact(
     rate_limited: bool | None = None,
     pipeline_id: uuid.UUID | None = None,
     team_name: str | None = None,
+    dispatched_at: datetime | None = None,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
+    total_queue_wait_ms: int | None = None,
 ) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
@@ -123,10 +127,11 @@ async def _insert_fact(
                 "trigger_type, status, total_cost_usd, total_tokens, error_code, claim_count, "
                 "queue_wait_ms, final_idle_ms, cancellation_requested, dispatcher, node_count, "
                 "sandbox_agent_node_count, max_node_timeout_seconds, parent_run_id, snapshot_id, "
-                "run_number, output_bytes, rate_limited, pipeline_id, team_name) "
+                "run_number, output_bytes, rate_limited, pipeline_id, team_name, dispatched_at, "
+                "started_at, completed_at, total_queue_wait_ms) "
                 "VALUES (:id, :oid, :rid, :day, :created, :tt, :st, :cost, :tok, :err, :claims, "
                 ":qwait, :fidle, :cancel, :disp, :ncount, :sa_count, :max_to, :parent, :snap, "
-                ":rnum, :obytes, :rlim, :pid, :tname)",
+                ":rnum, :obytes, :rlim, :pid, :tname, :disp_at, :started, :completed, :tqwait)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -156,6 +161,10 @@ async def _insert_fact(
                 "rlim": rate_limited,
                 "pid": str(pipeline_id) if pipeline_id else None,
                 "tname": team_name,
+                "disp_at": dispatched_at,
+                "started": started_at,
+                "completed": completed_at,
+                "tqwait": total_queue_wait_ms,
             },
         )
 
@@ -1066,12 +1075,12 @@ class TestBackfillEnrichment:
             await conn.execute(
                 text(
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
-                    "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at, "
-                    "dispatched_at, heartbeat_at, claim_count, cancellation_requested, error_code, "
-                    "outputs_json, rate_limit_key) "
+                    "status, input_hash, langgraph_thread_id, run_number, created_at, started_at, "
+                    "completed_at, dispatched_at, heartbeat_at, claim_count, cancellation_requested, "
+                    "error_code, outputs_json, rate_limit_key) "
                     "VALUES (:id, :oid, :pid, :sid, 'manual', 'failed', :hash, :thread, 7, "
-                    ":started, :completed, :dispatched, :heartbeat, 3, true, 'executor_stalled', "
-                    ":outjson, 'rate:limit:key')"
+                    ":created, :started, :completed, :dispatched, :heartbeat, 3, true, "
+                    "'executor_stalled', :outjson, 'rate:limit:key')"
                 ),
                 {
                     "id": str(run_id),
@@ -1080,6 +1089,7 @@ class TestBackfillEnrichment:
                     "sid": str(snapshot_id),
                     "hash": uuid.uuid4().hex,
                     "thread": f"thread-backfill-enrich-{run_id.hex[:8]}",
+                    "created": datetime(2026, 8, 7, 8, 59, 0, tzinfo=UTC),
                     "started": datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
                     "dispatched": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
                     "completed": datetime(2026, 8, 7, 9, 30, 0, tzinfo=UTC),
@@ -1139,7 +1149,8 @@ class TestBackfillEnrichment:
                         "SELECT error_code, claim_count, queue_wait_ms, final_idle_ms, "
                         "cancellation_requested, dispatcher, node_count, sandbox_agent_node_count, "
                         "max_node_timeout_seconds, parent_run_id, snapshot_id, run_number, "
-                        "output_bytes, rate_limited "
+                        "output_bytes, rate_limited, dispatched_at, started_at, completed_at, "
+                        "total_queue_wait_ms "
                         "FROM run_daily_facts WHERE run_id = :rid"
                     ),
                     {"rid": str(run_id)},
@@ -1159,3 +1170,81 @@ class TestBackfillEnrichment:
         assert row[12] is not None, "output_bytes from outputs_json"
         assert row[12] > 0, "output_bytes from outputs_json"
         assert row[13] is True, "rate_limited from rate_limit_key"
+        # FAR-134 concurrency columns — absolute instants + full queue wait.
+        assert row[14] == datetime(2026, 8, 7, 9, 0, tzinfo=UTC), "dispatched_at from Run.dispatched_at"
+        assert row[15] == datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC), "started_at from Run.started_at"
+        assert row[16] == datetime(2026, 8, 7, 9, 30, 0, tzinfo=UTC), "completed_at from Run.completed_at"
+        assert row[17] == 65000, "total_queue_wait_ms = started - created"
+
+
+class TestConcurrencyEndpoint:
+    """GET /api/v1/analytics/concurrency — slot-utilization series (FAR-134).
+
+    Runs only where Docker/testcontainers is available (CI / merge queue); the
+    unit tests pin the overlap math, this pins the endpoint wiring + org
+    isolation through the real Postgres.
+    """
+
+    async def test_concurrency_buckets_overlap_and_org_scope(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        org_a: uuid.UUID,
+        org_b: uuid.UUID,
+        user_a: uuid.UUID,
+    ) -> None:
+        today = datetime.now(UTC).date()
+        # Org A: one run spanning 09:30..10:30 (overlaps the 09:00 and 10:00
+        # hour buckets) + one queued-only run (created 23:00, never started).
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=datetime(today.year, today.month, today.day, 9, 20, tzinfo=UTC),
+            started_at=datetime(today.year, today.month, today.day, 9, 30, tzinfo=UTC),
+            completed_at=datetime(today.year, today.month, today.day, 10, 30, tzinfo=UTC),
+            total_queue_wait_ms=600_000,
+        )
+        await _insert_fact(
+            db_engine,
+            org_id=org_a,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=datetime(today.year, today.month, today.day, 23, 0, tzinfo=UTC),
+            started_at=None,
+            completed_at=None,
+        )
+        # Org B: a run that must NOT leak into org A's buckets.
+        await _insert_fact(
+            db_engine,
+            org_id=org_b,
+            run_id=uuid.uuid4(),
+            run_date=today,
+            created_at=datetime(today.year, today.month, today.day, 9, 30, tzinfo=UTC),
+            started_at=datetime(today.year, today.month, today.day, 9, 35, tzinfo=UTC),
+            completed_at=datetime(today.year, today.month, today.day, 9, 40, tzinfo=UTC),
+        )
+
+        token = _token(org_a, user_a, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/concurrency?group_by=hour&date_from={today.isoformat()}&date_to={today.isoformat()}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        assert payload["group_by"] == "hour"
+        buckets = {b["date"]: b for b in payload["buckets"]}
+        assert len(buckets) == 24, "a single day at hour granularity must zero-fill 24 buckets"
+        assert buckets[f"{today.isoformat()}T09:00:00"]["max_active"] == 1, (
+            "the 09:30..10:30 run must count toward the 09:00 bucket's active overlap"
+        )
+        assert buckets[f"{today.isoformat()}T10:00:00"]["max_active"] == 1, (
+            "a run spanning a bucket boundary counts in BOTH buckets"
+        )
+        assert buckets[f"{today.isoformat()}T23:00:00"]["max_queued"] == 1, (
+            "a never-started run counts as queued through the range"
+        )
+        assert buckets[f"{today.isoformat()}T23:00:00"]["max_active"] == 0
+        total_active = sum(b["max_active"] for b in payload["buckets"])
+        assert total_active == 2, f"org B's run leaked into org A — total active {total_active}"

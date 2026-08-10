@@ -209,6 +209,10 @@ class TestRecordRunFacts:
                 "run_number",
                 "output_bytes",
                 "rate_limited",
+                "dispatched_at",
+                "started_at",
+                "completed_at",
+                "total_queue_wait_ms",
             )
 
             def __init__(self, model) -> None:
@@ -261,9 +265,16 @@ class TestRecordRunFacts:
         assert values["status"] == "complete"
         assert values["total_cost_usd"] == run.total_cost_usd
         assert values["duration_ms"] == 60_000
+        # FAR-134 concurrency columns — the absolute instants pass through and
+        # total_queue_wait_ms = started_at - created_at.
+        assert values["dispatched_at"] is None  # not set on the fixture run
+        assert values["started_at"] == run.started_at
+        assert values["completed_at"] == run.completed_at
+        assert values["total_queue_wait_ms"] == 600_000  # started 10:30 - created 10:20
 
         update_keys = set(captured["set_"])
         assert {"status", "total_cost_usd", "total_tokens", "duration_ms", "run_date"} <= update_keys
+        assert {"dispatched_at", "started_at", "completed_at", "total_queue_wait_ms"} <= update_keys
 
     async def test_failure_is_swallowed_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = _make_run()

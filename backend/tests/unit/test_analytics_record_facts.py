@@ -20,6 +20,7 @@ from modulo.core.analytics import (
     _fact_output_bytes,
     _fact_queue_wait_ms,
     _fact_run_date,
+    _fact_total_queue_wait_ms,
 )
 
 
@@ -83,6 +84,27 @@ class TestFactTimingMs:
     def test_queue_wait_ms_null_when_either_side_missing(self) -> None:
         assert _fact_queue_wait_ms(_run(dispatched_at=None, started_at=datetime(2026, 8, 7, tzinfo=UTC))) is None
         assert _fact_queue_wait_ms(_run(dispatched_at=datetime(2026, 8, 7, tzinfo=UTC), started_at=None)) is None
+
+    def test_total_queue_wait_ms(self) -> None:
+        # FULL queue wait = started_at - created_at (capacity deferral + SAQ
+        # queue), unlike queue_wait_ms which is started - dispatched.
+        run = _run(
+            created_at=datetime(2026, 8, 7, 9, 0, 0, tzinfo=UTC),
+            started_at=datetime(2026, 8, 7, 9, 5, 30, tzinfo=UTC),
+        )
+        assert _fact_total_queue_wait_ms(run) == 330_000
+
+    def test_total_queue_wait_ms_null_when_either_side_missing(self) -> None:
+        assert _fact_total_queue_wait_ms(_run(created_at=None, started_at=datetime(2026, 8, 7, tzinfo=UTC))) is None
+        assert _fact_total_queue_wait_ms(_run(created_at=datetime(2026, 8, 7, tzinfo=UTC), started_at=None)) is None
+
+    def test_total_queue_wait_ms_null_when_created_at_attribute_absent(self) -> None:
+        # The getattr defensive path — a run-shaped object without created_at
+        # must degrade to NULL, never raise AttributeError.
+        run = SimpleNamespace(
+            started_at=datetime(2026, 8, 7, 9, 5, tzinfo=UTC),
+        )
+        assert _fact_total_queue_wait_ms(run) is None
 
     def test_final_idle_ms(self) -> None:
         run = _run(
