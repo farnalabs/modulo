@@ -13,10 +13,14 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     Uuid,
 )
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import expression
+from sqlalchemy.sql.compiler import SQLCompiler
 
 from modulo.db.models.base import OrgScoped
 
@@ -33,6 +37,30 @@ if TYPE_CHECKING:
 TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed"})
 
 
+class _GenRandomUuid(expression.FunctionElement[str]):
+    """Dialect-portable server_default for ``runs.claim_token``.
+
+    Migration 0074 makes ``claim_token`` NOT NULL with a
+    ``gen_random_uuid()::text`` server_default on Postgres. The ORM model
+    mirrors that so ORM-created schemas (unit tests on in-memory SQLite, dev
+    mode) stay valid: Postgres renders the native function, SQLite falls back
+    to ``hex(randomblob(16))`` (a valid 32-char hex UUID).
+    """
+
+    type = String(128)
+    inherit_cache = True
+
+
+@compiles(_GenRandomUuid)
+def _compile_postgres_default(element: _GenRandomUuid, compiler: SQLCompiler, **kw: Any) -> str:
+    return "gen_random_uuid()::text"
+
+
+@compiles(_GenRandomUuid, "sqlite")
+def _compile_sqlite_default(element: _GenRandomUuid, compiler: SQLCompiler, **kw: Any) -> str:
+    return "lower(hex(randomblob(16)))"
+
+
 class Run(OrgScoped):
     __tablename__ = "runs"
     __table_args__ = (
@@ -42,7 +70,7 @@ class Run(OrgScoped):
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', "
-            "'waiting_for_lock', 'complete', 'failed', 'cancelled', 'eval_failed')",
+            "'complete', 'failed', 'cancelled', 'eval_failed')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
@@ -109,7 +137,17 @@ class Run(OrgScoped):
     saq_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # DISTINCT per-claim value (NOT saq_job_id — SAQ retries reuse saq_job_id so a
     # token identical to it could never be superseded). F3a claim-token fence.
-    claim_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # NOT NULL since migration 0074 (NULLs backfilled to gen_random_uuid()::text;
+    # server_default keeps old-app INSERTs legal during bluegreen cutover).
+    claim_token: Mapped[str] = mapped_column(String(128), nullable=False, server_default=_GenRandomUuid())
+    # Enqueue-failure audit timestamp (migration 0074) — set when a SAQ
+    # dispatch enqueue fails so dispatcher_reconcile can fail the run.
+    enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
+    # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
+    sandbox_dispatch_state: Mapped[str | None] = mapped_column(Text)
+    # E2B sandbox id surfaced for observability (migration 0074).
+    sandbox_id: Mapped[str | None] = mapped_column(Text)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Per-node telemetry (status, wall_clock_time_ms, exit_code, ...) split out
     # of outputs_json by the Agent Return Contract (FAR-125). NULL for
