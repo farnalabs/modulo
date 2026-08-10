@@ -110,6 +110,25 @@ LEGITIMATE_SNIPPETS = [
         "re-raise of a concrete ValueError is a targeted re-raise",
         ("async def handler():\n    try:\n        await work()\n    except ValueError:\n        raise\n"),
     ),
+    (
+        "handler with real code is not a silent re-raise even when a later "
+        "CancelledError bare re-raise appears in the same file",
+        (
+            "async def handler():\n"
+            "    try:\n"
+            "        await redis_client.ping()\n"
+            "    except asyncio.CancelledError:\n"
+            "        raise\n"
+            "    except Exception:\n"
+            "        # Redis down - keep pending for a later tick\n"
+            "        summary['skipped'] += 1\n"
+            "        continue\n"
+            "    try:\n"
+            "        job = await q.job(job_key)\n"
+            "    except asyncio.CancelledError:\n"
+            "        raise\n"
+        ),
+    ),
 ]
 
 
