@@ -1215,7 +1215,9 @@ async def _bypass_capacity(mock_self: Any, **kwargs: Any) -> Any:
 
 
 async def test_executor_sets_awaiting_human_on_node_interrupt():
-    """When astream_events raises GraphInterrupt, the executor transitions run to awaiting_human."""
+    """When astream_events raises GraphInterrupt, the executor transitions the
+    run toward awaiting_human — but CANCEL-WINS (B6) finalises it ``cancelled``
+    when the row carries ``cancellation_requested``."""
     from contextlib import asynccontextmanager
 
     from langgraph.errors import GraphInterrupt
@@ -1228,10 +1230,10 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
     run.langgraph_thread_id = str(uuid.uuid4())
-    run.status = "awaiting_human"
+    run.status = "cancelled"
 
     final_run = MagicMock()
-    final_run.status = "awaiting_human"
+    final_run.status = "cancelled"
 
     snapshot = MagicMock()
     snapshot.graph_json = {"nodes": [{"id": "a"}], "edges": []}
@@ -1242,8 +1244,13 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    cancel_run = MagicMock()
+    cancel_run.id = run.id
+    cancel_run.status = "awaiting_human"
+    cancel_run.cancellation_requested = True
     scalar_result = MagicMock()
     scalar_result.scalar_one.return_value = snapshot
+    scalar_result.scalar_one_or_none.return_value = cancel_run
     session.execute = AsyncMock(return_value=scalar_result)
 
     @asynccontextmanager
@@ -1285,10 +1292,11 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
-    # PR A2 finalization contract: after finalize_cost, execute re-fetches the
-    # run via get_run in a fresh session and returns THAT object (executor.py
-    # finalization tail), so the awaited run's status reflects the transition.
+    # CANCEL-WINS (B6): finalizing an awaiting_human run whose row carries
+    # cancellation_requested writes "cancelled" instead — the executor's
+    # finalization tail returns the re-fetched run whose status reflects the
+    # DB transition.
     assert result is run
-    assert result.status == "awaiting_human"
+    assert result.status == "cancelled"
     final_update_call = mock_update.call_args_list[-1]
-    assert final_update_call.args[2] == "awaiting_human"
+    assert final_update_call.args[2] == "cancelled"

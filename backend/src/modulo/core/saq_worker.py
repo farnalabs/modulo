@@ -265,6 +265,19 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
         _log.warning("SAQ execute_run: run %s not claimed (already handled or wrong state)", rid)
         return {"status": "not_claimed"}
 
+    # Stamp the claim token into the job hash so the after_process task_failure
+    # hook can fence its terminal write: a failed job must not mark the run
+    # failed when a successor already re-claimed it (dist/runtime-core A1).
+    if job is not None:
+        try:
+            job_kwargs = getattr(job, "kwargs", None)
+            merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
+            await job.update(kwargs=merged_kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("SAQ execute_run: job kwargs stamp failed for run %s", rid)
+
     try:
         run, executor = await load_and_setup(aeng, rid, oid)
     except asyncio.CancelledError:
@@ -282,18 +295,28 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     if run is None:
         return {"status": "missing"}
 
-    await run_executor_with_watchdog(
+    outcome = await run_executor_with_watchdog(
         aeng,
         run_id=run_id,
         org_id=org_id,
         executor=executor,
         job=job,
         claim_token=claim_token,
-        execute_fn=lambda: executor.execute(run_id=rid, org_id=oid, input_payload=run.input_payload or {}),
+        execute_fn=lambda: executor.execute(
+            run_id=rid,
+            org_id=oid,
+            input_payload=run.input_payload or {},
+            claim_token=claim_token,
+        ),
     )
 
-    await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
-    return {"status": "complete"}
+    # Honest outcomes (A2): ``mark_complete`` runs ONLY on a genuine
+    # completion. After a failure/awaiting_human/supersession it is a no-op
+    # (the run is already terminal), so this is purely a guard against a
+    # silent wrong-success write.
+    if outcome.get("status") == "complete":
+        await mark_complete(aeng, run_id, org_id, claim_token=claim_token)
+    return outcome
 
 
 async def resume_run(

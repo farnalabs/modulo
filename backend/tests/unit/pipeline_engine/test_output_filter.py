@@ -333,7 +333,9 @@ class TestStreamGraphHandlesOutputRejectedError:
             run_id=uuid.uuid4(),
         )
 
-        assert status == "output_rejected"
+        # C4: output_rejected is an error CODE on a failed run, never a STATUS
+        # (it violates the ck_runs_status CHECK constraint).
+        assert status == "failed"
         assert error_code == "output_rejected"
         assert error_detail is not None
         assert "System prompt override" in error_detail

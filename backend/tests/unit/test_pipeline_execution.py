@@ -65,6 +65,48 @@ class _FakeEngine:
         return self.conn
 
 
+class _AsyncResultRow:
+    """Async fake result exposing ``fetchone`` (used by the fenced writers)."""
+
+    def __init__(self, row: object | None = None) -> None:
+        self._row = row
+
+    def fetchone(self) -> object | None:
+        return self._row
+
+
+class _AsyncConnRow:
+    """Async fake connection recording executed statements, returning a fixed row."""
+
+    def __init__(self, row: object | None = None) -> None:
+        self._row = row
+        self.statements: list[str] = []
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResultRow:
+        self.statements.append(str(stmt))
+        return _AsyncResultRow(self._row)
+
+    async def commit(self) -> None:
+        return None
+
+
+class _AsyncEngineRow:
+    def __init__(self, row: object | None = None) -> None:
+        self.conn = _AsyncConnRow(row)
+
+    def connect(self) -> _AsyncConnRow:
+        return self.conn
+
+
 def _make_settings(**overrides: object) -> MagicMock:
     """Mock Settings with the SAQ/legacy claim staleness plumbing values."""
     base = {
@@ -145,15 +187,19 @@ class TestClaimRunAsync:
         with patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()) as storm:
             claim_token = await pe.claim_run_async(engine, "run-1", "org-1")  # type: ignore[arg-type]
         assert claim_token is not None
-        assert calls[0]["params"]["stale_seconds"] == 450  # type: ignore[index]
+        # The RLS org-context set_config runs FIRST on the raw connection (C3) —
+        # the claim UPDATE is the second statement.
+        assert "set_config('app.organisation_id'" in calls[0]["stmt"]  # type: ignore[index]
+        claim_call = calls[1]
+        assert claim_call["params"]["stale_seconds"] == 450  # type: ignore[index]
         # Claim cap flows from settings (SAQ_RUN_CLAIM_CAP, default 20) when the
         # caller omits claim_cap — single source of truth shared with resume
         # (retro item 9). The old execute-only cap of 5 is retired.
-        assert calls[0]["params"]["claim_cap"] == 20  # type: ignore[index]
+        assert claim_call["params"]["claim_cap"] == 20  # type: ignore[index]
         # Every claim rotates to a fresh per-claim token (plan F3a), returned to
         # the caller so it can fence completion/heartbeat against successors.
-        assert "claim_token=:tok" in calls[0]["stmt"]  # type: ignore[index]
-        assert calls[0]["params"]["tok"] == claim_token  # type: ignore[index]
+        assert "claim_token=:tok" in claim_call["stmt"]  # type: ignore[index]
+        assert claim_call["params"]["tok"] == claim_token  # type: ignore[index]
         storm.assert_awaited_once()
 
     async def test_async_claim_false_when_no_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,75 +245,72 @@ class TestCompleteStatus:
 
 
 class TestMarkComplete:
+    """mark_complete is now a single conditional fenced UPDATE (A1) — no ORM
+    round-trip, no E2B Redis key release."""
+
     async def test_writes_complete_enum(self) -> None:
-        run = SimpleNamespace(status="running", completed_at=None)
-        with (
-            patch.object(pe, "get_run", AsyncMock(return_value=run)),
-            patch.object(pe, "async_sessionmaker") as mock_factory,
-            patch.object(pe, "set_rls_org", AsyncMock()),
-            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
-        ):
-            session = MagicMock()
-            session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
-            session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
-            factory = MagicMock()
-            factory.return_value.__aenter__ = AsyncMock(return_value=session)
-            factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_factory.return_value = factory
+        conn = _AsyncConnRow(("id",))
+        engine = MagicMock()
+        engine.connect.return_value = conn
 
-            engine = MagicMock()
+        await pe.mark_complete(engine, str(uuid.uuid4()), str(uuid.uuid4()))  # type: ignore[arg-type]
+
+        joined = " ".join(conn.statements)
+        assert "UPDATE runs SET status='complete', completed_at=now()" in joined
+        assert "status='running'" in joined
+        assert "claim_token" in joined
+        assert "cancellation_requested = false" in joined
+
+    async def test_superseded_rowcount_zero_skips_write(self, caplog: pytest.LogCaptureFixture) -> None:
+        # Rowcount 0 (superseded / not running / cancelled) → no-op with a warning.
+        conn = _AsyncConnRow(None)
+        engine = MagicMock()
+        engine.connect.return_value = conn
+        with caplog.at_level("WARNING", logger="modulo.core.pipeline_execution"):
             await pe.mark_complete(engine, str(uuid.uuid4()), str(uuid.uuid4()))  # type: ignore[arg-type]
 
-        assert run.status == "complete"
-        assert run.completed_at is not None
+        assert any("mark_complete skipped" in m for m in caplog.messages)
 
-    async def test_does_not_overwrite_terminal_status(self) -> None:
-        run = SimpleNamespace(status="failed")
-        with (
-            patch.object(pe, "get_run", AsyncMock(return_value=run)),
-            patch.object(pe, "async_sessionmaker") as mock_factory,
-            patch.object(pe, "set_rls_org", AsyncMock()),
-            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
-        ):
-            session = MagicMock()
-            session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
-            session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
-            factory = MagicMock()
-            factory.return_value.__aenter__ = AsyncMock(return_value=session)
-            factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_factory.return_value = factory
 
-            engine = MagicMock()
-            await pe.mark_complete(engine, str(uuid.uuid4()), str(uuid.uuid4()))  # type: ignore[arg-type]
+class TestFailRunTerminal:
+    """fail_run_terminal is now a single conditional fenced UPDATE (A1)."""
 
-        assert run.status == "failed"
-        assert not hasattr(run, "completed_at")
+    @pytest.mark.asyncio
+    async def test_fails_running_run(self) -> None:
+        conn = _AsyncConnRow(("id",))
+        engine = MagicMock()
+        engine.connect.return_value = conn
 
-    async def test_noop_when_run_missing(self) -> None:
-        run_id = str(uuid.uuid4())
-        org_id = str(uuid.uuid4())
-        with (
-            patch.object(pe, "get_run", AsyncMock(return_value=None)) as mock_get_run,
-            patch.object(pe, "async_sessionmaker") as mock_factory,
-            patch.object(pe, "set_rls_org", AsyncMock()) as mock_set_rls,
-            patch.object(pe, "e2b_idempotency_enabled", return_value=False),
-        ):
-            session = MagicMock()
-            session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
-            session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
-            factory = MagicMock()
-            factory.return_value.__aenter__ = AsyncMock(return_value=session)
-            factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_factory.return_value = factory
+        ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
+            engine,
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            error_code="executor_stalled",
+            error_detail="boom",
+            claim_token="tok-a",
+        )
+        assert ok is True
+        joined = " ".join(conn.statements)
+        assert "SET status='failed'" in joined
+        assert "error_code=:code" in joined
+        assert "status='running'" in joined
+        assert "claim_token = CAST(:tok AS text)" in joined
 
-            engine = MagicMock()
-            await pe.mark_complete(engine, run_id, org_id)  # type: ignore[arg-type]
-
-        # The run lookup is still performed with the right identifiers…
-        mock_set_rls.assert_awaited_once()
-        mock_get_run.assert_awaited_once()
-        args = mock_get_run.await_args.args
-        assert args[1] == uuid.UUID(run_id)
+    @pytest.mark.asyncio
+    async def test_superseded_or_terminal_returns_false(self) -> None:
+        # Rowcount 0 (superseded / already terminal / cancelled) → False, no write.
+        conn = _AsyncConnRow(None)
+        engine = MagicMock()
+        engine.connect.return_value = conn
+        ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
+            engine,
+            str(uuid.uuid4()),
+            str(uuid.uuid4()),
+            error_code="executor_stalled",
+            error_detail="boom",
+            claim_token="tok-a",
+        )
+        assert ok is False
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +372,68 @@ class TestHeartbeat:
 
         await pe.heartbeat_once(_AsyncEngine(), "run-1", "org-1")  # type: ignore[arg-type]
         assert len(executed) == 2
+
+    async def test_heartbeat_once_superseded_raises_and_skips_job(self) -> None:
+        """A fenced heartbeat whose UPDATE matches zero rows (superseded / row
+        gone) raises ClaimSupersededError and never touches the job hash
+        (dist/runtime-core A1)."""
+        executed: list[str] = []
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _FakeResult:
+                executed.append(str(stmt))
+                return _FakeResult(None)  # rowcount 0 — no RETURNING row
+
+            async def commit(self) -> None:
+                return None
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        job = MagicMock()
+        job.update = AsyncMock()
+
+        with pytest.raises(pe.ClaimSupersededError):
+            await pe.heartbeat_once(_AsyncEngine(), "run-1", "org-1", job=job, claim_token="tok-a")  # type: ignore[arg-type]
+
+        assert "claim_token=:tok" in executed[1]
+        job.update.assert_not_awaited()
+
+    async def test_heartbeat_loop_sets_superseded_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A superseded heartbeat sets the ``superseded`` Event and breaks."""
+
+        async def _superseded(*_a: object, **_kw: object) -> None:
+            raise pe.ClaimSupersededError("superseded")
+
+        monkeypatch.setattr(pe, "heartbeat_once", _superseded)
+        monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock())
+        superseded = asyncio.Event()
+        await pe.heartbeat_loop(
+            MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", superseded=superseded
+        )
+        assert superseded.is_set()
+
+    async def test_heartbeat_loop_fails_closed_after_3_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """3 consecutive heartbeat failures set the ``health_failed`` Event and break."""
+
+        async def _failing(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(pe, "heartbeat_once", _failing)
+        monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock())
+        health_failed = asyncio.Event()
+        await pe.heartbeat_loop(
+            MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", health_failed=health_failed
+        )
+        assert health_failed.is_set()
+        assert pe.asyncio.sleep.await_count == 3
 
     async def test_heartbeat_loop_uses_configured_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
         heartbeat_mock = AsyncMock()
@@ -979,79 +1084,6 @@ class TestSaqWorkerSettings:
 # ---------------------------------------------------------------------------
 
 
-class TestFailRunTerminal:
-    async def _session_patch(self) -> Any:
-        session = MagicMock()
-        session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
-        session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
-        factory = MagicMock()
-        factory.return_value.__aenter__ = AsyncMock(return_value=session)
-        factory.return_value.__aexit__ = AsyncMock(return_value=False)
-        return session, factory
-
-    @pytest.mark.asyncio
-    async def test_fails_running_run(self) -> None:
-        run = SimpleNamespace(status="running", completed_at=None, error_code=None, error_detail=None)
-        _session, factory = await self._session_patch()
-        with (
-            patch.object(pe, "get_run", AsyncMock(return_value=run)),
-            patch.object(pe, "async_sessionmaker") as mock_factory,
-            patch.object(pe, "set_rls_org", AsyncMock()),
-        ):
-            mock_factory.return_value = factory
-            ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
-                MagicMock(),
-                str(uuid.uuid4()),
-                str(uuid.uuid4()),
-                error_code="executor_stalled",
-                error_detail="boom",
-            )
-        assert ok is True
-        assert run.status == "failed"
-        assert run.error_code == "executor_stalled"
-        assert run.error_detail == "boom"
-        assert run.completed_at is not None
-
-    @pytest.mark.asyncio
-    async def test_noop_for_non_running(self) -> None:
-        for status in ("pending", "complete", "failed", "awaiting_human"):
-            run = SimpleNamespace(status=status, completed_at=None)
-            _session, factory = await self._session_patch()
-            with (
-                patch.object(pe, "get_run", AsyncMock(return_value=run)),
-                patch.object(pe, "async_sessionmaker") as mock_factory,
-                patch.object(pe, "set_rls_org", AsyncMock()),
-            ):
-                mock_factory.return_value = factory
-                ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
-                    MagicMock(),
-                    str(uuid.uuid4()),
-                    str(uuid.uuid4()),
-                    error_code="executor_stalled",
-                    error_detail="boom",
-                )
-            assert ok is False
-            assert run.status == status
-
-    @pytest.mark.asyncio
-    async def test_noop_when_run_missing(self) -> None:
-        _session, factory = await self._session_patch()
-        with (
-            patch.object(pe, "get_run", AsyncMock(return_value=None)),
-            patch.object(pe, "async_sessionmaker") as mock_factory,
-            patch.object(pe, "set_rls_org", AsyncMock()),
-        ):
-            mock_factory.return_value = factory
-            ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
-                MagicMock(),
-                str(uuid.uuid4()),
-                str(uuid.uuid4()),
-                error_code="executor_stalled",
-                error_detail="boom",
-            )
-        assert ok is False
-
-
 class TestZombieWatchdog:
     @pytest.mark.asyncio
     async def test_stands_down_on_first_progress(self) -> None:
@@ -1113,8 +1145,9 @@ class TestRunExecutorWithWatchdog:
         executor = MagicMock()
         ran: list[str] = []
 
-        async def _execute() -> None:
+        async def _execute() -> object:
             ran.append("executed")
+            return SimpleNamespace(status="complete")
 
         engine = MagicMock()
         with (
@@ -1149,6 +1182,7 @@ class TestRunExecutorWithWatchdog:
             patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
             patch.object(pe, "fail_run_terminal", new_callable=AsyncMock, return_value=True) as fail,
+            patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed") as read_status,
         ):
             result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
                 engine,
@@ -1158,10 +1192,12 @@ class TestRunExecutorWithWatchdog:
                 job=None,
                 execute_fn=_hang,
             )
-        assert result == {"status": "complete"}
+        assert result == {"status": "failed"}
         assert started == ["started"]
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_stalled"
+        # The run row was terminal-failed by the watchdog → outcome is failed.
+        read_status.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_watchdog_fail_write_completes_despite_cancellation_race(self) -> None:
@@ -1195,6 +1231,7 @@ class TestRunExecutorWithWatchdog:
                 patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.02)),
                 patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
                 patch.object(pe, "fail_run_terminal", _slow_fail),
+                patch.object(pe, "_read_run_status", new_callable=AsyncMock, return_value="failed"),
             ):
                 result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
                     engine,
@@ -1204,7 +1241,7 @@ class TestRunExecutorWithWatchdog:
                     job=None,
                     execute_fn=_hang,
                 )
-        assert result == {"status": "complete"}
+        assert result == {"status": "failed"}
         assert failed == ["executor_stalled"] * 10
 
     @pytest.mark.asyncio
@@ -1238,7 +1275,10 @@ class TestRunExecutorWithWatchdog:
         fail.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_executor_exception_logged_and_completes(self) -> None:
+    async def test_executor_exception_terminal_fails_with_executor_failed(self) -> None:
+        """A generic executor exception is terminal-failed with
+        ``executor_failed`` (token-guarded) and the outcome is ``failed`` — never
+        a silent wrong-success completion (dist/runtime-core A2)."""
         executor = MagicMock()
 
         async def _boom() -> None:
@@ -1248,7 +1288,7 @@ class TestRunExecutorWithWatchdog:
         with (
             patch.object(pe, "get_settings", return_value=MagicMock(saq_setup_grace_seconds=0.05)),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
-            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock),
+            patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail,
         ):
             result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
                 engine,
@@ -1258,4 +1298,7 @@ class TestRunExecutorWithWatchdog:
                 job=None,
                 execute_fn=_boom,
             )
-        assert result == {"status": "complete"}
+        assert result == {"status": "failed"}
+        fail.assert_awaited_once()
+        assert fail.await_args.kwargs["error_code"] == "executor_failed"
+        assert fail.await_args.kwargs["claim_token"] is None
