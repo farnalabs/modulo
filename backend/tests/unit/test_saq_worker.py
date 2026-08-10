@@ -6,6 +6,7 @@ knobs, worker metadata hostname, and the SAQ execute/resume wrappers.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,6 +21,7 @@ def _settings(**overrides: object) -> MagicMock:
     base: dict[str, object] = {
         "saq_runs_queue": "runs",
         "saq_redis_pool_size": 50,
+        "saq_worker_concurrency": 5,
         "redis_url": "redis://localhost:6379/0",
         "database_url": "postgresql+asyncpg://localhost/test",
         "modulo_db": "postgres",
@@ -201,6 +203,82 @@ class TestMaxConcurrentOps:
             assert sw._max_concurrent_ops(pool_size) <= pool_size
         for pool_size in range(2, 51):
             assert sw._max_concurrent_ops(pool_size) < pool_size
+
+
+class TestEffectiveRedisPoolSize:
+    """The effective pool must always exceed concurrency (2026-08-10 wedge).
+
+    SAQ's blocking ``dequeue()`` (``blmove``) holds one pool connection per
+    concurrent ``_process`` task regardless of ``max_concurrent_ops``. A pool
+    <= concurrency starves the Upkeep tasks (``schedule``/``sweep``/``abort``/
+    ``worker_info``) of a connection — ``ConnectionError: Too many connections``
+    kills the heartbeats and the worker wedges silently. The effective pool is
+    ``max(configured_pool, concurrency + 5)``.
+    """
+
+    @pytest.mark.parametrize(
+        ("pool_size", "concurrency", "expected"),
+        [
+            (50, 20, 50),  # pool already sufficient, unchanged
+            (20, 20, 25),  # equal -> raised to concurrency + 5
+            (5, 20, 25),  # too small -> raised (the exact incident config)
+            (2, 20, 25),
+            (20, 5, 20),  # default config, unchanged
+            (1, 1, 6),
+            (50, 50, 55),  # max concurrency raises above the settings cap; the
+            # worker accepts it (le=50 bounds the configured value, the
+            # effective pool is a runtime override)
+        ],
+    )
+    def test_effective_pool_never_below_concurrency_plus_reserve(
+        self, pool_size: int, concurrency: int, expected: int
+    ) -> None:
+        assert sw._effective_redis_pool_size(pool_size, concurrency) == expected
+
+    def test_effective_pool_always_exceeds_concurrency(self) -> None:
+        # For every pool and concurrency in the settings' valid ranges the
+        # effective pool must always be strictly larger than concurrency.
+        for pool in range(1, 51):
+            for concurrency in range(1, 51):
+                assert sw._effective_redis_pool_size(pool, concurrency) > concurrency
+
+    def test_build_queue_uses_effective_pool_and_clamps_max_ops(self, caplog: pytest.LogCaptureFixture) -> None:
+        # A configured pool of 5 with concurrency 20 (the incident config) must
+        # produce a client pool of 25 and a max_concurrent_ops of 20 (25-5),
+        # and log a warning that the pool was raised.
+        with (
+            patch.object(sw, "get_settings", return_value=_settings(saq_redis_pool_size=5, saq_worker_concurrency=20)),
+            patch("modulo.core.saq_worker.aioredis.from_url") as from_url,
+            patch("modulo.core.saq_worker.RedisQueue") as redis_queue,
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            client = MagicMock()
+            client.ping.return_value = True
+            from_url.return_value = client
+            sw._build_queue("runs")
+
+        assert from_url.call_args.kwargs["max_connections"] == 25
+        assert redis_queue.call_args.kwargs["max_concurrent_ops"] == 20
+        assert redis_queue.call_args.kwargs["name"] == "runs"
+        assert "pool_raised" in caplog.text
+
+    def test_build_queue_keeps_configured_pool_when_sufficient(self, caplog: pytest.LogCaptureFixture) -> None:
+        # A pool of 50 with concurrency 20 is already sufficient — no raise, no
+        # warning, and max_concurrent_ops clamped to 45 (50-5).
+        with (
+            patch.object(sw, "get_settings", return_value=_settings(saq_redis_pool_size=50, saq_worker_concurrency=20)),
+            patch("modulo.core.saq_worker.aioredis.from_url") as from_url,
+            patch("modulo.core.saq_worker.RedisQueue") as redis_queue,
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            client = MagicMock()
+            client.ping.return_value = True
+            from_url.return_value = client
+            sw._build_queue("runs")
+
+        assert from_url.call_args.kwargs["max_connections"] == 50
+        assert redis_queue.call_args.kwargs["max_concurrent_ops"] == 45
+        assert "pool_raised" not in caplog.text
 
 
 class TestSystemWebRunner:
