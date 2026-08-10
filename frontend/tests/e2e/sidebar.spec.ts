@@ -49,6 +49,9 @@ test.describe('Sidebar Navigation', () => {
     }
 
     const sidebarLinks = sidebar.locator('a.sidebar-link')
+    // Wait for at least one link to render before counting — links mount asynchronously
+    // after the plan/tier data loads (SidebarNav gates items behind planStore).
+    await expect(sidebarLinks.first()).toBeVisible({ timeout: 15000 })
     const count = await sidebarLinks.count()
     expect(count).toBeGreaterThan(0)
 
