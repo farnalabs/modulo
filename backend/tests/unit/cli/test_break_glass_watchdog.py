@@ -180,6 +180,13 @@ class TestValidateBreakGlassBoot:
             modulo_break_glass_standby_secret=_STANDBY,
             modulo_break_glass_database_url=_BG_URL,
             modulo_break_glass_boot_failure_mode="fail",
+            # The SAQ setup-grace/claim-stale WARN (cutover settings validator)
+            # fires on the deployed defaults (600 >= 450); the deployed default
+            # is a deliberate warn. Keep grace below the stale fence so this
+            # test isolates break-glass: a clean break-glass config must not
+            # produce ANY settings warning.
+            SAQ_SETUP_GRACE_SECONDS=300,
+            RUN_CLAIM_STALE_SECONDS=450,
         )
         validate_break_glass_boot(settings)
         assert not caplog.records

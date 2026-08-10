@@ -120,7 +120,12 @@ class Settings(BaseSettings):
     saq_run_retries: int = Field(default=5, alias="SAQ_RUN_RETRIES", ge=1, le=20)
     # Deterministic fixed delay (retry_backoff=False).
     saq_retry_delay: int = Field(default=60, alias="SAQ_RETRY_DELAY", ge=1, le=3600)
-    # Per-claim E2B idempotency key run:{id}:e2b:{claim_token} (F3a).
+    # Per-run execution ceiling for SAQ execute_run (dispatch.py): the job must
+    # reach a terminal state within this budget or the worker fails it.
+    saq_run_timeout: int = Field(default=7200, alias="SAQ_RUN_TIMEOUT", ge=300, le=86400)
+    # E2B idempotency fence (F3a). The claim token lives in runs.claim_token
+    # (NOT NULL, server-defaulted to gen_random_uuid()::text since migration
+    # 0074) — the old run:{id}:e2b:{claim_token} fence key is retired.
     saq_e2b_idempotency: bool = Field(default=True, alias="SAQ_E2B_IDEMPOTENCY")
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
     # Single source of truth (retro item 9): execute and resume claims in
@@ -485,6 +490,28 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SAQ_TEST_PAUSE is a TEST-ONLY flag and cannot be used outside test/staging "
                 "(set DEBUG=true in test/staging environments)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_saq_setup_grace_ge_claim_stale(self) -> "Settings":
+        """WARN-only: the setup grace window must stay below the claim fence.
+
+        ``saq_setup_grace_seconds`` is the execute_run zombie-watchdog window (a
+        run that has not dispatched a node within it is failed), while
+        ``run_claim_stale_seconds`` is the stale-heartbeat re-claim fence. If the
+        grace window is >= the stale fence, a legitimately slow run can be
+        re-claimed (and double-executed) before its own watchdog fires. This is a
+        WARN, never a raise — the currently deployed config intentionally has
+        grace=600 > stale=450.
+        """
+        if self.saq_setup_grace_seconds >= self.run_claim_stale_seconds:
+            _log.warning(
+                "settings.saq_setup_grace_ge_claim_stale",
+                extra={
+                    "saq_setup_grace_seconds": self.saq_setup_grace_seconds,
+                    "run_claim_stale_seconds": self.run_claim_stale_seconds,
+                },
             )
         return self
 
