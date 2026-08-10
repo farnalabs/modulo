@@ -129,13 +129,22 @@ async def update_run_outputs(
     session: AsyncSession,
     run_id: uuid.UUID,
     outputs: dict[str, Any],
+    node_telemetry_json: dict[str, Any] | None = None,
 ) -> Run | None:
-    """Store per-node outputs for a completed run."""
+    """Store per-node outputs for a completed run.
+
+    *outputs* is the run's ``outputs_json`` blob. *node_telemetry_json*, when
+    provided, is the split-out per-node telemetry (Agent Return Contract,
+    FAR-125) and is written atomically on the same ORM object — a single flush
+    leaves no torn state between the two columns.
+    """
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
     if run is None:
         return None
     run.outputs_json = outputs
+    if node_telemetry_json is not None:
+        run.node_telemetry_json = node_telemetry_json
     await session.flush()
     return run
 
@@ -304,6 +313,7 @@ async def update_run_status(
     cost_breakdown: Any = _COST_BREAKDOWN_SENTINEL,
     node_token_usage: dict[str, Any] | None = None,
     outputs_json: dict[str, Any] | None = None,
+    node_telemetry_json: dict[str, Any] | None = None,
     claimed_by: str | None = None,
     clear_error_code: bool = False,
 ) -> Run | None:
@@ -342,6 +352,11 @@ async def update_run_status(
         run.node_token_usage = node_token_usage
     if outputs_json is not None:
         run.outputs_json = outputs_json
+    if node_telemetry_json is not None:
+        # Split-out per-node telemetry (Agent Return Contract, FAR-125) —
+        # persisted on the SAME ORM object and flushed with outputs_json so the
+        # pair lands in one atomic write, never a torn half-state.
+        run.node_telemetry_json = node_telemetry_json
     await session.flush()
     return run
 

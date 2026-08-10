@@ -111,6 +111,10 @@ class Run(OrgScoped):
     # token identical to it could never be superseded). F3a claim-token fence.
     claim_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # Per-node telemetry (status, wall_clock_time_ms, exit_code, ...) split out
+    # of outputs_json by the Agent Return Contract (FAR-125). NULL for
+    # pre-split runs. Written atomically with outputs_json (migration 0074).
+    node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     snapshot: Mapped["PipelineSnapshot"] = relationship()

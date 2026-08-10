@@ -5,8 +5,8 @@ The migration upserts flags into ``feature_flag_catalog`` that the seed catalog
 to ``_KNOWN_FLAGS`` (or to ``catalog.FLAGS``) without updating the migration's
 ``_FLAGS`` dict, existing deployments seeded with ``ON CONFLICT DO NOTHING``
 never pick it up. This test keeps the migration's flag list in sync with the
-source of truth. The head check targets ``0073_run_node_attempt_count`` — the
-migration this branch adds on top of 0072 — so the head property holds against
+source of truth. The head check targets ``0074_run_node_telemetry_json`` — the
+migration this branch adds on top of 0073 — so the head property holds against
 the current chain.
 """
 
@@ -26,7 +26,7 @@ _MIGRATION_PATH = (
 )
 
 # The migration this branch introduces — the current head of the chain.
-_HEAD_MIGRATION_NAME = "0073_run_node_attempt_count"
+_HEAD_MIGRATION_NAME = "0074_run_node_telemetry_json"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
