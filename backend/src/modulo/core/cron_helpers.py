@@ -61,6 +61,22 @@ FIRE_JOB_HEARTBEAT = 30
 FIRE_JOB_RETRIES = 2
 FIRE_JOB_TTL = 300
 
+# Missed-fire catch-up (2026-08-10 incident). The fire_due_triggers tick
+# advances next_fire_at ATOMICALLY (claiming the epoch) and THEN enqueues the
+# per-item fire job. If the worker machine dies between the two — or the
+# enqueue fails — the epoch is consumed but never fired: a full missed cadence
+# for a daily cron, with nothing ever re-firing it. Two guards close the gap:
+#   1. The advance is rolled back when the enqueue fails (guarded, see
+#      ``_rollback_cron_advance``) so the next tick re-selects the epoch.
+#   2. A bounded catch-up scan re-fires a consumed epoch whose ``last_fired_at``
+#      is genuinely behind (see ``_fire_missed_cron_epochs``).
+# The grace/bound semantics mirror the hourly missed-fire alert
+# (``SAQ_MISSED_FIRE_GRACE_SECONDS = 300`` in modulo.core.error_tracking).
+CATCHUP_GRACE_SECONDS = 300  # a fire more than cadence + grace behind is "missed"
+CATCHUP_BOUND_SECONDS = 48 * 3600  # only re-fire misses within the last 48h
+_CATCHUP_MARKER_PREFIX = "saq:cron:catchup"
+_CATCHUP_MARKER_TTL = FIRE_JOB_TIMEOUT * (FIRE_JOB_RETRIES + 1) + 60  # 960s >= worst-case in-flight (300*3)
+
 # Report delivery (plan F1): failure backs off next_send_at +5min; deactivate
 # after 5 consecutive failures. NEVER re-enqueue every 30s.
 REPORT_BACKOFF_SECONDS = 300
@@ -498,6 +514,14 @@ async def fire_cron_trigger(
                 result="concurrency_limit_reached",
                 error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
             )
+            # Finding 2 (review PR #982): record the attempt (skip-not-defer).
+            # A concurrency-limited fire is CONSUMED, not missed — without this
+            # last_fired_at stays stale and the catch-up scan re-fires the epoch
+            # every marker TTL forever. The next NORMAL scheduled fire handles
+            # the future.
+            await session.execute(
+                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
+            )
             return {
                 "status": "skipped",
                 "reason": "concurrency_limit",
@@ -528,6 +552,12 @@ async def fire_cron_trigger(
                     result="spend_limit_reached",
                     error_detail=(f"Daily spend limit {spend_limit} reached (today: {today_cost})"),
                 )
+                # Finding 2 (review PR #982): record the attempt (skip-not-defer)
+                # so the catch-up scan does not re-fire a spend-limited epoch
+                # forever. The next NORMAL scheduled fire handles the future.
+                await session.execute(
+                    update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
+                )
                 return {
                     "status": "skipped",
                     "reason": "spend_limit",
@@ -550,6 +580,12 @@ async def fire_cron_trigger(
                     org_id=org_id,
                     result="no_pipeline",
                     error_detail="Pipeline not found when trying to auto-create snapshot",
+                )
+                # Finding 2 (review PR #982): record the attempt (skip-not-defer)
+                # so the catch-up scan does not re-fire a pipeline-missing epoch
+                # forever. The next NORMAL scheduled fire handles the future.
+                await session.execute(
+                    update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
                 )
                 return {"status": "skipped", "reason": "pipeline_not_found"}
             snapshot_id = new_snapshot.id
@@ -1066,6 +1102,264 @@ async def _advance_report_next_send(session: AsyncSession, report_id: uuid.UUID,
     return r.fetchone() is not None
 
 
+async def _rollback_cron_advance(
+    session: AsyncSession,
+    trigger_id: uuid.UUID,
+    cron_expression: str,
+    cron_timezone: str | None,
+    *,
+    previous_next_fire: datetime | None,
+    now: datetime,
+) -> None:
+    """Compensating rollback after a cron enqueue failure (2026-08-10 incident).
+
+    ``fire_due_triggers`` advances ``next_fire_at`` ATOMICALLY (claiming the
+    epoch) and then enqueues the per-item fire job. If the enqueue fails (a
+    Redis transient), the epoch is consumed but no job exists — a full missed
+    cadence for a daily cron. This restores ``next_fire_at`` to the value the
+    row held BEFORE the advance so the next tick re-selects the epoch and
+    retries the fire.
+
+    GUARDED: the restore fires only when the row STILL holds the value THIS
+    machine advanced it to (``next_fire_at = :advanced``). A concurrent
+    machine that already moved the row again (or a manual edit) is never
+    clobbered — the rollback becomes a no-op and the catch-up scan
+    (``_fire_missed_cron_epochs``) is the backstop. ``:advanced`` is
+    recomputed from the same ``now`` the loop captured; the advance's internal
+    ``now`` is at most sub-seconds later, so the recomputation matches for
+    every cron granularity >= 1s except a sub-second boundary race — where the
+    guard simply no-ops (the epoch stays consumed) and the catch-up re-fires.
+    """
+    if previous_next_fire is None:
+        return
+    advanced = compute_next_fire(cron_expression, after=now, timezone=cron_timezone or "UTC")
+    await session.execute(
+        text(
+            "UPDATE triggers SET next_fire_at = :old "
+            "WHERE id = :tid AND trigger_type = 'cron' AND next_fire_at = :advanced"
+        ),
+        {"old": previous_next_fire, "tid": str(trigger_id), "advanced": advanced},
+    )
+
+
+def _catchup_advance_stmt() -> Any:
+    """Atomic ``next_fire_at`` advance for the missed-fire catch-up scan.
+
+    Same single-winner primitive shape as ``_atomic_advance_stmt``, but for a
+    row whose ``next_fire_at`` is already in the FUTURE (a consumed-but-unfired
+    epoch — the normal ``next_fire_at <= now()`` guard would never match). The
+    guard is ``next_fire_at = :expected`` — the exact value the scan observed —
+    so only ONE machine (the one that selected the row in that state) wins; a
+    concurrent catch-up or a manual edit blocks the advance and the winner
+    fires the epoch.
+    """
+    return text(
+        "UPDATE triggers SET next_fire_at = :nf "
+        "WHERE id = :tid "
+        "  AND trigger_type = 'cron' "
+        "  AND active "
+        "  AND next_fire_at = :expected "
+        "RETURNING id"
+    )
+
+
+def _cron_cadence_seconds(cron_expression: str, cron_timezone: str | None, now: datetime) -> int | None:
+    """Cadence (seconds) between two consecutive fires of a cron expression.
+
+    Reuses the cadence helper from ``modulo.core.error_tracking`` — the same
+    computation the hourly missed-fire alert probe uses — so the catch-up scan
+    and the alert agree on what "behind schedule" means. Imported lazily (the
+    module chain is heavy and only needed on the catch-up path); it does not
+    import ``cron_helpers``, so there is no circular dependency (the existing
+    ``_ingest_saq_error`` already imports from it lazily).
+    """
+    from modulo.core.error_tracking import _trigger_period_seconds
+
+    return _trigger_period_seconds("cron", cron_expression, cron_timezone, None, now)
+
+
+async def _claim_catchup_marker(redis_client: AsyncRedis, trigger_id: uuid.UUID, missed_epoch: int) -> bool:
+    """Atomically claim the catch-up for *missed_epoch* (SET NX EX).
+
+    The claim is a single atomic ``SET key 1 NX EX`` so concurrent catch-up
+    scans across worker machines can never both fire the same missed epoch
+    (TOCTOU-free; review PR #982 finding 3). Returns True only when THIS call
+    won the claim. The marker lives for the worst-case fire-job in-flight
+    window (``_CATCHUP_MARKER_TTL`` >= FIRE_JOB_TIMEOUT * (RETRIES+1)); once the
+    job runs, ``last_fired_at`` is fresh and the trigger is no longer eligible
+    anyway. A Redis failure fails OPEN (the fire is allowed) — if Redis is down
+    the enqueue itself fails and the tick logs the failure.
+    """
+    key = f"{_CATCHUP_MARKER_PREFIX}:{trigger_id}:{missed_epoch}"
+    try:
+        return bool(await redis_client.set(key, "1", nx=True, ex=_CATCHUP_MARKER_TTL))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.catchup_marker_claim_failed trigger=%s", trigger_id)
+        return True
+
+
+async def _mark_catchup_fired(redis_client: AsyncRedis, trigger_id: uuid.UUID, missed_epoch: int) -> None:
+    """Mark a catch-up fire so the same missed epoch is not re-fired while its
+    fire job is still pending (see :func:`_catchup_marker_ok`). Best-effort: a
+    marker write failure only re-opens the (small, grace-bounded) re-fire
+    window, never a lost fire.
+    """
+    key = f"{_CATCHUP_MARKER_PREFIX}:{trigger_id}:{missed_epoch}"
+    try:
+        await redis_client.set(key, "1", ex=_CATCHUP_MARKER_TTL)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.catchup_marker_write_failed trigger=%s", trigger_id)
+
+
+async def _fire_missed_cron_epochs(
+    session: AsyncSession,
+    redis_client: AsyncRedis,
+    q: RedisQueue,
+    org_id: uuid.UUID,
+    now: datetime,
+    *,
+    summary: dict[str, Any],
+    advanced_this_tick: set[uuid.UUID],
+) -> None:
+    """Re-fire cron epochs consumed-but-never-fired (2026-08-10 incident).
+
+    A cron epoch is "consumed" when ``fire_due_triggers`` atomically advanced
+    ``next_fire_at`` past it but no per-item fire job was ever enqueued — the
+    worker machine was killed between the advance and the enqueue (the Daily
+    Watcher miss), or the enqueue failed and the compensating rollback could
+    not apply. The epoch then sits with ``next_fire_at`` in the FUTURE (the
+    normal due-loop never sees it) while ``last_fired_at`` is stale — nothing
+    would ever re-fire it.
+
+    This scan finds exactly those rows and re-fires each ONCE:
+      - Selection: active cron with ``next_fire_at`` in the future AND
+        ``last_fired_at`` NOT NULL and genuinely behind — older than
+        ``cadence + CATCHUP_GRACE_SECONDS`` (the same "missed" notion as the
+        hourly missed-fire alert) AND older than ``next_fire_at - cadence``
+        (the epoch ``next_fire_at`` points past was never fired).
+      - Bounded: only misses within ``min(CATCHUP_BOUND_SECONDS, cadence * 3)``
+        are caught up — an ancient stale trigger (disabled for months, then
+        re-enabled) is never fired.
+      - Single-winner: the advance guard is ``next_fire_at = :expected`` (the
+        exact value this scan observed), so a concurrent catch-up or a manual
+        edit blocks the advance and only ONE machine fires the epoch.
+      - No double-fire: rows this tick already advanced AND enqueued are
+        excluded (``advanced_this_tick``), and a short-lived Redis marker
+        (keyed by the stable missed epoch) prevents re-firing the same missed
+        epoch while its fire job is still pending.
+    """
+    from modulo.db.models.trigger import Trigger
+
+    try:
+        candidates = (
+            await session.execute(
+                select(
+                    Trigger.id,
+                    Trigger.pipeline_id,
+                    Trigger.config_json,
+                    Trigger.cron_expression,
+                    Trigger.cron_timezone,
+                    Trigger.next_fire_at,
+                    Trigger.last_fired_at,
+                ).where(
+                    Trigger.trigger_type == "cron",
+                    Trigger.active.is_(True),
+                    Trigger.next_fire_at.isnot(None),
+                    Trigger.next_fire_at > now,
+                    Trigger.last_fired_at.isnot(None),
+                    Trigger.cron_expression.isnot(None),
+                )
+            )
+        ).all()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("fire_due_triggers: catch-up read failed (org %s)", org_id)
+        return
+
+    for row in candidates:
+        if row.id in advanced_this_tick:
+            continue  # this tick already advanced + enqueued the epoch
+        if row.next_fire_at is None or row.last_fired_at is None:
+            continue
+        cadence = _cron_cadence_seconds(row.cron_expression, row.cron_timezone, now)
+        if cadence is None:
+            continue  # uncomputable cadence — leave it to the missed-fire alert
+        age_seconds = (now - row.last_fired_at).total_seconds()
+        if age_seconds <= cadence + CATCHUP_GRACE_SECONDS:
+            continue  # last fire is fresh (normal state — never catch up)
+        if age_seconds > min(CATCHUP_BOUND_SECONDS, cadence * 3):
+            continue  # ancient stale — beyond the bounded catch-up window
+        if row.last_fired_at >= row.next_fire_at - timedelta(seconds=cadence):
+            continue  # the epoch next_fire_at points past was already fired
+        missed_epoch = int((row.next_fire_at - timedelta(seconds=cadence)).timestamp())
+        if not await _claim_catchup_marker(redis_client, row.id, missed_epoch):
+            continue  # another machine already claimed this epoch — single winner
+        next_nf = compute_next_fire(row.cron_expression, after=now, timezone=row.cron_timezone or "UTC")
+        try:
+            r = await session.execute(
+                _catchup_advance_stmt(),
+                {"nf": next_nf, "tid": str(row.id), "expected": row.next_fire_at},
+            )
+            if r.fetchone() is None:
+                continue  # another machine won the epoch (or the row changed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("fire_due_triggers: catch-up advance failed %s", row.id)
+            continue
+        snapshot_id = _resolve_snapshot_id(row, {})
+        try:
+            job_id = await _enqueue_fire_job_async(
+                q,
+                "modulo.core.saq_worker.fire_cron_trigger",
+                f"fire:{row.id}:{int(now.timestamp())}",
+                trigger_id=str(row.id),
+                org_id=str(org_id),
+                pipeline_id=str(row.pipeline_id),
+                cron_expression=row.cron_expression,
+                snapshot_id=str(snapshot_id) if snapshot_id else "",
+            )
+            if job_id is not None:
+                summary["cron_catchup_enqueued"] += 1
+            await _mark_catchup_fired(redis_client, row.id, missed_epoch)
+            _log.info(
+                "fire_due_triggers.catchup_refire trigger=%s last_fired=%s cadence=%s missed_epoch=%s",
+                row.id,
+                row.last_fired_at.isoformat(),
+                cadence,
+                missed_epoch,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            summary["enqueue_failures"] += 1
+            _log.exception("fire_due_triggers: catch-up enqueue failed %s", row.id)
+            try:
+                await session.execute(
+                    text(
+                        "UPDATE triggers SET next_fire_at = :nf "
+                        "WHERE id = :tid AND trigger_type = 'cron' AND next_fire_at = :set"
+                    ),
+                    {"nf": row.next_fire_at, "tid": str(row.id), "set": next_nf},
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception("fire_due_triggers: catch-up enqueue rollback failed %s", row.id)
+            await _ingest_saq_error(
+                session,
+                org_id,
+                function="fire_due_triggers",
+                message=f"fire_due_triggers: catch-up enqueue failed for cron trigger {row.id}",
+                context={"trigger_id": str(row.id), "trigger_type": "cron", "catchup": True},
+            )
+
+
 async def fire_due_triggers() -> dict[str, Any]:
     """System cron — read due cron/polling/report rows and enqueue per-item fire jobs.
 
@@ -1073,7 +1367,10 @@ async def fire_due_triggers() -> dict[str, Any]:
     ATOMICALLY (conditional ``UPDATE ... RETURNING id``) and a per-item fire job
     is enqueued ONLY for returned rows. Per-type isolation: an exception in one
     trigger type does not stop the others. Enqueue failures ingest an
-    ``error_event`` (source='saq') and rely on next-tick re-fire.
+    ``error_event`` (source='saq') AND roll the advance back (guarded) so the
+    next tick re-selects the epoch; a bounded missed-fire catch-up scan re-fires
+    an epoch that was consumed-but-never-fired (worker killed between advance
+    and enqueue) — see ``_rollback_cron_advance`` / ``_fire_missed_cron_epochs``.
 
     Runs per-org (RLS-safe): the org context is set per transaction so the
     scheduler sees all orgs under FORCE RLS (integration) and behaves
@@ -1089,6 +1386,7 @@ async def fire_due_triggers() -> dict[str, Any]:
         "orgs_scanned": 0,
         "cron_due": 0,
         "cron_enqueued": 0,
+        "cron_catchup_enqueued": 0,
         "cron_skipped_paused": 0,
         "polling_due": 0,
         "polling_enqueued": 0,
@@ -1176,6 +1474,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                                 Trigger.config_json,
                                 Trigger.cron_expression,
                                 Trigger.cron_timezone,
+                                Trigger.next_fire_at,
                             ).where(
                                 Trigger.trigger_type == "cron",
                                 Trigger.active.is_(True),
@@ -1208,6 +1507,11 @@ async def fire_due_triggers() -> dict[str, Any]:
                     )
                     latest_snapshots = {row[0]: row[1] for row in snap_result}
 
+                # ``advanced_this_tick`` tracks epochs THIS tick advanced AND
+                # enqueued (or SAQ-deduped as already handled). The missed-fire
+                # catch-up scan below excludes them so it can never double-fire
+                # a trigger the normal loop already fired this tick.
+                advanced_this_tick: set[uuid.UUID] = set()
                 for row in cron_rows:
                     summary["cron_due"] += 1
                     try:
@@ -1238,11 +1542,41 @@ async def fire_due_triggers() -> dict[str, Any]:
                         )
                         if job_id is not None:
                             summary["cron_enqueued"] += 1
+                        # Enqueue succeeded or SAQ-deduped (a concurrent machine
+                        # already enqueued the same epoch) — handled, so the
+                        # catch-up scan must not re-fire it this tick.
+                        advanced_this_tick.add(row.id)
+                        # Finding 1 (review PR #982): ALSO mark the consumed epoch
+                        # so the catch-up scan does not re-fire it on the NEXT
+                        # tick while the fire job is still pending. row.next_fire_at
+                        # still holds the pre-advance value = the epoch consumed.
+                        try:
+                            await _mark_catchup_fired(redis_client, row.id, int(row.next_fire_at.timestamp()))
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            _log.exception("fire_due_triggers: catchup_marker_write_failed %s", row.id)
                     except asyncio.CancelledError:
                         raise
                     except Exception:
                         summary["enqueue_failures"] += 1
                         _log.exception("fire_due_triggers: cron enqueue failed %s", row.id)
+                        # Roll back the atomic advance so the next tick
+                        # re-selects the epoch and retries — never leave an
+                        # epoch consumed-but-unfired (2026-08-10 incident).
+                        try:
+                            await _rollback_cron_advance(
+                                session,
+                                row.id,
+                                row.cron_expression,
+                                row.cron_timezone,
+                                previous_next_fire=row.next_fire_at,
+                                now=now,
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            _log.exception("fire_due_triggers: cron enqueue rollback failed %s", row.id)
                         await _ingest_saq_error(
                             session,
                             org_id,
@@ -1403,6 +1737,23 @@ async def fire_due_triggers() -> dict[str, Any]:
                             message=f"fire_due_triggers: enqueue failed for report {row.id}",
                             context={"report_id": str(row.id), "trigger_type": "report"},
                         )
+
+                # ---- missed-fire catch-up (2026-08-10 incident) ----
+                # Re-fire cron epochs consumed-but-never-fired (worker killed
+                # between the atomic advance and the enqueue, or an enqueue
+                # failure whose rollback could not apply). Gated on the org not
+                # being paused: paused fires are SKIP-not-defer, so catch-up
+                # never fires a trigger while its org is paused.
+                if not org_paused:
+                    await _fire_missed_cron_epochs(
+                        session,
+                        redis_client,
+                        q,
+                        org_id,
+                        now,
+                        summary=summary,
+                        advanced_this_tick=advanced_this_tick,
+                    )
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
