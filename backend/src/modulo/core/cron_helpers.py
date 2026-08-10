@@ -42,6 +42,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
@@ -110,6 +111,42 @@ CAPACITY_REDISPATCH_SECONDS = 120
 # double-execute a live-but-stuck execute_run).
 _NODELESS_ZOMBIE_ERROR_CODE = "executor_stalled"
 
+# ---------------------------------------------------------------------------
+# Durable dispatch recovery (PR dist/runtime-reconcile, B2/B3).
+# dispatch_run now leaves a failed-enqueue run ``pending`` with
+# ``enqueue_failed_at`` stamped (never terminal-fails). dispatcher_reconcile
+# re-dispatches it on a bounded interval with a per-tick cap, and terminal-fails
+# it (``dispatch_failed``) only when Redis is verifiably reachable AND the
+# marker is older than the TTL backstop.
+# ---------------------------------------------------------------------------
+
+# Min-redispatch heartbeat gate for the enqueue-failed branch: a run is
+# re-dispatched only when its heartbeat is NULL or older than this window
+# (~120s), matching the capacity redispatch gate's cadence so a fresh run is not
+# hot-loop re-dispatched on every 60s tick.
+ENQUEUE_FAILED_REDISPATCH_SECONDS = 120
+
+# Per-tick re-dispatch cap for the enqueue-failed branch — a Redis outage
+# window that hit hundreds of webhooks must not flood the queue the moment it
+# recovers. Beyond the cap the remaining rows are deferred to later ticks.
+ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK = 50
+
+# TTL backstop: an enqueue-failed run whose marker is older than this is
+# terminal-failed with ``dispatch_failed`` — but ONLY when Redis is verifiably
+# reachable (lightweight ping). Redis down -> keep pending.
+ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES = 60
+
+_DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
+
+# ---------------------------------------------------------------------------
+# Age-bound mid-graph wedge terminalizer (B4). A run stuck mid-graph for longer
+# than the max plausible run duration is wedged (heartbeat may still be fresh —
+# the mid-graph stall can outlive the SAQ timeout window). Default is the max
+# SAQ run timeout in minutes, floored at 2h, plus a 15-minute skew (~135 min).
+# ---------------------------------------------------------------------------
+_MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
+_EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
+
 # Exported reconciliation stats for /healthz/ready (PR D — hitl-health-obs).
 _dispatcher_reconcile_stats: dict[str, Any] = {
     "last_run_at": None,
@@ -119,6 +156,10 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "redis_errors": 0,
     "deduped": 0,
     "nodeless_failed": 0,
+    "claim_cap_terminalized": 0,
+    "mid_graph_wedge_terminalized": 0,
+    "dispatch_failed_terminalized": 0,
+    "enqueue_failed_capped": 0,
 }
 
 
@@ -132,6 +173,10 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["deduped"] = stats.get("deduped", 0)
     _dispatcher_reconcile_stats["nodeless_failed"] = stats.get("nodeless_failed", 0)
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
+    _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
+    _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
+    _dispatcher_reconcile_stats["dispatch_failed_terminalized"] = stats.get("dispatch_failed_terminalized", 0)
+    _dispatcher_reconcile_stats["enqueue_failed_capped"] = stats.get("enqueue_failed_capped", 0)
 
 
 def get_dispatcher_reconcile_stats() -> dict[str, Any]:
@@ -1912,6 +1957,7 @@ def _build_re_dispatch_predicate(
     reenqueue_window: int,
     stale_window: int,
     capacity_redispatch_seconds: int,
+    enqueue_failed_redispatch_seconds: int = ENQUEUE_FAILED_REDISPATCH_SECONDS,
 ) -> Any:
     """Build the dispatcher_reconcile re-dispatch predicate (F3c + F6a).
 
@@ -1931,6 +1977,13 @@ def _build_re_dispatch_predicate(
     gate throttles the sandbox-cap claim/demote churn loop (one attempt per
     ``capacity_redispatch_seconds``); ``dispatch_run`` re-checks capacity
     atomically so a still-blocked run is re-deferred without churn.
+
+    B3 (durable dispatch): the zombie branch now REQUIRES ``enqueue_failed_at
+    IS NULL``, and a dedicated ``enqueue_failed_stale`` branch re-dispatches a
+    pending run whose enqueue-failure marker is set once its heartbeat is stale
+    past ``enqueue_failed_redispatch_seconds``. ``enqueue_failed_at`` is read via
+    raw SQL (the column ships in a parallel migration; the ORM model on this
+    branch does not yet map it).
     """
     from sqlalchemy import and_, or_
 
@@ -1951,13 +2004,30 @@ def _build_re_dispatch_predicate(
     return or_(
         capacity_deferred,
         capacity_marked_stale,
-        # Zombie branch: pending + dispatched_at set + dispatcher NULL — a
-        # fail-fast SAQ enqueue failure wrote dispatched_at but no job was
-        # enqueued. No staleness gate (re-dispatch immediately).
+        # Zombie branch: pending + dispatched_at set + dispatcher NULL AND no
+        # enqueue-failure marker (the marker-holding rows are recovered by the
+        # gated enqueue_failed_stale branch below). A bare zombie — the rare
+        # fail-fast failure before the marker migration — is re-dispatched
+        # immediately.
         and_(
             Run.status == "pending",
             Run.dispatched_at.is_not(None),
             Run.dispatcher.is_(None),
+            text("runs.enqueue_failed_at IS NULL"),
+        ),
+        # B3 enqueue-failed branch: pending + dispatched_at set + dispatcher
+        # NULL + enqueue_failed_at set + heartbeat stale past the bounded
+        # redispatch interval. The heartbeat gate throttles recovery to one
+        # attempt per window (no hot-loop on the 60s tick).
+        and_(
+            Run.status == "pending",
+            Run.dispatched_at.is_not(None),
+            Run.dispatcher.is_(None),
+            text("runs.enqueue_failed_at IS NOT NULL"),
+            or_(
+                Run.heartbeat_at.is_(None),
+                Run.heartbeat_at < func_now_minus(enqueue_failed_redispatch_seconds),
+            ),
         ),
         and_(
             Run.status == "pending",
@@ -1992,6 +2062,15 @@ def _reconcile_job_type(status: str) -> str:
     return "resume_run" if status in ("awaiting_human", "claimed") else "execute_run"
 
 
+# HITL decisions whose faithful resume REQUIRES a payload beyond the action name.
+# ``approved``/``rejected``/``deliver_manual`` only need the action;
+# ``approved_with_modification`` and ``manual_output`` carry modification/output
+# data that must be persisted. These actions are carried by the persisted
+# ``decision_payload``'s ``action`` member — the ``hitl_claims.decision`` column
+# only ever holds ``approved``/``rejected``/``deliver_manual``.
+_PAYLOAD_REQUIRING_ACTIONS = frozenset({"approved_with_modification", "manual_output"})
+
+
 async def _awaiting_human_has_committed_decision(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -2009,19 +2088,90 @@ async def _awaiting_human_has_committed_decision(
     with EMPTY resume_data would therefore auto-approve its gates. ``claimed``
     rows are exempt from the guard (a claim was already made, so the resume is
     safe mid-crash recovery).
-    """
-    from modulo.db.models.hitl_claim import HitlClaim
 
+    Stricter than the old ``decision IS NOT NULL`` guard (B1-reconcile): a
+    decision is only ``committed`` when the decision is present AND — for
+    payload-carrying actions (``approved_with_modification``/``manual_output``)
+    — the persisted ``decision_payload`` is present and actually carries the
+    required data. A payload-carrying decision without its payload cannot be
+    faithfully resumed. ``decision_payload`` is read via raw SQL (the jsonb
+    column ships in a parallel migration).
+
+    The payload-requirement is keyed off the persisted ``decision_payload``'s
+    ``action`` member, NOT the ``decision`` column — the column only ever holds
+    ``approved``/``rejected``/``deliver_manual``, so a column-keyed check would
+    be dead code and could never protect a manual-output decision whose payload
+    was lost: a payload-less recovery degrades to ``{"action": "approved"}``,
+    auto-approving the gate (a manual-output decision would pass
+    ``{"action": "approved"}`` to the manual node as its output). A payload-less
+    row (legacy/pre-migration) is treated as a plain approval/rejection that
+    needs no payload to resume faithfully.
+    """
     result = await session.execute(
-        select(HitlClaim.id)
-        .where(
-            HitlClaim.organisation_id == org_id,
-            HitlClaim.run_id == run_id,
-            HitlClaim.decision.is_not(None),
-        )
-        .limit(1)
+        text(
+            "SELECT decision, decision_payload FROM hitl_claims "
+            "WHERE organisation_id=:oid AND run_id=:rid AND decision IS NOT NULL "
+            "ORDER BY decision_at DESC NULLS LAST LIMIT 1"
+        ),
+        {"oid": str(org_id), "rid": str(run_id)},
     )
-    return result.scalar_one_or_none() is not None
+    row = result.first()
+    if row is None or row[0] is None:
+        return False
+    payload = row[1]
+    if isinstance(payload, dict):
+        action = payload.get("action")
+        if action == "manual_output":
+            # A manual-output decision MUST carry its output — otherwise the
+            # manual node resumes with ``{"action": "approved"}`` as its output.
+            return "output" in payload
+        if action == "approved_with_modification":
+            # An approve-with-modification MUST carry the modified output —
+            # otherwise the gate resumes as a plain approval, dropping the
+            # human's modification.
+            return "modified_output" in payload
+    # A payload-less row (legacy/pre-migration) degrades to
+    # ``{"action": <decision>}`` — a plain approval/rejection/deliver_manual
+    # needs no payload to be faithfully resumed.
+    return True
+
+
+async def _committed_decision_resume_data(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Reconstruct ``resume_data`` from the run's latest committed HITL decision.
+
+    Returns the persisted ``hitl_claims.decision_payload`` (jsonb) verbatim when
+    present, else ``{"action": <decision>}`` for a payload-less committed
+    decision (legacy rows / pre-migration DBs). ``None`` when no decision is
+    committed. NEVER returns ``{}`` for a committed decision — a recovered
+    rejection must resume as rejected, and an approve-with-modification must
+    carry its modification.
+    """
+    result = await session.execute(
+        text(
+            "SELECT decision, decision_payload FROM hitl_claims "
+            "WHERE organisation_id=:oid AND run_id=:rid AND decision IS NOT NULL "
+            "ORDER BY decision_at DESC NULLS LAST LIMIT 1"
+        ),
+        {"oid": str(org_id), "rid": str(run_id)},
+    )
+    row = result.first()
+    if row is None or row[0] is None:
+        return None
+    decision, payload = row[0], row[1]
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, TypeError):
+            payload = None
+    if isinstance(payload, dict):
+        return dict(payload)
+    if payload is None and decision:
+        return {"action": decision}
+    return None
 
 
 def _saq_run_claim_cap() -> int:
@@ -2035,6 +2185,94 @@ def _saq_run_claim_cap() -> int:
     through pipeline_execution -> executor).
     """
     return int(get_settings().saq_run_claim_cap)
+
+
+async def _terminalize_mid_graph_wedges(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    max_age_minutes: int,
+) -> int:
+    """Terminal-fail SAQ runs wedged mid-graph for longer than *max_age_minutes*.
+
+    DB-only, org-scoped (B4): a run stuck ``running`` with ``dispatcher='saq'``
+    whose ``started_at`` is older than the max plausible run duration is wedged
+    — a mid-graph stall can keep a fresh heartbeat alive (the in-process
+    executor may be gone while the job hash lingers), so the stale-heartbeat
+    branch never matches it. The age gate bounds the damage: ``executor_superseded``.
+    Runs ``UPDATE ... RETURNING id`` so each failure is logged.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE runs SET status='failed', error_code=:code, completed_at=now() "
+            "WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
+            "AND started_at < now() - (:max_age_minutes * interval '1 minute') "
+            "RETURNING id"
+        ),
+        {"oid": str(org_id), "code": _EXECUTOR_SUPERSEDED_ERROR_CODE, "max_age_minutes": max_age_minutes},
+    )
+    rows = result.all()
+    for (run_id,) in rows:
+        _log.warning(
+            "dispatcher_reconcile: mid-graph wedge terminalized %s (started > %d min ago)",
+            run_id,
+            max_age_minutes,
+        )
+    return len(rows)
+
+
+async def _terminalize_claim_cap_exhausted(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    claim_cap: int,
+    stale_seconds: int,
+) -> int:
+    """Terminal-fail SAQ runs at the claim cap whose heartbeat is STALE.
+
+    DB-only, org-scoped, selected INDEPENDENTLY of the other reconcile
+    predicates (B5). The old per-row terminalizer fired on ANY running row at
+    ``claim_count >= cap`` regardless of heartbeat freshness — killing a LIVE
+    run on its final claim (claim_run_async increments claim_count on EVERY
+    claim, so a legitimately-running final claim could trip the cap while the
+    executor is mid-node). Gating on a stale heartbeat means a capped run with
+    checkpoints is still caught once nothing claims it for *stale_seconds*; a
+    fresh-heartbeat capped run is left alone.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE runs SET status='failed', error_code='claim_cap_exhausted', completed_at=now() "
+            "WHERE organisation_id=:oid AND status='running' AND claim_count >= :cap "
+            "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:stale * interval '1 second')) "
+            "RETURNING id"
+        ),
+        {"oid": str(org_id), "cap": claim_cap, "stale": stale_seconds},
+    )
+    rows = result.all()
+    for (run_id,) in rows:
+        _log.warning(
+            "dispatcher_reconcile: claim-cap-exhausted SAQ run terminalized %s (claim_count >= %d, stale heartbeat)",
+            run_id,
+            claim_cap,
+        )
+    return len(rows)
+
+
+async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Terminal-fail an enqueue-failed run past the TTL backstop.
+
+    Org-scoped (C2-cron). Only transitions a run still ``pending`` with the
+    ``enqueue_failed_at`` marker set (a run already dispatched/claimed/terminal
+    is left untouched). The caller has already verified Redis is reachable.
+    """
+    await session.execute(
+        text(
+            "UPDATE runs SET status='failed', error_code=:code, completed_at=now() "
+            "WHERE id=:rid AND organisation_id=:oid AND status='pending' AND dispatcher IS NULL "
+            "AND enqueue_failed_at IS NOT NULL"
+        ),
+        {"rid": str(run_id), "oid": str(org_id), "code": _DISPATCH_FAILED_ERROR_CODE},
+    )
 
 
 async def dispatcher_reconcile() -> dict[str, Any]:
@@ -2056,10 +2294,18 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         run is re-deferred (counted ``capacity_deferred``, never alerted).
       * pending + dispatched_at set + ``dispatcher='saq'``: stale by the
         re-enqueue window.
-      * pending + dispatched_at set + dispatcher IS NULL: zombie from a
-        fail-fast SAQ enqueue failure — ``dispatch_run`` recorded dispatched_at
-        but the enqueue returned without a job, leaving the run stuck with no
-        dispatcher. NO staleness gate (re-dispatch immediately).
+      * pending + dispatched_at set + dispatcher IS NULL + NO
+        ``enqueue_failed_at``: zombie from a fail-fast SAQ enqueue failure
+        BEFORE the durable-dispatch marker existed. NO staleness gate
+        (re-dispatch immediately).
+      * pending + dispatched_at set + dispatcher IS NULL +
+        ``enqueue_failed_at`` SET (B3 durable dispatch): the run's enqueue
+        failed non-terminally. Re-dispatched once its heartbeat is stale past
+        ``ENQUEUE_FAILED_REDISPATCH_SECONDS`` (~120s), capped at
+        ``ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK`` (50) per tick. A marker
+        older than ``ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES`` (60m) is
+        terminal-failed ``dispatch_failed`` — ONLY when Redis is verifiably
+        reachable (lightweight ping); Redis down -> keep pending.
       * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT.
       * running + ``dispatcher='saq'`` + FRESH heartbeat but zero node
         progress after SAQ_CLAIMED_NODELESS_MINUTES (node_token_usage/out-
@@ -2078,19 +2324,35 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         nothing has claimed it for 2x the SAQ heartbeat window.
 
         F6a auto-approve guard: an ``awaiting_human`` row is re-dispatched ONLY
-        when a gate decision is actually committed (``hitl_claims.decision IS
-        NOT NULL`` — checked per-row via
-        :func:`_awaiting_human_has_committed_decision`). A genuinely-waiting
+        when a gate decision is actually committed AND (for payload-carrying
+        actions) its ``decision_payload`` is present — checked per-row via
+        :func:`_awaiting_human_has_committed_decision`. A genuinely-waiting
         run (no decision committed) whose job hash expired + heartbeat froze
         must NOT be resumed: ``executor.resume`` injects the (empty) payload as
         ``_hitl_decision``, which the HITL gate node treats as an approval —
         auto-approving the gate. ``claimed`` rows are exempt (a claim was
-        already made — mid-resume crash recovery).
+        already made — mid-resume crash recovery). Resume ``resume_data`` is
+        reconstructed from the persisted ``hitl_claims.decision_payload``
+        (B1-reconcile) — a recovered rejection resumes as rejected, never as an
+        empty ``{}``.
 
-    On match: verify the Redis read, then PARTIAL-EVICTION repair — DEL the
-    abort key, ZREM the incomplete zset, LREM queued/active (all keys derived
-    from the configured queue name), then a normal ``queue.enqueue()``. The
-    enqueue return is gated: a still-deduped result logs + alerts, never loops.
+    Per-org DB-only terminalizers (before the row select):
+      * B4 age-bound: any ``running`` + ``dispatcher='saq'`` row whose
+        ``started_at`` is older than ``_MID_GRAPH_WEDGE_MAX_AGE_MINUTES``
+        (~135m) is terminal-failed ``executor_superseded``.
+      * B5 claim-cap: any ``running`` row at ``claim_count >= cap`` whose
+        heartbeat is STALE is terminal-failed ``claim_cap_exhausted`` —
+        selected INDEPENDENTLY of the reconcile predicates so a capped
+        fresh-heartbeat run with checkpoints is still caught once its heartbeat
+        goes stale, while a LIVE run on its final claim is never killed.
+
+    On match: verify the Redis read, RE-CHECK ``q.job()`` AFTER the decision
+    and immediately before enqueue (skip if a job now exists — a concurrent
+    worker may have re-enqueued), then a normal ``queue.enqueue()`` with a
+    FRESH ``key_suffix`` so SAQ's key-based dedupe never suppresses the
+    recovery enqueue. NO SAQ-internal structures (``saq:abort:*``, incomplete
+    zset, queued/active lists) are read or written — the atomic claim UPDATE
+    (``claim_run_async``) is the real at-most-once dedupe.
 
     Re-dispatch type (discriminator): awaiting_human/claimed -> ``resume_run``;
     pending/running -> ``execute_run``. Capacity-deferred runs are re-dispatched
@@ -2107,6 +2369,8 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     stale_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
     nodeless_window = int(settings.saq_claimed_nodeless_minutes)
     capacity_redispatch_seconds = CAPACITY_REDISPATCH_SECONDS
+    max_age_minutes = _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+    claim_cap = _saq_run_claim_cap()
     factory = _open_factory()
     summary: dict[str, Any] = {
         "scanned": 0,
@@ -2116,6 +2380,9 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "deduped": 0,
         "nodeless_failed": 0,
         "claim_cap_terminalized": 0,
+        "mid_graph_wedge_terminalized": 0,
+        "dispatch_failed_terminalized": 0,
+        "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
     }
 
@@ -2137,11 +2404,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             await write_dispatcher_reconcile_stats(redis_client, summary)
             return summary
         q = RedisQueue(redis_client, name=queue_name)
+        # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
+        enqueue_failed_redispatched = 0
         re_dispatch_predicate = or_(
             _build_re_dispatch_predicate(
                 reenqueue_window=reenqueue_window,
                 stale_window=stale_window,
                 capacity_redispatch_seconds=capacity_redispatch_seconds,
+                enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
             ),
             # Claimed-but-nodeless zombie branch: running + saq + FRESH
             # heartbeat but ZERO node progress after the nodeless window.
@@ -2155,6 +2425,20 @@ async def dispatcher_reconcile() -> dict[str, Any]:
             async with factory() as session, session.begin():
                 await _set_rls_org(session, org_id)
                 try:
+                    # B4: age-bound mid-graph wedge terminalizer (DB-only,
+                    # org-scoped). Runs stuck 'running' past the max plausible
+                    # duration are wedged — fail them BEFORE the row select so
+                    # they are excluded from re-dispatch.
+                    summary["mid_graph_wedge_terminalized"] += await _terminalize_mid_graph_wedges(
+                        session, org_id, max_age_minutes=max_age_minutes
+                    )
+                    # B5: claim-cap terminalizer — INDEPENDENT of the reconcile
+                    # predicates, stale-heartbeat gated (a LIVE run on its final
+                    # claim is never killed; a capped run whose heartbeat froze
+                    # is still caught).
+                    summary["claim_cap_terminalized"] += await _terminalize_claim_cap_exhausted(
+                        session, org_id, claim_cap=claim_cap, stale_seconds=stale_window
+                    )
                     rows = (
                         await session.execute(
                             select(
@@ -2167,6 +2451,8 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 Run.outputs_json,
                                 Run.started_at,
                                 Run.claim_count,
+                                Run.dispatcher,
+                                text("runs.enqueue_failed_at AS enqueue_failed_at"),
                             ).where(
                                 Run.organisation_id == org_id,
                                 Run.status.in_(("pending", "running", "awaiting_human", "claimed")),
@@ -2183,34 +2469,6 @@ async def dispatcher_reconcile() -> dict[str, Any]:
 
                 for row in rows:
                     summary["scanned"] += 1
-                    # SAQ claim-cap terminalizer (plan F8): an SAQ run whose
-                    # claim_count reached its cap is stuck forever — claim_run
-                    # refuses to claim it (cap bound) and the pipeline_execution
-                    # worker_lost sweep is scoped to non-SAQ rows. Fail it
-                    # regardless of Redis job presence (it can never complete).
-                    if row.status == "running" and getattr(row, "claim_count", 0) >= _saq_run_claim_cap():
-                        try:
-                            await session.execute(
-                                text(
-                                    "UPDATE runs SET status='failed', error_code='claim_cap_exhausted', "
-                                    "completed_at=now() "
-                                    "WHERE id=:rid AND organisation_id=:oid AND status='running'"
-                                ),
-                                {"rid": str(row.id), "oid": str(org_id)},
-                            )
-                            summary["claim_cap_terminalized"] += 1
-                            _log.warning(
-                                "dispatcher_reconcile: claim-cap-exhausted SAQ run terminalized %s",
-                                row.id,
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:
-                            _log.exception(
-                                "dispatcher_reconcile: claim-cap terminalizer failed for run %s",
-                                row.id,
-                            )
-                        continue
 
                     if _is_nodeless_zombie_row(row, nodeless_window):
                         # Claimed-but-never-executed zombie: fail it directly,
@@ -2222,8 +2480,42 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                         await _fail_nodeless_run(session, row.id, org_id)
                         continue
 
+                    # B3 enqueue-failed branch: pending + dispatched + dispatcher
+                    # NULL + enqueue_failed_at set. Terminal-fail past the TTL
+                    # backstop (only when Redis is reachable), else re-dispatch
+                    # under the bounded interval + per-tick cap.
+                    is_enqueue_failed = (
+                        row.status == "pending"
+                        and row.dispatched_at is not None
+                        and getattr(row, "dispatcher", None) is None
+                        and getattr(row, "enqueue_failed_at", None) is not None
+                    )
+                    if is_enqueue_failed:
+                        marker_age = (datetime.now(UTC) - row.enqueue_failed_at).total_seconds()
+                        if marker_age > ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES * 60:
+                            try:
+                                await redis_client.ping()
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception:
+                                summary["skipped"] += 1
+                                # Redis down — do NOT terminal-fail; keep pending
+                                # for a later tick.
+                                continue
+                            await _fail_run_dispatch_failed(session, row.id, org_id)
+                            summary["dispatch_failed_terminalized"] += 1
+                            continue
+                        if enqueue_failed_redispatched >= ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK:
+                            summary["enqueue_failed_capped"] += 1
+                            _log.warning(
+                                "dispatcher_reconcile: enqueue-failed re-dispatch cap hit (%d/tick); "
+                                "deferring run %s to a later tick",
+                                ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK,
+                                row.id,
+                            )
+                            continue
+
                     job_key = f"run:{row.id}"
-                    job_id = q.job_id(job_key)
                     try:
                         job = await q.job(job_key)
                     except asyncio.CancelledError:
@@ -2245,27 +2537,36 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                         summary["skipped"] += 1
                         continue  # job still exists — nothing to repair
 
-                    # F6a auto-approve guard: an awaiting_human run may only be
-                    # re-dispatched as resume_run when a gate decision is actually
-                    # committed (hitl_claims.decision IS NOT NULL). A
-                    # genuinely-waiting run (no human action, no committed
-                    # decision) whose completed execute_run job hash expired and
-                    # whose heartbeat froze matches the F6a staleness branch, but
-                    # re-dispatching it with EMPTY resume_data would inject
-                    # {"_hitl_decision": {}} into executor.resume — the HITL gate
-                    # node treats any non-None decision as approved. Leave the row
-                    # alone; it is genuinely waiting on a human. claimed rows are
-                    # exempt (a claim was already made — mid-resume crash).
-                    if row.status == "awaiting_human" and not await _awaiting_human_has_committed_decision(
-                        session, org_id, row.id
-                    ):
-                        summary["skipped"] += 1
-                        _log.info(
-                            "dispatcher_reconcile: awaiting_human run %s has no committed HITL "
-                            "decision — not re-dispatched",
-                            row.id,
-                        )
-                        continue
+                    # F6a auto-approve guard + durable resume payload
+                    # (B1-reconcile): an awaiting_human run may only be
+                    # re-dispatched as resume_run when a gate decision is
+                    # actually committed AND (for payload-carrying actions) its
+                    # decision_payload is present. A genuinely-waiting run (no
+                    # human action, no committed decision) whose completed
+                    # execute_run job hash expired and whose heartbeat froze
+                    # matches the F6a staleness branch, but re-dispatching it
+                    # with EMPTY resume_data would inject {"_hitl_decision": {}}
+                    # into executor.resume — the HITL gate node treats any
+                    # non-None decision as approved. Leave the row alone; it is
+                    # genuinely waiting on a human. claimed rows are exempt (a
+                    # claim was already made — mid-resume crash recovery).
+                    resume_data: dict[str, Any] | None = None
+                    if row.status in ("awaiting_human", "claimed"):
+                        if row.status == "awaiting_human" and not await _awaiting_human_has_committed_decision(
+                            session, org_id, row.id
+                        ):
+                            summary["skipped"] += 1
+                            _log.info(
+                                "dispatcher_reconcile: awaiting_human run %s has no committed HITL "
+                                "decision — not re-dispatched",
+                                row.id,
+                            )
+                            continue
+                        # Reconstruct the durable resume payload from the
+                        # committed decision (never {} — a recovered rejection
+                        # must resume as rejected). claimed rows with no
+                        # committed decision yield None (the caller's default).
+                        resume_data = await _committed_decision_resume_data(session, org_id, row.id)
 
                     # Capacity check for capacity-deferred runs (pending + no
                     # dispatched_at). Re-dispatch only when the pipeline has free
@@ -2284,33 +2585,51 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 summary["skipped"] += 1
                                 continue
 
-                    # Partial-eviction repair — all keys derived from the queue name.
+                    # NO SAQ-internal eviction (B2): a version-pinned
+                    # DEL/ZREM/LREM of saq:abort:*/incomplete/queued/active is
+                    # TOCTOU-unsafe across machines and can permanently strand a
+                    # job. The atomic claim UPDATE is the real dedupe — a second
+                    # worker claiming the same run loses. Re-check q.job() AFTER
+                    # the decision and immediately before enqueue: if a job now
+                    # exists under the original key, a concurrent worker already
+                    # re-enqueued it — skip.
                     try:
-                        await redis_client.delete(f"saq:abort:{job_key}")
-                        await redis_client.zrem(f"saq:{queue_name}:incomplete", job_id)
-                        await redis_client.lrem(f"saq:{queue_name}:queued", 0, job_id)
-                        await redis_client.lrem(f"saq:{queue_name}:active", 0, job_id)
+                        if await q.job(job_key) is not None:
+                            summary["skipped"] += 1
+                            continue
                     except asyncio.CancelledError:
                         raise
                     except Exception:
                         summary["redis_errors"] += 1
-                        _log.exception("dispatcher_reconcile: partial-eviction failed for run %s", row.id)
+                        _log.exception("dispatcher_reconcile: Redis re-check failed for run %s", row.id)
                         await _ingest_saq_error(
                             session,
                             org_id,
                             function="dispatcher_reconcile",
-                            message=f"dispatcher_reconcile: partial-eviction failed for run {row.id}",
+                            message=f"dispatcher_reconcile: Redis re-check failed for run {row.id}",
                             context={"run_id": str(row.id)},
                         )
                         continue
 
                     # Discriminator (F6a): awaiting_human/claimed -> resume_run;
-                    # pending/running -> execute_run.
+                    # pending/running -> execute_run. Re-dispatch with a FRESH
+                    # key_suffix so SAQ key dedupe never suppresses the recovery
+                    # enqueue.
                     job_type = _reconcile_job_type(row.status)
+                    key_suffix = uuid.uuid4().hex
                     try:
-                        outcome, new_job_id = await _re_enqueue_run(q.name, str(row.id), str(org_id), job_type)
+                        outcome, new_job_id = await _re_enqueue_run(
+                            q.name,
+                            str(row.id),
+                            str(org_id),
+                            job_type,
+                            resume_data=resume_data,
+                            key_suffix=key_suffix,
+                        )
                         if outcome == "enqueued":
                             summary["repaired"] += 1
+                            if is_enqueue_failed:
+                                enqueue_failed_redispatched += 1
                             _log.info(
                                 "dispatcher_reconcile: re-dispatched run %s as %s (%s)",
                                 row.id,
@@ -2327,6 +2646,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                             summary["capacity_deferred"] += 1
                             _log.warning(
                                 "dispatcher_reconcile: run %s still capacity-deferred — pending undispatched",
+                                row.id,
+                            )
+                        elif outcome == "enqueue_failed":
+                            # The re-dispatch itself failed to enqueue: the run
+                            # is left pending with enqueue_failed_at refreshed by
+                            # dispatch_run — a later tick retries. Not a dedup,
+                            # not a terminal failure.
+                            summary["skipped"] += 1
+                            _log.warning(
+                                "dispatcher_reconcile: re-enqueue failed for run %s (left pending for retry)",
                                 row.id,
                             )
                         else:
@@ -2367,17 +2696,30 @@ async def _re_enqueue_run(
     run_id_str: str,
     org_id_str: str,
     job_type: str,
+    *,
+    resume_data: dict[str, Any] | None = None,
+    key_suffix: str | None = None,
 ) -> tuple[str, str | None]:
-    """Normal dispatch after partial-eviction; gate on the return value.
+    """Normal re-dispatch through ``dispatch_run``; gate on the return value.
 
     ``dispatch_run`` is the single gating point (F3e): it capacity-checks,
-    writes ``dispatched_at``, enqueues with the deterministic ``run:{id}`` key,
-    and records ``dispatcher='saq'`` + fresh claim token. A still-deduped result
-    (Lua dedupe not cleared) logs + alerts — it does NOT loop.
+    writes ``dispatched_at``, enqueues (with a FRESH ``key_suffix`` so SAQ key
+    dedupe never suppresses a recovery enqueue), and records ``dispatcher='saq'``
+    + fresh claim token, clearing ``enqueue_failed_at`` on success. For a
+    ``resume_run`` the caller passes the durable ``resume_data`` reconstructed
+    from the committed HITL decision payload (B1-reconcile) — never ``{}`` for a
+    committed decision. A still-deduped result logs + alerts — it does NOT loop.
     """
     from modulo.core.dispatch import dispatch_run
 
-    return await dispatch_run(run_id_str, org_id_str, queue=queue_name, job_type=job_type)
+    return await dispatch_run(
+        run_id_str,
+        org_id_str,
+        queue=queue_name,
+        job_type=job_type,
+        resume_data=resume_data,
+        key_suffix=key_suffix,
+    )
 
 
 def func_now_minus(seconds: int) -> Any:

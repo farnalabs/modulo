@@ -1,6 +1,6 @@
 ﻿rules:
   - id: bare-raise-in-except
-    pattern-regex: (?ms)^\s*except[ \t]+(?:Exception|BaseException)\s*(?:as[ \t]+\w+)?:[ \t]*\n(?:\s*(?:#.*)?\n)*\s*raise\s*(?:#.*)?$
+    pattern-regex: (?m)^\s*except[ \t]+(?:Exception|BaseException)\s*(?:as[ \t]+\w+)?:[ \t]*\n(?:\s*(?:#[^\n]*)?\n)*\s*raise\s*(?:#[^\n]*)?$
     message: "`except Exception:`/`except BaseException:` handler that only contains a bare `raise` is a silent re-raise - add logging or raise a specific exception (e.g. `raise ... from exc`) so the error is actionable. Concrete HTTPException re-raises are intentionally excluded: `except HTTPException: raise` is the correct FastAPI idiom for letting the exception handler map the status code."
     languages: [python]
     severity: ERROR

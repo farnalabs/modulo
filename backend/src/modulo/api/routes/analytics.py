@@ -46,6 +46,7 @@ from modulo.core.analytics.service import (
     AnalyticsValidationError,
     export_facts,
     run_analytics_query,
+    run_concurrency_query,
 )
 from modulo.settings import Settings, get_settings
 
@@ -79,6 +80,24 @@ class AnalyticsResponse(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
     buckets: list[AnalyticsBucket]
+
+
+class ConcurrencyBucket(BaseModel):
+    """One slot-utilization bucket — max/avg concurrent active + queued runs."""
+
+    date: str
+    max_active: int = 0
+    avg_active: float = 0.0
+    max_queued: int = 0
+    avg_queued: float = 0.0
+
+
+class ConcurrencyResponse(BaseModel):
+    group_by: str
+    date_from: str | None = None
+    date_to: str | None = None
+    pool_reference: int | None = None
+    buckets: list[ConcurrencyBucket]
 
 
 class AnalyticsExportItem(BaseModel):
@@ -249,6 +268,61 @@ async def analytics_query(
             raise
         raise _map_service_error(exc) from None
     return AnalyticsResponse(**result)
+
+
+@router.get("/concurrency", response_model=ConcurrencyResponse)
+async def analytics_concurrency(
+    group_by: AnalyticsGroupBy = Query(AnalyticsGroupBy.DAY),
+    auto_granularity: bool = Query(False),
+    trigger_type: AnalyticsTriggerType | None = Query(None),
+    status: AnalyticsStatus | None = Query(None),
+    pipeline_id: list[uuid.UUID] | None = Query(None),
+    folder_id: uuid.UUID | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    limit: int = Query(1000, ge=1, le=1000),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission("analytics.query"),
+    _: object = require_feature("analytics_page"),
+) -> ConcurrencyResponse:
+    """Slot-utilization series: per-bucket max/avg concurrent active + queued runs.
+
+    Reconstructs "how many runs were running / queued at any instant" from the
+    retained fact instants (``[started_at, completed_at)`` overlap — a run
+    spanning a bucket boundary counts in both). ``pool_reference`` is the
+    binding concurrency cap for the query scope: the org's
+    ``run_concurrency_limit``, or the single filtered pipeline's
+    ``max_concurrent_runs``. ``dimension``/``error_code`` are not surfaced —
+    there is no per-dimension concurrency split.
+    """
+    org_id = _require_org(principal)
+    params = AnalyticsParams(
+        group_by=group_by,
+        auto_granularity=auto_granularity,
+        dimension=None,
+        trigger_type=trigger_type,
+        status=status,
+        pipeline_ids=tuple(pipeline_id or ()),
+        error_code=None,
+        folder_id=folder_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+    try:
+        result = await run_concurrency_query(
+            org_id=org_id,
+            params=params,
+            factory=_analytics_session_factory(settings),
+            settings=settings,
+            account_id=principal.account_id,
+            org_role=principal.org_role,
+        )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        raise _map_service_error(exc) from None
+    return ConcurrencyResponse(**result)
 
 
 @router.get("/export", response_model=AnalyticsExportResponse)

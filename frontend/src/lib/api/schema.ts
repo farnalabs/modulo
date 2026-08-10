@@ -1244,6 +1244,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/concurrency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Concurrency
+         * @description Slot-utilization series: per-bucket max/avg concurrent active + queued runs.
+         *
+         *     Reconstructs "how many runs were running / queued at any instant" from the
+         *     retained fact instants (``[started_at, completed_at)`` overlap — a run
+         *     spanning a bucket boundary counts in both). ``pool_reference`` is the
+         *     binding concurrency cap for the query scope: the org's
+         *     ``run_concurrency_limit``, or the single filtered pipeline's
+         *     ``max_concurrent_runs``. ``dimension``/``error_code`` are not surfaced —
+         *     there is no per-dimension concurrency split.
+         */
+        get: operations["analytics_concurrency_api_v1_analytics_concurrency_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/export": {
         parameters: {
             query?: never;
@@ -7729,6 +7757,47 @@ export interface components {
             /** Version */
             version?: string | null;
         };
+        /**
+         * ConcurrencyBucket
+         * @description One slot-utilization bucket — max/avg concurrent active + queued runs.
+         */
+        ConcurrencyBucket: {
+            /** Date */
+            date: string;
+            /**
+             * Max Active
+             * @default 0
+             */
+            max_active: number;
+            /**
+             * Avg Active
+             * @default 0
+             */
+            avg_active: number;
+            /**
+             * Max Queued
+             * @default 0
+             */
+            max_queued: number;
+            /**
+             * Avg Queued
+             * @default 0
+             */
+            avg_queued: number;
+        };
+        /** ConcurrencyResponse */
+        ConcurrencyResponse: {
+            /** Group By */
+            group_by: string;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Pool Reference */
+            pool_reference?: number | null;
+            /** Buckets */
+            buckets: components["schemas"]["ConcurrencyBucket"][];
+        };
         /** ConfigEntry */
         ConfigEntry: {
             /** Key */
@@ -7742,6 +7811,11 @@ export interface components {
         ConfirmDeletionRequest: {
             /** Token */
             token: string;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** ConfirmDeletionResponse */
         ConfirmDeletionResponse: {
@@ -16983,6 +17057,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyticsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_concurrency_api_v1_analytics_concurrency_get: {
+        parameters: {
+            query?: {
+                group_by?: components["schemas"]["AnalyticsGroupBy"];
+                auto_granularity?: boolean;
+                trigger_type?: components["schemas"]["AnalyticsTriggerType"] | null;
+                status?: components["schemas"]["AnalyticsStatus"] | null;
+                pipeline_id?: string[] | null;
+                folder_id?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+                limit?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConcurrencyResponse"];
                 };
             };
             /** @description Validation Error */

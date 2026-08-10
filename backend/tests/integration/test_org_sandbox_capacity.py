@@ -253,6 +253,11 @@ async def _clean_runs_between_tests(db_engine: AsyncEngine) -> None:
     the shared session DB — truncation guarantees per-test isolation either way.
     """
     async with db_engine.connect() as conn:
+        # The ``enqueue_failed_at`` column ships in a parallel runtime migration
+        # (not yet on this branch) but dispatch_run's _record_saq_job/_mark_enqueue_failed
+        # reference it — self-provision it idempotently so the dispatch tests
+        # run here; the real migration makes this a no-op after merge.
+        await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS enqueue_failed_at timestamptz"))
         await conn.execute(text("TRUNCATE runs RESTART IDENTITY CASCADE"))
         await conn.commit()
 

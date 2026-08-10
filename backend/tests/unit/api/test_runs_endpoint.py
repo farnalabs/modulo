@@ -913,6 +913,104 @@ def test_diff_node_output_node_not_found(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/runs/{run_id}/nodes/{node_id}/recover — dispatch outcome handling
+# ---------------------------------------------------------------------------
+
+
+def test_recover_node_enqueued_returns_200(client: TestClient) -> None:
+    """A successfully enqueued recover-node resume returns 200 (replay mode
+    when input_data is supplied)."""
+    run = _make_run(status="running")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/nodes/manual-node-1/recover",
+            json={"input_data": {"answer": 42}},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["action"] == "replay"
+    assert body["status"] == "running"
+
+
+def test_recover_node_skip_without_input_data_returns_200(client: TestClient) -> None:
+    """Omitted input_data selects skip mode and still resumes the run."""
+    run = _make_run(status="running")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("deduped", "job-id"),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/nodes/manual-node-1/recover",
+            json={},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "skip"
+
+
+def test_recover_node_enqueue_failed_surfaces_500(client: TestClient) -> None:
+    """A persistent enqueue failure in the recover-node path (dispatch_run
+    returns ('enqueue_failed', None) after all retries) MUST surface as 500 —
+    the run is left pending and would otherwise be re-dispatched by
+    dispatcher_reconcile as execute_run with resume_data=None, silently losing
+    the operator's replay/skip recovery and any supplied input_data (the run
+    would re-execute from scratch instead of resuming at the recovered node)."""
+    run = _make_run(status="running")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueue_failed", None),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/nodes/manual-node-1/recover",
+            json={"input_data": {"answer": 42}},
+        )
+
+    assert resp.status_code == 500
+    assert "enqueue" in resp.json()["detail"].lower()
+
+
+def test_recover_node_capacity_deferred_surfaces_500(client: TestClient) -> None:
+    """A capacity-deferred recover-node resume ('deferred') also surfaces as
+    500 so the recovery is never silently dropped."""
+    run = _make_run(status="running")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("deferred", None),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/nodes/manual-node-1/recover",
+            json={},
+        )
+
+    assert resp.status_code == 500
+    assert "enqueue" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
 # GET /api/v1/runs/{run_id}/io — normalized split surfaces (FAR-126 P2a)
 # ---------------------------------------------------------------------------
 

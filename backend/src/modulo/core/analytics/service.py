@@ -40,12 +40,16 @@ from modulo.core.analytics.builder import (
     AnalyticsQuery,
     AnalyticsStatus,
     AnalyticsTriggerType,
+    bucket_concurrency_rows,
     bucket_rows,
+    build_concurrency_query,
     build_facts_query,
     hour_groupby_span_exceeds,
     resolve_group_by,
     to_utc_aware,
 )
+from modulo.db.crud.run import get_org_run_concurrency_limit
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings
@@ -63,6 +67,7 @@ __all__ = [
     "AnalyticsValidationError",
     "export_facts",
     "run_analytics_query",
+    "run_concurrency_query",
 ]
 
 # Default statement timeout for analytics queries (ms) — settings-driven via
@@ -335,6 +340,128 @@ async def run_analytics_query(
         "date_from": effective_from.isoformat(),
         "date_to": effective_to.isoformat(),
         "buckets": buckets,
+    }
+
+
+async def _resolve_pool_reference(
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    org_role: str | None,
+    pipeline_ids: tuple[uuid.UUID, ...],
+) -> int | None:
+    """Best-effort concurrency-cap reference for the response (FAR-134).
+
+    Never raises — a failed reference degrades to ``None`` with a log, never a
+    failed query. With a single ``pipeline_id`` filter the pool reference is
+    that pipeline's ``max_concurrent_runs`` (the binding cap for a one-pipeline
+    query); otherwise it is the org's ``run_concurrency_limit``. Reads use the
+    explicit org predicate because ``modulo_app`` is BYPASSRLS — the predicate
+    is the ONLY isolation control, and ``session.get`` alone would not scope it.
+    """
+    try:
+        async with factory() as session:
+            try:
+                async with session.begin():
+                    await set_rls_org(session, org_id)
+                    if account_id is not None:
+                        await set_rls_user_context(session, account_id, org_role or "")
+                    if len(pipeline_ids) == 1:
+                        value = (
+                            await session.execute(
+                                sa.select(Pipeline.max_concurrent_runs).where(
+                                    Pipeline.id == pipeline_ids[0],
+                                    Pipeline.organisation_id == org_id,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        return int(value) if value is not None else None
+                    return await get_org_run_concurrency_limit(session, org_id)
+            except asyncio.CancelledError:
+                raise
+            except (ProgrammingError, SQLAlchemyError):
+                _log.exception("analytics.pool_reference.db_error", extra={"org_id": str(org_id)})
+                return None
+    except Exception:
+        _log.exception("analytics.pool_reference.unexpected_error", extra={"org_id": str(org_id)})
+        return None
+
+
+async def run_concurrency_query(
+    *,
+    org_id: uuid.UUID,
+    params: AnalyticsParams,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+) -> dict[str, Any]:
+    """Slot-utilization series: per-bucket max/avg active + queued runs.
+
+    Mirrors ``run_analytics_query`` (rate limit, bounds normalisation,
+    auto-granularity, hour cap, statement timeout) but buckets the overlap of
+    the runs' ``[started_at, completed_at)`` intervals in Python instead of a
+    GROUP BY. ``dimension`` is accepted for surface parity and ignored — there
+    is no per-dimension concurrency split. Returns ``{group_by, date_from,
+    date_to, pool_reference, buckets}`` where each bucket carries ``{date,
+    key: None, max_active, avg_active, max_queued, avg_queued,
+    pool_reference}``.
+    """
+    if _rate_limited(str(org_id)):
+        raise AnalyticsRateLimitedError("Rate limit exceeded")
+
+    effective_from, effective_to = _normalise_bounds(params.date_from, params.date_to)
+    effective_group_by = (
+        resolve_group_by(params.group_by, effective_from, effective_to) if params.auto_granularity else params.group_by
+    )
+    _check_hour_cap(effective_group_by, effective_from, effective_to)
+
+    query = AnalyticsQuery(
+        org_id=org_id,
+        group_by=effective_group_by,
+        dimension=None,
+        trigger_type=params.trigger_type,
+        status=params.status,
+        pipeline_ids=params.pipeline_ids,
+        error_code=params.error_code,
+        folder_id=params.folder_id,
+        date_from=effective_from,
+        date_to=effective_to,
+        limit=params.limit,
+    )
+    stmt, bind = build_concurrency_query(query)
+    rows = await _execute_with_guards(
+        factory,
+        settings,
+        org_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+        stmt=stmt,
+        params=bind,
+    )
+    buckets = bucket_concurrency_rows(
+        rows,
+        group_by=effective_group_by,
+        date_from=effective_from,
+        date_to=effective_to,
+        limit=params.limit,
+    )
+    pool_reference = await _resolve_pool_reference(
+        factory,
+        settings,
+        org_id=org_id,
+        account_id=account_id,
+        org_role=org_role,
+        pipeline_ids=params.pipeline_ids,
+    )
+    return {
+        "group_by": effective_group_by.value,
+        "date_from": effective_from.isoformat(),
+        "date_to": effective_to.isoformat(),
+        "pool_reference": pool_reference,
+        "buckets": [{**bucket, "key": None, "pool_reference": pool_reference} for bucket in buckets],
     }
 
 

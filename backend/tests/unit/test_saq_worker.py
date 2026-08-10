@@ -369,7 +369,9 @@ class TestSystemWebRunner:
 class TestExecuteResumeWrappers:
     @pytest.mark.asyncio
     async def test_execute_run_claims_and_completes(self) -> None:
-        ctx: dict = {"job": MagicMock()}
+        job = MagicMock()
+        job.update = AsyncMock()
+        ctx: dict = {"job": job}
 
         async def _pass_through(aeng: Any, **kwargs: Any) -> dict[str, str]:
             # Faithfully execute the executor body (the real watchdog wiring is
@@ -402,11 +404,50 @@ class TestExecuteResumeWrappers:
         assert result == {"status": "complete"}
         claim.assert_awaited_once()
         executor.execute.assert_awaited_once()
+        assert executor.execute.await_args.kwargs["claim_token"] == "tok-claim"
         complete.assert_awaited_once()
         assert complete.await_args.kwargs["claim_token"] == "tok-claim"
         watchdog.assert_awaited_once()
         assert watchdog.await_args.kwargs["job"] is not None
         assert watchdog.await_args.kwargs["claim_token"] == "tok-claim"
+        # The claim token is stamped into the job hash so the after_process
+        # task_failure hook can fence its terminal write (A1).
+        job.update.assert_awaited_once()
+        assert job.update.await_args.kwargs["kwargs"]["claim_token"] == "tok-claim"
+
+    @pytest.mark.asyncio
+    async def test_execute_run_failed_outcome_skips_mark_complete(self) -> None:
+        """An honest ``failed`` outcome must NOT run mark_complete (A2) — a
+        silent wrong-success write is never attempted after a failure."""
+        job = MagicMock()
+        job.update = AsyncMock()
+        ctx: dict = {"job": job}
+
+        async def _fail_through(aeng: Any, **kwargs: Any) -> dict[str, str]:
+            await kwargs["execute_fn"]()
+            return {"status": "failed"}
+
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-claim"),
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+            patch(
+                "modulo.core.pipeline_execution.run_executor_with_watchdog",
+                side_effect=_fail_through,
+            ),
+        ):
+            run = MagicMock()
+            run.input_payload = {}
+            executor = MagicMock()
+            executor.execute = AsyncMock()
+            load.return_value = (run, executor)
+            result = await sw.execute_run(
+                ctx, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
+            )
+
+        assert result == {"status": "failed"}
+        complete.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_execute_run_not_claimed_returns_early(self) -> None:

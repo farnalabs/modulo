@@ -23,7 +23,9 @@ from modulo.core.analytics.builder import (
     AnalyticsQuery,
     AnalyticsStatus,
     AnalyticsTriggerType,
+    bucket_concurrency_rows,
     bucket_rows,
+    build_concurrency_query,
     build_facts_query,
     hour_groupby_span_exceeds,
     resolve_group_by,
@@ -765,3 +767,207 @@ class TestReconcileCooldown:
         assert ("org-a", "ledger_exceeds_facts") not in maintenance_mod._reconcile_cooldown
         assert ("org-b", "ledger_exceeds_facts") in maintenance_mod._reconcile_cooldown
         maintenance_mod._reconcile_cooldown.clear()
+
+
+def _conc_row(
+    created: datetime | None = None,
+    started: datetime | None = None,
+    completed: datetime | None = None,
+) -> SimpleNamespace:
+    """A raw concurrency input row shaped exactly like build_concurrency_query selects."""
+    created = created or started or datetime(2026, 8, 6, 9, 0, tzinfo=UTC)
+    return SimpleNamespace(
+        run_date=created.date(),
+        created_at=created,
+        started_at=started,
+        completed_at=completed,
+    )
+
+
+class TestConcurrencyCompiledSql:
+    """build_concurrency_query selects RAW instants + filters — no bucketing SQL."""
+
+    def test_org_predicate_present_and_bound(self) -> None:
+        for dialect in (postgresql.dialect(), sqlite.dialect()):
+            stmt, _ = build_concurrency_query(_query())
+            sql = str(stmt.compile(dialect=dialect))
+            assert "organisation_id" in sql, "the org predicate is the ONLY isolation control"
+            assert str(_ORG) not in sql, "the org uuid must be bound, never interpolated"
+
+    def test_no_group_by_no_limit(self) -> None:
+        stmt, _ = build_concurrency_query(_query(limit=5))
+        sql = str(stmt.compile(dialect=postgresql.dialect())).upper()
+        assert "GROUP BY" not in sql, "overlap counting happens in Python, never SQL GROUP BY"
+        assert "LIMIT" not in sql, "limit must be applied post-bucketing, never in SQL"
+
+    def test_selects_raw_instants(self) -> None:
+        stmt, _ = build_concurrency_query(_query())
+        keys = {k.name for k in stmt.selected_columns}
+        assert {"run_date", "created_at", "started_at", "completed_at"} <= keys
+
+    def test_filters_are_bound(self) -> None:
+        pid = uuid.UUID("22222222-2222-4222-8222-222222222222")
+        stmt, params = build_concurrency_query(
+            _query(
+                trigger_type=AnalyticsTriggerType.CRON,
+                status=AnalyticsStatus.FAILED,
+                pipeline_ids=(pid,),
+            )
+        )
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "cron" not in sql.lower(), "filter values must be bound, never interpolated"
+        assert "failed" not in sql.lower(), "filter values must be bound, never interpolated"
+        assert str(pid) not in sql, "pipeline ids must be bound, never interpolated"
+        assert params["trigger_type"] == "cron"
+        assert params["status"] == "failed"
+        assert params["pipeline_ids"] == [pid]
+
+
+class TestConcurrencyBucketing:
+    """Overlap math: a run spanning a boundary counts in both buckets; queued
+    vs active attribution follows the created/started instants."""
+
+    def _by_hour(self, rows: list[SimpleNamespace]) -> dict[str, dict]:
+        out = bucket_concurrency_rows(
+            rows,
+            group_by=AnalyticsGroupBy.HOUR,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        return {b["date"]: b for b in out}
+
+    def test_run_spanning_bucket_boundary_counts_in_both_buckets(self) -> None:
+        # [09:30, 10:30) overlaps the 09:00 bucket (09:30..10:00) AND the 10:00
+        # bucket (10:00..10:30) — both must report max_active >= 1.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 20, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 9, 30, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+            )
+        ]
+        by_hour = self._by_hour(rows)
+        assert by_hour["2026-08-06T09:00:00"]["max_active"] == 1, "active from 09:30 into the 09:00 bucket"
+        assert by_hour["2026-08-06T10:00:00"]["max_active"] == 1, "active through 10:30 into the 10:00 bucket"
+        assert by_hour["2026-08-06T11:00:00"]["max_active"] == 0
+        assert len(by_hour) == 24, "a single day at hour granularity must zero-fill 24 buckets"
+
+    def test_created_in_bucket_a_started_in_bucket_b(self) -> None:
+        # Created 09:30, started 10:30: the 09:00 bucket sees it queued (not
+        # active); the 10:00 bucket sees it queued for the first half AND active
+        # for the second half.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 30, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 11, 0, tzinfo=UTC),
+            )
+        ]
+        by_hour = self._by_hour(rows)
+        assert by_hour["2026-08-06T09:00:00"]["max_queued"] == 1, "created in bucket A → queued in A"
+        assert by_hour["2026-08-06T09:00:00"]["max_active"] == 0, "not started yet → not active in A"
+        assert by_hour["2026-08-06T10:00:00"]["max_queued"] == 1, "queued 10:00..10:30 in B"
+        assert by_hour["2026-08-06T10:00:00"]["max_active"] == 1, "started 10:30 → active in B"
+
+    def test_never_started_run_counts_as_queued_through_range(self) -> None:
+        # started_at NULL (never started / capacity-deferred / stuck) → queued
+        # from creation through the end of the bucket, never active.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 23, 0, tzinfo=UTC),
+                started=None,
+                completed=None,
+            )
+        ]
+        out = bucket_concurrency_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        assert len(out) == 1
+        assert out[0]["max_queued"] == 1
+        assert out[0]["max_active"] == 0
+
+    def test_overlapping_runs_peak_active_count(self) -> None:
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+            ),
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 15, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 45, tzinfo=UTC),
+            ),
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 45, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 11, 0, tzinfo=UTC),
+            ),
+        ]
+        by_hour = self._by_hour(rows)
+        assert by_hour["2026-08-06T10:00:00"]["max_active"] == 2, "runs 1+2 overlap 10:15..10:30"
+
+    def test_avg_active_is_time_weighted_mean(self) -> None:
+        # Two runs: both active 10:00..10:30 (2 x 1800s), one continues to
+        # 10:45 (1 x 900s), then 900s idle -> avg = (2*1800 + 1*900)/3600 = 1.25.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 45, tzinfo=UTC),
+            ),
+            _conc_row(
+                created=datetime(2026, 8, 6, 9, 50, tzinfo=UTC),
+                started=datetime(2026, 8, 6, 10, 0, tzinfo=UTC),
+                completed=datetime(2026, 8, 6, 10, 30, tzinfo=UTC),
+            ),
+        ]
+        by_hour = self._by_hour(rows)
+        bucket = by_hour["2026-08-06T10:00:00"]
+        assert bucket["max_active"] == 2
+        assert bucket["avg_active"] == 1.25
+
+    def test_week_buckets_anchor_iso_monday(self) -> None:
+        # 2026-08-05 (Wednesday) belongs to the ISO week anchored 2026-08-03.
+        rows = [
+            _conc_row(
+                created=datetime(2026, 8, 5, 8, 0, tzinfo=UTC),
+                started=datetime(2026, 8, 5, 8, 5, tzinfo=UTC),
+                completed=datetime(2026, 8, 5, 8, 10, tzinfo=UTC),
+            ),
+        ]
+        out = bucket_concurrency_rows(
+            rows,
+            group_by=AnalyticsGroupBy.WEEK,
+            date_from=date(2026, 8, 3),
+            date_to=date(2026, 8, 9),
+        )
+        assert [b["date"] for b in out] == ["2026-08-03"]
+        assert out[0]["max_active"] == 1
+
+    def test_empty_range_zero_fills(self) -> None:
+        out = bucket_concurrency_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            date_from=date(2026, 8, 6),
+            date_to=date(2026, 8, 6),
+        )
+        assert len(out) == 1
+        assert out[0]["max_active"] == 0
+        assert out[0]["avg_active"] == 0.0
+        assert out[0]["max_queued"] == 0
+        assert out[0]["avg_queued"] == 0.0
+
+    def test_limit_applied_post_bucketing(self) -> None:
+        out = bucket_concurrency_rows(
+            [],
+            group_by=AnalyticsGroupBy.DAY,
+            date_from=date(2026, 8, 1),
+            date_to=date(2026, 8, 10),
+            limit=3,
+        )
+        assert len(out) == 3, "limit must truncate AFTER bucketing"
+        assert out[-1]["date"] == "2026-08-10", "the most recent buckets win"

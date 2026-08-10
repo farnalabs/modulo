@@ -38,7 +38,9 @@ __all__ = [
     "AnalyticsQuery",
     "AnalyticsStatus",
     "AnalyticsTriggerType",
+    "bucket_concurrency_rows",
     "bucket_rows",
+    "build_concurrency_query",
     "build_facts_query",
     "hour_groupby_span_exceeds",
     "resolve_group_by",
@@ -228,6 +230,259 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
 
     stmt = stmt.group_by(*group_cols).order_by(*group_cols)
     return stmt, params
+
+
+# ---------------------------------------------------------------------------
+# Concurrency / slot-utilization query (FAR-134)
+# ---------------------------------------------------------------------------
+#
+# The facts table stores absolute run instants (created_at, started_at,
+# completed_at) but NO per-instant run state, so "how many runs were running /
+# queued at any instant" cannot be reconstructed with a GROUP BY. The SQL side
+# therefore selects the RAW instants over the range + filters (org predicate
+# intact — the ONLY isolation control) and the overlap math happens in Python
+# (``bucket_concurrency_rows``), exactly like ``bucket_rows`` does zero-fill.
+
+
+def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, Any]]:
+    """Select the raw concurrency inputs (run instants) over the range + filters.
+
+    Returns ``(stmt, params)`` — fully parameterised, carrying the org
+    predicate and the same allowlisted bound filters as ``build_facts_query``,
+    but with NO ``GROUP BY``: the overlap counting is done per-bucket in Python.
+    """
+    select_cols: list[Any] = [
+        RunDailyFact.run_date,
+        RunDailyFact.created_at,
+        RunDailyFact.started_at,
+        RunDailyFact.completed_at,
+    ]
+    params: dict[str, Any] = {
+        "org_id": query.org_id,
+    }
+    stmt = sa.select(*select_cols).where(RunDailyFact.organisation_id == sa.bindparam("org_id", type_=sa.Uuid))
+
+    if query.date_from is not None:
+        params["date_from"] = query.date_from
+        stmt = stmt.where(RunDailyFact.run_date >= sa.bindparam("date_from", type_=sa.Date))
+    if query.date_to is not None:
+        params["date_to"] = query.date_to
+        stmt = stmt.where(RunDailyFact.run_date <= sa.bindparam("date_to", type_=sa.Date))
+
+    if query.trigger_type is not None:
+        params["trigger_type"] = query.trigger_type.value
+        stmt = stmt.where(RunDailyFact.trigger_type == sa.bindparam("trigger_type", type_=sa.String))
+    if query.status is not None:
+        params["status"] = query.status.value
+        stmt = stmt.where(RunDailyFact.status == sa.bindparam("status", type_=sa.String))
+    if query.pipeline_ids:
+        params["pipeline_ids"] = list(query.pipeline_ids)
+        stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+    if query.error_code is not None:
+        params["error_code"] = query.error_code
+        stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
+    if query.folder_id is not None:
+        params["folder_id"] = query.folder_id
+        stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
+
+    stmt = stmt.order_by(RunDailyFact.run_date)
+    return stmt, params
+
+
+def _normalised_instants(rows: list[Any]) -> list[tuple[datetime | None, datetime | None, datetime | None]]:
+    """Normalise each row's (created_at, started_at, completed_at) to aware UTC.
+
+    Done ONCE up front so the per-bucket sweep never re-normalises. Naive
+    datetimes are treated as UTC; non-UTC offsets are converted.
+    """
+    out: list[tuple[datetime | None, datetime | None, datetime | None]] = []
+    for row in rows:
+        created = getattr(row, "created_at", None)
+        started = getattr(row, "started_at", None)
+        completed = getattr(row, "completed_at", None)
+        out.append(
+            (
+                to_utc_aware(created) if created is not None else None,
+                to_utc_aware(started) if started is not None else None,
+                to_utc_aware(completed) if completed is not None else None,
+            )
+        )
+    return out
+
+
+def _active_interval(
+    started_at: datetime | None,
+    completed_at: datetime | None,
+    bucket_start: datetime,
+    bucket_end: datetime,
+) -> tuple[datetime, datetime] | None:
+    """The portion of the run's ``[started_at, completed_at)`` inside the bucket.
+
+    ``None`` when the run is not active at any instant in the bucket. A run
+    spanning a bucket boundary is clamped into the bucket (``max(start,
+    bucket_start)`` .. ``min(completed, bucket_end)``), so it contributes to
+    BOTH adjacent buckets. A run with ``completed_at`` NULL is treated as
+    open-ended — active through the end of the bucket.
+    """
+    if started_at is None:
+        return None
+    if completed_at is not None and completed_at <= bucket_start:
+        return None  # finished before the bucket opened
+    if started_at >= bucket_end:
+        return None  # has not started within the bucket
+    start = max(started_at, bucket_start)
+    end = completed_at if completed_at is not None and completed_at < bucket_end else bucket_end
+    if start >= end:
+        return None
+    return (start, end)
+
+
+def _queued_interval(
+    created_at: datetime | None,
+    started_at: datetime | None,
+    bucket_start: datetime,
+    bucket_end: datetime,
+) -> tuple[datetime, datetime] | None:
+    """The portion of the run's queue wait (``created_at``..``started_at``) inside the bucket.
+
+    A run counts as queued at instant ``t`` when ``created_at <= t <
+    started_at``. ``started_at`` NULL (never started) counts as queued through
+    the end of the bucket. A run created in an earlier bucket but started in
+    this one contributes ``bucket_start``..``started_at`` here.
+    """
+    if created_at is None or created_at >= bucket_end:
+        return None  # not yet created within the bucket
+    if started_at is not None and started_at <= bucket_start:
+        return None  # already started before the bucket opened — not queued here
+    start = max(created_at, bucket_start)
+    end = started_at if started_at is not None and started_at < bucket_end else bucket_end
+    if start >= end:
+        return None
+    return (start, end)
+
+
+def _sweep_peak_and_mean(
+    intervals: list[tuple[datetime, datetime]],
+    bucket_start: datetime,
+    bucket_end: datetime,
+) -> tuple[int, float]:
+    """Line-sweep ``[start, end)`` intervals: peak count + time-weighted mean.
+
+    Events sort so an end (-1) at instant ``t`` precedes a start (+1) at the
+    same instant — matching the half-open interval semantics (an interval
+    ending at ``t`` does NOT cover ``t``; one starting at ``t`` does). Returns
+    ``(max_concurrent, time-weighted-mean-across-the-bucket)`` — the mean is
+    the exact limit of the sampled mean, i.e. "sum of overlap seconds / bucket
+    seconds".
+    """
+    if not intervals:
+        return 0, 0.0
+    events: list[tuple[datetime, int]] = []
+    for start, end in intervals:
+        events.append((start, 1))
+        events.append((end, -1))
+    events.sort(key=lambda e: (e[0], e[1]))
+    current = 0
+    peak = 0
+    weighted = 0.0
+    prev = bucket_start
+    for ts, delta in events:
+        if ts > prev:
+            weighted += current * (ts - prev).total_seconds()
+            prev = ts
+        current += delta
+        if current > peak:
+            peak = current
+    if bucket_end > prev:
+        weighted += current * (bucket_end - prev).total_seconds()
+    total = (bucket_end - bucket_start).total_seconds()
+    return peak, weighted / total if total > 0 else 0.0
+
+
+def _concurrency_bucket_grid(
+    group_by: AnalyticsGroupBy,
+    date_from: date | datetime,
+    date_to: date | datetime,
+) -> list[tuple[datetime, datetime, str]]:
+    """``(bucket_start, bucket_end, label)`` per bucket over the range.
+
+    Hour buckets run from the hour boundary of ``date_from`` through ``date_to``
+    23:59:59 and label as ISO datetimes; day/week buckets label as ISO dates
+    (week buckets ISO-Monday-anchored) — mirroring ``bucket_rows``.
+    """
+    frm = to_utc_aware(date_from)
+    to = to_utc_aware(date_to, end_of_day=True)
+    buckets: list[tuple[datetime, datetime, str]] = []
+    if group_by == AnalyticsGroupBy.HOUR:
+        cursor = datetime(frm.year, frm.month, frm.day, frm.hour, tzinfo=UTC)
+        while cursor < to:
+            end = cursor + timedelta(hours=1)
+            buckets.append((cursor, end, cursor.replace(tzinfo=None).isoformat()))
+            cursor = end
+        return buckets
+    if group_by == AnalyticsGroupBy.WEEK:
+        cursor = datetime.combine(_week_start(frm.date()), time.min, tzinfo=UTC)
+        while cursor <= to:
+            end = cursor + timedelta(days=7)
+            buckets.append((cursor, end, cursor.date().isoformat()))
+            cursor = end
+        return buckets
+    cursor = datetime.combine(frm.date(), time.min, tzinfo=UTC)
+    while cursor <= to:
+        end = cursor + timedelta(days=1)
+        buckets.append((cursor, end, cursor.date().isoformat()))
+        cursor = end
+    return buckets
+
+
+def bucket_concurrency_rows(
+    rows: list[Any],
+    *,
+    group_by: AnalyticsGroupBy,
+    date_from: date | datetime,
+    date_to: date | datetime,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """Bucket raw concurrency rows into the slot-utilization series (FAR-134).
+
+    The SQL side only selects raw instants; the overlap math lives HERE, like
+    ``bucket_rows`` owns zero-fill. Per bucket the timeline is line-swept over
+    interval start/end events, giving EXACT peak and time-weighted-mean counts:
+
+    - ``max_active`` / ``avg_active``: concurrent runs whose ``[started_at,
+      completed_at)`` overlaps the bucket. A run spanning a bucket boundary
+      contributes to BOTH buckets. A never-completed run (``completed_at``
+      NULL) counts as active through the bucket's end.
+    - ``max_queued`` / ``avg_queued``: runs waiting for a slot at some instant
+      in the bucket (``created_at <= t < started_at``); never-started runs
+      (``started_at`` NULL) count as queued through the bucket's end.
+    """
+    instants = _normalised_instants(rows)
+    out: list[dict[str, Any]] = []
+    for bucket_start, bucket_end, label in _concurrency_bucket_grid(group_by, date_from, date_to):
+        active_intervals: list[tuple[datetime, datetime]] = []
+        queued_intervals: list[tuple[datetime, datetime]] = []
+        for created_at, started_at, completed_at in instants:
+            active = _active_interval(started_at, completed_at, bucket_start, bucket_end)
+            if active is not None:
+                active_intervals.append(active)
+            queued = _queued_interval(created_at, started_at, bucket_start, bucket_end)
+            if queued is not None:
+                queued_intervals.append(queued)
+        max_active, avg_active = _sweep_peak_and_mean(active_intervals, bucket_start, bucket_end)
+        max_queued, avg_queued = _sweep_peak_and_mean(queued_intervals, bucket_start, bucket_end)
+        out.append(
+            {
+                "date": label,
+                "max_active": max_active,
+                "avg_active": round(avg_active, 2),
+                "max_queued": max_queued,
+                "avg_queued": round(avg_queued, 2),
+            }
+        )
+    if 0 < limit < len(out):
+        out = out[-limit:]
+    return out
 
 
 def _week_start(day: date) -> date:

@@ -13,6 +13,7 @@ from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
     ClaimTokenInvalidError,
+    DecisionPayloadError,
     GateAlreadyDecidedError,
     GateNotFoundError,
     GateVanishedError,
@@ -128,6 +129,48 @@ def _session_update(
     begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin_nested = MagicMock(return_value=begin_nested_cm)
     return session
+
+
+def _session_decide_capture(update_returns_id: uuid.UUID | None, gate: HitlClaim | None) -> tuple[AsyncMock, list[Any]]:
+    """Session mock capturing the UPDATE statement so tests can assert values.
+
+    Mirrors ``_session_decide`` from conftest but records every statement
+    passed to ``execute``. Returns ``(session, captured_stmts)``.
+    """
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    update_result = MagicMock()
+    update_result.scalar_one_or_none.return_value = update_returns_id
+    diag_result = MagicMock()
+    # Like conftest._session_decide, the post-UPDATE diagnosis SELECT returns
+    # no chain head (None) so the audit logger's _get_chain_head_locked is a
+    # no-op instead of tripping over a gate mock.
+    diag_result.scalar_one_or_none.return_value = None
+    captured: list[Any] = []
+    call_count = 0
+
+    async def _execute(stmt: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        captured.append(stmt)
+        if call_count == 1:
+            return update_result
+        return diag_result
+
+    session.execute = _execute
+    session.get = AsyncMock(return_value=gate)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    return session, captured
+
+
+def _update_values(stmt: Any) -> dict[str, Any]:
+    """Extract the UPDATE .values() dict from a captured SQLAlchemy statement."""
+    return {col.name: expr.value for col, expr in stmt._values.items()}
 
 
 def _assert_decode_scope_args(mock_decode: MagicMock) -> None:
@@ -897,8 +940,151 @@ async def test_approve_audit_cancellation_propagates():
 
 
 # ---------------------------------------------------------------------------
-# reject
+# decision_payload persistence (B1)
 # ---------------------------------------------------------------------------
+
+
+async def test_approve_persists_decision_payload():
+    """approve() persists the full resume payload into decision_payload."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, captured = _session_decide_capture(gate.id, gate_decided)
+    mgr = HITLManager()
+    payload: dict[str, Any] = {"action": "approved", "notes": "looks good"}
+    await mgr.approve(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="good-token",
+        decision_payload=payload,
+    )
+    values = _update_values(captured[0])
+    assert values["decision"] == "approved"
+    assert values["decision_payload"] == payload
+
+
+async def test_approve_without_payload_defaults_to_action():
+    """approve() with no payload still persists a faithful {"action": "approved"}."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, captured = _session_decide_capture(gate.id, gate_decided)
+    mgr = HITLManager()
+    await mgr.approve(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="good-token")
+    values = _update_values(captured[0])
+    assert values["decision_payload"] == {"action": "approved"}
+
+
+async def test_approve_with_modification_persists_modified_output_payload():
+    """approve_with_modification() persists the modified_output into the payload."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, captured = _session_decide_capture(gate.id, gate_decided)
+    modified = {"summary": "Rewritten by reviewer"}
+    mgr = HITLManager()
+    await mgr.approve_with_modification(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="good-token",
+        modified_output=modified,
+    )
+    values = _update_values(captured[0])
+    assert values["decision_payload"] == {"action": "approved", "modified_output": modified}
+
+
+async def test_reject_persists_reason_payload():
+    """reject() persists the reason into the decision payload."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, decision="rejected")
+    session, captured = _session_decide_capture(gate.id, gate_decided)
+    mgr = HITLManager()
+    await mgr.reject(session, run_id=_RUN, gate_id=_GATE, org_id=_ORG, claim_token="tok", reason="needs rework")
+    values = _update_values(captured[0])
+    assert values["decision"] == "rejected"
+    assert values["decision_payload"] == {"action": "rejected", "reason": "needs rework"}
+
+
+async def test_deliver_manual_persists_output_payload():
+    """deliver_manual() persists the manual output into the decision payload."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="deliver_manual")
+    session, captured = _session_decide_capture(gate.id, gate_decided)
+    manual = {"summary": "Human provided answer"}
+    mgr = HITLManager()
+    await mgr.deliver_manual(
+        session,
+        run_id=_RUN,
+        gate_id=_GATE,
+        org_id=_ORG,
+        claim_token="good-token",
+        output=manual,
+    )
+    values = _update_values(captured[0])
+    assert values["decision"] == "deliver_manual"
+    assert values["decision_payload"] == {"action": "deliver_manual", "output": manual}
+
+
+async def test_decision_payload_must_be_dict():
+    """A non-dict decision_payload is rejected with DecisionPayloadError."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, _ = _session_decide_capture(gate.id, gate_decided)
+    mgr = HITLManager()
+    with pytest.raises(DecisionPayloadError, match="must be a JSON object"):
+        await mgr.approve(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="good-token",
+            decision_payload="not-a-dict",  # type: ignore[arg-type]
+        )
+
+
+async def test_decision_payload_output_must_be_dict():
+    """A non-dict output member is rejected with DecisionPayloadError."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, _ = _session_decide_capture(gate.id, gate_decided)
+    mgr = HITLManager()
+    with pytest.raises(DecisionPayloadError, match="output must be a JSON object"):
+        await mgr.approve(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="good-token",
+            decision_payload={"action": "approved", "output": ["not", "a", "dict"]},
+        )
+
+
+async def test_decision_payload_size_limited():
+    """An oversized decision_payload is rejected with DecisionPayloadError."""
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    gate = _gate(account_id=_USER, claim_token="good-token", expires_at=future)
+    gate_decided = _gate(account_id=None, claim_token=None, expires_at=None, decision="approved")
+    session, _ = _session_decide_capture(gate.id, gate_decided)
+    mgr = HITLManager()
+    huge = {"action": "deliver_manual", "output": {"blob": "x" * (256 * 1024 + 1)}}
+    with pytest.raises(DecisionPayloadError, match="byte limit"):
+        await mgr.deliver_manual(
+            session,
+            run_id=_RUN,
+            gate_id=_GATE,
+            org_id=_ORG,
+            claim_token="good-token",
+            output={"blob": "x" * (256 * 1024 + 1)},
+            decision_payload=huge,
+        )
 
 
 async def test_reject_valid_token_records_decision():
@@ -1215,7 +1401,9 @@ async def _bypass_capacity(mock_self: Any, **kwargs: Any) -> Any:
 
 
 async def test_executor_sets_awaiting_human_on_node_interrupt():
-    """When astream_events raises GraphInterrupt, the executor transitions run to awaiting_human."""
+    """When astream_events raises GraphInterrupt, the executor transitions the
+    run toward awaiting_human — but CANCEL-WINS (B6) finalises it ``cancelled``
+    when the row carries ``cancellation_requested``."""
     from contextlib import asynccontextmanager
 
     from langgraph.errors import GraphInterrupt
@@ -1228,10 +1416,10 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     run.pipeline_id = uuid.uuid4()
     run.snapshot_id = uuid.uuid4()
     run.langgraph_thread_id = str(uuid.uuid4())
-    run.status = "awaiting_human"
+    run.status = "cancelled"
 
     final_run = MagicMock()
-    final_run.status = "awaiting_human"
+    final_run.status = "cancelled"
 
     snapshot = MagicMock()
     snapshot.graph_json = {"nodes": [{"id": "a"}], "edges": []}
@@ -1242,8 +1430,13 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    cancel_run = MagicMock()
+    cancel_run.id = run.id
+    cancel_run.status = "awaiting_human"
+    cancel_run.cancellation_requested = True
     scalar_result = MagicMock()
     scalar_result.scalar_one.return_value = snapshot
+    scalar_result.scalar_one_or_none.return_value = cancel_run
     session.execute = AsyncMock(return_value=scalar_result)
 
     @asynccontextmanager
@@ -1285,10 +1478,11 @@ async def test_executor_sets_awaiting_human_on_node_interrupt():
         executor = PipelineExecutor(MagicMock(), checkpointer_conn_string="a" * 32)
         result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
 
-    # PR A2 finalization contract: after finalize_cost, execute re-fetches the
-    # run via get_run in a fresh session and returns THAT object (executor.py
-    # finalization tail), so the awaited run's status reflects the transition.
+    # CANCEL-WINS (B6): finalizing an awaiting_human run whose row carries
+    # cancellation_requested writes "cancelled" instead — the executor's
+    # finalization tail returns the re-fetched run whose status reflects the
+    # DB transition.
     assert result is run
-    assert result.status == "awaiting_human"
+    assert result.status == "cancelled"
     final_update_call = mock_update.call_args_list[-1]
-    assert final_update_call.args[2] == "awaiting_human"
+    assert final_update_call.args[2] == "cancelled"

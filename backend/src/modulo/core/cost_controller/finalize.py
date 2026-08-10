@@ -492,6 +492,7 @@ async def _fallback_write(
     error_code: str | None,
     error_detail: str | None,
     is_terminal: bool = False,
+    claim_token: str | None = None,
 ) -> None:
     """The LEGACY FALLBACK write (never-fail envelope, §1.5).
 
@@ -559,6 +560,7 @@ async def _fallback_write(
         outputs_json=merged_outputs,
         node_telemetry_json=merged_telemetry,
         total_tokens=total_tokens,
+        claim_token=claim_token,
     )
     if is_terminal:
         run = await session.get(Run, run_id)
@@ -645,12 +647,14 @@ async def _reduced_escape(
     status: str,
     finalize_fields: dict[str, Any],
     session_factory: Callable[[], Any] | None,
+    claim_token: str | None = None,
 ) -> None:
     """The REDUCED terminalize-without-ledger escape (§4.2).
 
     Persists the FULL finalization field set in a FRESH transaction, sets
     NOTHING ELSE, leaves ``ledger_written = false``. Engages ONLY for genuine
-    write failures, never a ``daily_limit_exceeded`` refusal.
+    write failures, never a ``daily_limit_exceeded`` refusal. The status write
+    is fenced by *claim_token* (a superseded executor's escape is a no-op).
     """
     if session_factory is None:
         _log.error("cost_ledger.reduced_escape_unavailable", extra={"run_id": str(run_id)})
@@ -658,7 +662,13 @@ async def _reduced_escape(
     try:
         async with session_factory() as fresh, fresh.begin():
             await set_rls_org(fresh, org_id)
-            run = await update_run_status(fresh, run_id, status, **finalize_fields)
+            run = await update_run_status(
+                fresh,
+                run_id,
+                status,
+                **finalize_fields,
+                claim_token=claim_token,
+            )
             if run is not None:
                 await record_run_facts(fresh, run)
     except asyncio.CancelledError:
@@ -678,6 +688,7 @@ async def _ledger_block(
     run_date: date,
     finalize_fields: dict[str, Any],
     session_factory: Callable[[], Any] | None,
+    claim_token: str | None = None,
 ) -> None:
     """Terminal-only ledger block — guarded, retried, then the reduced escape.
 
@@ -729,7 +740,15 @@ async def _ledger_block(
             extra={"reason": reason or "unknown", "run_id": str(run_id)},
         )
         record_finalize_deferred(reason="write_failure", team=str(owner_team_id or "none"))
-        await _reduced_escape(session, run_id, org_id, status, finalize_fields, session_factory)
+        await _reduced_escape(
+            session,
+            run_id,
+            org_id,
+            status,
+            finalize_fields,
+            session_factory,
+            claim_token=claim_token,
+        )
         return
 
     locked.ledger_written = True
@@ -793,6 +812,7 @@ async def finalize_cost(
     error_detail: str | None = None,
     is_terminal: bool = True,
     session_factory: Callable[[], Any] | None = None,
+    claim_token: str | None = None,
 ) -> None:
     """The SINGLE finalization block (§4.2) — component read + build + run write + ledger.
 
@@ -804,11 +824,25 @@ async def finalize_cost(
 
     ``session_factory`` is used ONLY by the reduced escape (a FRESH
     transaction); the executor passes its ``async_sessionmaker``.
+
+    *claim_token* (dist/runtime-core A1) fences the terminal/pause status write:
+    a superseded executor's token no longer matches and the write is a no-op
+    (logged, skipped) so it cannot terminalize the run out from under a
+    successor. CANCEL-WINS (B6): finalizing an ``awaiting_human``/``complete``
+    run whose row carries ``cancellation_requested`` writes ``cancelled``
+    instead (the same statement is guard-atomic for the concurrent case).
     """
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         _log.warning("cost_finalize.run_not_found", extra={"run_id": str(run_id)})
         return
+
+    # B6 — CANCEL-WINS precedence: an interrupted/awaiting_human (or about-to-be
+    # completed) run with a cancellation requested is finalised ``cancelled``,
+    # never ``awaiting_human``/``complete``.
+    if getattr(run, "cancellation_requested", False) and status in ("awaiting_human", "complete"):
+        _log.info("cost_finalize.cancel_wins", extra={"run_id": str(run_id), "status": status})
+        status = "cancelled"
 
     merged_usage = _merge(run.node_token_usage, segment_node_token_usage, segment_wins=True)
     merged_outputs, merged_telemetry = _split_merge_outputs(
@@ -829,6 +863,7 @@ async def finalize_cost(
             error_detail=error_detail,
             total_cost_usd=Decimal(0),
             total_tokens=0,
+            claim_token=claim_token,
         )
         if is_terminal:
             await record_run_facts(session, run)
@@ -867,6 +902,7 @@ async def finalize_cost(
             outputs_json=merged_outputs,
             node_telemetry_json=merged_telemetry,
             total_tokens=total_tokens,
+            claim_token=claim_token,
         )
     except asyncio.CancelledError:
         raise
@@ -883,6 +919,7 @@ async def finalize_cost(
             error_code,
             error_detail,
             is_terminal=is_terminal,
+            claim_token=claim_token,
         )
         return
 
@@ -907,6 +944,7 @@ async def finalize_cost(
                 "total_tokens": total_tokens,
             },
             session_factory=session_factory,
+            claim_token=claim_token,
         )
 
     # --- Analytics facts — every terminal path, SAME transaction (ADR 020) ---

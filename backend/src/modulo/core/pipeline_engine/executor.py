@@ -29,7 +29,7 @@ import socket
 import uuid
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from decimal import Decimal
 from typing import Any
 
@@ -64,6 +64,7 @@ from modulo.core.pipeline_engine.decorator import (
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
+from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
@@ -110,6 +111,26 @@ class RunNotFoundError(KeyError):
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(str(run_id))
         self.run_id = run_id
+
+
+async def _teardown_hub(hub: Any) -> None:
+    """Await a hub's ``__aexit__`` shielded against cancellation.
+
+    A cancellation arriving during cleanup must not abort the hub teardown —
+    ``asyncio.shield`` keeps the ``__aexit__`` coroutine running to completion
+    even when the awaiting task is cancelled (a second CancelledError cannot
+    abort the cleanup). The shielded future is re-awaited on cancellation so no
+    "Task was destroyed but it is pending" warning is emitted at loop close.
+    """
+    shielded = asyncio.shield(hub.__aexit__(None, None, None))
+    try:
+        await shielded
+    except asyncio.CancelledError:
+        with suppress(Exception):
+            await shielded
+        raise
+    except Exception:
+        _log.exception("pipeline.hub_cleanup_failed")
 
 
 class GraphValidationError(ValueError):
@@ -302,6 +323,17 @@ class PipelineExecutor:
         # distinguish "hung in pre-node setup" (no progress) from a legitimate
         # long-running node (progress already signalled → watchdog stands down).
         self.on_first_progress: Callable[[], None] | None = None
+        # Fenced-lease authority (dist/runtime-core A1): the claim token
+        # captured at execute/resume start. Every terminal/demotion write by
+        # this executor is fenced against it so a superseded original cannot
+        # write out from under a successor. Seeded into LangGraph state as
+        # ``_claim_lease`` for the sandbox dispatch marker.
+        self._claim_token: str | None = None
+        # Cancellation-intent signals wired by run_executor_with_watchdog so the
+        # NodeCancelledError retry handler can tell a watchdog stall / supersession
+        # from a genuine transient node cancellation and skip the pending-reset.
+        self._stall_requested: asyncio.Event | None = None
+        self._superseded: asyncio.Event | None = None
 
     # Token pricing constants
     _INPUT_TOKEN_RATE = Decimal("0.00001")
@@ -430,13 +462,18 @@ class PipelineExecutor:
                 org_run_capacity_ok=org_run_capacity_ok,
             )
             # Demote to pending + reason marker so the recovery sweeps
-            # (dispatcher_reconcile / stale-run) pick it up.
+            # (dispatcher_reconcile / stale-run) pick it up. FENCED to this
+            # executor's claim token and only from ``running`` (A1): a
+            # superseded original (token rotated by a successor) cannot demote
+            # the successor's running row back to pending.
             await update_run_status(
                 session,
                 run_id,
                 "pending",
                 error_code=decline_code,
                 error_detail=decline_detail,
+                claim_token=self._claim_token,
+                from_status="running",
             )
             pending_run = await get_run(session, run_id)
             if pending_run is None:
@@ -614,10 +651,7 @@ class PipelineExecutor:
         except Exception:
             _log.exception("pipeline.model_backend_hub_init_failed")
             if hub is not None:
-                try:
-                    await hub.__aexit__(None, None, None)
-                except Exception:
-                    _log.exception("pipeline.model_backend_hub_cleanup_failed")
+                await _teardown_hub(hub)
             hub = None
         return hub
 
@@ -672,10 +706,7 @@ class PipelineExecutor:
         except Exception:
             _log.exception("pipeline.connector_hub_init_failed")
             if hub is not None:
-                try:
-                    await hub.__aexit__(None, None, None)
-                except Exception:
-                    _log.exception("pipeline.connector_hub_cleanup_failed")
+                await _teardown_hub(hub)
             hub = None
         return hub
 
@@ -790,13 +821,16 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         org_id: uuid.UUID,
         resume_data: dict[str, Any],
+        claim_token: str | None = None,
     ) -> Run:
         """Resume a run that was interrupted for HITL review.
 
         Loads the checkpointed graph state, injects *resume_data* as
         ``_hitl_decision``, and streams the graph until completion or the
-        next interrupt.
+        next interrupt. *claim_token* is the fenced-lease authority captured at
+        resume start (see :meth:`execute`).
         """
+        self._claim_token = claim_token
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             run = await get_run(session, run_id)
@@ -888,7 +922,10 @@ class PipelineExecutor:
                 fernet_key=_settings.fernet_key,
             ) as saver:
                 compiled.checkpointer = saver
-                await compiled.aupdate_state(config, {"_hitl_decision": resume_data})
+                await compiled.aupdate_state(
+                    config,
+                    {"_hitl_decision": resume_data, "_claim_lease": self._claim_token},
+                )
                 final_status, error_code, _, node_token_usage = await self._stream_graph(
                     compiled,
                     None,
@@ -922,7 +959,7 @@ class PipelineExecutor:
             set_cancellation_check(None)
             set_model_backend_hub(None)
             if model_backend_hub is not None:
-                await model_backend_hub.__aexit__(None, None, None)
+                await _teardown_hub(model_backend_hub)
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
@@ -962,6 +999,7 @@ class PipelineExecutor:
                 error_detail=error_detail,
                 is_terminal=final_status in _TERMINAL_STATUSES,
                 session_factory=self._session_factory,
+                claim_token=self._claim_token,
             )
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
@@ -981,13 +1019,21 @@ class PipelineExecutor:
         run_id: uuid.UUID,
         org_id: uuid.UUID,
         input_payload: dict[str, Any],
+        claim_token: str | None = None,
     ) -> Run:
         """Execute the run to completion. Returns the final Run row.
+
+        *claim_token* is the fenced-lease authority captured at execute start:
+        it guards the capacity demotion, the NodeCancelledError pending-reset,
+        and is seeded into LangGraph state as ``_claim_lease`` for the sandbox
+        dispatch marker. A superseded executor (whose token was rotated by a
+        successor) cannot demote/complete the run out from under it.
 
         A capacity-blocked run is returned ``pending`` (with its reason marker)
         — there is NO in-process retry loop (plan F3b); recovery is owned by
         ``dispatcher_reconcile`` (cron_helpers) and ``stale_run_recovery_sweep``.
         """
+        self._claim_token = claim_token
         # Load run + pipeline + snapshot in one short-lived transaction.
         # Query directly to avoid SQLAlchemy async lazy-load (MissingGreenlet).
         async with self._session_factory() as session, session.begin():
@@ -1082,8 +1128,13 @@ class PipelineExecutor:
             )
 
             initial_state = _seed_state(snapshot, input_payload)
-            initial_state["_run_id"] = run_id
-            initial_state["_org_id"] = org_id
+            initial_state.update(
+                {
+                    "_run_id": run_id,
+                    "_org_id": org_id,
+                    "_claim_lease": self._claim_token,
+                }
+            )
             config = {"configurable": {"thread_id": thread_id}}
             node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
             node_token_budgets: dict[str, int] = {
@@ -1145,41 +1196,53 @@ class PipelineExecutor:
                 )
         except asyncio.CancelledError:
             raise
-        except NodeCancelledError as exc:
-            # Transient node cancellation (e.g. an E2B sandbox command wait
-            # cancelled from outside — langgraph wraps the node body's
-            # asyncio.CancelledError into NodeCancelledError). Do NOT
-            # terminal-fail: the run is still retryable. Bounded by the SAQ
-            # node-attempt count (NOT the claim count — capacity-deferred /
-            # non-executing claims must not consume the retry budget); releases
-            # the E2B idempotency fence so the retry claim can re-dispatch;
-            # then re-raises so the SAQ job retries.
-            _log.warning("pipeline.node_cancelled_transient", extra={"run_id": str(run_id)})
-            from modulo.core.pipeline_execution import (
-                e2b_dispatch_release_fenced,
-                e2b_idempotency_enabled,
+        except (NodeCancelledError, SandboxNodeFailedError) as exc:
+            # Transient node cancellation / sandbox-infra failure (e.g. an E2B
+            # sandbox command wait cancelled from outside, a stall, or a command
+            # timeout). Do NOT terminal-fail: the run is still retryable.
+            # Bounded by the SAQ node-attempt count (NOT the claim count —
+            # capacity-deferred / non-executing claims must not consume the
+            # retry budget). Uses the ORIGINAL executor's captured claim token
+            # for the fenced pending-reset; a superseded original, a watchdog
+            # stall, or a requested cancellation SKIP the reset (the run is
+            # owned elsewhere / terminal / cancelled — never demote it).
+            _log.warning(
+                "pipeline.node_cancelled_transient",
+                extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
             )
             from modulo.settings import get_settings
 
             retries = int(get_settings().saq_run_retries)
             node_attempt_count = 0
-            claim_token: str | None = None
+            current_token: str | None = None
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 current_run = await get_run(session, run_id)
                 if current_run is not None:
                     node_attempt_count = int(current_run.node_attempt_count or 0)
-                    claim_token = current_run.claim_token
+                    current_token = current_run.claim_token
 
-            if node_attempt_count < retries:
-                # Release the E2B dispatch fence held by THIS claim so the
-                # successor claim's e2b_dispatch_acquire SETNX can win.
-                if e2b_idempotency_enabled() and claim_token is not None:
-                    await e2b_dispatch_release_fenced(str(run_id), claim_token)
-                # Reset to pending so the retry claim (status='pending') succeeds.
+            superseded = (
+                self._claim_token is not None and current_token is not None and current_token != self._claim_token
+            )
+            stalled = bool(self._stall_requested is not None and self._stall_requested.is_set())
+
+            if node_attempt_count < retries and not superseded and not stalled:
+                # Fenced pending-reset: a conditional UPDATE guarded by OUR
+                # captured claim token + status='running' so a superseded
+                # original cannot demote the successor's running row, a stalled
+                # (watchdog-cancelled) executor cannot resurrect a run the
+                # watchdog just failed, and a cancellation cannot be reversed.
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
-                    await update_run_status(session, run_id, "pending", clear_error_code=True)
+                    await session.execute(
+                        text(
+                            "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
+                            "WHERE id=:rid AND claim_token=:tok AND status='running' "
+                            "AND cancellation_requested = false"
+                        ),
+                        {"rid": str(run_id), "tok": self._claim_token},
+                    )
                 # The re-raise below propagates out of execute() BEFORE the
                 # post-stream try/finally, so run its cleanup here: clear the
                 # cancellation check + hubs and close the run's broker so the
@@ -1188,9 +1251,24 @@ class PipelineExecutor:
                 set_model_backend_hub(None)
                 set_connector_hub(None)
                 if model_backend_hub is not None:
-                    await model_backend_hub.__aexit__(None, None, None)
+                    await _teardown_hub(model_backend_hub)
                 if connector_hub is not None:
-                    await connector_hub.__aexit__(None, None, None)
+                    await _teardown_hub(connector_hub)
+                get_registry().close(run_id)
+                raise
+            if superseded or stalled:
+                # Superseded or watchdog-stalled: the run is owned by a
+                # successor or was already terminal-failed by the zombie
+                # watchdog — never reset it to pending and never terminal-fail
+                # it here. Clean up and re-raise so the SAQ job retries (its
+                # next claim will lose against the live/superseded row).
+                set_cancellation_check(None)
+                set_model_backend_hub(None)
+                set_connector_hub(None)
+                if model_backend_hub is not None:
+                    await _teardown_hub(model_backend_hub)
+                if connector_hub is not None:
+                    await _teardown_hub(connector_hub)
                 get_registry().close(run_id)
                 raise
             # Retries exhausted — terminal failure with a MEANINGFUL code
@@ -1199,7 +1277,10 @@ class PipelineExecutor:
             # with every other terminal-failure path in this file.
             final_status = "failed"
             error_code = "node_cancelled"
-            error_detail = "Sandbox node cancelled (transient) after retries exhausted: " + str(exc)[:500]
+            if isinstance(exc, NodeCancelledError):
+                error_detail = "Sandbox node cancelled (transient) after retries exhausted: " + str(exc)[:500]
+            else:
+                error_detail = "Sandbox node failed (transient) after retries exhausted: " + str(exc)[:500]
             broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
         except Exception as exc:
             import traceback
@@ -1307,9 +1388,9 @@ class PipelineExecutor:
             set_model_backend_hub(None)
             set_connector_hub(None)
             if model_backend_hub is not None:
-                await model_backend_hub.__aexit__(None, None, None)
+                await _teardown_hub(model_backend_hub)
             if connector_hub is not None:
-                await connector_hub.__aexit__(None, None, None)
+                await _teardown_hub(connector_hub)
             if final_status != "awaiting_human":
                 get_registry().close(run_id)
 
@@ -1332,6 +1413,7 @@ class PipelineExecutor:
                 error_detail=error_detail,
                 is_terminal=final_status in _TERMINAL_STATUSES,
                 session_factory=self._session_factory,
+                claim_token=self._claim_token,
             )
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
@@ -1668,8 +1750,10 @@ class PipelineExecutor:
             broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
             return "eval_failed", "eval_blocked", str(exc), node_token_usage or None
         except OutputRejectedError as exc:
+            # C4: ``output_rejected`` violates the ``ck_runs_status`` CHECK
+            # constraint as a STATUS — it is an error CODE on a ``failed`` run.
             broker.publish("run_failed", {"error": "output_rejected", "detail": str(exc)})
-            return "output_rejected", "output_rejected", str(exc), node_token_usage or None
+            return "failed", "output_rejected", str(exc), node_token_usage or None
         except RunCancelledError:
             broker.publish("run_cancelled", {})
             self._log_accumulation_state(run_id, segments_completed, node_token_usage)
@@ -1695,13 +1779,26 @@ class PipelineExecutor:
                 extra={"run_id": str(run_id), "detail": error_detail},
             )
             return "failed", "node_timeout", error_detail, node_token_usage or None
+        except SupersededNodeError as exc:
+            # A6: the sandbox dispatch marker was denied — a superseded claim
+            # or a run no longer running. Terminal ``superseded`` failure; the
+            # token-guarded finalize write is a no-op if a successor already
+            # owns the run. NEVER a completed run with zero work.
+            broker.publish("run_failed", {"error": "executor_superseded", "detail": str(exc)})
+            _log.warning(
+                "pipeline.node_superseded",
+                extra={"run_id": str(run_id), "detail": str(exc)[:500]},
+            )
+            return "failed", "executor_superseded", str(exc), node_token_usage or None
         except asyncio.CancelledError:
             raise
-        except NodeCancelledError:
-            # Transient node cancellation (langgraph wraps a node body's
-            # asyncio.CancelledError). Do NOT swallow into a terminal failure
-            # tuple here — propagate so execute() can decide: retry (reset to
-            # pending + re-raise) or terminal-fail once retries are exhausted.
+        except (NodeCancelledError, SandboxNodeFailedError):
+            # Transient node cancellation / sandbox-infra failure (langgraph
+            # wraps a node body's asyncio.CancelledError; a stall or command
+            # timeout raises SandboxNodeFailedError). Do NOT swallow into a
+            # terminal failure tuple here — propagate so execute() can decide:
+            # retry (fenced reset to pending + re-raise) or terminal-fail once
+            # retries are exhausted.
             raise
         except Exception as exc:
             import traceback

@@ -124,3 +124,22 @@ provider never breaks the facts path.
   status write, fail-open (a facts failure never affects the cost result).
 - The typed-params endpoint is the sole bucketing authority; the client renders.
 - Facts survive the run purge; reconcile keeps the projection honest.
+
+## Decision 9 — Concurrency/slot-utilization columns + Python overlap bucketing (FAR-134)
+
+`run_daily_facts` gains the absolute run-lifecycle instants (`dispatched_at`,
+`started_at`, `completed_at`) and `total_queue_wait_ms` (`started_at −
+created_at`, the full wait from creation to execution start) so slot
+utilization can be reconstructed without reading live `runs` (purged at 90
+days). The instants are deliberately NOT FKs — facts survive the purge
+(Decision 2). Overlap counting (`[started_at, completed_at)` per bucket) is
+done in Python via a line-sweep over interval start/end events (exact peak +
+time-weighted mean), NOT a SQL GROUP BY — interval-overlap counting is not
+expressible as a bucket aggregate, and the facts table stores no per-instant
+run state. The concurrency surface (`GET /api/v1/analytics/concurrency` +
+`query_analytics_concurrency` MCP tool) shares the same service patterns as
+the bucketed query (org predicate, rate limit, statement timeout, typed
+errors), and the live writer + backfill populate the new columns identically.
+`pool_reference` exposes the binding concurrency cap for the query scope (org
+`run_concurrency_limit`, or a single filtered pipeline's
+`max_concurrent_runs`).

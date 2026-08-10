@@ -18,6 +18,7 @@ from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.node_runner import (
     _E2B_SANDBOX_USD_PER_HOUR,
     _MAX_ARTIFACT_LOG,
+    SandboxNodeFailedError,
     _compute_sandbox_cost,
     _fetch_sandbox_log_tail,
     _wait_command_with_idle_watchdog,
@@ -27,23 +28,6 @@ from modulo.core.pipeline_engine.node_runner import (
 
 _ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
 _AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
-
-
-@pytest.fixture(autouse=True)
-def _disable_e2b_idempotency_fence(monkeypatch):
-    """Short-circuit the E2B dispatch fence so no test constructs Settings().
-
-    Worktrees have no ``backend/.env``; ``e2b_idempotency_enabled()`` calls
-    ``get_settings()`` which builds ``Settings()`` and REQUIRES database_url /
-    secret_key / fernet_key, raising ValidationError before the sandbox path is
-    reached. The fence is incidental to these tests (none exercise it), so a
-    module-scoped autouse fixture returning False makes the file runnable in
-    any environment while leaving fence-specific behaviour untested elsewhere.
-    """
-    monkeypatch.setattr(
-        "modulo.core.pipeline_execution.e2b_idempotency_enabled",
-        lambda: False,
-    )
 
 
 def _read_router(output_json: str, log_content: str = ""):
@@ -352,10 +336,11 @@ async def test_resolve_env_var_refs_calls_resolver_per_ref():
     assert resolved == {"A": "a-secret", "B": "plain", "C": ""}
 
 
-async def test_sandbox_agent_command_timeout_surfaces_clear_summary():
+async def test_sandbox_agent_command_timeout_raises_retryable_failure():
     """A timed-out command (cmd_result None, exit_code -1, EMPTY stdout/stderr)
-    must surface a clear explanation in the summary — not a silent empty-summary
-    failure (the Branch Fixer empty-agent-output hang of 2026-08-05)."""
+    RAISES SandboxNodeFailedError with a clear explanation in the message —
+    never a silent empty-summary failure and never a wrong-success completion
+    (dist/runtime-core A6)."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
 
@@ -365,18 +350,15 @@ async def test_sandbox_agent_command_timeout_surfaces_clear_summary():
     sandbox.files.read = AsyncMock(side_effect=TimeoutError("no output.json"))
     sandbox.kill = AsyncMock()
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_run_state())
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
 
-    output = result["output"]
-    artifact = result["artifacts"][0]["output"]
-    assert output["status"] == "failed"
-    assert artifact["exit_code"] == -1
-    assert output["agent_stdout"] == ""
-    assert output["agent_stderr"] == ""
-    assert "no output" in output["summary"]
-    assert "30s" in output["summary"]
-    assert artifact["summary"] == output["summary"]
+    assert "no output" in str(excinfo.value)
+    assert "30s" in str(excinfo.value)
+    sandbox.kill.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -384,10 +366,11 @@ async def test_sandbox_agent_command_timeout_surfaces_clear_summary():
 # ---------------------------------------------------------------------------
 
 
-async def test_idle_watchdog_kills_stalled_command_and_fails():
+async def test_idle_watchdog_kills_stalled_command_and_raises():
     """A command whose sandbox connection dies (drain probe fails for
-    _SANDBOX_IDLE_TIMEOUT) is killed and the node fails fast — it does not block
-    for the full sandbox_timeout (FAR-97)."""
+    _SANDBOX_IDLE_TIMEOUT) is killed and the node fails fast with a retryable
+    SandboxNodeFailedError — it does not block for the full sandbox_timeout
+    (FAR-97 / dist/runtime-core A6)."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
 
@@ -408,25 +391,23 @@ async def test_idle_watchdog_kills_stalled_command_and_fails():
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.01),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
-        result = await fn(_run_state())
+        await fn(_run_state())
 
-    output = result["output"]
-    artifact = result["artifacts"][0]["output"]
-    assert output["status"] == "failed"
-    assert artifact["exit_code"] == -1
-    assert "no output" in output["summary"]
     # The stalled command itself was killed...
     handle.kill.assert_awaited()
     # ...and the still-running sandbox was killed before output.json could be
     # read — the interrupted process must not fabricate a completion.
     sandbox.kill.assert_awaited()
     sandbox.files.read.assert_not_called()
+    assert "no output" in str(excinfo.value)
 
 
 async def test_timed_out_command_does_not_read_output_json():
     """On a timed-out command the sandbox is killed and output.json is NOT read —
-    an interrupted-but-alive agent could otherwise fabricate a completion (FAR-97)."""
+    an interrupted-but-alive agent could otherwise fabricate a completion (FAR-97).
+    The node raises a retryable SandboxNodeFailedError."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
 
@@ -436,15 +417,14 @@ async def test_timed_out_command_does_not_read_output_json():
     sandbox.files.read = AsyncMock(return_value='{"summary": "fabricated"}')
     sandbox.kill = AsyncMock()
 
-    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
-        result = await fn(_run_state())
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
+    ):
+        await fn(_run_state())
 
-    output = result["output"]
-    artifact = result["artifacts"][0]["output"]
-    assert output["status"] == "failed"
-    assert artifact["exit_code"] == -1
-    assert "no output" in output["summary"]
-    assert "30s" in output["summary"]
+    assert "no output" in str(excinfo.value)
+    assert "30s" in str(excinfo.value)
     sandbox.files.read.assert_not_called()
     sandbox.kill.assert_awaited()
 
@@ -626,9 +606,10 @@ async def test_stall_timeout_seconds_config_passed_to_watchdog():
     assert watchdog.await_args.kwargs["idle_timeout"] == 60
 
 
-async def test_stalled_command_output_includes_stall_reason():
-    """A stalled command surfaces a distinct stall_reason on the node output
-    and still kills the sandbox before output.json can be read (FAR-98)."""
+async def test_stalled_command_raises_with_stall_reason():
+    """A stalled command raises SandboxNodeFailedError carrying the stall reason
+    and still kills the sandbox before output.json can be read (FAR-98 /
+    dist/runtime-core A6)."""
     node_def = _base_node_def(timeout_seconds=30)
     fn = make_sandbox_agent_fn(node_def)
 
@@ -645,16 +626,11 @@ async def test_stalled_command_output_includes_stall_reason():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._SANDBOX_IDLE_TIMEOUT", 1.0),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
-        result = await fn(_run_state())
+        await fn(_run_state())
 
-    output = result["output"]
-    artifact = result["artifacts"][0]["output"]
-    assert output["status"] == "failed"
-    assert artifact["exit_code"] == -1
-    assert "no output" in output["stall_reason"]
-    assert output["stall_reason"] == artifact["stall_reason"]
-    assert output["summary"] == output["stall_reason"]
+    assert "no output" in str(excinfo.value)
     handle.kill.assert_awaited()
     sandbox.kill.assert_awaited()
     sandbox.files.read.assert_not_called()
@@ -863,16 +839,14 @@ async def test_timed_out_command_output_includes_sandbox_id_and_log_tail():
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
         patch("modulo.core.pipeline_engine.node_runner._fetch_sandbox_log_tail", new=_fake_tail),
+        pytest.raises(SandboxNodeFailedError) as excinfo,
     ):
-        result = await fn(_run_state())
+        await fn(_run_state())
 
-    output = result["output"]
-    artifact = result["artifacts"][0]["output"]
-    assert output["status"] == "failed"
-    assert output["sandbox_id"] == "sbx-dead"
-    assert output["sandbox_log_tail"] == "sample log line"
-    assert artifact["sandbox_id"] == "sbx-dead"
-    assert artifact["sandbox_log_tail"] == "sample log line"
+    # The timed-out command raises a retryable SandboxNodeFailedError (A6) — the
+    # sandbox trace is no longer a node output but the fetch-before-kill
+    # ordering guarantee is preserved (FAR-97).
+    assert "no output" in str(excinfo.value)
     # The tail fetch precedes the kill so the still-live sandbox serves its logs.
     assert events[0] == "fetch"
     assert events.index("fetch") < events.index("kill")

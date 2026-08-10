@@ -1,7 +1,7 @@
 """Add 'stalled' as a terminal run status
 
-Revision ID: 0076_add_stalled_status
-Revises: 0075_runtime_hardening_columns
+Revision ID: 0077_add_stalled_status
+Revises: 0076_analytics_concurrency_columns
 Create Date: 2026-08-10
 
 A sandbox-agent node that STALLS (idle watchdog fired — agent silent for
@@ -23,8 +23,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0076_add_stalled_status"
-down_revision: str | None = "0075_runtime_hardening_columns"
+revision: str = "0077_add_stalled_status"
+down_revision: str | None = "0076_analytics_concurrency_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
