@@ -218,7 +218,7 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it.each(['complete', 'failed', 'cancelled', 'eval_failed'])('renders no stop button for %s runs', async (status) => {
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed', 'stalled'])('renders no stop button for %s runs', async (status) => {
     mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
     const wrapper = mountView()
     await flushPromises()

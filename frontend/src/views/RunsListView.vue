@@ -14,6 +14,7 @@
           { value: RUN_STATUS.FAILED, label: 'Failed' },
           { value: RUN_STATUS.CANCELLED, label: 'Cancelled' },
           { value: RUN_STATUS.EVAL_FAILED, label: 'Eval Failed' },
+          { value: RUN_STATUS.STALLED, label: 'Stalled' },
         ]},
         { key: 'trigger_type', label: 'Trigger Type', options: [
           { value: TRIGGER_TYPE.MANUAL, label: 'Manual' },

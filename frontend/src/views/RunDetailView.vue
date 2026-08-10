@@ -773,6 +773,7 @@ const statusBadgeClass = computed(() => {
     running: 'badge badge-status-primary',
     complete: 'badge badge-status-success',
     failed: 'badge badge-status-destructive',
+    stalled: 'badge badge-status-destructive',
     cancelled: 'badge badge-status-warning',
     pending: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
