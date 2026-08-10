@@ -56,12 +56,16 @@
             { key: 'actions', label: '', sortable: false },
           ]"
           :rows="runs"
-          @row-click="(row: any) => navigateToDetail(row.run_id)"
+          :row-clickable="false"
         >
-          <template #cell-pipeline_name="{ value }">
-            <span class="font-medium hover:underline">
-              {{ value || '(deleted pipeline)' }}
-            </span>
+          <template #cell-pipeline_name="{ row }">
+            <router-link
+              :to="`/runs/${row.run_id}`"
+              class="font-medium hover:underline"
+              :data-testid="`runs-list-view-${row.run_id}`"
+            >
+              {{ row.pipeline_name || '(deleted pipeline)' }}
+            </router-link>
           </template>
           <template #cell-status="{ value }">
             <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
@@ -150,7 +154,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -165,7 +169,6 @@ import { isNonTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
-const router = useRouter()
 const route = useRoute()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 const { t } = useI18n()
@@ -267,10 +270,6 @@ function prevPage() {
   if (page.value <= 1) return
   page.value--
   loadRuns()
-}
-
-function navigateToDetail(id: string) {
-  router.push(`/runs/${id}`)
 }
 
 function cancelLabel(runId: string): string {
