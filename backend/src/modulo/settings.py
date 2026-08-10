@@ -164,24 +164,29 @@ class Settings(BaseSettings):
     # "Too many connections") is justified by the verified budget, so it stays.
     saq_worker_db_pool_size: int = Field(default=10, alias="SAQ_WORKER_DB_POOL_SIZE", ge=1, le=10)
     # SAQ Redis client pool size (Upstash connection budget — F2).
-    # LOWERED to 20 after budget verification (2026-08-06). Verified prod facts:
-    # the SAQ_REDIS_POOL_SIZE secret is pinned to 5 and Upstash showed ~15
-    # connected clients at sample time — the firefight default of 50 (raised
-    # during the cutover) was over-provisioned (500 potential conns across 5
-    # machines vs ~15 actual). With worker concurrency 5, workers hold pool
-    # conns only while running jobs (~5 jobs x 2 workers = 10 live conns per
-    # machine), so 20 gives ample headroom (up to 200 across 5 machines).
-    # Operators on a small Redis tier may lower to 5, matching prod.
-    # The reserve clamp in saq_worker._max_concurrent_ops() must stay strictly
-    # below this pool so the semaphore can never exhaust every connection.
+    # Default 20 satisfies the invariant for the default concurrency of 5
+    # (20 >= 5 + 5 reserve). NOTE the real invariant: SAQ's dequeue() uses a
+    # blocking blmove (_DEQUEUE_TIMEOUT) that is NOT gated by
+    # max_concurrent_ops — every concurrent _process task holds ONE pool
+    # connection while blocked. The Redis pool MUST therefore be strictly
+    # larger than the worker concurrency, with reserve for the Upkeep ops
+    # (schedule/sweep/abort/jobs/worker_info). saq_worker._build_queue()
+    # enforces pool >= concurrency + 5 at runtime (raising the effective pool
+    # above the configured value with a warning when needed), so no config can
+    # wedge the workers. 2026-08-10 incident: concurrency 20 with the pool
+    # secret pinned to 5 silently wedged production — the upkeep task died
+    # with ConnectionError: Too many connections and worker_info heartbeats
+    # stopped. Prod now pins SAQ_WORKER_CONCURRENCY=20 and SAQ_REDIS_POOL_SIZE=50
+    # via secrets; the code guard makes any smaller pool self-correcting.
     saq_redis_pool_size: int = Field(default=20, alias="SAQ_REDIS_POOL_SIZE", ge=1, le=50)
     # SAQ worker concurrency (how many jobs run at once per worker).
     # Default 5; prod/staging pin this to 20 via fly.toml — the accepted
     # design target (20 per worker x up to 5 machines = up to 100 concurrent
     # runs), verified-safe against the prod Postgres 300-connection cap (only
     # ~40 in use; SAQ is asyncio single-engine so concurrency does not multiply
-    # the DB pool). Decoupled from Redis pool size — pool=20 handles bursty
-    # Redis ops while concurrency prevents runaway job parallelism.
+    # the DB pool). Must stay strictly below the effective Redis pool — see
+    # saq_redis_pool_size (blocking dequeue holds one pool connection per
+    # concurrent task; a pool <= concurrency wedges the worker).
     saq_worker_concurrency: int = Field(default=5, alias="SAQ_WORKER_CONCURRENCY", ge=1, le=50)
     # Per-run agent runtime cost: E2B sandbox hourly rate used to estimate
     # sandbox_agent node cost from wall-clock time (E2B bills per-second
