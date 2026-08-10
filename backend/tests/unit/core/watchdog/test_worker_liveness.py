@@ -13,11 +13,12 @@ import json
 import time
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from modulo.core.email_service import EmailSendingError
 from modulo.core.watchdog import worker_liveness as wl
 from modulo.settings import Settings
 
@@ -111,7 +112,7 @@ class TestWorkerLivenessWatchdog:
         with (
             patch.object(wl.aioredis.Redis, "from_url", return_value=fake),
             patch.object(wl.asyncio, "sleep", side_effect=_stop),
-            patch.object(wl, "_post_webhook", post),
+            patch.object(wl, "_send_alerts", post),
             pytest.raises(asyncio.CancelledError),
         ):
             await wl.run_worker_liveness_watchdog(settings)
@@ -128,7 +129,7 @@ class TestWorkerLivenessWatchdog:
         dead_since = time.time() - 200
 
         post = AsyncMock()
-        with patch.object(wl, "_post_webhook", post):
+        with patch.object(wl, "_send_alerts", post):
             state = await wl._evaluate_once(settings, fake, dead_since)
 
         assert state == dead_since  # still dead, timer keeps running
@@ -138,7 +139,7 @@ class TestWorkerLivenessWatchdog:
 
         # Next tick within the cooldown window: suppressed.
         post2 = AsyncMock()
-        with patch.object(wl, "_post_webhook", post2):
+        with patch.object(wl, "_send_alerts", post2):
             state2 = await wl._evaluate_once(settings, fake, state)
         post2.assert_not_awaited()
         assert state2 == state
@@ -159,7 +160,7 @@ class TestWorkerLivenessWatchdog:
         with (
             patch.object(wl.aioredis.Redis, "from_url", return_value=fake),
             patch.object(wl.asyncio, "sleep", side_effect=_stop),
-            patch.object(wl, "_post_webhook", post),
+            patch.object(wl, "_send_alerts", post),
             pytest.raises(asyncio.CancelledError),
         ):
             await wl.run_worker_liveness_watchdog(settings)
@@ -176,7 +177,7 @@ class TestWorkerLivenessWatchdog:
         client.post.side_effect = httpx.ConnectError("boom")
 
         with patch.object(wl.httpx, "AsyncClient", return_value=client):
-            await wl._post_webhook(settings, ["no live SAQ worker"])  # must not raise
+            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
 
         client.__aenter__.assert_awaited()
 
@@ -187,27 +188,41 @@ class TestWorkerLivenessWatchdog:
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
 
         with patch.object(wl.httpx, "AsyncClient", return_value=client) as ctor:
-            await wl._post_webhook(settings, ["no live SAQ worker"])
+            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
 
         ctor.assert_called_once_with(timeout=wl._WEBHOOK_TIMEOUT_SECONDS)
         call = client.post.await_args
         assert call.args[0] == "https://hooks.slack.com/services/T/X/B"
         body = json.loads(call.kwargs["content"])
-        assert isinstance(body["text"], str)
+        assert set(body) == {"text"}
         assert "worker-liveness" in body["text"]
 
-    async def test_no_webhook_url_never_posts_but_still_ticks(self) -> None:
+    async def test_no_channel_configured_never_alerts_but_still_ticks(self) -> None:
         fake = _FakeWatchdogRedis()
-        settings = _make_settings(ALERT_WEBHOOK_URL=None)
+        settings = _make_settings()  # no generic/Teams webhook, no email
         dead_since = time.time() - 200
 
-        post = AsyncMock()
-        with patch.object(wl, "_post_webhook", post):
+        send_alerts = AsyncMock()
+        with patch.object(wl, "_send_alerts", send_alerts):
             state = await wl._evaluate_once(settings, fake, dead_since)
 
-        post.assert_not_awaited()
+        send_alerts.assert_not_awaited()
         assert state is not None  # still tracking the dead state
         assert wl._ALERT_COOLDOWN_KEY not in fake._data
+
+    async def test_channel_configured_via_teams_or_email_fires_alert(self) -> None:
+        fake = _FakeWatchdogRedis()
+
+        for settings in (
+            _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t"),
+            _make_settings(ALERT_EMAIL_TO="ops@example.com", smtp_host="smtp.example.com"),
+        ):
+            send_alerts = AsyncMock()
+            with patch.object(wl, "_send_alerts", send_alerts):
+                await wl._evaluate_once(settings, fake, time.time() - 200)
+            send_alerts.assert_awaited_once()
+            assert wl._ALERT_COOLDOWN_KEY in fake._data
+            fake._data.pop(wl._ALERT_COOLDOWN_KEY, None)
 
     async def test_recovery_resets_and_new_alert_can_fire_after_cooldown(self) -> None:
         fake = _FakeWatchdogRedis()
@@ -215,7 +230,7 @@ class TestWorkerLivenessWatchdog:
 
         # 1. Alert fires while the fleet is dead past the threshold.
         post = AsyncMock()
-        with patch.object(wl, "_post_webhook", post):
+        with patch.object(wl, "_send_alerts", post):
             dead_state = await wl._evaluate_once(settings, fake, time.time() - 200)
         post.assert_awaited_once()
         assert wl._ALERT_COOLDOWN_KEY in fake._data
@@ -225,7 +240,7 @@ class TestWorkerLivenessWatchdog:
         fake.add_live_worker("system")
         fake.set_cron_heartbeat()
         post2 = AsyncMock()
-        with patch.object(wl, "_post_webhook", post2):
+        with patch.object(wl, "_send_alerts", post2):
             recovered = await wl._evaluate_once(settings, fake, dead_state)
         post2.assert_not_awaited()
         assert recovered is None
@@ -235,14 +250,14 @@ class TestWorkerLivenessWatchdog:
         fake.clear_workers("system")
         fake.set_cron_heartbeat(age_seconds=600)
         post3 = AsyncMock()
-        with patch.object(wl, "_post_webhook", post3):
+        with patch.object(wl, "_send_alerts", post3):
             state2 = await wl._evaluate_once(settings, fake, time.time() - 200)
         post3.assert_not_awaited()
 
         # 4. Cooldown expires (TTL) -> a new alert can fire again.
         fake._data.pop(wl._ALERT_COOLDOWN_KEY, None)
         post4 = AsyncMock()
-        with patch.object(wl, "_post_webhook", post4):
+        with patch.object(wl, "_send_alerts", post4):
             await wl._evaluate_once(settings, fake, state2)
         post4.assert_awaited_once()
 
@@ -254,7 +269,7 @@ class TestWorkerLivenessWatchdog:
         settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
 
         post = AsyncMock()
-        with patch.object(wl, "_post_webhook", post):
+        with patch.object(wl, "_send_alerts", post):
             state = await wl._evaluate_once(settings, fake, None)
 
         post.assert_awaited_once()
@@ -332,7 +347,7 @@ async def test_cron_read_failure_fails_open_without_alert() -> None:
 
     with (
         patch.object(fake, "keys", side_effect=RuntimeError("redis down")),
-        patch.object(wl, "_post_webhook", post),
+        patch.object(wl, "_send_alerts", post),
     ):
         state = await wl._evaluate_once(settings, fake, None)
 
@@ -348,7 +363,7 @@ async def test_workers_dead_below_stale_threshold_does_not_alert() -> None:
     post = AsyncMock()
     dead_since = time.time() - 10  # far below the 180s stale threshold
 
-    with patch.object(wl, "_post_webhook", post):
+    with patch.object(wl, "_send_alerts", post):
         state = await wl._evaluate_once(settings, fake, dead_since)
 
     assert state == dead_since  # still tracking the dead window
@@ -399,3 +414,138 @@ def test_hostname_defaults_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FLY_MACHINE_ID", raising=False)
     monkeypatch.delenv("HOSTNAME", raising=False)
     assert wl._hostname() == "unknown"
+
+
+class TestMultiChannelAlertFanout:
+    async def test_generic_webhook_only_posts_text_payload(self) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/services/T/X/B")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+
+        with patch.object(wl.httpx, "AsyncClient", return_value=client) as ctor:
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+        ctor.assert_called_once_with(timeout=wl._WEBHOOK_TIMEOUT_SECONDS)
+        call = client.post.await_args
+        assert call.args[0] == "https://hooks.slack.com/services/T/X/B"
+        body = json.loads(call.kwargs["content"])
+        assert set(body) == {"text"}
+        assert "no live SAQ worker" in body["text"]
+        assert "worker-liveness" in body["text"]
+
+    async def test_teams_webhook_only_posts_message_card(self) -> None:
+        settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/abc")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+
+        with patch.object(wl.httpx, "AsyncClient", return_value=client) as ctor:
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+        ctor.assert_called_once_with(timeout=wl._WEBHOOK_TIMEOUT_SECONDS)
+        call = client.post.await_args
+        assert call.args[0] == "https://outlook.office.com/webhook/abc"
+        body = json.loads(call.kwargs["content"])
+        assert body["@type"] == "MessageCard"
+        assert body["@context"] == "http://schema.org/extensions"
+        assert "worker-liveness" in body["summary"]
+        assert "worker-liveness" in body["title"]
+        assert "no live SAQ worker" in body["text"]
+
+    async def test_email_only_sends_via_to_thread(self) -> None:
+        settings = _make_settings(
+            ALERT_EMAIL_TO="ops@example.com, alice@example.com",
+            smtp_host="smtp.example.com",
+        )
+        send = MagicMock(return_value=True)
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+        ):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+
+        to_thread.assert_awaited_once()
+        assert to_thread.await_args.args[0] is send
+        send.assert_called_once()
+        call = send.call_args
+        assert call.args[1] == ["ops@example.com", "alice@example.com"]
+        assert call.args[2] == "[Modulo Watchdog] Worker-liveness alert"
+        assert "<li>no live SAQ worker</li>" in call.args[3]
+        assert "Detected at" in call.args[4]
+
+    async def test_multiple_channels_all_fire(self) -> None:
+        settings = _make_settings(
+            ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
+            ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/abc",
+            ALERT_EMAIL_TO="ops@example.com",
+            smtp_host="smtp.example.com",
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+        send = MagicMock(return_value=True)
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "send_email", send),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+        assert client.post.await_count == 2  # generic + Teams
+        assert send.call_count == 1
+
+    async def test_channel_isolation_email_failure_does_not_block_webhook(self) -> None:
+        settings = _make_settings(
+            ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
+            ALERT_EMAIL_TO="ops@example.com",
+            smtp_host="smtp.example.com",
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+
+        def _raise_send_error(*_args: Any, **_kwargs: Any) -> bool:
+            raise EmailSendingError("smtp down")
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "send_email", side_effect=_raise_send_error),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])  # must not raise
+
+        client.post.assert_awaited_once()
+        assert client.post.await_args.args[0] == "https://hooks.slack.com/webhook"
+
+    async def test_parse_alert_email_to(self) -> None:
+        assert wl._parse_alert_email_to("a@b.com, c@d.com , ,e@f.com") == [
+            "a@b.com",
+            "c@d.com",
+            "e@f.com",
+        ]
+        assert wl._parse_alert_email_to("") == []
+        assert wl._parse_alert_email_to(None) == []
+        assert wl._parse_alert_email_to("  ,  ") == []
+
+    async def test_email_skipped_when_recipient_list_empty(self) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="  , ", smtp_host="smtp.example.com")
+        send = MagicMock()
+        with patch.object(wl, "send_email", send):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+        send.assert_not_called()
+
+    async def test_email_skipped_when_smtp_not_configured(self) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="ops@example.com")
+        send = MagicMock()
+        with patch.object(wl, "send_email", send):
+            await wl._send_alerts(settings, ["no live SAQ worker"])  # must not raise
+        send.assert_not_called()
+
+    async def test_send_email_alert_no_smtp_host_returns_without_sending(self) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="ops@example.com")
+        send = MagicMock()
+        with patch.object(wl, "send_email", send):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+        send.assert_not_called()
