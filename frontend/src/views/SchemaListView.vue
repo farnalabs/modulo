@@ -145,6 +145,9 @@
                           <DropdownMenuItem data-testid="schema-view-edit" @click.stop="openEditor(schema)">
                             {{ $t('views.SchemaListView.view_edit') }}
                           </DropdownMenuItem>
+                          <DropdownMenuItem data-testid="schema-move-folder" @click.stop="openMoveToFolder(schema)">
+                            {{ $t('views.SchemaListView.move_to_folder') }}
+                          </DropdownMenuItem>
                           <DropdownMenuItem
                             v-if="!schema.deprecated"
                             class="text-destructive focus:text-destructive"
@@ -181,6 +184,51 @@
           </Button>
           <Button variant="destructive" data-testid="schema-deprecate-confirm" :disabled="deprecating" :loading="deprecating" @click="deprecateSchema">
             {{ deprecating ? $t('views.SchemaListView.deprecating') : $t('views.SchemaListView.deprecate') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Move to Folder Dialog -->
+    <Dialog v-model:open="showMoveToFolder">
+      <DialogContent data-testid="schema-move-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.SchemaListView.move_to_folder') }}</DialogTitle>
+          <DialogDescription v-if="moveTarget">
+            {{ $t('views.SchemaListView.move_to_folder_description', { name: moveTarget.name }) }}
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-2">
+          <button
+            v-for="f in foldersList"
+            :key="f.id"
+            class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+            :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
+            :data-testid="`schema-move-folder-${f.id}`"
+            @click="moveToFolderId = f.id"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+            {{ f.name }}
+          </button>
+          <button
+            class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
+            :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
+            data-testid="schema-move-nofolder"
+            @click="moveToFolderId = null"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            {{ $t('views.SchemaListView.no_folder') }}
+          </button>
+          <div v-if="moveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+            {{ moveError }}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" data-testid="schema-move-cancel" @click="showMoveToFolder = false">
+            {{ $t('common.cancel') }}
+          </Button>
+          <Button data-testid="schema-move-confirm" :disabled="moving" :loading="moving" @click="handleMoveToFolder">
+            {{ moving ? $t('common.saving') : $t('common.save') }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -249,13 +297,37 @@ const folderError = ref<string | null>(null)
 
 const folderSchemaCounts = computed(() => {
   const counts: Record<string, number> = {}
-  for (const s of schemas.value) {
+  for (const s of allSchemasForCounts.value) {
     if (s.folder_id) {
       counts[s.folder_id] = (counts[s.folder_id] || 0) + 1
     }
   }
+  counts.__all__ = allSchemasForCounts.value.length
   return counts
 })
+
+const allSchemasForCounts = ref<SchemaItem[]>([])
+
+async function loadAllSchemasForCounts() {
+  try {
+    const items: SchemaItem[] = []
+    let page = 1
+    let total = 0
+    do {
+      const { data } = await api.GET('/api/v1/schemas', {
+        params: { query: { page, page_size: 100 } },
+      })
+      if (!data) break
+      total = data.total
+      items.push(...data.items)
+      if (data.items.length === 0) break
+      page += 1
+    } while ((page - 1) * 100 < total)
+    allSchemasForCounts.value = items
+  } catch (e: unknown) {
+    console.warn('Failed to load schema counts', e)
+  }
+}
 
 const folderNameMap = computed(() => {
   const map = new Map<string, string>()
@@ -292,6 +364,7 @@ function onSelectFolder(folderId: string | null) {
 function onFoldersChanged() {
   loadSchemas()
   loadFolders()
+  loadAllSchemasForCounts()
 }
 
 function onSchemaDragStart(schema: SchemaItem, event: DragEvent) {
@@ -302,22 +375,49 @@ function onSchemaDragStart(schema: SchemaItem, event: DragEvent) {
 const moving = ref(false)
 const moveError = ref<string | null>(null)
 
-async function onMoveSchema(ev: { pipelineId: string; folderId: string | null }) {
+async function moveSchema(schemaId: string, folderId: string | null) {
   if (moving.value) return
-  const schema = schemas.value.find(s => s.id === ev.pipelineId)
+  const schema = schemas.value.find(s => s.id === schemaId)
   if (!schema) return
-  if ((schema.folder_id ?? null) === ev.folderId) return
+  if ((schema.folder_id ?? null) === folderId) return
   moveError.value = null
   moving.value = true
   try {
-    await patchUntyped(`/api/v1/schemas/${ev.pipelineId}/folder`, {
-      folder_id: ev.folderId,
+    await patchUntyped(`/api/v1/schemas/${schemaId}/folder`, {
+      folder_id: folderId,
     })
     await loadSchemas()
+    await loadAllSchemasForCounts()
   } catch (e: unknown) {
     moveError.value = formatApiError(e)
   } finally {
     moving.value = false
+  }
+}
+
+async function onMoveSchema(ev: { pipelineId: string; folderId: string | null }) {
+  await moveSchema(ev.pipelineId, ev.folderId)
+}
+
+const showMoveToFolder = ref(false)
+const moveTarget = ref<SchemaItem | null>(null)
+const moveToFolderId = ref<string | null>(null)
+
+function openMoveToFolder(schema: SchemaItem) {
+  moveTarget.value = schema
+  moveToFolderId.value = schema.folder_id ?? null
+  moveError.value = null
+  showMoveToFolder.value = true
+}
+
+async function handleMoveToFolder() {
+  if (!moveTarget.value) return
+  const targetId = moveTarget.value.id
+  const folderId = moveToFolderId.value
+  await moveSchema(targetId, folderId)
+  if (!moveError.value) {
+    showMoveToFolder.value = false
+    moveTarget.value = null
   }
 }
 
@@ -370,5 +470,6 @@ async function deprecateSchema() {
 
 onMounted(() => {
   loadFolders()
+  loadAllSchemasForCounts()
 })
 </script>

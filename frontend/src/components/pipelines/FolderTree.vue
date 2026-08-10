@@ -234,6 +234,7 @@ const labels = computed(() => {
     renameFolder: t(`${ns}.rename_folder`),
     deleteFolder: t(`${ns}.delete_folder`),
     folderName: t(`${ns}.folder_name`),
+    uncategorised: t(`${ns}.uncategorised`),
   }
 })
 
@@ -291,9 +292,12 @@ const deleteConfirmMessage = computed(() => {
   if (!deleteTarget.value) return ''
   const count = counts.value?.[deleteTarget.value.id]
   if (count && count > 0) {
-    return `Are you sure you want to delete this folder? ${itemNoun.value} will be moved to Uncategorised.`
+    return t('components.pipelines.FolderTree.delete_confirm_with_items', {
+      itemNoun: itemNoun.value,
+      uncategorisedLabel: labels.value.uncategorised,
+    })
   }
-  return 'Are you sure you want to delete this folder?'
+  return t('components.pipelines.FolderTree.delete_confirm_empty')
 })
 
 async function loadFolders() {

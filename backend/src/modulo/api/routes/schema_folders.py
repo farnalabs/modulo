@@ -113,6 +113,12 @@ async def update_folder_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
+    except ValueError as e:
+        logger.info("schema_folders.update(%s) rejected: %s", folder_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        ) from None
     except ProgrammingError:
         logger.exception("schema_folders.update(%s)", folder_id)
         raise HTTPException(

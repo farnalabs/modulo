@@ -1940,7 +1940,8 @@ export default {
       "deprecation_description": "This schema will be marked as deprecated. Agents using it will still function, but it will no longer appear as active. This action can be reversed by a future reactivation.",
       "uncategorised": "Uncategorised",
       "no_folder": "No folder",
-      "move_to_folder": "Move to Folder"
+      "move_to_folder": "Move to Folder",
+      "move_to_folder_description": "Choose a folder for \"{name}\"."
     },
     "SettingsTriggersView": {
       "title": "Triggers",
@@ -2160,7 +2161,9 @@ export default {
     "pipelines": {
       "FolderTree": {
         "parent_folder": "Parent folder",
-        "no_parent_root_level": "No parent (root level)"
+        "no_parent_root_level": "No parent (root level)",
+        "delete_confirm_empty": "Are you sure you want to delete this folder?",
+        "delete_confirm_with_items": "Are you sure you want to delete this folder? {itemNoun} will be moved to {uncategorisedLabel}."
       }
     },
     "onboarding": {

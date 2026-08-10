@@ -47,6 +47,8 @@ vi.mock('../lib/api/client', () => {
 })
 
 const mockPush = vi.fn()
+const patchMock = vi.hoisted(() => vi.fn())
+
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual('vue-router')
   return {
@@ -63,7 +65,7 @@ vi.mock('@/composables/useApi', () => ({
     ]),
     post: vi.fn(),
     put: vi.fn(),
-    patch: vi.fn().mockResolvedValue(undefined),
+    patch: patchMock.mockResolvedValue(undefined),
     delete: vi.fn(),
   }),
 }))
@@ -187,5 +189,51 @@ describe('SchemaListView', () => {
     await trigger.trigger('click')
     await nextTick()
     expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('moves a schema to a folder via the actions menu', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="schema-move-folder"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(document.body.textContent).toContain('Move to Folder')
+
+    const folderBtn = document.body.querySelector('[data-testid="schema-move-folder-folder-1"]') as HTMLElement | null
+    expect(folderBtn).not.toBeNull()
+    folderBtn!.click()
+    await nextTick()
+
+    const confirmBtn = document.body.querySelector('[data-testid="schema-move-confirm"]') as HTMLElement | null
+    expect(confirmBtn).not.toBeNull()
+    confirmBtn!.click()
+    await flushPromises()
+    await nextTick()
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/schemas/1/folder', { folder_id: 'folder-1' })
+    expect(document.body.textContent).not.toContain('Move to Folder')
+  })
+
+  it('moves a schema back to no folder via the actions menu', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const moveItems = wrapper.findAll('[data-testid="schema-move-folder"]')
+    expect(moveItems.length).toBe(2)
+    await moveItems[1].trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const noFolderBtn = document.body.querySelector('[data-testid="schema-move-nofolder"]') as HTMLElement | null
+    expect(noFolderBtn).not.toBeNull()
+    noFolderBtn!.click()
+    await nextTick()
+
+    const confirmBtn = document.body.querySelector('[data-testid="schema-move-confirm"]') as HTMLElement | null
+    confirmBtn!.click()
+    await flushPromises()
+    await nextTick()
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/schemas/2/folder', { folder_id: null })
+    expect(document.body.textContent).not.toContain('Move to Folder')
   })
 })

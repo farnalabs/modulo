@@ -29,6 +29,30 @@ async def _compute_folder_depth(session: AsyncSession, folder_id: uuid.UUID | No
     return depth
 
 
+async def _folder_is_ancestor(
+    session: AsyncSession,
+    folder_id: uuid.UUID,
+    ancestor_id: uuid.UUID,
+) -> bool:
+    """Return True if ancestor_id appears in folder_id's parent chain (or equals it)."""
+    current_id = folder_id
+    steps = 0
+    while current_id is not None and steps <= _MAX_FOLDER_DEPTH:
+        if current_id == ancestor_id:
+            return True
+        result = await session.execute(select(SchemaFolder.parent_id).where(SchemaFolder.id == current_id))
+        current_id = result.scalar_one_or_none()
+        steps += 1
+    return False
+
+
+async def _check_parent_depth(session: AsyncSession, parent_id: uuid.UUID) -> None:
+    """Reject a parent whose chain would place a child beyond _MAX_FOLDER_DEPTH levels."""
+    depth = await _compute_folder_depth(session, parent_id)
+    if depth >= _MAX_FOLDER_DEPTH:
+        raise ValueError(f"Folder nesting depth would exceed {_MAX_FOLDER_DEPTH} levels")
+
+
 async def create_folder(
     session: AsyncSession,
     *,
@@ -38,9 +62,7 @@ async def create_folder(
     parent_id: uuid.UUID | None = None,
 ) -> SchemaFolder:
     if parent_id is not None:
-        depth = await _compute_folder_depth(session, parent_id)
-        if depth > _MAX_FOLDER_DEPTH:
-            raise ValueError(f"Folder nesting depth would exceed {_MAX_FOLDER_DEPTH} levels")
+        await _check_parent_depth(session, parent_id)
     folder = SchemaFolder(
         organisation_id=org_id,
         name=name,
@@ -73,6 +95,14 @@ async def update_folder(
     folder = await get_folder(session, folder_id)
     if folder is None:
         return None
+    if "parent_id" in updates:
+        new_parent_id = updates["parent_id"]
+        if new_parent_id is not None:
+            if new_parent_id == folder_id:
+                raise ValueError("A folder cannot be its own parent")
+            if await _folder_is_ancestor(session, new_parent_id, folder_id):
+                raise ValueError("A folder cannot be moved under one of its own descendants")
+            await _check_parent_depth(session, new_parent_id)
     apply_updates(folder, updates)
     await session.flush()
     return folder

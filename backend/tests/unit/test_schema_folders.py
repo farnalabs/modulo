@@ -1,9 +1,11 @@
 """Unit tests for /api/v1/schema-folders endpoints and schema folder assignment."""
 
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +22,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.db.crud.schema_folder import _MAX_FOLDER_DEPTH, update_folder
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -217,3 +220,70 @@ def test_move_schema_to_folder_missing_schema_returns_404(client: TestClient) ->
     with patch(f"{_SCHEMAS_PATCH_PREFIX}move_schema_to_folder", return_value=None):
         resp = client.patch(f"/api/v1/schemas/{uuid.uuid4()}/folder", json={"folder_id": None})
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# update_folder parent validation — cycle / depth protection
+# ---------------------------------------------------------------------------
+
+
+def _session_returning(*values: Any) -> AsyncMock:
+    """Mock session whose scalar_one_or_none() yields values in order per execute."""
+    session = _make_mock_session()
+    result = MagicMock()
+    result.scalar_one_or_none.side_effect = list(values)
+    session.execute.return_value = result
+    return session
+
+
+def test_update_folder_rejects_self_parent() -> None:
+    folder = _make_folder()
+    session = _session_returning(folder)
+    with pytest.raises(ValueError, match="own parent"):
+        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": _FOLDER_ID}))
+
+
+def test_update_folder_rejects_descendant_parent() -> None:
+    folder = _make_folder()
+    descendant_id = uuid.uuid4()
+    # get_folder -> folder; _folder_is_ancestor walks up from the descendant
+    # and finds the folder being updated in its parent chain.
+    session = _session_returning(folder, _FOLDER_ID)
+    with pytest.raises(ValueError, match="descendants"):
+        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": descendant_id}))
+
+
+def test_update_folder_accepts_valid_parent() -> None:
+    folder = _make_folder()
+    new_parent_id = uuid.uuid4()
+    # get_folder -> folder; ancestor walk terminates (parent is root);
+    # depth walk terminates (parent is root) -> depth 1, within limit.
+    session = _session_returning(folder, None, None)
+    updated = asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": new_parent_id}))
+    assert updated is folder
+    assert folder.parent_id == new_parent_id
+
+
+def test_update_folder_enforces_depth_limit() -> None:
+    folder = _make_folder()
+    session = _session_returning(folder)
+    with (
+        patch("modulo.db.crud.schema_folder._folder_is_ancestor", new=AsyncMock(return_value=False)),
+        patch(
+            "modulo.db.crud.schema_folder._compute_folder_depth",
+            new=AsyncMock(return_value=_MAX_FOLDER_DEPTH),
+        ),
+        pytest.raises(ValueError, match="nesting depth"),
+    ):
+        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": uuid.uuid4()}))
+
+
+def test_update_folder_invalid_parent_returns_422(client: TestClient) -> None:
+    with patch(
+        f"{_SF_PATCH_PREFIX}update_folder",
+        side_effect=ValueError("A folder cannot be its own parent"),
+    ) as mock_update:
+        resp = client.patch(f"/api/v1/schema-folders/{_FOLDER_ID}", json={"parent_id": str(_FOLDER_ID)})
+    mock_update.assert_called_once()
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "A folder cannot be its own parent"
