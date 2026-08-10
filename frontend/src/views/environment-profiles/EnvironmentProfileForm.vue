@@ -1,5 +1,5 @@
 <template>
-  <div class="page-narrow">
+  <div class="page-wide">
     <header class="flex items-center gap-3 mb-6">
       <button
         class="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
@@ -17,7 +17,7 @@
       />
     </header>
 
-    <form @submit.prevent="handleSubmit" class="card p-6 space-y-5">
+    <form @submit.prevent="handleSubmit" class="card max-w-3xl p-6 space-y-5">
       <div>
         <label for="environmentprofileform-field-7" class="mb-1 block text-sm font-medium">{{ $t('views.EnvironmentProfileForm.name') }} <span class="text-destructive">*</span></label>
         <input id="environmentprofileform-field-7"
