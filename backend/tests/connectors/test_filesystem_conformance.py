@@ -7,9 +7,9 @@ for the auto-parametrised conformance tests automatically.
 from pathlib import Path
 
 import pytest
+
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 from modulo.connectors.filesystem import FilesystemConnector, PathTraversalError
-
 from tests.connectors._conformance import assert_result_shape
 
 
