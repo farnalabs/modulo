@@ -22,11 +22,12 @@ export const useOnboardingStore = defineStore('onboarding', () => {
   const dismissed = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const ready = ref(false)
 
   const incompleteActions = computed(() => actions.value.filter(a => !a.completed && !a.skipped))
   const completedCount = computed(() => actions.value.filter(a => a.completed).length)
   const totalActions = computed(() => actions.value.length)
-  const isActive = computed(() => isFirstRun.value && !dismissed.value)
+  const isActive = computed(() => ready.value && isFirstRun.value && !dismissed.value)
   const currentAction = computed(() => incompleteActions.value.sort((a, b) => a.order - b.order)[0] ?? null)
 
   async function fetchStatus() {
@@ -51,6 +52,7 @@ export const useOnboardingStore = defineStore('onboarding', () => {
       error.value = formatApiError(e)
     } finally {
       loading.value = false
+      ready.value = true
     }
   }
 
@@ -101,7 +103,7 @@ export const useOnboardingStore = defineStore('onboarding', () => {
   }
 
   return {
-    actions, progressPct, isFirstRun, dismissed, loading, error,
+    actions, progressPct, isFirstRun, dismissed, loading, error, ready,
     incompleteActions, completedCount, totalActions, isActive, currentAction,
     fetchStatus, completeAction, skipAction, dismiss, seedExamples,
   }
