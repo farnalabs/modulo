@@ -3,13 +3,13 @@
 Two worker processes (plan F1/F2):
 
 * ``runs_settings`` — queue ``runs``, concurrency (SAQ_WORKER_CONCURRENCY,
-  default 5, deployed at 20 in prod/staging, decoupled from Redis pool size),
-  no web UI. Executes
+  default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
+  larger — see :func:`_effective_redis_pool_size`), no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
   (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
 * ``system_settings`` — queue ``system``, concurrency (SAQ_WORKER_CONCURRENCY,
-  default 5, deployed at 20 in prod/staging, decoupled from Redis pool size),
-  web UI on 8081 bound
+  default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
+  larger — see :func:`_effective_redis_pool_size`), web UI on 8081 bound
   to 127.0.0.1 (``fly ssh`` only), FAIL-CLOSED auth: refuses to boot unless
   ``SAQ_AUTH_PASSWORD`` and ``SAQ_AUTH_USERNAME`` are set. Owns the system
   crons: fire_due_triggers, dispatcher_reconcile, claim-expiry, retention,
@@ -117,6 +117,24 @@ def _max_concurrent_ops(pool_size: int) -> int:
     return pool_size - 5
 
 
+def _effective_redis_pool_size(pool_size: int, concurrency: int) -> int:
+    """Guarantee the SAQ Redis pool is large enough for blocking dequeue.
+
+    SAQ's ``dequeue()`` uses a blocking ``blmove`` (``_DEQUEUE_TIMEOUT``) that
+    is NOT gated by ``max_concurrent_ops`` — every concurrent ``_process``
+    task holds one pool connection while blocked. When the queue drains, all
+    ``concurrency`` connections can be held simultaneously, leaving nothing
+    for the Upkeep tasks (``schedule``/``sweep``/``abort``/``worker_info``),
+    which raises ``ConnectionError: Too many connections`` and kills the
+    worker's heartbeats (the silent wedge, 2026-08-10).
+
+    Enforce ``pool >= concurrency + reserve`` where reserve covers the upkeep
+    ops (a minimum of 5, matching the historical non-dequeue margin).
+    """
+    reserve = 5
+    return max(pool_size, concurrency + reserve)
+
+
 def _build_queue(queue_name: str) -> RedisQueue:
     """Build an SAQ RedisQueue with the Upstash-pinned client knobs (F2).
 
@@ -124,10 +142,26 @@ def _build_queue(queue_name: str) -> RedisQueue:
     exhausts all available connections — leaving reserve connections for SAQ
     operations that bypass the semaphore (``schedule``, ``sweep``, ``dequeue``,
     ``notify``).
+
+    The client pool uses the EFFECTIVE pool size (never below
+    ``concurrency + 5``) because SAQ's blocking ``dequeue()`` holds one pool
+    connection per concurrent ``_process`` task regardless of
+    ``max_concurrent_ops``; a pool smaller than the concurrency leaves nothing
+    for the Upkeep tasks and silently wedges the worker.
     """
     settings = get_settings()
-    pool_size = settings.saq_redis_pool_size
+    pool_size = _effective_redis_pool_size(settings.saq_redis_pool_size, settings.saq_worker_concurrency)
     max_ops = _max_concurrent_ops(pool_size)
+    if pool_size != settings.saq_redis_pool_size:
+        _log.warning(
+            "saq_worker.pool_raised",
+            extra={
+                "queue": queue_name,
+                "configured_pool": settings.saq_redis_pool_size,
+                "effective_pool": pool_size,
+                "concurrency": settings.saq_worker_concurrency,
+            },
+        )
     redis_client = aioredis.from_url(  # type: ignore[no-untyped-call]
         settings.redis_url,
         socket_connect_timeout=10,

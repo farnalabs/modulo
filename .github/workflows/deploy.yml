@@ -309,6 +309,64 @@ jobs:
             echo "Started worker machine(s) already exist: $WORKER_COUNT"
           fi
 
+      - name: Wait for worker liveness check (staging)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WORKER_HEALTH_TIMEOUT_MINUTES: "10"
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Post-deploy gate: the "Ensure worker machine exists" step only guarantees a
+          # STARTED worker machine exists -- it does not verify SAQ workers actually came
+          # up (the 2026-08-08 outage left both workers `stopped` and the deploy passed
+          # silently). Poll `fly checks list` until at least ONE worker machine reports
+          # the worker_health check (port 8082 liveness, ADR 021) as PASSING.
+          #
+          # Pass criterion is AT-LEAST-ONE, not ALL: `fly checks list --json` emits one
+          # worker_health row PER worker machine, and a machine mid-rollout or one that
+          # self-healed back to a warning state still shows non-passing rows even when
+          # the fleet is healthy. A deploy that cannot bring up ANY worker (the outage
+          # case) yields ZERO passing rows and fails here. A transient `fly checks list`
+          # API failure is treated as "not yet healthy" and retried (2>/dev/null || true,
+          # mirroring the worker-exists step) -- only the hard timeout fails the job.
+          TIMEOUT_MIN="${WORKER_HEALTH_TIMEOUT_MINUTES:-10}"
+          INTERVAL_SEC=15
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            fly checks list --app staging-modulo --json > /tmp/worker-checks.json 2>/dev/null || true
+            PASSING_MACHINES="$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-checks.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+          # flyctl emits a dict keyed by machine id -> [check,...]; tolerate a list shape.
+          entries = []
+          if isinstance(data, dict):
+              entries = [(mid, c) for mid, checks in data.items() for c in (checks or [])]
+          elif isinstance(data, list):
+              entries = [(c.get("machine_id") or c.get("machine") or "?", c) for c in data]
+          passing = sorted(
+              mid for mid, c in entries
+              if c.get("name") == "worker_health"
+              and str(c.get("status", "")).lower() == "passing"
+          )
+          print(" ".join(passing))
+          ' || true)"
+            if [ -n "$PASSING_MACHINES" ]; then
+              echo "worker_health: PASSING (machine ${PASSING_MACHINES}) - attempt ${attempt}/${ATTEMPTS}"
+              exit 0
+            fi
+            echo "worker_health: not passing yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
+          exit 1
+
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
     needs: [deploy-staging]
@@ -496,6 +554,65 @@ jobs:
           else
             echo "Started worker machine(s) already exist: $WORKER_COUNT"
           fi
+
+      - name: Wait for worker liveness check (production)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WORKER_HEALTH_TIMEOUT_MINUTES: "10"
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # Post-deploy gate: the "Ensure worker machine exists" step only guarantees a
+          # STARTED worker machine exists -- it does not verify SAQ workers actually came
+          # up (the 2026-08-08 outage left both workers `stopped` and the deploy passed
+          # silently). Poll `fly checks list` until at least ONE worker machine reports
+          # the worker_health check (port 8082 liveness, ADR 021) as PASSING.
+          #
+          # Pass criterion is AT-LEAST-ONE, not ALL: `fly checks list --json` emits one
+          # worker_health row PER worker machine, and a machine mid-rollout or one that
+          # self-healed back to a warning state still shows non-passing rows even when
+          # the fleet is healthy. A deploy that cannot bring up ANY worker (the outage
+          # case) yields ZERO passing rows and fails here. A transient `fly checks list`
+          # API failure is treated as "not yet healthy" and retried (2>/dev/null || true,
+          # mirroring the worker-exists step) -- only the hard timeout fails the job.
+          TIMEOUT_MIN="${WORKER_HEALTH_TIMEOUT_MINUTES:-10}"
+          INTERVAL_SEC=15
+          ATTEMPTS=$(( TIMEOUT_MIN * 60 / INTERVAL_SEC ))
+          attempt=0
+          while [ "$attempt" -lt "$ATTEMPTS" ]; do
+            attempt=$(( attempt + 1 ))
+            fly checks list --app app-modulo --json > /tmp/worker-checks.json 2>/dev/null || true
+            PASSING_MACHINES="$(python3 -c '
+          import json
+          try:
+              with open("/tmp/worker-checks.json") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+          # flyctl emits a dict keyed by machine id -> [check,...]; tolerate a list shape.
+          entries = []
+          if isinstance(data, dict):
+              entries = [(mid, c) for mid, checks in data.items() for c in (checks or [])]
+          elif isinstance(data, list):
+              entries = [(c.get("machine_id") or c.get("machine") or "?", c) for c in data]
+          passing = sorted(
+              mid for mid, c in entries
+              if c.get("name") == "worker_health"
+              and str(c.get("status", "")).lower() == "passing"
+          )
+          print(" ".join(passing))
+          ' || true)"
+            if [ -n "$PASSING_MACHINES" ]; then
+              echo "worker_health: PASSING (machine ${PASSING_MACHINES}) - attempt ${attempt}/${ATTEMPTS}"
+              exit 0
+            fi
+            echo "worker_health: not passing yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
+            sleep "$INTERVAL_SEC"
+          done
+          echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
+          exit 1
+
   prod-smoke:
     name: Prod smoke tests
     needs: [deploy-production]

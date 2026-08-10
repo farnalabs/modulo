@@ -203,7 +203,7 @@ async function checkInteractiveNotClipped(page: Page) {
     const vw = document.documentElement.clientWidth
     const hasHScroll = doc.scrollWidth > vw + 1
     if (hasHScroll) {
-      return { skip: true, clipped: [], allowlistedClipped: [], allowlistCount: 0 }
+      return { skip: true, clipped: [], allowlistedClipped: [], allowlistCount: 0, sampled: false, interactiveCount: 0 }
     }
     // A right-side overhang inside a horizontal scroll container (e.g. a wide
     // table with overflow-x: auto) is reachable by scrolling the container —
@@ -223,9 +223,6 @@ async function checkInteractiveNotClipped(page: Page) {
     }
     const selector = 'button, a, input, select, textarea, [tabindex], [role="button"]'
     const interactives = Array.from(document.querySelectorAll(selector))
-    if (interactives.length > 500) {
-      process.stdout.write(`[mobile-layout] clipped scan sampled: ${interactives.length} interactives, processing first 500\n`)
-    }
     const clipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
     const allowlistedClipped: { tag: string; cls: string; text: string; left: number; right: number }[] = []
     for (const el of interactives.slice(0, 500)) {
@@ -268,11 +265,16 @@ async function checkInteractiveNotClipped(page: Page) {
       // present on the page (typically the one Remy FAB). Used so the
       // assertion reads against reality instead of a magic literal.
       allowlistCount: document.querySelectorAll(allowlistSelector).length,
+      sampled: interactives.length > 500,
+      interactiveCount: interactives.length,
     }
   }, CLIPPED_ALLOWLIST_SELECTOR)
   if (result.skip) {
     process.stdout.write(`[mobile-layout] ${page.url()} has horizontal scroll — skipping clipped-interactive check\n`)
     return
+  }
+  if (result.sampled) {
+    process.stdout.write(`[mobile-layout] clipped scan sampled: ${result.interactiveCount} interactives, processing first 500\n`)
   }
   if (result.clipped.length > 0) {
     for (const c of result.clipped) {

@@ -115,11 +115,11 @@ class TestNormaliseBounds:
 
 class TestCheckHourCap:
     def test_under_cap_passes(self) -> None:
-        _check_hour_cap(AnalyticsGroupBy.HOUR, date(2026, 8, 1), date(2026, 8, 14))
+        assert _check_hour_cap(AnalyticsGroupBy.HOUR, date(2026, 8, 1), date(2026, 8, 14)) is None
 
     def test_over_cap_rejected(self) -> None:
         with pytest.raises(AnalyticsValidationError, match="hour granularity"):
             _check_hour_cap(AnalyticsGroupBy.HOUR, date(2026, 8, 1), date(2026, 8, 16))
 
     def test_day_grouping_ignores_span(self) -> None:
-        _check_hour_cap(AnalyticsGroupBy.DAY, date(2026, 1, 1), date(2026, 8, 1))
+        assert _check_hour_cap(AnalyticsGroupBy.DAY, date(2026, 1, 1), date(2026, 8, 1)) is None

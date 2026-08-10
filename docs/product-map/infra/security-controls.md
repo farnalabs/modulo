@@ -36,6 +36,8 @@ code:
   - .semgrep/rls_set_local.yml
   - .semgrep/async_db_driver.yml
   - .semgrep/sensitive-data-in-log.yml
+  - .semgrep/asyncio_waitfor_wait_unshielded.yml
+  - .semgrep/non_serializable_in_langgraph_state.yml
 unit-tests:
   - backend/tests/unit/auth/test_jwt.py
   - backend/tests/unit/auth/test_api_key.py

@@ -33,6 +33,31 @@ SAQ_RESUME_RUN_FUNCTION = "modulo.core.saq_worker.resume_run"
 SAQ_RUN_TIMEOUT = 7200
 SAQ_RUN_TTL = 300
 
+_shared_redis: AsyncRedis | None = None
+_shared_redis_lock = asyncio.Lock()
+
+
+async def _get_shared_redis() -> AsyncRedis:
+    """Return a process-lifetime shared Redis client (created once).
+
+    The dispatch path is hot under webhook load; creating + closing a fresh
+    client per enqueue churned connections and accumulated to Upstash's
+    connection limit, stalling the SAQ runs worker (2026-08-09). A single
+    shared client with the configured pool size is the durable fix.
+    """
+    global _shared_redis
+    if _shared_redis is None:
+        async with _shared_redis_lock:
+            if _shared_redis is None:
+                settings = get_settings()
+                _shared_redis = AsyncRedis.from_url(
+                    settings.redis_url,
+                    socket_keepalive=True,
+                    socket_connect_timeout=10,
+                    max_connections=settings.saq_redis_pool_size,
+                )
+    return _shared_redis
+
 
 def _open_session() -> AsyncSession:
     # Reuse the shared, tuned app engine (pool_pre_ping, asyncpg statement cache
@@ -232,31 +257,23 @@ async def _enqueue_saq(
 ) -> tuple[str, bool]:
     """Enqueue a run job to SAQ. Returns (job_id, deduped)."""
     settings = get_settings()
-    redis_client = AsyncRedis.from_url(
-        settings.redis_url,
-        socket_keepalive=True,
-        socket_connect_timeout=10,
-        max_connections=settings.saq_redis_pool_size,
+    redis_client = await _get_shared_redis()
+    q = RedisQueue(redis_client, name=queue_name)
+    function = SAQ_RESUME_RUN_FUNCTION if job_type == "resume_run" else SAQ_EXECUTE_RUN_FUNCTION
+    kwargs: dict[str, Any] = {"run_id": run_id, "org_id": org_id}
+    if resume_data:
+        kwargs["resume_data"] = resume_data
+    job = await q.enqueue(
+        function,
+        key=f"run:{run_id}",
+        timeout=SAQ_RUN_TIMEOUT,
+        heartbeat=settings.saq_job_heartbeat,
+        retries=settings.saq_run_retries,
+        retry_delay=settings.saq_retry_delay,
+        retry_backoff=False,
+        ttl=SAQ_RUN_TTL,
+        **kwargs,
     )
-    try:
-        q = RedisQueue(redis_client, name=queue_name)
-        function = SAQ_RESUME_RUN_FUNCTION if job_type == "resume_run" else SAQ_EXECUTE_RUN_FUNCTION
-        kwargs: dict[str, Any] = {"run_id": run_id, "org_id": org_id}
-        if resume_data:
-            kwargs["resume_data"] = resume_data
-        job = await q.enqueue(
-            function,
-            key=f"run:{run_id}",
-            timeout=SAQ_RUN_TIMEOUT,
-            heartbeat=settings.saq_job_heartbeat,
-            retries=settings.saq_run_retries,
-            retry_delay=settings.saq_retry_delay,
-            retry_backoff=False,
-            ttl=SAQ_RUN_TTL,
-            **kwargs,
-        )
-    finally:
-        await redis_client.aclose()
     if job is not None:
         return job.id, False
     # Already enqueued with the same key — deterministic job id.

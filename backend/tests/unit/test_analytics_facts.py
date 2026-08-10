@@ -368,6 +368,12 @@ class TestRecorders:
         metrics_mod.record_reconcile_alert("org-1", "ledger_exceeds_facts")
         metrics_mod.set_retention_lag(2.0)
         metrics_mod.record_facts_skip_non_pg()
+        assert metrics_mod._facts_write_failed_total is None
+        assert metrics_mod._backfill_last_run_ts is None
+        assert metrics_mod._backfill_rows is None
+        assert metrics_mod._reconcile_alert_total is None
+        assert metrics_mod._retention_lag is None
+        assert metrics_mod._facts_skip_non_pg_total is None
 
     def test_record_facts_write_failed_lazily_initialises_and_adds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         meter = _FakeMeter()

@@ -33,6 +33,8 @@ vi.mock('@/lib/api/client', () => ({
   setAccessToken: vi.fn(),
   setRefreshToken: vi.fn(),
   onAuthChange: vi.fn(() => vi.fn()),
+  getInitialAuthState: vi.fn((hasToken: boolean) => hasToken),
+  shouldReRunAutoLogin: vi.fn(() => false),
 }))
 
 vi.mock('@/lib/error-tracking', () => ({

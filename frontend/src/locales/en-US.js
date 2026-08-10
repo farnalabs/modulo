@@ -432,6 +432,7 @@ export default {
       "failed_to_change_password": "Failed to change password",
       "update_password": "Update Password",
       "passwords_do_not_match": "Passwords do not match",
+      "new_password_must_differ": "New password must be different from the current password",
       "manage_your_account_settings_and_password": "Manage your account settings and password.",
       "password_must_be_at_least_8_characters": "Password must be at least 8 characters",
       "member_since": "Member since {date}"

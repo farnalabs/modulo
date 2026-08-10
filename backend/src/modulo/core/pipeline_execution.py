@@ -1043,11 +1043,15 @@ def e2b_idempotency_enabled() -> bool:
 
 
 async def _e2b_client() -> Any:
-    """Create a short-lived Redis client for one fence operation.
+    """Create a short-lived, BOUNDED Redis client for one fence operation.
 
     Per-call client (opened and closed within the operation) matches the
     codebase pattern (dispatch.py / cron_helpers.py) and avoids leaking a
-    process-lifetime connection pool into tests and worker teardown.
+    process-lifetime connection pool into tests and worker teardown. The
+    max_connections cap bounds a concurrent fence-op burst so the aggregate
+    connection count cannot exhaust Upstash's limit (2026-08-09:
+    uncapped per-call clients accumulated to 12-25 connections against a
+    5-connection pool and stalled the SAQ runs worker).
     """
     from redis.asyncio import Redis as _AsyncRedis
 
@@ -1056,6 +1060,7 @@ async def _e2b_client() -> Any:
         settings.redis_url,
         socket_connect_timeout=10,
         socket_keepalive=True,
+        max_connections=min(int(settings.saq_redis_pool_size), 5),
     )
 
 

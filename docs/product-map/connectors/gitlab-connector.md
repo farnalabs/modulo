@@ -41,6 +41,9 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Verify `write_repository` scope during health check — read the token's declared scopes from the instance `GET /oauth/token/info` endpoint and report it when missing
 - [x] Verify `api` scope during health check — same token-introspection probe; a token declaring `api` is treated as satisfying `read_api`/`write_repository` (GitLab superset scope)
 - [x] Report missing scopes individually in health check detail
+- [x] Per-operation write scope verification — `write()` fails fast with a descriptive `ValueError` when the token lacks the scope the operation requires (repository-file writes need `write_repository`; MR/issue/label/milestone/pipeline writes need `api`); declared scopes are read from the instance `/oauth/token/info` endpoint and cached per instance for `_SCOPE_CACHE_TTL` (5 min) so the probe runs at most once per window
+- [x] Health check warms the write-scope cache — a successful `health_check()` caches the declared scopes so the first subsequent `write()` is verified without re-probing
+- [x] Scope verification degrades to allow when scopes cannot be determined — an unavailable `GET /oauth/token/info` (older self-hosted returns 404), network error, or unparseable body skips the pre-write check and lets the GitLab API enforce scope on the call
 - [ ] Block run start when scopes are insufficient (pre-run health check in ConnectorHub)
 
 ### Project Operations — listing and discovery
@@ -120,8 +123,8 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] API error detail includes GitLab's `X-Request-Id` header when present (via `_error_detail`)
 - [x] Health check failure details include GitLab's `X-Request-Id` header when present (via `_id_suffix`)
 - [x] Path traversal blocked locally — absolute paths and `..` segments raise ValueError on `query("file")`, `write("file")`, `write("file_delete")` before any request is sent
-- [ ] Missing token during construction is not validated until first API call
-- [ ] Project path encoding fails gracefully on malformed project IDs (e.g. None, numbers)
+- [x] Missing token is rejected at construction — `GitLabConnector(token=None/"")` raises a descriptive `ValueError` ("requires a non-empty token") immediately instead of failing at the first API call
+- [x] Malformed project IDs fail gracefully — `_project_path` accepts numeric IDs (coerced to strings, e.g. `project: 123` → `/projects/123/...`) and raises descriptive `ValueError`s for `None`, booleans, empty/whitespace-only strings, and other non-scalar project filters instead of crashing in `quote()`
 
 ### Resilience & Integration Robustness
 
@@ -135,14 +138,36 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] Other `httpx.HTTPError` subclasses (StreamError, ProtocolError, etc.) caught and wrapped in retry loop
 - [x] Report GitLab `RateLimit-*` headers (`Limit`/`Remaining`/`Observed`/`Reset`/`ResetTime`) as `metadata["rate_limit"]` on query results
 - [x] Absent rate-limit headers produce an empty `metadata["rate_limit"]` dict (no crash, no phantom data)
+- [x] Missing write scope raises ValueError before the API call — a token lacking the scope an operation requires is blocked with a descriptive message (e.g. `requires scope 'write_repository'`, `token declares: read_api`) and the API is never reached
+- [x] `verify_write_scopes(resource)` exposes the missing-scope set programmatically — returns `frozenset()` when satisfied or when scopes cannot be determined
 
 ## Known Gaps
 
-- **Scope verification incomplete** — partially RESOLVED 2026-08-05: `write_repository`/`api` are now individually verified during health check via a best-effort `GET /oauth/token/info` token-introspection probe (reported as `Missing scopes: …`). Pre-run ConnectorHub blocking of insufficient scopes remains unimplemented.
-- [ ] **Pre-run ConnectorHub scope blocking**: a connector instance with insufficient scopes still permits run start — the health check flags it, but the ConnectorHub does not refuse to build/execute the connector.
+- **Scope verification incomplete** — largely RESOLVED: `write_repository`/`api` are verified during health check via a best-effort `GET /oauth/token/info` probe, and every `write()` now fails fast when the token lacks the scope the operation requires (see QA History 2026-08-09). Pre-run ConnectorHub blocking of insufficient scopes remains unimplemented.
+- [ ] **Pre-run ConnectorHub scope blocking**: a connector instance with insufficient scopes still permits run start — the health check flags it and writes fail fast, but the ConnectorHub does not refuse to build/execute the connector.
 - [ ] **Self-hosted discovery**: `base_url` is configurable per connector instance, but there is no instance-discovery/onboarding flow for self-hosted GitLab
 
 ## QA History
+
+### 2026-08-10 — improve-architecture: construction-time token validation + malformed project ID handling RESOLVED
+
+**RESOLVED 2 known gaps** in `connectors/gitlab/__init__.py`:
+
+1. **Missing token validated at construction** — `GitLabConnector.__init__` now rejects a `None`, empty, or whitespace-only token with a descriptive `ValueError` ("GitLabConnector requires a non-empty token") before any API call, instead of silently sending `Authorization: Bearer ` and failing at the first request. The ConnectorHub `initialise()` resilience path (`except ValueError` → skip + WARNING log) already handles this new failure mode.
+2. **Malformed project IDs fail gracefully** — `_project_path()` now accepts numeric project IDs (coerced to strings — `project: 123` routes to `/projects/123/...`, which GitLab resolves) and raises descriptive `ValueError`s for `None`, booleans, empty/whitespace-only strings, and other non-scalar project filters instead of crashing with a raw `TypeError` from `quote()`. The guard runs before any request is sent and applies to every query/write resource that URL-encodes a project.
+
+**Tests:** 9 new unit tests in `test_gitlab.py` — constructor rejects missing/empty/whitespace token; numeric project ID coerced and routed correctly; `None`/empty/whitespace/bool project filters raise descriptive `ValueError`s on both `query("file")` and `write("file")`. **95/95 `test_gitlab.py` + 180/180 across the 3 gitlab unit test files pass (171 + 9 new), ruff check + format clean, mypy --strict clean.** Status: partial (pre-run ConnectorHub scope blocking + self-hosted discovery remain).
+
+### 2026-08-09 — improve-architecture: per-operation scope verification RESOLVED
+
+**RESOLVED the last GitLab scope gap** — "Per-operation scope verification — no granular check before `write()` calls". Before dispatching any write, `GitLabConnector.write()` now verifies the token actually has the scope the operation requires and fails fast with a descriptive `ValueError` instead of letting the API reject with an opaque 403.
+
+- New module map `_WRITE_SCOPE_REQUIREMENTS` — repository-file writes (`file`, `files`/`commit`, `file_delete`) require `write_repository`; every other write (`mr`/`merge_request`, `mr_comment`/`mr_note`, `mr_merge`, `mr_approve`, `mr_approval_request`, `mr_labels`, `issue`, `issue_update`, `issue_note`, `issue_label`, `label`, `milestone`, `pipeline_run`) requires `api`. The `api` superset satisfies all of them via the existing `_effective_scopes()` relation.
+- New `_ensure_write_scope(resource)` runs at the top of `write()` and raises `ValueError` (e.g. `GitLab write resource 'file' requires scope 'write_repository'; token declares: read_api`) before any request is sent. It is strictly best-effort: when declared scopes can't be determined (404 on older self-hosted GitLab, network error, unparseable body, empty scope list) the check is skipped and the API enforces scope as before.
+- Scope probe is cached per instance for `_SCOPE_CACHE_TTL` (5 min) via new `_scope_cache` + `_declared_scopes_cached()`/`_probe_declared_scopes()`, so the token-info round-trip happens at most once per window rather than on every write. A successful `health_check()` now warms the cache (refactored to `_declared_effective_scopes(client)` + cache write), so connectors health-checked at init verify the first write without re-probing.
+- New public `verify_write_scopes(resource)` returns the missing-scope set programmatically (empty when satisfied or when scopes cannot be determined) for callers that want to probe before dispatching.
+
+**Tests:** 11 new unit tests in `test_gitlab.py` — file write blocked without `write_repository` (write endpoint never called), scope error lists declared scopes, MR write blocked without `api`, `write_repository`-only token can write files, `api`-only token satisfies MR + file writes, writes proceed when token-info is 404/network-error (fail-open), `verify_write_scopes` returns exact missing sets / empty-when-unknown, scope cache avoids re-probing across consecutive writes, health check warms the write-scope cache. **171/171 gitlab unit tests pass (160 + 11 new), ruff check + format clean, mypy --strict clean.** Status: partial (pre-run ConnectorHub scope blocking + self-hosted discovery remain).
 
 ### 2026-08-05 — improve-architecture (index 145+)
 
