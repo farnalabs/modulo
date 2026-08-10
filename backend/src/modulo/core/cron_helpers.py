@@ -45,7 +45,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
-from modulo.db.session import get_shared_engine
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
 
@@ -274,7 +273,10 @@ def _get_engine() -> AsyncEngine:
         with _ENGINE_LOCK:
             if _ENGINE is None:
                 # D4: one engine per process — the shared factory (Fly/HAProxy
-                # knobs) instead of a second singleton.
+                # knobs) instead of a second singleton. Lazy import keeps
+                # db.session's module-level `engine` out of the worker graph.
+                from modulo.db.session import get_shared_engine
+
                 _ENGINE = get_shared_engine()
     return _ENGINE
 

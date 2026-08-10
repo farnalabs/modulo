@@ -61,7 +61,6 @@ from saq import CronJob, Worker
 from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modulo.db.session import get_shared_engine
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -93,6 +92,10 @@ _ASYNC_ENGINE: AsyncEngine | None = None
 def _get_async_engine() -> AsyncEngine:
     global _ASYNC_ENGINE
     if _ASYNC_ENGINE is None:
+        # Lazy import keeps db.session (and its module-level `engine`) out of
+        # the worker's import graph until the first engine is actually needed.
+        from modulo.db.session import get_shared_engine
+
         settings = get_settings()
         if settings.modulo_db.lower() == "postgres":
             _ASYNC_ENGINE = get_shared_engine(

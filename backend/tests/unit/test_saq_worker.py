@@ -654,7 +654,7 @@ class TestGetAsyncEngine:
                 return_value=_settings(database_url="postgresql+asyncpg://localhost/test", saq_worker_db_pool_size=3),
             ),
             patch.object(sw, "_ASYNC_ENGINE", None),
-            patch.object(sw, "get_shared_engine", return_value=MagicMock()) as shared,
+            patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
         ):
             engine = sw._get_async_engine()
 
@@ -669,7 +669,7 @@ class TestGetAsyncEngine:
                 return_value=_settings(database_url="sqlite+aiosqlite:///./test.db", modulo_db="sqlite"),
             ),
             patch.object(sw, "_ASYNC_ENGINE", None),
-            patch.object(sw, "get_shared_engine", return_value=MagicMock()) as shared,
+            patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
         ):
             sw._get_async_engine()
 
@@ -679,7 +679,7 @@ class TestGetAsyncEngine:
         with (
             patch.object(sw, "get_settings", return_value=_settings()),
             patch.object(sw, "_ASYNC_ENGINE", None),
-            patch.object(sw, "get_shared_engine", return_value=MagicMock()) as shared,
+            patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
         ):
             first = sw._get_async_engine()
             second = sw._get_async_engine()
