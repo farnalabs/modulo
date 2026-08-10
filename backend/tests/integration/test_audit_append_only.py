@@ -229,9 +229,7 @@ class TestAuditReadOperations:
         # otherwise keep this test green. Scope by this run's fresh org id so
         # leftover rows from earlier runs cannot inflate the count.
         result = await db_session.execute(
-            text(
-                "SELECT COUNT(*) FROM audit_events WHERE event_type = 'test.insert' AND organisation_id = :org_id"
-            ),
+            text("SELECT COUNT(*) FROM audit_events WHERE event_type = 'test.insert' AND organisation_id = :org_id"),
             {"org_id": str(org_id)},
         )
         assert result.scalar() == 1
