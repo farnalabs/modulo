@@ -193,7 +193,9 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
     dispatcher NULL) must be re-dispatched when capacity frees. dispatch_run
     returns deferred BEFORE recording dispatched_at/dispatcher, so the
     capacity-deferred branch must match on the creation path, not
-    dispatcher='saq'."""
+    dispatcher='saq'. Under schema 0075 (runtime cutover) runs.claim_token is
+    NOT NULL, so a capacity-deferred run carries a token and reconcile must
+    preserve it (never clobber it) on re-dispatch."""
     run_id, _ = await _seed_saq_run(
         db_engine,
         test_org,
