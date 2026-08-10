@@ -66,7 +66,7 @@ class RunDailyFact(OrgScoped):
     error_code: Mapped[str | None] = mapped_column(String(255), comment="the stall dimension — from Run.error_code")
     claim_count: Mapped[int | None] = mapped_column(Integer)
     queue_wait_ms: Mapped[int | None] = mapped_column(
-        BigInteger, comment="Run.dispatched_at - Run.started_at when both present, else NULL"
+        BigInteger, comment="Run.started_at - Run.dispatched_at when both present, else NULL"
     )
     final_idle_ms: Mapped[int | None] = mapped_column(
         BigInteger, comment="Run.completed_at - Run.heartbeat_at (the stuck-with-no-heartbeat window), else NULL"

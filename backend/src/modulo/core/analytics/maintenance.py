@@ -134,7 +134,7 @@ async def backfill_facts(session: Any, day: date) -> int:
     queue_wait_ms_expr = sa.case(
         (
             sa.and_(Run.dispatched_at.is_not(None), Run.started_at.is_not(None)),
-            sa.cast(sa.func.extract("epoch", Run.dispatched_at - Run.started_at) * 1000, sa.BigInteger),
+            sa.cast(sa.func.extract("epoch", Run.started_at - Run.dispatched_at) * 1000, sa.BigInteger),
         ),
         else_=None,
     )
