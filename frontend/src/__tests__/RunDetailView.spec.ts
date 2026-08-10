@@ -41,7 +41,7 @@ vi.mock('../lib/api/client', () => {
         if (url === '/api/v1/runs/{run_id}/io') {
           return Promise.resolve({
             data: {
-              outputs_json: { 'node-a': { result: 'pure agent return', summary: 'return-level summary' } },
+              outputs_json: { 'node-a': { input: { q: 'hello' }, output: 'response' } },
               node_telemetry: {
                 'node-a': {
                   status: 'complete',
@@ -140,20 +140,20 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('shows prompt hidden state for nodes', async () => {
+  it('shows a single view-prompt button for each node', async () => {
     router.push('/runs/test-run-id')
     await router.isReady()
     const wrapper = createWrapper()
     await nextTick()
     await flushPromises()
     await nextTick()
-    const revealBtns = wrapper.findAll('[data-testid="run-detail-reveal-prompt"]')
-    expect(revealBtns.length).toBeGreaterThanOrEqual(1)
-    expect(revealBtns[0].text()).toContain('Prompt hidden')
+    const promptBtns = wrapper.findAll('[data-testid="run-detail-show-prompt"]')
+    expect(promptBtns.length).toBeGreaterThanOrEqual(1)
+    expect(promptBtns[0].text()).toContain('View prompt')
     wrapper.unmount()
   })
 
-  it('reveals prompt on click and shows dialog', async () => {
+  it('reveals the prompt and opens the dialog on a single click', async () => {
     router.push('/runs/test-run-id')
     await router.isReady()
     const wrapper = createWrapper()
@@ -161,16 +161,11 @@ describe('RunDetailView', () => {
     await flushPromises()
     await nextTick()
 
-    const revealBtn = wrapper.find('[data-testid="run-detail-reveal-prompt"]')
-    expect(revealBtn.exists()).toBe(true)
-    await revealBtn.trigger('click')
+    const promptBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
+    expect(promptBtn.exists()).toBe(true)
+    await promptBtn.trigger('click')
     await nextTick()
     await flushPromises()
-
-    const showBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
-    expect(showBtn.exists()).toBe(true)
-    await showBtn.trigger('click')
-    await nextTick()
 
     expect(document.body.textContent).toContain('helpful assistant')
     expect(document.body.textContent).toContain('25')
@@ -188,20 +183,58 @@ describe('RunDetailView', () => {
     await flushPromises()
     await nextTick()
 
-    const revealBtn = wrapper.find('[data-testid="run-detail-reveal-prompt"]')
-    await revealBtn.trigger('click')
+    const promptBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
+    await promptBtn.trigger('click')
     await nextTick()
     await flushPromises()
-
-    const showBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
-    await showBtn.trigger('click')
-    await nextTick()
 
     const copyBtn = document.querySelector('[data-testid="run-detail-copy-prompt"]')
     expect(copyBtn).not.toBeNull()
     ;(copyBtn as HTMLElement).click()
     expect(writeText).toHaveBeenCalled()
     expect(writeText.mock.calls[0][0]).toContain('helpful assistant')
+    wrapper.unmount()
+  })
+
+  it('shows node input and output values from normalized outputs_json', async () => {
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    // Complete runs auto-expand the last node's IO row.
+    expect(wrapper.text()).toContain('hello')
+    expect(wrapper.text()).toContain('response')
+    wrapper.unmount()
+  })
+
+  it('shows empty-state messages instead of the string null for a node with no input/output', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: { ...baseDetail(), node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } } }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: { 'node-a': {} } }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const noInput = wrapper.find('[data-testid="run-detail-no-input"]')
+    const noOutput = wrapper.find('[data-testid="run-detail-no-output"]')
+    expect(noInput.exists()).toBe(true)
+    expect(noOutput.exists()).toBe(true)
+    expect(noInput.text()).toContain('No input data')
+    expect(noOutput.text()).toContain('No output data')
+    expect(noInput.text()).not.toContain('null')
     wrapper.unmount()
   })
 
@@ -392,7 +425,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it.each(['complete', 'failed', 'cancelled', 'eval_failed'])('hides the cancel button for %s runs', async (status) => {
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed', 'stalled'])('hides the cancel button for %s runs', async (status) => {
     const wrapper = await mountWithDetail({ ...baseDetail(), status })
     expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(false)
     wrapper.unmount()
@@ -436,9 +469,12 @@ describe('RunDetailView', () => {
 
     const ioRow = wrapper.find('[data-testid="run-detail-io-row"]')
     expect(ioRow.exists()).toBe(true)
+    // The pure return has no explicit `input` key, so the input panel renders
+    // as an empty state and only the output panel gets a JsonViewer.
+    expect(wrapper.find('[data-testid="run-detail-no-input"]').exists()).toBe(true)
     const viewers = ioRow.findAll('[data-testid="json-viewer"]')
-    expect(viewers.length).toBe(2)
-    const outputPanel = viewers[1]
+    expect(viewers.length).toBe(1)
+    const outputPanel = viewers[0]
     expect(outputPanel.text()).toContain('pure agent return')
     expect(outputPanel.text()).toContain('return-level summary')
     expect(outputPanel.text()).not.toContain('agent_stdout')
@@ -600,7 +636,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('legacy rows (envelope outputs_json, no node_telemetry) render the full envelope in the IO output panel', async () => {
+  it('legacy envelope outputs_json (no node_telemetry) splits input and output across the IO panels', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') {
@@ -630,9 +666,12 @@ describe('RunDetailView', () => {
     await nextTick()
 
     const ioRow = wrapper.find('[data-testid="run-detail-io-row"]')
-    const outputPanel = ioRow.findAll('[data-testid="json-viewer"]')[1]
+    const viewers = ioRow.findAll('[data-testid="json-viewer"]')
+    expect(viewers.length).toBe(2)
+    const inputPanel = viewers[0]
+    expect(inputPanel.text()).toContain('hello')
+    const outputPanel = viewers[1]
     expect(outputPanel.text()).toContain('legacy response')
-    expect(outputPanel.text()).toContain('hello')
     expect(outputPanel.text()).toContain('legacy stdout')
     expect(outputPanel.text()).toContain('agent_stdout')
 

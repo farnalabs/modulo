@@ -24,7 +24,7 @@ from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 _log = logging.getLogger(__name__)
 
@@ -390,7 +390,7 @@ async def update_run_status(
         run.started_at = datetime.now(UTC)
     if claimed_by is not None:
         run.claimed_by = claimed_by
-    if status in ("complete", "failed", "cancelled", "eval_failed"):
+    if status in ("complete", "failed", "cancelled", "eval_failed", "stalled"):
         run.completed_at = datetime.now(UTC)
     if clear_error_code:
         # Explicitly clear a prior capacity marker (the error_code=... writes
@@ -433,7 +433,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN now() ELSE started_at END, "
     "completed_at = CASE "
     "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
-    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed') THEN now() "
+    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') THEN now() "
     "  ELSE completed_at END, "
     "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
     "error_code = CASE WHEN :clear_error_code THEN NULL "
@@ -521,7 +521,7 @@ async def _update_run_status_fenced(
 
 _TRANSITION_SQL = text(
     "UPDATE runs SET status=CAST(:target AS text), "
-    "completed_at = CASE WHEN CAST(:target AS text) IN ('complete', 'failed', 'cancelled', 'eval_failed') "
+    "completed_at = CASE WHEN CAST(:target AS text) IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') "
     "THEN now() ELSE completed_at END, "
     "error_code = COALESCE(CAST(:error_code AS text), error_code), "
     "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "
@@ -936,7 +936,7 @@ async def _get_run_stats_python(
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        elif r.status in ("failed", "cancelled", "eval_failed", "expired"):
+        elif r.status in ("failed", "cancelled", "eval_failed", "expired", "stalled"):
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
@@ -948,7 +948,7 @@ async def _get_run_stats_python(
 
     failure_reasons: dict[str, int] = defaultdict(int)
     for r in runs:
-        if r.status in ("failed", "eval_failed") and r.error_code:
+        if r.status in ("failed", "eval_failed", "stalled") and r.error_code:
             failure_reasons[r.error_code] += 1
 
     return {
@@ -996,7 +996,7 @@ async def _get_run_stats_postgres(
                     func.count().label("run_count"),
                     func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
                     func.sum(
-                        case((Run.status.in_(("failed", "cancelled", "eval_failed", "expired")), 1), else_=0)
+                        case((Run.status.in_(("failed", "cancelled", "eval_failed", "expired", "stalled")), 1), else_=0)
                     ).label("failed"),
                     func.avg(duration_ms).label("avg_duration"),
                 )
@@ -1046,7 +1046,7 @@ async def _get_run_stats_postgres(
                 .join(Pipeline, Run.pipeline_id == Pipeline.id)
                 .where(
                     *base_where,
-                    Run.status.in_(("failed", "eval_failed")),
+                    Run.status.in_(("failed", "eval_failed", "stalled")),
                     Run.error_code.is_not(None),
                     Run.error_code != "",
                 )
@@ -1116,7 +1116,7 @@ async def batch_delete_old_terminal_runs(
 ) -> int:
     """Delete terminal runs older than *max_age_days* in batches.
 
-    Only affects runs with status in (complete, failed, eval_failed, cancelled).
+    Only affects runs with a terminal status (``TERMINAL_STATUSES``).
     Returns total deleted count.
     """
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
@@ -1127,7 +1127,7 @@ async def batch_delete_old_terminal_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
+                        Run.status.in_(TERMINAL_STATUSES),
                         Run.created_at < cutoff,
                     )
                     .limit(batch_size)
@@ -1167,7 +1167,7 @@ async def purge_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
+                        Run.status.in_(TERMINAL_STATUSES),
                         Run.completed_at < cutoff,
                     )
                     .limit(batch_size)
