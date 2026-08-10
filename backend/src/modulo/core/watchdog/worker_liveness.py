@@ -1,4 +1,4 @@
-"""In-process worker-liveness watchdog with Slack-compatible webhook alerting.
+"""In-process worker-liveness watchdog with multi-channel alerting.
 
 Postmortem (2026-08-08/09): a rolling deploy left both SAQ worker machines
 ``stopped`` for ~3 hours and nothing alerted a human. The web/app process
@@ -18,9 +18,14 @@ Design:
 - "All workers dead" = no live worker on ANY configured queue (runs AND
   system), sustained for ``watchdog_worker_stale_seconds`` (default 180s =
   2x the 90s worker_info TTL).
-- On alert: POST ``{"text": ...}`` to ``alert_webhook_url`` (default-off —
-  nothing is sent until the operator sets it), deduped by a Redis cooldown
-  key so it fires at most once per ``watchdog_alert_cooldown_seconds``.
+- On alert: fan out to EVERY configured channel — generic webhook
+  (``alert_webhook_url``, Slack-compatible ``{"text": ...}``), Microsoft
+  Teams webhook (``alert_teams_webhook_url``, MessageCard), and/or email
+  (``alert_email_to`` + SMTP settings). Each channel is isolated: one
+  channel's failure never blocks the others. Default-off — nothing is sent
+  until at least one channel is configured. Alerts are deduped by a Redis
+  cooldown key so they fire at most once per
+  ``watchdog_alert_cooldown_seconds``.
 - Fail-open on Redis read errors: cannot confirm death => never alert, just
   log and continue. The watchdog never crashes the web process.
 """
@@ -29,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import json
 import logging
 import os
@@ -38,6 +44,7 @@ from datetime import UTC, datetime
 import httpx
 import redis.asyncio as aioredis
 
+from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger("modulo.watchdog")
@@ -142,18 +149,37 @@ async def _set_cooldown(redis: aioredis.Redis, settings: Settings) -> None:
         _log.warning("watchdog.cooldown_write_failed: %s", exc)
 
 
-async def _post_webhook(settings: Settings, conditions: list[str]) -> None:
+def _channel_configured(settings: Settings) -> bool:
+    """True when at least one alert channel is configured.
+
+    Channels: generic webhook (``alert_webhook_url``), Teams webhook
+    (``alert_teams_webhook_url``), or email (``alert_email_to`` AND
+    ``smtp_host``). Default-off: with none configured the watchdog ticks and
+    logs but never sends anything.
+    """
+    return bool(
+        settings.alert_webhook_url
+        or settings.alert_teams_webhook_url
+        or (settings.alert_email_to and settings.smtp_host)
+    )
+
+
+def _alert_text(conditions: list[str]) -> str:
+    """Shared human-readable alert text (title + condition bullets + detection stamp)."""
+    return (
+        "\U0001f6a8 *Modulo watchdog: worker-liveness alert*\n"
+        + "\n".join(f"\u2022 {condition}" for condition in conditions)
+        + f"\nDetected at {datetime.now(UTC).isoformat()} on {_hostname()}"
+    )
+
+
+async def _post_generic_webhook(settings: Settings, text: str) -> None:
     """Best-effort Slack-compatible webhook POST. Never raises out of the task."""
     webhook_url = settings.alert_webhook_url
     if not webhook_url:
         _log.warning("watchdog.webhook_no_url")
         return
 
-    text = (
-        "\U0001f6a8 *Modulo watchdog: worker-liveness alert*\n"
-        + "\n".join(f"\u2022 {condition}" for condition in conditions)
-        + f"\nDetected at {datetime.now(UTC).isoformat()} on {_hostname()}"
-    )
     payload = json.dumps({"text": text}).encode()
     try:
         async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
@@ -172,12 +198,129 @@ async def _post_webhook(settings: Settings, conditions: list[str]) -> None:
         _log.warning("watchdog.webhook_unknown_failure: %s", exc)
 
 
+async def _post_teams_webhook(settings: Settings, text: str) -> None:
+    """Best-effort Microsoft Teams MessageCard POST. Never raises out of the task."""
+    webhook_url = settings.alert_teams_webhook_url
+    if not webhook_url:
+        _log.warning("watchdog.teams_webhook_no_url")
+        return
+
+    payload = json.dumps(
+        {
+            "@type": "MessageCard",
+            "@context": "http://schema.org/extensions",
+            "summary": "Modulo watchdog: worker-liveness alert",
+            "title": "Modulo watchdog: worker-liveness alert",
+            "text": text,
+        }
+    ).encode()
+    try:
+        async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
+            resp = await client.post(
+                webhook_url,
+                content=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "Modulo-Watchdog/1.0"},
+            )
+        if not resp.is_success:
+            _log.warning("watchdog.teams_webhook_http_error status=%s", resp.status_code)
+    except asyncio.CancelledError:
+        raise
+    except httpx.RequestError as exc:
+        _log.warning("watchdog.teams_webhook_request_failed: %s", exc)
+    except Exception as exc:
+        _log.warning("watchdog.teams_webhook_unknown_failure: %s", exc)
+
+
+def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
+    """Split a comma-separated recipient list — trim whitespace, drop empties."""
+    if not alert_email_to:
+        return []
+    return [address.strip() for address in alert_email_to.split(",") if address.strip()]
+
+
+async def _send_email_alert(settings: Settings, conditions: list[str]) -> None:
+    """Best-effort SMTP email alert. Never raises out of the task.
+
+    ``send_email`` is synchronous (smtplib with retries) — it MUST run via
+    ``asyncio.to_thread`` so it never blocks the watchdog's event loop.
+    """
+    to_emails = _parse_alert_email_to(settings.alert_email_to)
+    if not to_emails:
+        _log.warning("watchdog.email_no_recipients")
+        return
+    if not settings.smtp_host:
+        _log.warning("watchdog.email_no_smtp_host")
+        return
+
+    subject = "[Modulo Watchdog] Worker-liveness alert"
+    body_html = (
+        "<html><body>"
+        "<h2>Modulo watchdog: worker-liveness alert</h2>"
+        "<p>The in-process watchdog detected one or more worker-liveness conditions:</p>"
+        "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in conditions) + "</ul>"
+        f"<p>Detected at {html.escape(datetime.now(UTC).isoformat())} "
+        f"on {html.escape(_hostname())}</p>"
+        "</body></html>"
+    )
+    body_text = _alert_text(conditions)
+    try:
+        await asyncio.to_thread(
+            send_email,
+            settings,
+            to_emails,
+            subject,
+            body_html,
+            body_text,
+        )
+    except asyncio.CancelledError:
+        raise
+    except EmailSendingError as exc:
+        _log.warning("watchdog.email_send_failed: %s", exc)
+    except Exception as exc:
+        _log.warning("watchdog.email_unknown_failure: %s", exc)
+
+
+async def _send_alerts(settings: Settings, conditions: list[str]) -> None:
+    """Fan the alert out to every configured channel, isolated per channel.
+
+    Each channel is wrapped in its own try/except so one channel's failure
+    never prevents the others from delivering (mirrors the error-forwarder
+    isolation lesson). Never raises out of the watchdog task.
+    """
+    text = _alert_text(conditions)
+    if settings.alert_webhook_url:
+        try:
+            await _post_generic_webhook(settings, text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.warning("watchdog.channel_generic_failed: %s", exc)
+    if settings.alert_teams_webhook_url:
+        try:
+            await _post_teams_webhook(settings, text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.warning("watchdog.channel_teams_failed: %s", exc)
+    if settings.alert_email_to and settings.smtp_host:
+        try:
+            await _send_email_alert(settings, conditions)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.warning("watchdog.channel_email_failed: %s", exc)
+
+
 async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: list[str]) -> None:
     """Fire one deduped alert per cooldown window. Never raises."""
     message = "; ".join(conditions)
-    if not settings.alert_webhook_url:
-        # Default-off: the watchdog still ticks and logs, but never POSTs.
-        _log.warning("watchdog.alert_suppressed_no_webhook conditions=%s", message)
+    if not _channel_configured(settings):
+        # Default-off: the watchdog still ticks and logs, but never sends.
+        _log.warning(
+            "watchdog.alert_suppressed_no_channel conditions=%s "
+            "(no generic webhook / Teams webhook / email configured)",
+            message,
+        )
         return
     if await _cooldown_active(redis):
         _log.warning("watchdog.alert_suppressed_cooldown conditions=%s", message)
@@ -186,7 +329,7 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
     # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
     # event needs stdout visibility (repo lesson).
     print(f"[watchdog] ALERT worker-liveness: {message}", flush=True)  # noqa: T201
-    await _post_webhook(settings, conditions)
+    await _send_alerts(settings, conditions)
 
 
 async def _evaluate_once(
