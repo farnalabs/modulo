@@ -13,6 +13,7 @@ warnings at shutdown.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -239,3 +240,155 @@ async def test_update_run_status_fenced_rewrites_cancel_wins(
         ).fetchone()
     assert row is not None
     assert row[0] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Claim RLS conformance (dist/runtime-core C3) — real Postgres, non-superuser
+# role so the RLS policy ``organisation_id = current_setting(...)`` actually
+# filters. claim_run_async must set the org context FIRST or the claim UPDATE
+# matches ZERO rows under a NOBYPASSRLS role.
+# ---------------------------------------------------------------------------
+
+
+async def _claim_count(
+    engine: AsyncEngine,
+    run_id: uuid.UUID,
+) -> int:
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT claim_count, claim_token FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+async def test_claim_run_async_real_pg_rls_concurrent(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """Two concurrent claims on separate non-superuser RLS connections claim the
+    run exactly once: exactly one returns a token, claim_count incremented once.
+
+    The atomic ``UPDATE ... WHERE status='pending'`` is the dedupe — a second
+    claimer finds the row already running with a fresh heartbeat and loses.
+    Both connections run as the NOBYPASSRLS role (``app_engine`` SET ROLEs on
+    checkout) and set_config the org context inside claim_run_async, so the
+    RLS policy matches the row instead of silently matching zero (C3).
+    """
+    run_id = uuid.uuid4()
+    await _insert_run(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="pending",
+    )
+
+    token_a, token_b = await asyncio.gather(
+        pe.claim_run_async(app_engine, str(run_id), str(test_org)),
+        pe.claim_run_async(app_engine, str(run_id), str(test_org)),
+    )
+
+    tokens = [t for t in (token_a, token_b) if t is not None]
+    assert len(tokens) == 1, f"expected exactly one claim winner, got {tokens}"
+    assert await _claim_count(db_engine, run_id) == 1
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running"
+
+
+async def test_claim_run_async_rls_scoped_claim_requires_set_config(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """A raw claim UPDATE executed on a NOBYPASSRLS connection WITHOUT the org
+    context (``set_config('app.organisation_id', ...)``) matches ZERO rows.
+
+    This pins the C3 contract: under RLS the claim is scoped to the org the
+    connection is configured for — a connection with no org context cannot
+    claim anything (fail-closed, never a silent wrong-success).
+    """
+    run_id = uuid.uuid4()
+    await _insert_run(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="pending",
+    )
+
+    claim_sql = pe.build_claim_update(
+        stale_seconds=450,
+        claim_cap=20,
+        claim_token="tok-no-context",
+    )
+    async with app_engine.connect() as conn, conn.begin():
+        # NOTE: deliberately NO set_config — the RLS policy must refuse.
+        result = await conn.execute(
+            claim_sql,
+            pe._claim_params(str(run_id), str(test_org), 450, 20, "tok-no-context"),
+        )
+        claimed = result.fetchone() is not None
+
+    assert claimed is False
+    assert await _claim_count(db_engine, run_id) == 0
+
+
+async def test_claim_resume_run_async_real_pg(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    test_org: uuid.UUID,
+    test_pipeline: uuid.UUID,
+    test_snapshot: uuid.UUID,
+) -> None:
+    """The resume claim variant (awaiting_human/claimed) works under real PG +
+    RLS (non-superuser): a second immediate resume claim loses (idempotent)."""
+    run_id = uuid.uuid4()
+    await _insert_run_with_token(
+        db_engine,
+        run_id=run_id,
+        org_id=test_org,
+        pipeline_id=test_pipeline,
+        snapshot_id=test_snapshot,
+        status="awaiting_human",
+        claim_token="tok-first",
+    )
+
+    token = await pe.claim_resume_run_async(app_engine, str(run_id), str(test_org))
+    assert token is not None, "resume claim must succeed under RLS (C3)"
+    assert await _claim_count(db_engine, run_id) == 1
+
+    second = await pe.claim_resume_run_async(app_engine, str(run_id), str(test_org))
+    assert second is None, "a second resume claim on a fresh-heartbeat running row loses"
+
+    async with db_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, claim_token FROM runs WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "running"
+    assert row[1] == token
