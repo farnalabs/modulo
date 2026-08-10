@@ -72,9 +72,11 @@ class TestFactTimingMs:
         assert _fact_duration_ms(_run(started_at=datetime(2026, 8, 7, tzinfo=UTC), completed_at=None)) is None
 
     def test_queue_wait_ms(self) -> None:
+        # dispatched_at is stamped BEFORE enqueue, started_at when a worker
+        # claims the run — so dispatched < started and the stat is POSITIVE.
         run = _run(
-            dispatched_at=datetime(2026, 8, 7, 9, 0, 20, tzinfo=UTC),
-            started_at=datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
+            dispatched_at=datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
+            started_at=datetime(2026, 8, 7, 9, 0, 20, tzinfo=UTC),
         )
         assert _fact_queue_wait_ms(run) == 15000
 

@@ -1080,8 +1080,8 @@ class TestBackfillEnrichment:
                     "sid": str(snapshot_id),
                     "hash": uuid.uuid4().hex,
                     "thread": f"thread-backfill-enrich-{run_id.hex[:8]}",
-                    "started": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
-                    "dispatched": datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
+                    "started": datetime(2026, 8, 7, 9, 0, 5, tzinfo=UTC),
+                    "dispatched": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
                     "completed": datetime(2026, 8, 7, 9, 30, 0, tzinfo=UTC),
                     "heartbeat": datetime(2026, 8, 7, 9, 29, 0, tzinfo=UTC),
                     "outjson": '{"node_a": {"result": "ok"}}',
@@ -1148,7 +1148,7 @@ class TestBackfillEnrichment:
         assert row is not None, "the backfill must produce a fact for the terminal run"
         assert row[0] == "executor_stalled"
         assert row[1] == 3
-        assert row[2] == 5000, "queue_wait_ms = dispatched - started"
+        assert row[2] == 5000, "queue_wait_ms = started - dispatched"
         assert row[3] == 60000, "final_idle_ms = completed - heartbeat"
         assert row[4] is True, "cancellation_requested"
         assert row[6] == 2, "node_count must come from the snapshot graph_json"

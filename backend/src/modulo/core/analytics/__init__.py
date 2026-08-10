@@ -75,14 +75,17 @@ def _fact_duration_ms(run: Run) -> int | None:
 
 
 def _fact_queue_wait_ms(run: Run) -> int | None:
-    """Run.dispatched_at - Run.started_at when both present, else NULL.
+    """Run.started_at - Run.dispatched_at when both present, else NULL.
 
-    ``dispatched_at`` is read via ``getattr`` so any run-shaped object (legacy
-    fakes without the attribute) degrades to NULL instead of raising.
+    Semantics: ``dispatched_at`` is stamped by the dispatcher BEFORE the run is
+    enqueued and ``started_at`` when a worker claims it, so
+    ``dispatched_at < started_at`` in time and the stat is a POSITIVE queue
+    wait. ``dispatched_at`` is read via ``getattr`` so any run-shaped object
+    (legacy fakes without the attribute) degrades to NULL instead of raising.
     """
     dispatched_at = getattr(run, "dispatched_at", None)
     if dispatched_at is not None and run.started_at is not None:
-        return int((dispatched_at - run.started_at).total_seconds() * 1000)
+        return int((run.started_at - dispatched_at).total_seconds() * 1000)
     return None
 
 
