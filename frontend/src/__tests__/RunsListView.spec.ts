@@ -25,6 +25,44 @@ vi.mock('../lib/api/client', () => {
   }
 })
 
+const routerMocks = vi.hoisted(() => ({
+  push: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('vue-router', () => ({
+  useRoute: vi.fn(() => ({
+    path: '/runs',
+    fullPath: '/runs',
+    params: {},
+    query: {},
+    hash: '',
+    matched: [],
+    name: 'runs-list',
+    redirectedFrom: undefined,
+    meta: {},
+  })),
+  useRouter: vi.fn(() => ({
+    push: routerMocks.push,
+    replace: vi.fn(),
+    resolve: vi.fn(),
+    go: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    onError: vi.fn(),
+    currentRoute: { value: {} },
+    getRoutes: vi.fn(() => []),
+    addRoute: vi.fn(),
+    removeRoute: vi.fn(),
+    hasRoute: vi.fn(() => false),
+    isReady: vi.fn().mockResolvedValue(undefined),
+    install: vi.fn(),
+  })),
+  createRouter: vi.fn(),
+  createWebHistory: vi.fn(() => ({})),
+}))
+
 import RunsListView from '../views/RunsListView.vue'
 import { api } from '../lib/api/client'
 
@@ -163,8 +201,8 @@ describe('RunsListView', () => {
     expect(wrapper.text()).not.toContain('(+child)')
   })
 
-  it('renders a stop button for non-terminal runs', async () => {
-    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+  it.each(['pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock'])('renders a stop button for %s runs', async (status) => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
@@ -174,12 +212,57 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it('renders no stop button for terminal runs', async () => {
-    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'complete' }])
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed'])('renders no stop button for %s runs', async (status) => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
     const wrapper = mountView()
     await flushPromises()
     await nextTick()
     expect(wrapper.find('[data-testid="runs-list-cancel-run1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('disables the stop button while the cancel request is in flight', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'running' }])
+    let resolvePost!: (value: unknown) => void
+    ;(api.POST as any).mockImplementation(() => new Promise((resolve) => { resolvePost = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    await stopBtn.trigger('click')
+    await nextTick()
+
+    expect(stopBtn.attributes('disabled')).toBeDefined()
+
+    resolvePost({ data: null, error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="runs-list-cancel-run1"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('does not navigate to run detail when the stop button is clicked', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    await stopBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(routerMocks.push).not.toHaveBeenCalled()
+
+    const row = wrapper.find('tbody tr')
+    await row.trigger('click')
+    expect(routerMocks.push).toHaveBeenCalledWith('/runs/run1')
     wrapper.unmount()
   })
 

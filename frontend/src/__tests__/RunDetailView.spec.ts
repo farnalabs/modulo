@@ -320,27 +320,43 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('shows the cancel button for awaiting_human runs', async () => {
-    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'awaiting_human' })
+  it.each(['pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock'])('shows the cancel button for %s runs', async (status) => {
+    const wrapper = await mountWithDetail({ ...baseDetail(), status })
     expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('shows the cancel button for claimed runs', async () => {
-    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'claimed' })
-    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('shows the cancel button for waiting_for_lock runs', async () => {
-    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'waiting_for_lock' })
-    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('hides the cancel button for terminal runs', async () => {
-    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'complete' })
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed'])('hides the cancel button for %s runs', async (status) => {
+    const wrapper = await mountWithDetail({ ...baseDetail(), status })
     expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('calls the cancel endpoint on click and flips the run to cancelled', async () => {
+    const { api } = await import('../lib/api/client')
+    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'running' })
+    const cancelBtn = wrapper.find('[data-testid="run-detail-cancel"]')
+    await cancelBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/runs/{run_id}/cancel', {
+      params: { path: { run_id: 'test-run-id' } },
+    })
+    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('cancelled')
+    wrapper.unmount()
+  })
+
+  it('shows an inline error when the detail cancel request fails', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockResolvedValue({ data: null, error: { detail: 'run_already_terminal' } })
+    const wrapper = await mountWithDetail({ ...baseDetail(), status: 'running' })
+    await wrapper.find('[data-testid="run-detail-cancel"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('Failed to cancel:')
+    expect(wrapper.text()).toContain('run_already_terminal')
+    expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })
