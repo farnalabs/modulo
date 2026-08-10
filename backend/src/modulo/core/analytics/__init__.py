@@ -121,14 +121,35 @@ def _fact_final_idle_ms(run: Run) -> int | None:
 def _fact_output_bytes(run: Run) -> int | None:
     """Serialised size of Run.outputs_json (``json.dumps`` length) when present.
 
-    ``outputs_json`` is read via ``getattr`` so any run-shaped object without
-    the attribute degrades to NULL instead of raising.
+    Since FAR-125 P1 ``outputs_json`` holds PURE returns (telemetry excluded),
+    so this fact measures the pure-return size. Historical values measured the
+    pre-P1 envelope size and are NOT comparable across the P1 boundary —
+    accepted, no fact backfill (pre-alpha). ``outputs_json`` is read via
+    ``getattr`` so any run-shaped object without the attribute degrades to NULL
+    instead of raising.
     """
     outputs_json = getattr(run, "outputs_json", None)
     if outputs_json is None:
         return None
     try:
         return len(json.dumps(outputs_json))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fact_telemetry_bytes(run: Run) -> int | None:
+    """Serialised size of Run.node_telemetry_json (``json.dumps`` length) when present.
+
+    Mirrors ``_fact_output_bytes``: NULL when the telemetry payload is absent
+    and NULL (never a raise) when it cannot be serialised. ``node_telemetry_json``
+    is read via ``getattr`` so any run-shaped object without the attribute
+    degrades to NULL instead of raising.
+    """
+    node_telemetry_json = getattr(run, "node_telemetry_json", None)
+    if node_telemetry_json is None:
+        return None
+    try:
+        return len(json.dumps(node_telemetry_json))
     except (TypeError, ValueError):
         return None
 
@@ -244,6 +265,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "snapshot_id": getattr(run, "snapshot_id", None),
             "run_number": getattr(run, "run_number", None),
             "output_bytes": _fact_output_bytes(run),
+            "telemetry_bytes": _fact_telemetry_bytes(run),
             "rate_limited": getattr(run, "rate_limit_key", None) is not None,
             # FAR-134 concurrency columns — absolute run-lifecycle instants +
             # the full queue wait (started - created). getattr defensively for
@@ -281,6 +303,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "snapshot_id": stmt.excluded.snapshot_id,
                 "run_number": stmt.excluded.run_number,
                 "output_bytes": stmt.excluded.output_bytes,
+                "telemetry_bytes": stmt.excluded.telemetry_bytes,
                 "rate_limited": stmt.excluded.rate_limited,
                 "dispatched_at": stmt.excluded.dispatched_at,
                 "started_at": stmt.excluded.started_at,

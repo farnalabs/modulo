@@ -274,6 +274,20 @@ class TestBuildMessagesFromAgentAndState:
         user_msgs = [m for m in messages if m["role"] == "user"]
         assert "from checkpoint" in user_msgs[0]["content"]
 
+    def test_new_shape_outputs_use_pure_return_content(self) -> None:
+        from modulo.api.routes.runs import _build_messages_from_agent_and_state
+
+        agent = _make_agent()
+        outputs = {"node-b": {"summary": "agent summary", "changed_files": ["a.py"]}}
+        messages = _build_messages_from_agent_and_state(agent, {"q": "hi"}, outputs, None, "node-a")
+        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) == 1
+        content = assistant_msgs[0]["content"]
+        assert '"summary": "agent summary"' in content
+        assert "changed_files" in content
+        assert "agent_stdout" not in content
+        assert "wall_clock_time_ms" not in content
+
     def test_returns_empty_when_no_data(self) -> None:
         from modulo.api.routes.runs import _build_messages_from_agent_and_state
 

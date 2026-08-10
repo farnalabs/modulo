@@ -18,6 +18,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalEngine
+from modulo.core.node_output_split import node_return
 from modulo.db.crud.run import create_run, get_run
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline import Pipeline
@@ -491,8 +492,8 @@ class FeedbackManager:
             )
 
         engine = eval_engine or EvalEngine()
-        output = correction_run.outputs_json
-        if not output:
+        raw_output = correction_run.outputs_json
+        if not raw_output:
             await self._escalate_record(
                 record_id,
                 f"Correction run {record.correction_run_id} produced no output",
@@ -503,7 +504,8 @@ class FeedbackManager:
                 "score": 0.0,
                 "needs_human_review": True,
             }
-        output = dict(output)
+        telemetry = correction_run.node_telemetry_json
+        output = {nid: node_return(raw_output, telemetry, nid) for nid in raw_output}
 
         try:
             result = engine.standalone_evaluate(

@@ -9,6 +9,7 @@ write path itself.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from modulo.core.analytics import (
     _fact_output_bytes,
     _fact_queue_wait_ms,
     _fact_run_date,
+    _fact_telemetry_bytes,
     _fact_total_queue_wait_ms,
 )
 
@@ -123,12 +125,35 @@ class TestFactOutputBytes:
         run = _run(outputs_json={"node_a": {"result": "ok"}})
         assert _fact_output_bytes(run) == len('{"node_a": {"result": "ok"}}')
 
+    def test_output_bytes_is_pure_return_size_since_p1(self) -> None:
+        # Since FAR-125 P1 outputs_json holds PURE returns (telemetry excluded),
+        # so the fact measures the pure-return size — smaller than the old
+        # envelope that carried agent_stdout inline.
+        pure_return = {"result": "ok"}
+        run = _run(outputs_json=pure_return, node_telemetry_json={"agent_stdout": "installing deps...\n"})
+        envelope = {**pure_return, "agent_stdout": "installing deps...\n"}
+        assert _fact_output_bytes(run) == len(json.dumps(pure_return))
+        assert _fact_output_bytes(run) < len(json.dumps(envelope))
+
     def test_none_outputs_returns_none(self) -> None:
         assert _fact_output_bytes(_run(outputs_json=None)) is None
 
     def test_non_serialisable_outputs_returns_none(self) -> None:
         run = _run(outputs_json={"node": object()})
         assert _fact_output_bytes(run) is None, "json.dumps failure must degrade to NULL, never raise"
+
+
+class TestFactTelemetryBytes:
+    def test_telemetry_bytes_is_json_dumps_length(self) -> None:
+        run = _run(node_telemetry_json={"agent_stdout": "installing deps...\n"})
+        assert _fact_telemetry_bytes(run) == len('{"agent_stdout": "installing deps...\\n"}')
+
+    def test_none_telemetry_returns_none(self) -> None:
+        assert _fact_telemetry_bytes(_run(node_telemetry_json=None)) is None
+
+    def test_non_serialisable_telemetry_returns_none(self) -> None:
+        run = _run(node_telemetry_json={"node": object()})
+        assert _fact_telemetry_bytes(run) is None, "json.dumps failure must degrade to NULL, never raise"
 
 
 class TestDeriveGraphDimensions:

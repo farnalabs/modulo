@@ -214,6 +214,7 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.snapshot_id.label("snapshot_id"),
             Run.run_number.label("run_number"),
             sa.func.length(sa.cast(Run.outputs_json, sa.Text)).label("output_bytes"),
+            sa.func.length(sa.cast(Run.node_telemetry_json, sa.Text)).label("telemetry_bytes"),
             Run.rate_limit_key.is_not(None).label("rate_limited"),
             # FAR-134 concurrency columns — absolute run-lifecycle instants +
             # the full queue wait, mirroring the live writer.
@@ -265,6 +266,7 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.snapshot_id,
                 RunDailyFact.run_number,
                 RunDailyFact.output_bytes,
+                RunDailyFact.telemetry_bytes,
                 RunDailyFact.rate_limited,
                 RunDailyFact.dispatched_at,
                 RunDailyFact.started_at,

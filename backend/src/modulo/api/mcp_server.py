@@ -1639,9 +1639,13 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
 
             token_usage = _clamp_node_token_usage_union(run.node_token_usage or {})
             outputs_json = run.outputs_json or {}
+            telemetry_json = run.node_telemetry_json
+            if not isinstance(telemetry_json, dict):
+                telemetry_json = {}
             node_ids: set[str] = set()
             node_ids.update(token_usage.keys())
             node_ids.update(outputs_json.keys())
+            node_ids.update(telemetry_json.keys())
             nodes: list[dict[str, Any]] = []
             for nid in sorted(node_ids):
                 usage = token_usage.get(nid, {})
@@ -1649,14 +1653,22 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
                     usage = {}
                 t_in = usage.get("input_tokens") or 0
                 t_out = usage.get("output_tokens") or 0
+                if nid in outputs_json:
+                    status = "completed"
+                elif nid in telemetry_json:
+                    tel_entry = telemetry_json[nid]
+                    tel_status = tel_entry.get("status") if isinstance(tel_entry, dict) else None
+                    status = "failed" if tel_status == "failed" else "processed"
+                else:
+                    status = "processed"
                 node: dict[str, Any] = {
                     "node_id": nid,
-                    "status": "completed" if nid in outputs_json else "processed",
+                    "status": status,
                     "input_tokens": t_in,
                     "output_tokens": t_out,
                     "total_tokens": usage.get("total_tokens") or (t_in + t_out),
                     "cost_usd": usage.get("cost_usd", 0),
-                    "has_output": nid in outputs_json,
+                    "has_output": nid in outputs_json or nid in telemetry_json,
                 }
                 if usage.get("model_cost_display_usd") is not None:
                     node["model_cost_display_usd"] = usage["model_cost_display_usd"]
@@ -1687,7 +1699,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
-        from modulo.core.node_output_split import node_return
+        from modulo.core.node_output_split import node_return, node_telemetry
 
         org_id = _ctx_org_id_val()
         try:
@@ -1699,7 +1711,14 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         outputs = run.outputs_json or {}
-        node_output = node_return(outputs, None, node_id)
+        telemetry = run.node_telemetry_json
+        if not isinstance(telemetry, dict):
+            telemetry = {}
+        node_output = node_return(outputs, telemetry, node_id)
+        if node_output is None:
+            node_meta = node_telemetry(telemetry, outputs, node_id)
+            if isinstance(node_meta, dict):
+                node_output = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
         if node_output is None:
             return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
         masked = _mask_output_value(node_output)
