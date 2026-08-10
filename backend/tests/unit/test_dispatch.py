@@ -3,18 +3,11 @@
 Mock/fake based — no Postgres, no Redis. Covers:
   * capacity -> deferred (no enqueue, no dispatched_at)
   * SAQ route + dispatcher 'saq' + enqueued (PR C: SAQ is the only path)
-  * enqueued vs deduped (incl. the deterministic job-id dedup path)
-  * enqueue failure -> dispatch_failed + webhook dedup expiry (non-webhook)
-  * fail-fast (webhook) enqueue failure -> deferred, no block
-  * enqueue retry (transient -> enqueued) and CancelledError propagation
+  * enqueued vs deduped (incl. the B2 TOCTOU re-check inside _enqueue_saq)
+  * enqueue failure -> NON-terminal 'enqueue_failed' marker + webhook dedup
+    expiry (B3 durable dispatch — the run stays pending for reconcile)
+  * fail-fast (webhook) enqueue failure -> 'enqueue_failed', no block
   * claim_token distinct from saq_job_id
-  * the _capacity_deferred pipeline gate (missing run/pipeline, cap 0, at/under cap)
-  * the org-capacity gate (cap hit marker, non-pending deferral without demotion,
-    resume bypass, fail-open readers, CancelledError re-raise)
-  * the SQL writers' contracts: dispatched_at before enqueue, dispatcher 'saq' +
-    claim_token preserved once a worker claims, dispatch_failed never overwriting
-    terminal runs, webhook dedup-hash expiry
-  * _open_session reuses the shared tuned app engine
   * error enum: 'saq' accepted by the validator, unknown rejected
   * the call sites route through dispatch_run (on-loop via BackgroundTasks)
 """
@@ -74,6 +67,7 @@ def _make_settings(**overrides: object) -> MagicMock:
         "saq_run_retries": 5,
         "saq_retry_delay": 60,
         "saq_redis_pool_size": 50,
+        "saq_run_claim_cap": 20,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -177,7 +171,11 @@ class TestDispatchRunRouting:
         assert job_id == JOB_ID
 
     @pytest.mark.asyncio
-    async def test_enqueue_failure_marks_dispatch_failed_and_expires_dedup(self) -> None:
+    async def test_enqueue_failure_marks_enqueue_failed_and_expires_dedup(self) -> None:
+        """Final enqueue failure (non-webhook): the run is LEFT pending with the
+        non-terminal ``enqueue_failed_at`` marker — never terminal-failed — and
+        the outcome is DISTINCT ``enqueue_failed`` (not ``deferred``) so the
+        caller can record an error_event without confusing it with capacity."""
         with (
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
             _rls_patch(),
@@ -187,12 +185,12 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(side_effect=RuntimeError("redis down")),
             patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
-            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+            patch.object(dispatch, "_mark_enqueue_failed", new_callable=AsyncMock) as mark_failed,
             patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock) as expire_dedup,
         ):
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
 
-        assert outcome == "deferred"
+        assert outcome == "enqueue_failed"
         assert job_id is None
         mark_failed.assert_awaited()
         expire_dedup.assert_awaited()
@@ -201,9 +199,10 @@ class TestDispatchRunRouting:
     async def test_enqueue_failure_fail_fast_returns_enqueue_failed(self) -> None:
         """Fail-fast (webhook) enqueue failure -> 'enqueue_failed', no block.
 
-        Distinct from the capacity-deferred 'deferred' outcome so the webhook
-        background task can record an error_event (source='saq',
-        function='webhook_dispatch') without false-positiving on deferrals.
+        The run is still LEFT pending with the non-terminal enqueue_failed marker
+        and the webhook dedup is expired even though the run awaits
+        dispatcher_reconcile recovery — a retried webhook must not be
+        suppressed while the run is pending re-dispatch.
         """
         with (
             patch.object(dispatch, "get_settings", return_value=_make_settings()),
@@ -213,15 +212,15 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "_open_session", return_value=_MockSession()),
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(side_effect=RuntimeError("redis down")),
-            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+            patch.object(dispatch, "_mark_enqueue_failed", new_callable=AsyncMock) as mark_failed,
             patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock) as expire_dedup,
         ):
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID, fail_fast=True)
 
         assert outcome == "enqueue_failed"
         assert job_id is None
-        mark_failed.assert_not_called()
-        expire_dedup.assert_not_called()
+        mark_failed.assert_awaited()
+        expire_dedup.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_enqueue_failure_retries_then_enqueues(self) -> None:
@@ -240,7 +239,7 @@ class TestDispatchRunRouting:
             _enqueue_patch(side_effect=[RuntimeError("transient"), (JOB_ID, False)]),
             patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
             patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
-            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+            patch.object(dispatch, "_mark_enqueue_failed", new_callable=AsyncMock) as mark_failed,
             patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock) as expire_dedup,
         ):
             outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
@@ -268,7 +267,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(side_effect=asyncio.CancelledError()),
             patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
-            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+            patch.object(dispatch, "_mark_enqueue_failed", new_callable=AsyncMock) as mark_failed,
         ):
             await dispatch.dispatch_run(RUN_ID, ORG_ID)
 
@@ -279,7 +278,7 @@ class TestDispatchRunRouting:
         """Cancellation DURING a retry must also propagate immediately.
 
         After a transient failure, a cancelled retry aborts the loop rather
-        than falling through to the ``dispatch_failed`` terminal path.
+        than falling through to the ``enqueue_failed`` marker path.
         """
         with (
             pytest.raises(asyncio.CancelledError),
@@ -291,7 +290,7 @@ class TestDispatchRunRouting:
             patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
             _enqueue_patch(side_effect=[RuntimeError("transient"), asyncio.CancelledError()]),
             patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
-            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+            patch.object(dispatch, "_mark_enqueue_failed", new_callable=AsyncMock) as mark_failed,
         ):
             await dispatch.dispatch_run(RUN_ID, ORG_ID)
 
@@ -919,6 +918,9 @@ class TestEnqueueSaq:
         queue_cls = MagicMock()
         queue_instance = queue_cls.return_value
         queue_instance.enqueue = enqueue_mock
+        # The TOCTOU re-check: no job under the key yet -> enqueue proceeds.
+        queue_instance.job = AsyncMock(return_value=None)
+        queue_instance.job_id.return_value = JOB_ID
         redis_cls = MagicMock()
         redis_client = redis_cls.from_url.return_value
         redis_client.aclose = AsyncMock(return_value=None)
@@ -950,6 +952,8 @@ class TestEnqueueSaq:
         queue_cls = MagicMock()
         queue_instance = queue_cls.return_value
         queue_instance.enqueue = enqueue_mock
+        queue_instance.job = AsyncMock(return_value=None)
+        queue_instance.job_id.return_value = JOB_ID
         redis_cls = MagicMock()
         redis_client = redis_cls.from_url.return_value
         redis_client.aclose = AsyncMock(return_value=None)
@@ -969,11 +973,16 @@ class TestEnqueueSaq:
     @pytest.mark.asyncio
     async def test_enqueue_none_returns_deterministic_deduped_job(self) -> None:
         """``q.enqueue`` returning None means a job with the same key already
-        exists -- the caller must report ``deduped`` with the deterministic id."""
+        exists -- the caller must report ``deduped`` with the deterministic id.
+
+        The TOCTOU re-check (``q.job(key)``) finds no job under the key, so the
+        enqueue proceeds and returns None -- the post-enqueue dedup path.
+        """
         enqueue_mock = AsyncMock(return_value=None)
         queue_cls = MagicMock()
         queue_instance = queue_cls.return_value
         queue_instance.enqueue = enqueue_mock
+        queue_instance.job = AsyncMock(return_value=None)
         queue_instance.job_id.return_value = JOB_ID
         redis_cls = MagicMock()
 
@@ -986,7 +995,60 @@ class TestEnqueueSaq:
 
         assert job_id == JOB_ID
         assert deduped is True
+        queue_instance.job.assert_awaited_once_with(f"run:{RUN_ID}")
         queue_instance.job_id.assert_called_once_with(f"run:{RUN_ID}")
+
+    @pytest.mark.asyncio
+    async def test_key_suffix_suffixed_key_no_dedupe_suppression(self) -> None:
+        """A re-dispatch with a FRESH key_suffix enqueues under run:{id}:{suffix}
+        — SAQ's key-based dedupe can never suppress the recovery enqueue."""
+        enqueue_mock = AsyncMock(return_value=SimpleNamespace(id="saq:job:runs:run:x:abc"))
+        queue_cls = MagicMock()
+        queue_instance = queue_cls.return_value
+        queue_instance.enqueue = enqueue_mock
+        queue_instance.job = AsyncMock(return_value=None)
+        redis_cls = MagicMock()
+        redis_client = redis_cls.from_url.return_value
+        redis_client.aclose = AsyncMock(return_value=None)
+
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            patch.object(dispatch, "RedisQueue", queue_cls),
+            patch.object(dispatch, "AsyncRedis", redis_cls),
+        ):
+            job_id, deduped = await dispatch._enqueue_saq(RUN_ID, ORG_ID, "runs", "execute_run", None, key_suffix="abc")
+
+        assert deduped is False
+        assert job_id == "saq:job:runs:run:x:abc"
+        assert enqueue_mock.await_args.kwargs["key"] == f"run:{RUN_ID}:abc"
+        # The re-check hit the suffixed key, never a SAQ-internal list.
+        queue_instance.job.assert_awaited_once_with(f"run:{RUN_ID}:abc")
+
+    @pytest.mark.asyncio
+    async def test_job_now_exists_after_decision_returns_deduped_without_enqueue(self) -> None:
+        """TOCTOU re-check (B2): if a job exists under the key AFTER the caller's
+        decision, the enqueue is skipped and the deterministic job id returned —
+        a concurrent worker already handled it."""
+        enqueue_mock = AsyncMock()
+        queue_cls = MagicMock()
+        queue_instance = queue_cls.return_value
+        queue_instance.enqueue = enqueue_mock
+        queue_instance.job = AsyncMock(return_value=SimpleNamespace(id=JOB_ID))
+        queue_instance.job_id.return_value = JOB_ID
+        redis_cls = MagicMock()
+        redis_client = redis_cls.from_url.return_value
+        redis_client.aclose = AsyncMock(return_value=None)
+
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            patch.object(dispatch, "RedisQueue", queue_cls),
+            patch.object(dispatch, "AsyncRedis", redis_cls),
+        ):
+            job_id, deduped = await dispatch._enqueue_saq(RUN_ID, ORG_ID, "runs", "execute_run", None)
+
+        assert deduped is True
+        assert job_id == JOB_ID
+        enqueue_mock.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1073,7 @@ class TestOpenSession:
 
 
 # ---------------------------------------------------------------------------
-# _record_dispatched / _record_saq_job / _mark_dispatch_failed — SQL writers
+# _record_dispatched / _record_saq_job / _mark_enqueue_failed — SQL writers
 # ---------------------------------------------------------------------------
 
 
@@ -1057,26 +1119,29 @@ class TestRecordSaqJob:
         assert "claim_token = CASE WHEN claim_token IS NULL THEN :tok ELSE claim_token END" in rendered
 
 
-class TestMarkDispatchFailed:
+class TestMarkEnqueueFailed:
     @pytest.mark.asyncio
-    async def test_marks_failed_with_dispatch_failed_code(self) -> None:
+    async def test_marks_enqueue_failed_non_terminal(self) -> None:
+        """A failed enqueue leaves the run PENDING with the non-terminal
+        ``enqueue_failed_at`` marker -- never status='failed' -- so
+        dispatcher_reconcile can re-dispatch it."""
         session = AsyncMock()
         run_id = uuid.UUID(RUN_ID)
-        await dispatch._mark_dispatch_failed(session, run_id)
+        await dispatch._mark_enqueue_failed(session, run_id)
 
         session.execute.assert_awaited_once()
         stmt, params = session.execute.await_args.args
         rendered = str(stmt)
-        assert "status='failed'" in rendered
-        assert "error_code='dispatch_failed'" in rendered
-        assert "completed_at=now()" in rendered
+        assert "enqueue_failed_at=now()" in rendered
+        assert "status='failed'" not in rendered
+        assert "error_code='dispatch_failed'" not in rendered
         assert params["rid"] == run_id
 
     @pytest.mark.asyncio
     async def test_never_overwrites_terminal_runs(self) -> None:
-        """A run already complete/cancelled must never be flipped to failed."""
+        """A run already complete/cancelled must never be marked enqueue-failed."""
         session = AsyncMock()
-        await dispatch._mark_dispatch_failed(session, uuid.UUID(RUN_ID))
+        await dispatch._mark_enqueue_failed(session, uuid.UUID(RUN_ID))
 
         rendered = str(session.execute.await_args.args[0])
         assert "status NOT IN ('complete', 'cancelled')" in rendered
@@ -1165,10 +1230,17 @@ class _F6aMockBegin:
 
 
 class _F6aMockSession:
-    """Minimal session double for the dispatcher_reconcile row loop."""
+    """Minimal session double for the dispatcher_reconcile row loop.
+
+    Intercepts the dedicated org-scoped terminalizer UPDATEs (B4 age-bound /
+    B5 claim-cap) before the row select and returns ``RETURNING id`` rows from
+    ``terminalizer_rows`` (keyed by error_code), so tests can simulate which
+    runs were terminalized before re-dispatch.
+    """
 
     def __init__(self, results: list[object]) -> None:
         self._results = list(results)
+        self.terminalizer_rows: dict[str, list[uuid.UUID]] = {}
         self.begin_cm = _F6aMockBegin()
         bind = MagicMock()
         bind.dialect.name = "postgresql"
@@ -1190,8 +1262,19 @@ class _F6aMockSession:
         return SimpleNamespace(max_concurrent_runs=5)
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
-        if "set_config" in str(stmt):
+        s = str(stmt)
+        if "set_config" in s:
             return MagicMock()
+        if "UPDATE runs SET" in s:
+            ids: list[uuid.UUID] = []
+            if "executor_superseded" in s:
+                ids = self.terminalizer_rows.get("executor_superseded", [])
+            elif "claim_cap_exhausted" in s:
+                ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
+            r = MagicMock()
+            r.all.return_value = [(uid,) for uid in ids]
+            r.rowcount = len(ids)
+            return r
         if not self._results:
             return MagicMock()
         return self._results.pop(0)
@@ -1217,6 +1300,9 @@ def _f6a_row(status: str, *, stale: bool = True) -> SimpleNamespace:
         status=status,
         dispatched_at=datetime.now(UTC),
         heartbeat_at=heartbeat,
+        node_token_usage={},
+        outputs_json={},
+        started_at=datetime.now(UTC) - timedelta(minutes=1),
     )
 
 
@@ -1312,7 +1398,9 @@ class TestReconcileF6aRecovery:
 
     @pytest.mark.asyncio
     async def test_running_claim_cap_exhausted_terminalized(self, monkeypatch) -> None:
-        """Plan F8: a running SAQ run at its claim cap is FAILED, not re-dispatched."""
+        """Plan F8/B5: a running SAQ run at its claim cap with a STALE heartbeat
+        is FAILED, not re-dispatched — via the dedicated org-scoped terminalizer
+        UPDATE, independent of the reconcile predicates."""
         from modulo.core import cron_helpers as ch
 
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
@@ -1325,9 +1413,12 @@ class TestReconcileF6aRecovery:
         session = _F6aMockSession(
             [
                 _f6a_org_result([org]),
-                _f6a_rows_result([row]),
+                # The capped run was terminalized by the dedicated UPDATE — the
+                # subsequent row select returns nothing to re-dispatch.
+                _f6a_rows_result([]),
             ]
         )
+        session.terminalizer_rows["claim_cap_exhausted"] = [row.id]
         factory = MagicMock(return_value=session)
         redis_client = AsyncMock()
         q = MagicMock()
@@ -1350,6 +1441,55 @@ class TestReconcileF6aRecovery:
         assert summary["claim_cap_terminalized"] == 1
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_claim_cap_fresh_heartbeat_not_terminalized(self, monkeypatch) -> None:
+        """B5 regression: a capped run with a FRESH heartbeat is a LIVE run on
+        its final claim — the terminalizer must NOT fire (stale-heartbeat gate),
+        and the run is re-dispatched (no job)."""
+        from modulo.core import cron_helpers as ch
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
+        monkeypatch.setenv("SECRET_KEY", "a" * 40)
+        monkeypatch.setenv("FERNET_KEY", "b" * 44)
+
+        row = _f6a_row("running", stale=False)
+        row.claim_count = 20
+        org = uuid.uuid4()
+        session = _F6aMockSession(
+            [
+                _f6a_org_result([org]),
+                _f6a_rows_result([row]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        q = MagicMock()
+        q.name = "runs"
+        q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
+        q.job = AsyncMock(return_value=None)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_make_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(
+                ch,
+                "_re_enqueue_run",
+                new_callable=AsyncMock,
+                return_value=("enqueued", "job-2"),
+            ) as reenqueue,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["claim_cap_terminalized"] == 0
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
         ingest.assert_not_awaited()
 
     def test_reconcile_job_type_discriminator(self) -> None:
