@@ -24,6 +24,7 @@ from modulo.core.cost_controller.finalize import (
     _enrich_union,
     _legacy_sandbox_cost,
     _merge,
+    _split_merge_outputs,
     _token_cost,
     _write_back_node_cost,
     derive_node_type_map,
@@ -51,6 +52,68 @@ def test_merge_empty_accumulator_leaves_stored_untouched() -> None:
     stored = {"a": {"input_tokens": 1}}
     assert _merge(stored, None, segment_wins=True) == stored
     assert _merge(stored, {}, segment_wins=True) == stored
+
+
+# ---------------------------------------------------------------------------
+# _split_merge_outputs — the FAR-125 P1b two-column write-flip
+# ---------------------------------------------------------------------------
+
+
+def test_split_merge_legacy_row_splits_into_lockstep_columns() -> None:
+    """A LEGACY stored envelope is re-split: the pure return lands in the
+    outputs column and the exhaustive telemetry in the telemetry column —
+    LOCKSTEP (every outputs key has a telemetry key)."""
+    agent_return = {"summary": "agent summary", "changed_files": []}
+    stored_outputs = {
+        "node-a": {
+            "artifacts": [
+                {
+                    "node_id": "node-a",
+                    "status": "completed",
+                    "output": {
+                        "status": "completed",
+                        "summary": "did the thing",
+                        "wall_clock_time_ms": 1200,
+                        "output_json": agent_return,
+                    },
+                }
+            ],
+            "output": {"status": "completed", "summary": "did the thing", "wall_clock_time_ms": 1200},
+        }
+    }
+    outputs, telemetry = _split_merge_outputs(stored_outputs, None, None, {"node-a": "sandbox_agent"}, run_id="run-1")
+    assert set(outputs) == {"node-a"}
+    assert set(telemetry) == {"node-a"}  # lockstep
+    assert outputs["node-a"] == agent_return
+    assert telemetry["node-a"]["status"] == "completed"
+    assert telemetry["node-a"]["wall_clock_time_ms"] == 1200
+    assert "output_json" not in telemetry["node-a"]
+
+
+def test_split_merge_already_pure_rows_are_idempotent_noop() -> None:
+    """A stored PURE row (telemetry entry exists) passes through UNCHANGED —
+    never re-split, never clobbered by a later segment."""
+    pure_return = {"summary": "x", "data": 1}
+    stored_telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 10}}
+    outputs, telemetry = _split_merge_outputs(
+        {"node-a": pure_return}, stored_telemetry, {"node-a": pure_return}, {"node-a": "sandbox_agent"}
+    )
+    assert outputs["node-a"] is pure_return
+    assert telemetry["node-a"] is stored_telemetry["node-a"]
+
+
+def test_split_merge_skipped_recovery_is_telemetry_only() -> None:
+    """A skipped recovery marker has NO outputs key — the telemetry entry is the
+    sole record (lockstep holds because the outputs key is omitted)."""
+    outputs, telemetry = _split_merge_outputs(
+        {"node-a": {"input": None, "output": None, "skipped": True}},
+        None,
+        None,
+        {"node-a": "agent"},
+        run_id="run-1",
+    )
+    assert "node-a" not in outputs
+    assert telemetry == {"node-a": {"skipped": True}}
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +205,19 @@ def test_enrich_union_schema_drift_increment_gated(
         mock_counter.assert_not_called()
 
 
+def test_enrich_union_reads_split_telemetry_column() -> None:
+    """FAR-125 P1b: the union folds wall-clock + model cost from the SPLIT
+    telemetry column, not the (now PURE) outputs column."""
+    usage = {"node-a": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
+    outputs = {"node-a": {"summary": "agent summary"}}  # pure return
+    telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 3_600_000, "model_cost_usd": 0.04}}
+    union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    entry = union["node-a"]
+    assert entry["wall_clock_time_ms"] == 3_600_000
+    assert entry["model_cost_usd"] == 0.04
+    assert entry["is_sandbox_for_wallclock"] is True
+
+
 # ---------------------------------------------------------------------------
 # _write_back_node_cost / _derive_total_tokens / derive_node_type_map
 # ---------------------------------------------------------------------------
@@ -203,6 +279,7 @@ def _make_run(**kw: Any) -> MagicMock:
     run.owner_team_id = kw.get("owner_team_id")
     run.node_token_usage = kw.get("node_token_usage")
     run.outputs_json = kw.get("outputs_json")
+    run.node_telemetry_json = kw.get("node_telemetry_json")
     run.started_at = kw.get("started_at", datetime.now(UTC))
     run.snapshot_id = kw.get("snapshot_id", uuid.uuid4())
     run.ledger_written = kw.get("ledger_written", False)
@@ -233,10 +310,15 @@ async def test_finalize_cost_pre_component_read_writes_zero_total() -> None:
 
 
 async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
-    """A cost-path exception degrades to the legacy fallback — wall-clock only."""
-    run = _make_run(
-        outputs_json={"node-a": {"output": {"wall_clock_time_ms": 3_600_000, "cost_estimate_usd": 99999.0}}}
-    )
+    """A cost-path exception degrades to the legacy fallback — wall-clock only.
+
+    The fixture is the SPLIT two-column shape (FAR-125 P1b): the pure return
+    lives in ``outputs_json`` and the exhaustive telemetry (incl. wall-clock +
+    a hostile ``cost_estimate_usd``) in ``node_telemetry_json``.
+    """
+    stored_outputs = {"node-a": {"summary": "did the thing"}}
+    stored_telemetry = {"node-a": {"wall_clock_time_ms": 3_600_000, "cost_estimate_usd": 99999.0}}
+    run = _make_run(outputs_json=stored_outputs, node_telemetry_json=stored_telemetry)
     session = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
     with (
@@ -261,7 +343,9 @@ async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
     assert kwargs["total_cost_usd"] == Decimal("0.1332")
     # The fallback persists the UN-ENRICHED merged set (cumulative write-back invariant).
     assert kwargs["node_token_usage"] == {}
-    assert kwargs["outputs_json"] == run.outputs_json
+    # Both output columns are written SHAPE-IDENTICAL — never an un-split envelope.
+    assert kwargs["outputs_json"] == stored_outputs
+    assert kwargs["node_telemetry_json"] == stored_telemetry
     # The fallback's breakdown is flat-clamped with the shared marker when over the cap.
     assert kwargs["cost_breakdown"]
 
@@ -285,10 +369,19 @@ async def test_finalize_cancelled_run_never_paused_forfeits_accrued_cost() -> No
 
 async def test_finalize_cancelled_run_streamed_with_prior_pause_finalizes() -> None:
     """A streamed run that HAS PAUSED has stored cumulative sets -> finalize_cost
-    is invoked with the STORED sets (DATA SOURCE PINNED)."""
+    is invoked with the STORED outputs as the segment (DATA SOURCE PINNED). The
+    split telemetry source is read from the stored ``node_telemetry_json``
+    column inside finalize_cost (FAR-125 P1b), so already-pure rows stay
+    idempotent in the cancel path."""
     stored_usage = {"node-a": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8}}
     stored_outputs = {"node-a": {"output": {"status": "completed", "wall_clock_time_ms": 1000}}}
-    run = _make_run(node_token_usage=stored_usage, outputs_json=stored_outputs, snapshot_id=uuid.uuid4())
+    stored_telemetry = {"node-a": {"status": "completed", "wall_clock_time_ms": 1000}}
+    run = _make_run(
+        node_token_usage=stored_usage,
+        outputs_json=stored_outputs,
+        node_telemetry_json=stored_telemetry,
+        snapshot_id=uuid.uuid4(),
+    )
     session = AsyncMock()
     session.execute = AsyncMock(
         side_effect=[
