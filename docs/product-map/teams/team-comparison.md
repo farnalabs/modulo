@@ -15,7 +15,7 @@ status: gap
 ---
 # Team Comparison
 
-Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API. Route at `/admin/teams/comparison`.
+Side-by-side eval pass rates and pipeline metrics across teams. Built on the org dashboard summary API.
 
 ## Behaviours
 - [x] Side-by-side eval pass rates across teams with color-coded progress bars (green ≥80%, amber 50–79%, red <50%)

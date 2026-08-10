@@ -66,14 +66,6 @@ test.describe('Admin Plugins', { tag: "@regression" }, () => {
   })
 })
 
-test.describe('Admin Team Comparison', { tag: "@regression" }, () => {
-  test('renders the Team Comparison page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
-    await page.goto('/admin/teams/comparison')
-    await expect(page.locator('h1')).toContainText('Team Comparison')
-  })
-})
-
 test.describe('Admin Triggers', { tag: "@regression" }, () => {
   test('renders the Triggers page', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)

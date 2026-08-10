@@ -2538,8 +2538,6 @@ export default {
     "browser_monitoring": "Browser Monitoring",
     "error_dashboard": "Error Dashboard",
     "notification_log": "Notification Log",
-    "api_changelog": "API Changelog",
-    "team_comparison": "Team Comparison",
     "schema_editor": "Editor",
     "schema_infer": "Infer",
     "sso": "SSO",
