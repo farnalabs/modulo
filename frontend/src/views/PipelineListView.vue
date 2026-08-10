@@ -31,7 +31,7 @@
           </button>
         </div>
           <Button
-            v-if="allPipelines.length > 0 && !loading"
+            :class="allPipelines.length > 0 && !loading ? '' : 'invisible'"
             variant="default"
             as="router-link"
             to="/library"
@@ -62,13 +62,35 @@
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
-            <div class="h-5 w-3/4 bg-muted rounded mb-2" />
-            <div class="h-3 w-full bg-muted rounded mb-1" />
-            <div class="h-3 w-2/3 bg-muted rounded mb-4" />
-            <div class="h-4 w-16 bg-muted rounded mb-3" />
-            <div class="h-9 w-full bg-muted rounded" />
+        <div v-if="loading || !foldersReady">
+          <div v-if="viewMode === 'table'" class="card rounded-lg border border-border overflow-hidden animate-pulse" aria-hidden="true">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
+                  <tr>
+                    <th v-for="i in 7" :key="`th-${i}`" class="px-4 py-3">
+                      <div class="h-3 w-16 bg-muted rounded" />
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y">
+                  <tr v-for="i in 6" :key="`row-${i}`">
+                    <td v-for="j in 7" :key="`cell-${j}`" class="px-4 py-3">
+                      <div class="h-5 bg-muted rounded" :class="j === 1 ? 'w-3/4' : 'w-full'" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div v-for="i in 6" :key="i" class="card p-5 animate-pulse">
+              <div class="h-5 w-3/4 bg-muted rounded mb-2" />
+              <div class="h-3 w-full bg-muted rounded mb-1" />
+              <div class="h-3 w-2/3 bg-muted rounded mb-4" />
+              <div class="h-4 w-16 bg-muted rounded mb-3" />
+              <div class="h-9 w-full bg-muted rounded" />
+            </div>
           </div>
         </div>
 
@@ -650,6 +672,7 @@ const allPipelines = computed(() => pipelinesResp.value?.items ?? [])
 
 const foldersList = ref<FolderItem[]>([])
 const folderError = ref<string | null>(null)
+const foldersReady = ref(false)
 
 const triggerTypes = ref<Record<string, string>>({})
 const lastRunDates = ref<Record<string, string>>({})
@@ -739,6 +762,8 @@ async function loadFolders() {
   } catch (e) {
     folderError.value = formatApiError(e)
     console.warn('Failed to load folders', e)
+  } finally {
+    foldersReady.value = true
   }
 }
 
