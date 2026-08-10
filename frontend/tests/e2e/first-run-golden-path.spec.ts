@@ -97,7 +97,7 @@ test.describe('First-Run Golden Path', { tag: "@regression" }, () => {
 
     // At least one pipeline should be visible (from the mock) — wait for the
     // list to render before counting (locator.count() does not auto-wait).
-    const pipelineRows = page.locator('a[href*="/pipelines/"]')
+    const pipelineRows = page.locator('[data-testid^="pipeline-list-card"], [data-testid^="pipeline-tree-row-"]')
     await expect(pipelineRows.first()).toBeVisible()
     const count = await pipelineRows.count()
     expect(count).toBeGreaterThanOrEqual(1)
