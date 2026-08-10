@@ -13,8 +13,10 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,7 +44,7 @@ class Run(OrgScoped):
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', "
-            "'waiting_for_lock', 'complete', 'failed', 'cancelled', 'eval_failed')",
+            "'complete', 'failed', 'cancelled', 'eval_failed')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
@@ -109,7 +111,19 @@ class Run(OrgScoped):
     saq_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # DISTINCT per-claim value (NOT saq_job_id — SAQ retries reuse saq_job_id so a
     # token identical to it could never be superseded). F3a claim-token fence.
-    claim_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # NOT NULL since migration 0074 (NULLs backfilled to gen_random_uuid()::text;
+    # server_default keeps old-app INSERTs legal during bluegreen cutover).
+    claim_token: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default=text("gen_random_uuid()::text")
+    )
+    # Enqueue-failure audit timestamp (migration 0074) — set when a SAQ
+    # dispatch enqueue fails so dispatcher_reconcile can fail the run.
+    enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Sandbox dispatch lifecycle state (migration 0074) — the persistent handle
+    # dispatch.py reads to resume/retry a sandbox_agent node after a crash.
+    sandbox_dispatch_state: Mapped[str | None] = mapped_column(Text)
+    # E2B sandbox id surfaced for observability (migration 0074).
+    sandbox_id: Mapped[str | None] = mapped_column(Text)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
