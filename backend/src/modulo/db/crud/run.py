@@ -336,8 +336,10 @@ def _json_bind(value: Any) -> str | bytes | None:
     """
     if value is None:
         return None
-    if isinstance(value, (str, bytes)):
+    if isinstance(value, str):
         return value
+    if isinstance(value, bytes):
+        return value.decode()
     return json.dumps(value)
 
 
