@@ -95,8 +95,10 @@ test.describe('First-Run Golden Path', { tag: "@regression" }, () => {
     await loginAsAdmin(page, env)
     await page.goto('/pipelines')
 
-    // At least one pipeline should be visible (from the mock)
+    // At least one pipeline should be visible (from the mock) — wait for the
+    // list to render before counting (locator.count() does not auto-wait).
     const pipelineRows = page.locator('a[href*="/pipelines/"]')
+    await expect(pipelineRows.first()).toBeVisible()
     const count = await pipelineRows.count()
     expect(count).toBeGreaterThanOrEqual(1)
   })
