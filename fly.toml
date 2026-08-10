@@ -91,10 +91,13 @@ primary_region = 'lhr'
   MODULO_PLUGIN_DISCOVERY = "false"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   SAQ_WORKER_CONCURRENCY = "20"
+  # Redis pool must exceed SAQ worker concurrency (blocking dequeue holds one
+  # pool connection per concurrent task). Must stay > SAQ_WORKER_CONCURRENCY.
+  SAQ_REDIS_POOL_SIZE = "50"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-app-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
-  CORS_ORIGINS = "https://modulo.run,https://app.modulo.run"
+  CORS_ORIGINS = "https://modulo.run,https://app.modulo.run,http://localhost:5173"
 
 [[vm]]
   processes = ['app']
