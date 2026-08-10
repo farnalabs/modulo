@@ -63,6 +63,7 @@ from modulo.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     build_telemetry,
 )
+from modulo.core.node_output_split import node_telemetry
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -115,14 +116,14 @@ def _merge(stored: Any, segment: Any, *, segment_wins: bool = True) -> dict[str,
 
 
 def _node_output_dict(merged_outputs: Any, node_id: str) -> dict[str, Any] | None:
-    """The inner ``output`` dict of a completed node (or ``None``)."""
-    if not isinstance(merged_outputs, dict):
-        return None
-    node_output = merged_outputs.get(node_id)
-    if not isinstance(node_output, dict):
-        return None
-    inner = node_output.get("output")
-    return inner if isinstance(inner, dict) else node_output
+    """The inner ``output`` dict of a completed node (or ``None``).
+
+    Routes through ``node_output_split.node_telemetry`` so the legacy
+    extraction is SHARED and identical everywhere (FAR-124 P0); ``None`` here
+    means "no telemetry column yet", which selects the legacy-row branch that
+    mirrors the historical implementation exactly.
+    """
+    return node_telemetry(None, merged_outputs, node_id)
 
 
 def _pop_model_cost_fields(node_dict: dict[str, Any]) -> None:
@@ -361,10 +362,8 @@ def _legacy_sandbox_cost(merged_outputs: dict[str, Any]) -> Decimal:
         return Decimal(0)
     total = Decimal(0)
     rate = _e2b_rate()
-    for node_output in merged_outputs.values():
-        if not isinstance(node_output, dict):
-            continue
-        out = node_output.get("output")
+    for node_id in merged_outputs:
+        out = node_telemetry(None, merged_outputs, node_id)
         if not isinstance(out, dict):
             continue
         wall_ms = out.get("wall_clock_time_ms")
@@ -404,10 +403,8 @@ async def _fallback_write(
         total = Decimal(0)
     wall_hours = 0.0
     if isinstance(merged_outputs, dict):
-        for node_output in merged_outputs.values():
-            if not isinstance(node_output, dict):
-                continue
-            out = node_output.get("output")
+        for node_id in merged_outputs:
+            out = node_telemetry(None, merged_outputs, node_id)
             if isinstance(out, dict) and isinstance(out.get("wall_clock_time_ms"), (int, float)):
                 wall_hours += float(out["wall_clock_time_ms"]) / 3600000.0
     breakdown: list[dict[str, Any]] = [

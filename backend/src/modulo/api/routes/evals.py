@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.node_output_split import node_return
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.pipeline import Pipeline
@@ -865,7 +866,9 @@ async def create_eval_from_run(
                 raise HTTPException(status_code=404, detail="Run not found")
 
             outputs = run.outputs_json or {}
-            node_output = outputs.get(str(req.node_id)) or outputs.get(req.node_id.hex) or {}
+            node_output = (
+                node_return(outputs, None, str(req.node_id)) or node_return(outputs, None, req.node_id.hex) or {}
+            )
 
             sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}
     except HTTPException:
