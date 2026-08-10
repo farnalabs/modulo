@@ -138,6 +138,15 @@ async def backfill_facts(session: Any, day: date) -> int:
         ),
         else_=None,
     )
+    # FAR-134: full queue wait = started_at - created_at (capacity deferral +
+    # SAQ queue), unlike queue_wait_ms (started - dispatched).
+    total_queue_wait_ms_expr = sa.case(
+        (
+            sa.and_(Run.started_at.is_not(None), Run.created_at.is_not(None)),
+            sa.cast(sa.func.extract("epoch", Run.started_at - Run.created_at) * 1000, sa.BigInteger),
+        ),
+        else_=None,
+    )
     final_idle_ms_expr = sa.case(
         (
             sa.and_(Run.completed_at.is_not(None), Run.heartbeat_at.is_not(None)),
@@ -205,7 +214,14 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.snapshot_id.label("snapshot_id"),
             Run.run_number.label("run_number"),
             sa.func.length(sa.cast(Run.outputs_json, sa.Text)).label("output_bytes"),
+            sa.func.length(sa.cast(Run.node_telemetry_json, sa.Text)).label("telemetry_bytes"),
             Run.rate_limit_key.is_not(None).label("rate_limited"),
+            # FAR-134 concurrency columns — absolute run-lifecycle instants +
+            # the full queue wait, mirroring the live writer.
+            Run.dispatched_at.label("dispatched_at"),
+            Run.started_at.label("started_at"),
+            Run.completed_at.label("completed_at"),
+            total_queue_wait_ms_expr.label("total_queue_wait_ms"),
         )
         .select_from(Run)
         .outerjoin(Team, Team.id == Run.owner_team_id)
@@ -250,7 +266,12 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.snapshot_id,
                 RunDailyFact.run_number,
                 RunDailyFact.output_bytes,
+                RunDailyFact.telemetry_bytes,
                 RunDailyFact.rate_limited,
+                RunDailyFact.dispatched_at,
+                RunDailyFact.started_at,
+                RunDailyFact.completed_at,
+                RunDailyFact.total_queue_wait_ms,
             ],
             select_stmt,
         )

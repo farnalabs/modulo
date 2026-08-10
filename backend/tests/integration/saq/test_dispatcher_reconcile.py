@@ -209,7 +209,9 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
     dispatcher NULL) must be re-dispatched when capacity frees. dispatch_run
     returns deferred BEFORE recording dispatched_at/dispatcher, so the
     capacity-deferred branch must match on the creation path, not
-    dispatcher='saq'."""
+    dispatcher='saq'. Under schema 0075 (runtime cutover) runs.claim_token is
+    NOT NULL, so a capacity-deferred run carries a token and reconcile must
+    preserve it (never clobber it) on re-dispatch."""
     run_id, _ = await _seed_saq_run(
         db_engine,
         test_org,
@@ -217,18 +219,20 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
         status="pending",
         dispatched=False,
         dispatcher=None,
-        # A real capacity-deferred run was never dispatched and never claimed,
-        # so its claim token is NULL — _record_saq_job only writes a fresh token
-        # when the token is NULL (it must never clobber a worker's claim token).
-        claim_token=None,
+        # Under schema 0075 (runtime cutover) runs.claim_token is NOT NULL with a
+        # server default (gen_random_uuid()::text), so even a never-claimed
+        # capacity-deferred run carries a token at insert time. _record_saq_job
+        # only writes a fresh token when the token is NULL — it must PRESERVE an
+        # existing token, never clobber it.
+        claim_token="seed-token",
     )
 
     # Re-dispatch happens (summary count is global across orgs, so assert on our
     # run's job + row state instead of the exact global "repaired" number).
     await ch.dispatcher_reconcile()
 
-    # A fresh dispatch records dispatcher='saq' + a fresh claim token, and the
-    # deterministic job key now exists.
+    # A fresh dispatch records dispatcher='saq' and preserves the run's existing
+    # claim token (never clobbers it); the deterministic job key now exists.
     assert await _job_exists(saq_settings_env, f"run:{run_id}")
 
     from sqlalchemy import NullPool
@@ -243,8 +247,7 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
     finally:
         await eng.dispose()
     assert row[0] == "saq"
-    assert row[1] is not None
-    assert row[1] != "token-a"
+    assert row[1] == "seed-token"  # dispatch preserves an existing token; it never clobbers it
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="admin_feature_flags" required-tier="team" show-disabled>
   <div data-theme="agent" class="page-wide">
     <header>
       <PageHeader :title="$t('views.AdminFeatureFlagsView.feature_flags')" :subtitle="$t('views.AdminFeatureFlagsView.all_known_feature_flags_and_their_current_activation_status')" />
@@ -50,8 +51,11 @@
 
     <div class="card p-4">
       <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminFeatureFlagsView.license_status') }}</h2>
-      <div v-if="loading" class="flex items-center justify-center py-8">
-        <div class="h-6 w-6 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      <div v-if="loading" aria-hidden="true" class="grid grid-cols-1 gap-4 sm:grid-cols-4">
+        <div v-for="i in 4" :key="i">
+          <div class="h-3 w-16 rounded bg-muted/50" />
+          <div class="mt-1 h-5 w-24 rounded bg-muted/50" />
+        </div>
       </div>
       <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div>
@@ -110,7 +114,31 @@
         @update:search="searchQuery = $event; currentPage = 1"
       />
 
-      <LoadingSpinner v-if="loading" />
+      <div v-if="loading" aria-hidden="true" class="card mb-6 overflow-hidden">
+        <div class="border-b bg-muted/30 px-4 py-2">
+          <div class="h-4 w-32 rounded bg-muted/50" />
+        </div>
+        <table class="w-full">
+          <thead>
+            <tr>
+              <th class="table-header w-12"></th>
+              <th class="table-header"></th>
+              <th class="table-header"></th>
+              <th class="table-header"></th>
+              <th class="table-header w-32"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border">
+            <tr v-for="row in 8" :key="row">
+              <td class="table-cell"><div class="h-5 w-9 rounded-full bg-muted/50" /></td>
+              <td class="table-cell"><div class="h-4 w-28 rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="h-4 w-14 rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="h-4 w-full max-w-xs rounded bg-muted/50" /></td>
+              <td class="table-cell"><div class="ml-auto h-8 w-16 rounded-lg border border-muted bg-muted/30" /></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadFlags" />
       <template v-else>
         <div v-if="!hasResults && searchQuery" class="flex flex-col items-center justify-center py-16">
@@ -243,18 +271,19 @@
       </div>
     </FormDialog>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { formatApiError } from '../lib/api/formatError'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { Button } from '../components/ui/button'
 import FormDialog from '../components/shared/FormDialog.vue'

@@ -1,5 +1,6 @@
 """Unit tests for GET /api/v1/runs/{run_id}/nodes/{node_id}/output."""
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from typing import Any
@@ -34,11 +35,13 @@ def _make_run(
     *,
     status: str = "complete",
     outputs_json: dict[str, Any] | None = None,
+    node_telemetry_json: dict[str, Any] | None = None,
 ) -> MagicMock:
     r = MagicMock()
     r.id = _RUN_ID
     r.status = status
     r.outputs_json = outputs_json
+    r.node_telemetry_json = node_telemetry_json
     return r
 
 
@@ -178,6 +181,100 @@ class TestGetNodeOutput:
     def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
         assert resp.status_code in (401, 403)
+
+
+class TestSplitRowOutput:
+    """Per-node endpoint behavior for P1+ (split) runs — pure returns and the
+    derived-status fallback for telemetry-only nodes (FAR-126 P2a)."""
+
+    def test_returns_pure_return_for_split_run(self, client: TestClient) -> None:
+        pure_return = {"plan": "Step 1: analyse", "confidence": 0.9}
+        run = _make_run(
+            outputs_json={"planner": pure_return},
+            node_telemetry_json={
+                "planner": {
+                    "status": "completed",
+                    "summary": "planned",
+                    "agent_stdout": "log",
+                    "wall_clock_time_ms": 1200,
+                }
+            },
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
+
+        assert resp.status_code == 200
+        assert resp.json()["output"] == pure_return
+
+    def test_none_return_with_telemetry_returns_derived_status(self, client: TestClient) -> None:
+        # A skipped node has NO outputs entry — only telemetry. The endpoint
+        # must NOT 404; it returns a derived {status, summary} object.
+        run = _make_run(
+            outputs_json={},
+            node_telemetry_json={
+                "planner": {"status": "skipped", "summary": "Skipped: missing input fields"},
+            },
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
+
+        assert resp.status_code == 200
+        assert resp.json()["output"] == {
+            "status": "skipped",
+            "summary": "Skipped: missing input fields",
+        }
+
+    def test_recovered_node_in_telemetry_no_404(self, client: TestClient) -> None:
+        run = _make_run(
+            outputs_json={},
+            node_telemetry_json={"planner": {"recovered": True, "recovery_input": {"review": "LGTM"}}},
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
+
+        assert resp.status_code == 200
+        output = resp.json()["output"]
+        # Derived surface only — recovery_input must not leak.
+        assert output == {}
+
+    def test_derived_status_never_leaks_telemetry(self, client: TestClient) -> None:
+        secret = "sk-leaked-in-stdout"
+        run = _make_run(
+            outputs_json={},
+            node_telemetry_json={
+                "planner": {
+                    "status": "failed",
+                    "summary": "agent errored",
+                    "agent_stdout": f"token issued: {secret}",
+                    "sandbox_log_tail": secret,
+                }
+            },
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/nodes/planner/output")
+
+        assert resp.status_code == 200
+        body = resp.json()["output"]
+        assert body == {"status": "failed", "summary": "agent errored"}
+        assert "agent_stdout" not in body
+        assert "sandbox_log_tail" not in body
+        assert secret not in json.dumps(body)
 
 
 class TestSensitiveMasking:

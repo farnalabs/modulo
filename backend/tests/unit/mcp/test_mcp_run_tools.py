@@ -1,5 +1,6 @@
 """Unit tests for the run/evals MCP tools (get_run_status, cancel_run, get_run_evals, list_eval_definitions)."""
 
+import json
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -31,6 +32,7 @@ def _make_mock_run(
     error_code: str | None = None,
     node_token_usage: dict | None = None,
     outputs_json: dict | None = None,
+    node_telemetry_json: dict | None = None,
     cost_breakdown: list | None = None,
 ) -> MagicMock:
     run = MagicMock()
@@ -44,6 +46,7 @@ def _make_mock_run(
     run.error_code = error_code
     run.node_token_usage = node_token_usage
     run.outputs_json = outputs_json
+    run.node_telemetry_json = node_telemetry_json
     run.cost_breakdown = cost_breakdown
     return run
 
@@ -226,6 +229,42 @@ class TestGetRunStatus(_AuthContext):
                 "has_output": False,
             },
         ]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_detail_derives_status_from_telemetry(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_mock_run(
+            status="running",
+            node_token_usage={},
+            outputs_json={"node_a": {"summary": "ok"}},
+            node_telemetry_json={
+                "node_a": {"status": "completed"},
+                "node_b": {"status": "failed", "summary": "boom", "agent_stderr": "traceback", "error_message": "boom"},
+                "node_c": {"status": "completed"},
+            },
+        )
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = run
+
+        result = await get_run_status(run_id=str(run.id), detail=True)
+
+        by_id = {n["node_id"]: n for n in result["nodes"]}
+        assert by_id["node_a"]["status"] == "completed"
+        assert by_id["node_a"]["has_output"] is True
+        assert by_id["node_b"]["status"] == "failed"
+        assert by_id["node_b"]["has_output"] is True
+        assert by_id["node_c"]["status"] == "processed"
+        assert by_id["node_c"]["has_output"] is True
+        # Response field set stays bounded: no raw telemetry dump.
+        assert all("agent_stderr" not in n and "error_message" not in n for n in result["nodes"])
+        assert "traceback" not in json.dumps(result)
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_run")

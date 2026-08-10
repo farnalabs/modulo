@@ -8,11 +8,11 @@ derived from.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, ForeignKey, Index, Integer, Numeric, String, Uuid
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -95,7 +95,28 @@ class RunDailyFact(OrgScoped):
     output_bytes: Mapped[int | None] = mapped_column(
         BigInteger, comment="serialised size of Run.outputs_json (json.dumps length) when present"
     )
+    telemetry_bytes: Mapped[int | None] = mapped_column(
+        BigInteger, comment="serialised size of Run.node_telemetry_json (json.dumps length) when present"
+    )
     rate_limited: Mapped[bool | None] = mapped_column(Boolean, comment="True when Run.rate_limit_key is not null")
+    # FAR-134 concurrency/slot-utilization columns (migration 0075) — absolute
+    # UTC instants copied from the source run. Deliberately NOT FKs — facts
+    # survive the run purge (ADR 020). The overlap between [started_at,
+    # completed_at) is what the concurrency query surface buckets.
+    dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="absolute UTC instant the run was dispatched to the queue — from Run.dispatched_at",
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="absolute UTC instant the run started executing — from Run.started_at"
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="absolute UTC instant the run completed — from Run.completed_at"
+    )
+    total_queue_wait_ms: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="Run.started_at - Run.created_at (full wait from creation to start), else NULL",
+    )
 
     team: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_id])
     pipeline: Mapped[Optional["Pipeline"]] = relationship(foreign_keys=[pipeline_id])

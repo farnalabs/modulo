@@ -38,6 +38,7 @@ def _make_run(
     *,
     input_payload: dict[str, Any] | None = None,
     outputs_json: dict[str, Any] | None = None,
+    node_telemetry_json: dict[str, Any] | None = None,
 ) -> MagicMock:
     r = MagicMock()
     r.id = _RUN_ID
@@ -46,6 +47,7 @@ def _make_run(
     r.status = status
     r.input_payload = input_payload
     r.outputs_json = outputs_json
+    r.node_telemetry_json = node_telemetry_json
     return r
 
 
@@ -173,6 +175,69 @@ class TestExportFixture:
         assert len(body["fixture_map"]) == 2
         assert body["fixture_map"]["design"] == "blueprint"
         assert body["fixture_map"]["blueprint"] == "code"
+
+    def test_export_fixture_new_shape_exports_pure_return_only(
+        self, client: TestClient, mock_session: AsyncMock
+    ) -> None:
+        pure_outputs = {"planner": {"input": "design a thing", "output": "blueprint"}}
+        telemetry = {
+            "planner": {
+                "status": "complete",
+                "agent_stdout": "compiling modules...",
+                "exit_code": 0,
+                "wall_clock_time_ms": 1234,
+                "model_cost_usd": 0.001,
+            }
+        }
+        run = _make_run(
+            input_payload={"prompt": "build a thing"},
+            outputs_json=pure_outputs,
+            node_telemetry_json=telemetry,
+        )
+        snapshot = _make_snapshot()
+
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[None, run, snapshot])
+
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["outputs_json"] == pure_outputs
+        assert "agent_stdout" not in str(body["outputs_json"])
+        assert "exit_code" not in str(body["outputs_json"])
+        assert body["fixture_map"] == {"design a thing": "blueprint"}
+
+    def test_export_fixture_legacy_outputs_byte_identical(self, client: TestClient, mock_session: AsyncMock) -> None:
+        legacy_envelope = {
+            "planner": {
+                "artifacts": [
+                    {
+                        "status": "complete",
+                        "output": {
+                            "status": "complete",
+                            "agent_stdout": "compiling modules...",
+                            "exit_code": 0,
+                            "wall_clock_time_ms": 1234,
+                            "output_json": {"result": "blueprint"},
+                        },
+                    }
+                ],
+                "status": "complete",
+            }
+        }
+        run = _make_run(
+            input_payload={"prompt": "build a thing"},
+            outputs_json=legacy_envelope,
+        )
+        snapshot = _make_snapshot()
+
+        mock_session.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[None, run, snapshot])
+
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}/export-fixture")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["outputs_json"] == legacy_envelope
 
     def test_export_fixture_run_not_found_returns_404(self, client: TestClient, mock_session: AsyncMock) -> None:
         mock_session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
