@@ -202,10 +202,15 @@ async def _record_saq_job(session: AsyncSession, run_id: uuid.UUID, job_id: str,
     heartbeat would raise ``ClaimSupersededError`` and the active executor would
     abort. Once a worker claims the run, the worker owns the claim token — the
     dispatcher must not touch it.
+
+    A successful dispatch also CLEARS ``enqueue_failed_at`` (raw SQL — the
+    column ships in a parallel migration): a run that previously failed to
+    enqueue and was left ``pending`` with the marker is admitted once its
+    retry dispatch lands.
     """
     await session.execute(
         text(
-            "UPDATE runs SET dispatcher='saq', saq_job_id=:jid, "
+            "UPDATE runs SET dispatcher='saq', saq_job_id=:jid, enqueue_failed_at=NULL, "
             "claim_token = CASE WHEN claim_token IS NULL THEN :tok ELSE claim_token END "
             "WHERE id=:rid"
         ),
@@ -213,13 +218,19 @@ async def _record_saq_job(session: AsyncSession, run_id: uuid.UUID, job_id: str,
     )
 
 
-async def _mark_dispatch_failed(session: AsyncSession, run_id: uuid.UUID) -> None:
-    """Final enqueue failure — mark the run failed with error_code='dispatch_failed'."""
+async def _mark_enqueue_failed(session: AsyncSession, run_id: uuid.UUID) -> None:
+    """Non-terminal enqueue-failure marker — leave the run pending for retry.
+
+    The old terminal ``_mark_dispatch_failed`` permanently failed every run in a
+    >6s Redis outage window with no recovery. Instead the run stays ``pending``
+    (``dispatched_at`` already set, ``dispatcher`` NULL) and
+    ``enqueue_failed_at=now()`` is stamped (raw SQL — column ships in a parallel
+    migration). ``dispatcher_reconcile`` re-dispatches it on a bounded interval
+    with a per-tick cap, and terminal-fails it (``dispatch_failed``) only when
+    Redis is verifiably reachable AND the marker is older than the TTL backstop.
+    """
     await session.execute(
-        text(
-            "UPDATE runs SET status='failed', error_code='dispatch_failed', completed_at=now() "
-            "WHERE id=:rid AND status NOT IN ('complete', 'cancelled')"
-        ),
+        text("UPDATE runs SET enqueue_failed_at=now() WHERE id=:rid AND status NOT IN ('complete', 'cancelled')"),
         {"rid": run_id},
     )
 
@@ -254,18 +265,36 @@ async def _enqueue_saq(
     queue_name: str,
     job_type: str,
     resume_data: dict[str, Any] | None,
+    *,
+    key_suffix: str | None = None,
 ) -> tuple[str, bool]:
-    """Enqueue a run job to SAQ. Returns (job_id, deduped)."""
+    """Enqueue a run job to SAQ. Returns (job_id, deduped).
+
+    ``key_suffix`` (default empty) makes the SAQ job key ``run:{run_id}:{suffix}``
+    instead of the deterministic ``run:{run_id}``. A re-dispatch (reconcile) uses
+    a FRESH suffix so SAQ's key-based dedupe never suppresses a re-enqueue of an
+    evicted/never-landed job; the atomic claim UPDATE (``claim_run_async``) is the
+    real at-most-once dedupe — a second worker claiming the same run loses.
+
+    TOCTOU guard: ``q.job(key)`` is re-checked AFTER the caller's decision and
+    immediately before enqueue — if a job now exists under this key (a concurrent
+    worker enqueued it in the meantime) the enqueue is skipped and the existing
+    deterministic job id returned (``deduped=True``).
+    """
     settings = get_settings()
     redis_client = await _get_shared_redis()
     q = RedisQueue(redis_client, name=queue_name)
     function = SAQ_RESUME_RUN_FUNCTION if job_type == "resume_run" else SAQ_EXECUTE_RUN_FUNCTION
+    key = f"run:{run_id}" if not key_suffix else f"run:{run_id}:{key_suffix}"
     kwargs: dict[str, Any] = {"run_id": run_id, "org_id": org_id}
     if resume_data:
         kwargs["resume_data"] = resume_data
+    # Re-check AFTER the decision and before enqueue — skip if a job now exists.
+    if await q.job(key) is not None:
+        return q.job_id(key), True
     job = await q.enqueue(
         function,
-        key=f"run:{run_id}",
+        key=key,
         timeout=SAQ_RUN_TIMEOUT,
         heartbeat=settings.saq_job_heartbeat,
         retries=settings.saq_run_retries,
@@ -277,7 +306,7 @@ async def _enqueue_saq(
     if job is not None:
         return job.id, False
     # Already enqueued with the same key — deterministic job id.
-    return q.job_id(f"run:{run_id}"), True
+    return q.job_id(key), True
 
 
 async def dispatch_run(
@@ -288,6 +317,7 @@ async def dispatch_run(
     job_type: str = "execute_run",
     resume_data: dict[str, Any] | None = None,
     fail_fast: bool = False,
+    key_suffix: str | None = None,
 ) -> tuple[str, str | None]:
     """Route a run to SAQ (the only dispatch path post-cutover).
 
@@ -304,9 +334,17 @@ async def dispatch_run(
         (``running``/``awaiting_human``/``claimed`` resume) is deferred without
         a status write so its resume payload / committed HITL decision is
         preserved.
-      * ``('enqueue_failed', None)`` — fail-fast enqueue failure (webhook path);
-        the caller records an ``error_event`` (source='saq',
-        function='webhook_dispatch'). Only produced when ``fail_fast=True``.
+      * ``('enqueue_failed', None)`` — final enqueue failure after all retries.
+        The run is LEFT ``pending`` (non-terminal): ``dispatched_at`` stays set,
+        ``dispatcher`` stays NULL and ``enqueue_failed_at=now()`` is stamped so
+        ``dispatcher_reconcile`` re-dispatches it on a bounded interval (and
+        terminal-fails it with ``dispatch_failed`` only once Redis is verifiably
+        reachable and the marker is older than the TTL backstop). The caller
+        records an ``error_event`` (source='saq', function='webhook_dispatch').
+
+    ``key_suffix`` (default empty) makes the SAQ job key ``run:{run_id}:{suffix}``;
+    ``dispatcher_reconcile`` re-dispatches with a FRESH suffix so SAQ key dedupe
+    never suppresses the recovery enqueue.
     """
     settings = get_settings()
     rid = uuid.UUID(str(run_id))
@@ -343,18 +381,36 @@ async def dispatch_run(
         await session.close()
 
     try:
-        job_id, deduped = await _enqueue_saq(str(rid), str(oid), queue_name, job_type, resume_data)
+        job_id, deduped = await _enqueue_saq(
+            str(rid), str(oid), queue_name, job_type, resume_data, key_suffix=key_suffix
+        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         if fail_fast:
+            # Fail-fast (webhook) path: NO retries — return immediately, but
+            # still mark enqueue_failed (non-terminal) + expire the webhook
+            # dedup so a retried webhook is not suppressed while the run awaits
+            # dispatcher_reconcile recovery.
             _log.exception("dispatch_run: SAQ enqueue failed for run %s (fail-fast)", rid)
+            session = _open_session()
+            try:
+                async with session.begin():
+                    from modulo.db.rls import set_rls_org
+
+                    await set_rls_org(session, oid)
+                    await _mark_enqueue_failed(session, rid)
+                    await _expire_webhook_dedup(session, rid)
+            finally:
+                await session.close()
             return ("enqueue_failed", None)
         _log.warning("dispatch_run: SAQ enqueue failed for run %s: %s", rid, exc)
         for attempt in (1, 2, 3):
             await asyncio.sleep(attempt)
             try:
-                job_id, deduped = await _enqueue_saq(str(rid), str(oid), queue_name, job_type, resume_data)
+                job_id, deduped = await _enqueue_saq(
+                    str(rid), str(oid), queue_name, job_type, resume_data, key_suffix=key_suffix
+                )
                 break
             except asyncio.CancelledError:
                 raise
@@ -372,11 +428,16 @@ async def dispatch_run(
                     from modulo.db.rls import set_rls_org
 
                     await set_rls_org(session, oid)
-                    await _mark_dispatch_failed(session, rid)
+                    # NON-terminal: leave the run pending for dispatcher_reconcile
+                    # recovery (a >6s Redis outage must not permanently fail the
+                    # whole dispatch window). Keep the webhook dedup expiry even
+                    # though the run stays pending, so a retried webhook is not
+                    # suppressed while the run awaits re-dispatch.
+                    await _mark_enqueue_failed(session, rid)
                     await _expire_webhook_dedup(session, rid)
             finally:
                 await session.close()
-            return ("deferred", None)
+            return ("enqueue_failed", None)
 
     session = _open_session()
     try:

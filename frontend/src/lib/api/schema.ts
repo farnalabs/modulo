@@ -7811,6 +7811,11 @@ export interface components {
         ConfirmDeletionRequest: {
             /** Token */
             token: string;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** ConfirmDeletionResponse */
         ConfirmDeletionResponse: {

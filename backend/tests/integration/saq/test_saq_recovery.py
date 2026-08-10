@@ -1,4 +1,4 @@
-"""SAQ recovery + safety-net tests (plan Â§Verification / F3a) â€” fully mocked.
+"""SAQ recovery + safety-net tests (plan §Verification / F3a) — fully mocked.
 
 These tests exercise the at-most-once safety net and recovery invariants WITHOUT
 live Redis/Postgres (fake sessions, fake Redis clients, patched dispatch). They
@@ -7,9 +7,11 @@ complement the real-infra tests in this directory (``test_dispatcher_reconcile``
 
   * retry off-by-one: ``retries=N`` means N total attempts (N-1 retries), and
     the after_process hook only fails a run when retries are truly exhausted.
-  * partial-eviction repair: the exact repair sequence for a job hash missing
-    from Redis (DEL abort key + ZREM incomplete + LREM queued/active + enqueue).
-  * claim-token fence: a superseded heartbeat aborts before any side effect.
+  * no-SAQ-eviction re-dispatch: an evicted job hash is re-dispatched with a
+    FRESH key_suffix, never via DEL/ZREM/LREM of SAQ internals (B2).
+  * claim-token fence: heartbeat/mark_complete/fail_run_terminal use ATOMIC
+    token-guarded UPDATEs — a superseded token raises ClaimSupersededError and
+    the SAQ job hash is untouched.
   * event-loop-stall refusal: a live-heartbeat run refuses the next claim.
   * fire_due_triggers two-worker single-fire: the atomic next_fire_at advance
     produces exactly ONE fire job per epoch under concurrent invocation.
@@ -82,17 +84,24 @@ class TestRetryOffByOne:
 # ---------------------------------------------------------------------------
 
 
-class TestPartialEvictionRepair:
-    async def test_repair_sequence_for_evicted_job_hash(self) -> None:
-        """A run whose SAQ job hash is missing is repaired and re-dispatched."""
+class TestNoSaqEvictionRedispatch:
+    async def test_evicted_job_redispatched_without_saq_eviction(self) -> None:
+        """A run whose SAQ job hash is missing is re-dispatched WITHOUT touching
+        SAQ-internal structures (B2): no DEL/ZREM/LREM, no SAQ list reads. The
+        re-dispatch carries a FRESH key_suffix so SAQ key dedupe never suppresses
+        the recovery enqueue; the atomic claim UPDATE is the real dedupe."""
         run_id = str(_RUN_ID)
-        job_id = f"saq:job:runs:run:{run_id}"
         row = SimpleNamespace(
             id=uuid.UUID(run_id),
             pipeline_id=uuid.uuid4(),
             status="running",
             dispatched_at=None,
             heartbeat_at=None,
+            node_token_usage={},
+            outputs_json={},
+            started_at=None,
+            dispatcher="saq",
+            enqueue_failed_at=None,
         )
 
         redis = MagicMock()
@@ -126,8 +135,12 @@ class TestPartialEvictionRepair:
                 return self
 
             async def execute(self, stmt: object, params: dict[str, Any] | None = None) -> _Result:
-                if "FROM organisations" in str(stmt):
+                s = str(stmt)
+                if "FROM organisations" in s:
                     return _Result(scalars=[_ORG])
+                if "UPDATE runs SET" in s:
+                    # Dedicated terminalizer UPDATEs (B4/B5) — none matched here.
+                    return _Result()
                 return _Result(rows=self._rows)
 
             async def get(self, model: Any, pk: Any) -> Any:
@@ -142,7 +155,6 @@ class TestPartialEvictionRepair:
 
         q = MagicMock()
         q.name = "runs"
-        q.job_id.return_value = job_id
         q.job = AsyncMock(return_value=None)  # job hash evicted -> None
 
         with (
@@ -150,7 +162,12 @@ class TestPartialEvictionRepair:
                 ch,
                 "get_settings",
                 return_value=MagicMock(
-                    saq_runs_queue="runs", saq_reenqueue_window=600, saq_job_heartbeat=300, saq_redis_pool_size=50
+                    saq_runs_queue="runs",
+                    saq_reenqueue_window=600,
+                    saq_job_heartbeat=300,
+                    saq_redis_pool_size=50,
+                    saq_run_claim_cap=20,
+                    saq_claimed_nodeless_minutes=45,
                 ),
             ),
             patch.object(ch, "_open_factory", return_value=_FakeFactory([row])),
@@ -163,15 +180,15 @@ class TestPartialEvictionRepair:
             summary = await ch.dispatcher_reconcile()
 
         assert summary["repaired"] == 1
-        # Repair sequence: DEL abort key + ZREM incomplete + LREM queued/active.
-        redis.delete.assert_awaited_once_with(f"saq:abort:run:{run_id}")
-        redis.zrem.assert_awaited_once_with("saq:runs:incomplete", job_id)
-        assert redis.lrem.await_args_list == [
-            (("saq:runs:queued", 0, job_id),),
-            (("saq:runs:active", 0, job_id),),
-        ]
-        # Normal re-enqueue via dispatch_run.
+        # B2: NO SAQ-internal eviction — no DEL/ZREM/LREM issued at all.
+        redis.delete.assert_not_awaited()
+        redis.zrem.assert_not_awaited()
+        redis.lrem.assert_not_awaited()
+        # The deterministic key was re-checked (job exists -> skip; gone -> re-enqueue).
+        q.job.assert_awaited()
+        # Normal re-enqueue via dispatch_run with a FRESH key_suffix.
         re_enqueue.assert_awaited_once()
+        assert re_enqueue.await_args.kwargs["key_suffix"]
 
 
 # ---------------------------------------------------------------------------
@@ -180,19 +197,20 @@ class TestPartialEvictionRepair:
 
 
 class TestClaimTokenFence:
-    async def test_superseded_heartbeat_aborts_before_any_write(self) -> None:
-        """Token A superseded by B: heartbeat with A raises BEFORE any DB write."""
+    async def test_superseded_heartbeat_raises_without_touching_job_hash(self) -> None:
+        """Token A superseded by B: the ATOMIC guarded heartbeat UPDATE
+        (``WHERE claim_token=:tok``) matches zero rows, so ClaimSupersededError
+        is raised and the SAQ job hash is NEVER touched."""
 
         class _Result:
-            def __init__(self, row: Any | None) -> None:
-                self._row = row
+            def __init__(self, matched: bool) -> None:
+                self._matched = matched
 
-            def first(self) -> Any | None:
-                return self._row
+            def fetchone(self) -> Any | None:
+                return ("id",) if self._matched else None
 
         class _Recorder:
-            def __init__(self, current_token: str) -> None:
-                self.current_token = current_token
+            def __init__(self) -> None:
                 self.statements: list[str] = []
                 self.commits = 0
 
@@ -214,9 +232,11 @@ class TestClaimTokenFence:
 
             async def execute(self, stmt: object, params: dict[str, Any] | None = None) -> _Result:
                 self.rec.statements.append(str(stmt))
-                if "SELECT claim_token FROM runs" in str(stmt):
-                    return _Result((self.rec.current_token,))
-                return _Result(None)
+                if "UPDATE runs SET heartbeat_at" in str(stmt):
+                    # The guarded UPDATE with claim_token=:tok matched zero rows
+                    # (the successor rotated the token) -> superseded.
+                    return _Result(matched=False)
+                return _Result(matched=False)
 
             async def commit(self) -> None:
                 self.rec.commits += 1
@@ -228,27 +248,30 @@ class TestClaimTokenFence:
             def connect(self) -> _Conn:
                 return self.rec.new_conn()
 
-        rec = _Recorder(current_token="tok-b")
+        rec = _Recorder()
         job = MagicMock()
         job.update = AsyncMock()
 
         with pytest.raises(pe.ClaimSupersededError):
             await pe.heartbeat_once(_Engine(rec), str(_RUN_ID), str(_ORG), job=job, claim_token="tok-a")
 
-        # Aborted BEFORE the heartbeat write â€” no UPDATE, no COMMIT, no job touch.
-        assert not any("UPDATE runs SET heartbeat_at" in s for s in rec.statements)
-        assert rec.commits == 0
+        # The ATOMIC guarded UPDATE (WHERE claim_token=:tok) WAS attempted —
+        # that is the fence. Rowcount 0 -> superseded -> raise.
+        assert any("UPDATE runs SET heartbeat_at" in s and "claim_token" in s for s in rec.statements)
+        # The SAQ job hash is untouched: job.update() only runs when the write
+        # actually landed.
         job.update.assert_not_awaited()
 
     async def test_current_token_heartbeat_writes(self) -> None:
-        """A matching token proceeds with the normal heartbeat write."""
+        """A matching token: the guarded UPDATE matches, the write lands, and the
+        SAQ job hash IS touched exactly once."""
 
         class _Result:
-            def __init__(self, row: Any | None) -> None:
-                self._row = row
+            def __init__(self, matched: bool) -> None:
+                self._matched = matched
 
-            def first(self) -> Any | None:
-                return self._row
+            def fetchone(self) -> Any | None:
+                return ("id",) if self._matched else None
 
         statements: list[str] = []
 
@@ -261,9 +284,11 @@ class TestClaimTokenFence:
 
             async def execute(self, stmt: object, params: dict[str, Any] | None = None) -> _Result:
                 statements.append(str(stmt))
-                if "SELECT claim_token FROM runs" in str(stmt):
-                    return _Result(("tok-a",))
-                return _Result(None)
+                if "UPDATE runs SET heartbeat_at" in str(stmt):
+                    # The guarded UPDATE matched (claim_token still owned by this
+                    # executor) -> the heartbeat write lands.
+                    return _Result(matched=True)
+                return _Result(matched=False)
 
             async def commit(self) -> None:
                 return None

@@ -12,13 +12,16 @@ Run retention:
     hourly job (see ``batch_delete_langgraph_checkpoints``).
 """
 
+import asyncio
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import bindparam, func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.run import batch_delete_old_terminal_runs
@@ -29,12 +32,17 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from modulo.db.models.run import TERMINAL_STATUSES, Run
+
+_log = logging.getLogger(__name__)
 
 DELETION_TOKEN_BYTES = 48
 CONFIRMATION_WINDOW_HOURS = 24
 RUN_RETENTION_DAYS = 30
 CHECKPOINT_BATCH_SIZE = 500
+# Best-effort E2B sandbox kill timeout (B7) — teardown-grade, per the SDK
+# wait_for guidance in backend AGENTS.md.
+_SANDBOX_KILL_TIMEOUT = 30
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -42,6 +50,76 @@ CHECKPOINT_BATCH_SIZE = 500
 
 def _generate_deletion_token() -> str:
     return secrets.token_urlsafe(DELETION_TOKEN_BYTES)
+
+
+async def _count_non_terminal_runs(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Count runs for the org that are NOT in a terminal state.
+
+    Terminal statuses are the single source of truth ``TERMINAL_STATUSES``
+    (complete/failed/cancelled/eval_failed). A non-terminal run is still
+    live — the org cannot be hard-deleted out from under it.
+    """
+    result = await session.execute(
+        select(func.count()).select_from(Run).where(Run.organisation_id == org_id, Run.status.not_in(TERMINAL_STATUSES))
+    )
+    return int(result.scalar() or 0)
+
+
+async def _abort_org_live_sandboxes(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Best-effort kill of the org's live E2B sandboxes before hard-delete.
+
+    Reads ``runs.sandbox_id`` via raw SQL (the column ships in a parallel
+    migration; the runs model is owned by another worker). Kills each
+    sandbox by id through the E2B SDK. NEVER blocks the delete: any failure
+    (import, missing column pre-migration, SDK error, network) is logged and
+    swallowed. Returns the number of kill requests sent (not necessarily
+    succeeded).
+    """
+    try:
+        from e2b import AsyncSandbox  # type: ignore[import-untyped]
+
+        # Guard: runs.sandbox_id ships in a parallel migration owned by the
+        # runs-model worker. Skip the whole abort when the column is absent —
+        # an UndefinedColumnError would abort the surrounding transaction and
+        # break the delete that follows.
+        col_check = await session.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'runs' AND column_name = 'sandbox_id' "
+                "LIMIT 1"
+            )
+        )
+        if col_check.first() is None:
+            _log.info("org_deletion: runs.sandbox_id column not present; skipping sandbox abort for org %s", org_id)
+            return 0
+
+        result = await session.execute(
+            text(
+                "SELECT DISTINCT sandbox_id FROM runs "
+                "WHERE organisation_id = :org_id AND sandbox_id IS NOT NULL "
+                "AND status NOT IN :terminal"
+            ).bindparams(bindparam("terminal", expanding=True)),
+            {"org_id": org_id, "terminal": tuple(TERMINAL_STATUSES)},
+        )
+        sandbox_ids = [row[0] for row in result.all()]
+    except SQLAlchemyError:
+        # Column not present yet (parallel migration not applied) — best-effort.
+        _log.exception("org_deletion: could not read runs.sandbox_id for org %s", org_id)
+        return 0
+    except Exception:
+        _log.exception("org_deletion: E2B SDK unavailable; skipping sandbox abort for org %s", org_id)
+        return 0
+
+    killed = 0
+    for sandbox_id in sandbox_ids:
+        try:
+            await asyncio.wait_for(AsyncSandbox.kill(sandbox_id), timeout=_SANDBOX_KILL_TIMEOUT)
+            killed += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("org_deletion: failed to kill E2B sandbox %s for org %s", sandbox_id, org_id)
+    return killed
 
 
 async def _collect_org_export(session: AsyncSession, org: Organisation) -> dict[str, Any]:
@@ -153,13 +231,20 @@ async def confirm_org_deletion(
     token: str,
     *,
     immediate: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Confirm and execute org deletion.
 
     When *immediate* is True (admin DELETE endpoint), the token check is
     skipped. Otherwise the token must match and not be expired.
 
-    Before hard-deleting the org, terminal runs older than 30 days are
+    Guard (B7): hard-delete is REFUSED while ANY non-terminal run exists
+    (status not in ``TERMINAL_STATUSES``) — the org cannot be deleted out from
+    under live runs. Passing *force*=True proceeds anyway; it is destructive
+    and is only wired to admin break-glass endpoints.
+
+    Before hard-deleting, the org's live E2B sandboxes are aborted best-effort
+    (never blocks on E2B), then terminal runs older than 30 days are
     batch-deleted. The remaining cascade is handled by Postgres FK constraints.
     """
     result = await session.execute(select(Organisation).where(Organisation.id == org_id).with_for_update())
@@ -173,6 +258,17 @@ async def confirm_org_deletion(
         expires_at = org.deletion_token_expires_at
         if expires_at is None or datetime.now(UTC) > expires_at:
             raise ValueError("Deletion token has expired")
+
+    # B7 guard — refuse while live runs exist unless force proceeds.
+    non_terminal = await _count_non_terminal_runs(session, org_id)
+    if non_terminal and not force:
+        raise ValueError(
+            f"Cannot delete organisation: {non_terminal} run(s) still in progress. "
+            "Wait for them to finish, or force the deletion (destructive)."
+        )
+
+    # Abort the org's live sandboxes before hard-delete (best-effort).
+    await _abort_org_live_sandboxes(session, org_id)
 
     # Hard-delete terminal runs past retention window
     deleted_runs = await batch_delete_old_terminal_runs(session, max_age_days=RUN_RETENTION_DAYS, batch_size=500)
