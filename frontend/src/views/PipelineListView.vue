@@ -69,14 +69,14 @@
                 <thead class="bg-muted/50 text-xs font-medium uppercase text-muted-foreground">
                   <tr>
                     <th v-for="i in 7" :key="`th-${i}`" class="px-4 py-3">
-                      <div class="h-3 w-16 bg-muted rounded" />
+                      <div class="h-4 w-16 bg-muted rounded" />
                     </th>
                   </tr>
                 </thead>
                 <tbody class="divide-y">
                   <tr v-for="i in 6" :key="`row-${i}`">
                     <td v-for="j in 7" :key="`cell-${j}`" class="px-4 py-3">
-                      <div class="h-5 bg-muted rounded" :class="j === 1 ? 'w-3/4' : 'w-full'" />
+                      <div class="h-6 bg-muted rounded" :class="j === 1 ? 'w-3/4' : 'w-full'" />
                     </td>
                   </tr>
                 </tbody>
@@ -298,7 +298,7 @@
                     @drop="onPipelineDrop(row.data as PipelineItem, $event)"
                   >
                     <td class="px-4 py-3" :style="{ paddingLeft: `${12 + (row.depth || 0) * 16}px` }">
-                      <span class="font-medium text-foreground">{{ (row.data as PipelineItem).name }}</span>
+                      <span class="font-medium text-foreground block truncate">{{ (row.data as PipelineItem).name }}</span>
                     </td>
                     <td class="px-4 py-3">
                       <span v-if="(row.data as PipelineItem).description" class="text-muted-foreground truncate block max-w-xs">{{ (row.data as PipelineItem).description }}</span>
@@ -310,10 +310,10 @@
                       </span>
                     </td>
                     <td class="px-4 py-3">
-                      <span class="text-muted-foreground">{{ getLastRun((row.data as PipelineItem).id) || '\u2014' }}</span>
+                      <span class="text-muted-foreground block truncate max-w-[8rem]">{{ getLastRun((row.data as PipelineItem).id) || '\u2014' }}</span>
                     </td>
                     <td class="px-4 py-3">
-                      <span class="text-xs text-muted-foreground">{{ getPipelineTrigger((row.data as PipelineItem).id) || '\u2014' }}</span>
+                      <span class="text-xs text-muted-foreground block truncate max-w-[7rem]">{{ getPipelineTrigger((row.data as PipelineItem).id) || '\u2014' }}</span>
                     </td>
                     <td class="px-4 py-3">
                       <span class="text-muted-foreground">{{ formatDate((row.data as PipelineItem).created_at) }}</span>
