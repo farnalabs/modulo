@@ -27,6 +27,7 @@ from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
     ClaimTokenInvalidError,
+    DecisionPayloadError,
     GateAlreadyDecidedError,
     GateNotFoundError,
     HITLManager,
@@ -230,6 +231,10 @@ async def approve_gate(
     principal: TenantPrincipal = require_permission("hitl.approve"),
 ) -> dict[str, str]:
     """Approve an interrupted HITL gate and resume the run."""
+    resume_data: dict[str, Any] = {"action": "approved"}
+    if req.notes:
+        resume_data["notes"] = req.notes
+
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -243,6 +248,7 @@ async def approve_gate(
                     org_id=principal.organisation_id,
                     claim_token=req.claim_token,
                     actor_id=principal.account_id,
+                    decision_payload=resume_data,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -252,6 +258,8 @@ async def approve_gate(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+            except DecisionPayloadError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError as exc:
         logger.exception("hitl.approve_gate")
         raise HTTPException(
@@ -272,10 +280,6 @@ async def approve_gate(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
         ) from e
-
-    resume_data: dict[str, Any] = {"action": "approved"}
-    if req.notes:
-        resume_data["notes"] = req.notes
 
     try:
         executor = PipelineExecutor(
@@ -326,6 +330,12 @@ async def approve_gate_with_modification(
     documenting the change.
     """
     mgr = HITLManager()
+    resume_data: dict[str, Any] = {
+        "action": "approved",
+        "modified_output": req.modified_output,
+    }
+    if req.notes:
+        resume_data["notes"] = req.notes
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -339,6 +349,7 @@ async def approve_gate_with_modification(
                     claim_token=req.claim_token,
                     modified_output=req.modified_output,
                     actor_id=principal.account_id,
+                    decision_payload=resume_data,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -348,6 +359,8 @@ async def approve_gate_with_modification(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+            except DecisionPayloadError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError as exc:
         logger.exception("hitl.approve_gate_with_modification")
         raise HTTPException(
@@ -368,13 +381,6 @@ async def approve_gate_with_modification(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred",
         ) from e
-
-    resume_data: dict[str, Any] = {
-        "action": "approved",
-        "modified_output": req.modified_output,
-    }
-    if req.notes:
-        resume_data["notes"] = req.notes
 
     try:
         executor = PipelineExecutor(
@@ -419,6 +425,7 @@ async def reject_gate(
     principal: TenantPrincipal = require_permission("hitl.reject"),
 ) -> dict[str, str]:
     """Reject an interrupted HITL gate and route to reject_target or fail."""
+    resume_data: dict[str, Any] = {"action": "rejected", "reason": req.reason}
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -435,6 +442,7 @@ async def reject_gate(
                     org_id=principal.organisation_id,
                     actor_id=principal.account_id,
                     claim_token=req.claim_token,
+                    decision_payload=resume_data,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -444,6 +452,8 @@ async def reject_gate(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+            except DecisionPayloadError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError as exc:
         logger.exception("hitl.reject_gate")
         raise HTTPException(
@@ -467,7 +477,6 @@ async def reject_gate(
 
     # Resume the graph with rejection data so the gate router picks the
     # reject_target branch.
-    resume_data: dict[str, Any] = {"action": "rejected", "reason": req.reason}
     try:
         executor = PipelineExecutor(
             engine,
@@ -522,6 +531,7 @@ async def deliver_manual_output(
             detail="output must be a non-empty object",
         )
 
+    resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -536,6 +546,7 @@ async def deliver_manual_output(
                     claim_token=req.claim_token,
                     output=req.output,
                     actor_id=principal.account_id,
+                    decision_payload=resume_data,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -545,6 +556,8 @@ async def deliver_manual_output(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
             except ClaimTokenExpiredError as exc:
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+            except DecisionPayloadError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError as exc:
         logger.exception("hitl.deliver_manual_output")
         raise HTTPException(
@@ -566,7 +579,6 @@ async def deliver_manual_output(
             detail="An unexpected error occurred",
         ) from e
 
-    resume_data: dict[str, Any] = {"action": "deliver_manual", "output": req.output}
     try:
         executor = PipelineExecutor(
             engine,
@@ -610,6 +622,7 @@ async def submit_manual_output(
     principal: TenantPrincipal = require_permission("hitl.approve"),
 ) -> dict[str, str]:
     """Submit output for a manual-input node and resume the run."""
+    resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
     mgr = HITLManager()
     try:
         async with session.begin():
@@ -623,6 +636,7 @@ async def submit_manual_output(
                     org_id=principal.organisation_id,
                     claim_token=req.claim_token,
                     actor_id=principal.account_id,
+                    decision_payload=resume_data,
                 )
             except GateNotFoundError as exc:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -634,6 +648,8 @@ async def submit_manual_output(
                 raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
             except NotTeamMemberError as exc:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+            except DecisionPayloadError as exc:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     except ProgrammingError as exc:
         logger.exception("hitl.submit_manual_output")
         raise HTTPException(
@@ -655,7 +671,6 @@ async def submit_manual_output(
             detail="An unexpected error occurred",
         ) from e
 
-    resume_data: dict[str, Any] = {"action": "manual_output", "output": req.output}
     try:
         executor = PipelineExecutor(
             engine,
