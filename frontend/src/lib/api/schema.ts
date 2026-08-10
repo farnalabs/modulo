@@ -11768,6 +11768,12 @@ export interface components {
              * @default 0.000000
              */
             aggregate_cost_usd: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /** RunSummary */
         RunSummary: {

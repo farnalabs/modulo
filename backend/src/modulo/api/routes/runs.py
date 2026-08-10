@@ -6,6 +6,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -325,6 +326,9 @@ class RunResponse(BaseModel):
     child_runs_cost_usd: Decimal = Decimal("0.000000")
     child_runs_count: int = 0
     aggregate_cost_usd: Decimal = Decimal("0.000000")
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count: int = 0) -> RunResponse:
@@ -361,6 +365,9 @@ def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count
         child_runs_cost_usd=child_runs_cost_usd,
         child_runs_count=child_count,
         aggregate_cost_usd=_quantize_cost_rollup(own_cost + child_runs_cost_usd),
+        created_at=run.created_at,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
     )
 
 
