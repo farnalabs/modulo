@@ -247,7 +247,7 @@
               </td>
               <td class="py-3">
                 <button
-                  v-if="node.hasLogs"
+                  v-if="node.hasLogs || node.telemetry"
                   data-testid="run-detail-toggle-logs"
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="toggleNodeLogs(node.name)"
@@ -316,7 +316,7 @@
                   <div class="mb-2 flex flex-wrap items-center gap-2">
                     <h4 class="text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.telemetry') }}</h4>
                     <span v-if="node.telemetry?.status != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium capitalize">{{ node.telemetry?.status }}</span>
-                    <span v-if="node.telemetry?.exit_code != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.exit_code') }}: {{ node.telemetry?.exit_code }}</span>
+                    <span v-if="node.telemetry?.exit_code != null && Number(node.telemetry?.exit_code) !== 0" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.exit_code') }}: {{ node.telemetry?.exit_code }}</span>
                     <span v-if="node.telemetry?.wall_clock_time_ms != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.wall_clock_time') }}: {{ formatMs(Number(node.telemetry?.wall_clock_time_ms)) }}</span>
                     <span v-if="node.telemetry?.cost_estimate_usd != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.cost_estimate') }}: {{ formatMoney(Number(node.telemetry?.cost_estimate_usd), currencyCode, 6) }}</span>
                     <span

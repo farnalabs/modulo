@@ -449,7 +449,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('renders agent telemetry/logs (stdout, exit_code, stall_reason) in the Logs section', async () => {
+  it('renders agent telemetry/logs (stdout, stderr, stall_reason) in the Logs section', async () => {
     const wrapper = await mountWithNormalizedIO()
 
     const toggleLogs = wrapper.find('[data-testid="run-detail-toggle-logs"]')
@@ -463,9 +463,91 @@ describe('RunDetailView', () => {
     expect(text).toContain('Agent Telemetry')
     expect(text).toContain('Building widget...')
     expect(text).toContain('Warning: legacy config detected.')
-    expect(text).toContain('Exit code')
     expect(text).toContain('Agent stalled: waiting on upstream')
     expect(text).toContain('return-level summary')
+    // Exit code 0 (success) does not render an "Exit code" chip.
+    expect(text).not.toContain('Exit code')
+    wrapper.unmount()
+  })
+
+  it('renders the exit-code chip when the telemetry exit code is non-zero', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: baseDetail(), error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: null,
+            node_telemetry: {
+              'node-a': { status: 'failed', exit_code: 2, agent_stderr: 'boom' },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await nextTick()
+
+    const logRow = wrapper.find('[data-testid="run-detail-log-row"]')
+    expect(logRow.text()).toContain('Exit code: 2')
+    wrapper.unmount()
+  })
+
+  it('shows the telemetry card for nodes that have telemetry but no stdout/stderr logs', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: baseDetail(), error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: { 'gate-a': { result: 'passed' } },
+            node_telemetry: {
+              'gate-a': {
+                status: 'complete',
+                exit_code: 0,
+                wall_clock_time_ms: 99,
+                cost_estimate_usd: 0.0001,
+                summary: 'gate ran cleanly',
+              },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const toggleLogs = wrapper.find('[data-testid="run-detail-toggle-logs"]')
+    expect(toggleLogs.exists()).toBe(true)
+    await toggleLogs.trigger('click')
+    await nextTick()
+
+    const telemetry = wrapper.find('[data-testid="run-detail-node-telemetry"]')
+    expect(telemetry.exists()).toBe(true)
+    expect(telemetry.text()).toContain('Agent Telemetry')
+    expect(telemetry.text()).toContain('99')
+    expect(telemetry.text()).toContain('gate ran cleanly')
     wrapper.unmount()
   })
 
@@ -518,7 +600,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('legacy rows (envelope outputs_json, no node_telemetry) still render the old IO tree', async () => {
+  it('legacy rows (envelope outputs_json, no node_telemetry) render the full envelope in the IO output panel', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((url: string) => {
       if (url === '/api/v1/runs/{run_id}') {
@@ -551,6 +633,8 @@ describe('RunDetailView', () => {
     const outputPanel = ioRow.findAll('[data-testid="json-viewer"]')[1]
     expect(outputPanel.text()).toContain('legacy response')
     expect(outputPanel.text()).toContain('hello')
+    expect(outputPanel.text()).toContain('legacy stdout')
+    expect(outputPanel.text()).toContain('agent_stdout')
 
     // No node_telemetry -> no Logs toggle, no telemetry card.
     expect(wrapper.find('[data-testid="run-detail-toggle-logs"]').exists()).toBe(false)
