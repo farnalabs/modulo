@@ -5,15 +5,13 @@ delivery-tasks: [task-nv7-team-comparison]
 bdd:
   - backend/tests/bdd/features/personas/elena-engineering-director.feature
 code:
-  - frontend/src/views/TeamComparisonView.vue
   - frontend/src/router/index.ts
   - backend/src/modulo/api/routes/dashboard.py
   - backend/src/modulo/api/routes/admin.py
   - backend/tests/unit/api/test_dashboard.py
-unit-tests:
-  - frontend/src/__tests__/TeamComparisonView.spec.ts
+unit-tests: []
 depends-on: [feat-teams-dashboard, feat-teams-team-crud, feat-evals-eval-engine]
-status: partial
+status: gap
 ---
 # Team Comparison
 

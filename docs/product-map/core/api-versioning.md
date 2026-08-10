@@ -5,16 +5,13 @@ delivery-tasks: [task-nv12-api-versioning]
 bdd: []
 code:
   - backend/src/modulo/api/middleware/deprecation_headers.py
-  - backend/src/modulo/api/routes/changelog.py
   - backend/src/modulo/api/main.py
-  - frontend/src/views/ApiChangelogView.vue
   - backend/docs/operations/api-versioning.md
   - backend/docs/operations/migrations/v1-config-to-admin.md
 
 depends-on: []
 unit-tests:
   - backend/tests/unit/api/test_deprecation_headers.py
-  - backend/tests/unit/api/test_changelog.py
 status: partial
 ---
 
