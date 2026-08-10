@@ -232,7 +232,21 @@ def _safe_json_object(response: httpx.Response) -> dict[str, Any]:
 
 
 def _project_path(project_id: str) -> str:
-    """URL-encode a project path like 'group/subgroup/project'."""
+    """URL-encode a project path like 'group/subgroup/project'.
+
+    Numeric project IDs are accepted (coerced to strings) because GitLab
+    resolves them. ``None``, booleans, empty/whitespace-only strings, and other
+    non-scalar values raise a descriptive ``ValueError`` instead of a raw
+    ``TypeError`` from ``quote()``.
+    """
+    if project_id is None or isinstance(project_id, bool):
+        raise ValueError(f"GitLab 'project' filter must be a project ID or path, got {project_id!r}")
+    if not isinstance(project_id, str):
+        if not isinstance(project_id, (int, float)):
+            raise ValueError(f"GitLab 'project' filter must be a project ID or path, got {project_id!r}")
+        project_id = str(project_id)
+    if not project_id.strip():
+        raise ValueError("GitLab 'project' filter must be a non-empty project ID or path")
     return quote(project_id, safe="")
 
 
@@ -293,6 +307,8 @@ class GitLabConnector(ConnectorBase):
     """
 
     def __init__(self, token: str, base_url: str = _GITLAB_API) -> None:
+        if not token or not token.strip():
+            raise ValueError("GitLabConnector requires a non-empty token")
         self._token = token
         self._base_url = base_url.rstrip("/")
         self._scope_cache: tuple[float, frozenset[str]] | None = None
