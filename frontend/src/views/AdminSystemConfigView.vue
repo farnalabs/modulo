@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="runtime_config" required-tier="team" show-disabled>
   <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader :title="$t('views.AdminSystemConfigView.system_admin_config')" :subtitle="$t('views.AdminSystemConfigView.deploymentwide_system_configuration_system_admin_only')" />
@@ -39,9 +40,7 @@
               <code class="text-sm font-mono">{{ entry.key }}</code>
             </td>
             <td class="px-4 py-3">
-              <code class="text-sm font-mono break-all max-w-xs inline-block">
-                {{ formatValue(entry.value) }}
-              </code>
+              <JsonViewer :data="entry.value" :show-toolbar="true" :max-height="'20rem'" />
             </td>
             <td class="px-4 py-3 text-sm text-muted-foreground">
               {{ entry.updated_at || '—' }}
@@ -51,10 +50,13 @@
       </table>
     </div>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { Ref, ref, watch } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -65,18 +67,6 @@ interface ConfigEntry {
   key: string
   value: unknown
   updated_at: string | null
-}
-
-function formatValue(value: unknown): string {
-  if (value === null) return '(null)'
-  if (value === undefined) return '(undefined)'
-  if (typeof value === 'string') return value
-  if (typeof value === 'boolean' || typeof value === 'number') return String(value)
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }
 
 const { loading, error, data, load: loadConfig } = useDataFetch(

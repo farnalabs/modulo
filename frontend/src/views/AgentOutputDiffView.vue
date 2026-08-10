@@ -102,11 +102,13 @@
           <div class="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2">
             <div>
               <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run A: <span class="font-mono">{{ runIdA }}</span></h4>
-              <pre class="max-h-64 overflow-auto rounded bg-muted p-3 text-xs leading-relaxed"><code>{{ result.node_output_a ? JSON.stringify(result.node_output_a, null, 2) : '—' }}</code></pre>
+              <JsonViewer v-if="result.node_output_a" :data="result.node_output_a" :show-toolbar="true" :max-height="'16rem'" />
+              <span v-else class="text-xs text-muted-foreground">—</span>
             </div>
             <div>
               <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run B: <span class="font-mono">{{ runIdB }}</span></h4>
-              <pre class="max-h-64 overflow-auto rounded bg-muted p-3 text-xs leading-relaxed"><code>{{ result.node_output_b ? JSON.stringify(result.node_output_b, null, 2) : '—' }}</code></pre>
+              <JsonViewer v-if="result.node_output_b" :data="result.node_output_b" :show-toolbar="true" :max-height="'16rem'" />
+              <span v-else class="text-xs text-muted-foreground">—</span>
             </div>
           </div>
         </details>
@@ -147,6 +149,7 @@ import { useMutation } from '../composables/useMutation'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
