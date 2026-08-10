@@ -47,6 +47,7 @@ __all__ = [
 
 _COMPLETE_STATUS = "complete"
 _FAILED_STATUS = "failed"
+_STALLED_STATUS = "stalled"
 _SANDBOX_AGENT_NODE_TYPE = "sandbox_agent"
 
 # Error codes that mark a failed run as a STALL — the run made no progress
@@ -100,6 +101,7 @@ class AnalyticsStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     EVAL_FAILED = "eval_failed"
+    STALLED = "stalled"
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,12 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         time_expr: Any = sa.func.date_trunc("hour", RunDailyFact.created_at).label("run_date")
         group_cols = [time_expr]
         select_cols = [time_expr]
+    # FAR-102 stall-dimension metrics — all bound, never interpolated.
+    # A stalled run is a failure for rate purposes (it never completed).
+    failure_status = sa.or_(
+        RunDailyFact.status == _FAILED_STATUS,
+        RunDailyFact.status == _STALLED_STATUS,
+    )
     select_cols += [
         # Complete-run count for success_rate — a FILTER keeps it out of the
         # group key while staying computable at day granularity.
@@ -161,12 +169,11 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         sa.func.sum(RunDailyFact.total_cost_usd).label("total_cost_usd"),
         sa.func.sum(RunDailyFact.total_tokens).label("total_tokens"),
         sa.func.avg(RunDailyFact.duration_ms).label("avg_duration_ms"),
-        # FAR-102 stall-dimension metrics — all bound, never interpolated.
-        sa.func.count(RunDailyFact.id).filter(RunDailyFact.status == _FAILED_STATUS).label("failure_count"),
+        sa.func.count(RunDailyFact.id).filter(failure_status).label("failure_count"),
         sa.func.count(RunDailyFact.id)
         .filter(
             sa.and_(
-                RunDailyFact.status == _FAILED_STATUS,
+                failure_status,
                 RunDailyFact.error_code.in_(sa.bindparam("stall_error_codes", type_=sa.String, expanding=True)),
             )
         )

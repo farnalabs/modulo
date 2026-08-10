@@ -70,7 +70,7 @@ class Run(OrgScoped):
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', "
-            "'complete', 'failed', 'cancelled', 'eval_failed')",
+            "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
