@@ -75,7 +75,7 @@ FIRE_JOB_TTL = 300
 CATCHUP_GRACE_SECONDS = 300  # a fire more than cadence + grace behind is "missed"
 CATCHUP_BOUND_SECONDS = 48 * 3600  # only re-fire misses within the last 48h
 _CATCHUP_MARKER_PREFIX = "saq:cron:catchup"
-_CATCHUP_MARKER_TTL = 600  # 2x grace — covers the fire-job pending window
+_CATCHUP_MARKER_TTL = FIRE_JOB_TIMEOUT * (FIRE_JOB_RETRIES + 1) + 60  # 960s >= worst-case in-flight (300*3)
 
 # Report delivery (plan F1): failure backs off next_send_at +5min; deactivate
 # after 5 consecutive failures. NEVER re-enqueue every 30s.
@@ -514,6 +514,14 @@ async def fire_cron_trigger(
                 result="concurrency_limit_reached",
                 error_detail=(f"Active runs: {active_count}, limit: {trigger.max_concurrent_runs}"),
             )
+            # Finding 2 (review PR #982): record the attempt (skip-not-defer).
+            # A concurrency-limited fire is CONSUMED, not missed — without this
+            # last_fired_at stays stale and the catch-up scan re-fires the epoch
+            # every marker TTL forever. The next NORMAL scheduled fire handles
+            # the future.
+            await session.execute(
+                update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
+            )
             return {
                 "status": "skipped",
                 "reason": "concurrency_limit",
@@ -544,6 +552,12 @@ async def fire_cron_trigger(
                     result="spend_limit_reached",
                     error_detail=(f"Daily spend limit {spend_limit} reached (today: {today_cost})"),
                 )
+                # Finding 2 (review PR #982): record the attempt (skip-not-defer)
+                # so the catch-up scan does not re-fire a spend-limited epoch
+                # forever. The next NORMAL scheduled fire handles the future.
+                await session.execute(
+                    update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
+                )
                 return {
                     "status": "skipped",
                     "reason": "spend_limit",
@@ -566,6 +580,12 @@ async def fire_cron_trigger(
                     org_id=org_id,
                     result="no_pipeline",
                     error_detail="Pipeline not found when trying to auto-create snapshot",
+                )
+                # Finding 2 (review PR #982): record the attempt (skip-not-defer)
+                # so the catch-up scan does not re-fire a pipeline-missing epoch
+                # forever. The next NORMAL scheduled fire handles the future.
+                await session.execute(
+                    update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=datetime.now(UTC))
                 )
                 return {"status": "skipped", "reason": "pipeline_not_found"}
             snapshot_id = new_snapshot.id
@@ -1158,25 +1178,25 @@ def _cron_cadence_seconds(cron_expression: str, cron_timezone: str | None, now: 
     return _trigger_period_seconds("cron", cron_expression, cron_timezone, None, now)
 
 
-async def _catchup_marker_ok(redis_client: AsyncRedis, trigger_id: uuid.UUID, missed_epoch: int) -> bool:
-    """True when the catch-up for *missed_epoch* has NOT already been fired.
+async def _claim_catchup_marker(redis_client: AsyncRedis, trigger_id: uuid.UUID, missed_epoch: int) -> bool:
+    """Atomically claim the catch-up for *missed_epoch* (SET NX EX).
 
-    The catch-up re-fires a trigger whose ``last_fired_at`` is still stale
-    while its fire job is PENDING (``last_fired_at`` only updates when the job
-    actually runs). Without a marker, every 60s tick within the pending window
-    would re-enqueue the same missed epoch — a double fire. The marker is keyed
-    by the stable missed-epoch identity and lives for the fire-job pending
-    window; once the job runs, ``last_fired_at`` is fresh and the trigger is no
-    longer eligible anyway. A Redis failure fails OPEN (the fire is allowed) —
-    if Redis is down the enqueue itself fails and the tick logs the failure.
+    The claim is a single atomic ``SET key 1 NX EX`` so concurrent catch-up
+    scans across worker machines can never both fire the same missed epoch
+    (TOCTOU-free; review PR #982 finding 3). Returns True only when THIS call
+    won the claim. The marker lives for the worst-case fire-job in-flight
+    window (``_CATCHUP_MARKER_TTL`` >= FIRE_JOB_TIMEOUT * (RETRIES+1)); once the
+    job runs, ``last_fired_at`` is fresh and the trigger is no longer eligible
+    anyway. A Redis failure fails OPEN (the fire is allowed) — if Redis is down
+    the enqueue itself fails and the tick logs the failure.
     """
     key = f"{_CATCHUP_MARKER_PREFIX}:{trigger_id}:{missed_epoch}"
     try:
-        return not bool(await redis_client.get(key))
+        return bool(await redis_client.set(key, "1", nx=True, ex=_CATCHUP_MARKER_TTL))
     except asyncio.CancelledError:
         raise
     except Exception:
-        _log.warning("cron_helpers.catchup_marker_read_failed trigger=%s", trigger_id)
+        _log.warning("cron_helpers.catchup_marker_claim_failed trigger=%s", trigger_id)
         return True
 
 
@@ -1277,8 +1297,8 @@ async def _fire_missed_cron_epochs(
         if row.last_fired_at >= row.next_fire_at - timedelta(seconds=cadence):
             continue  # the epoch next_fire_at points past was already fired
         missed_epoch = int((row.next_fire_at - timedelta(seconds=cadence)).timestamp())
-        if not await _catchup_marker_ok(redis_client, row.id, missed_epoch):
-            continue  # already caught up — the fire job is still pending
+        if not await _claim_catchup_marker(redis_client, row.id, missed_epoch):
+            continue  # another machine already claimed this epoch — single winner
         next_nf = compute_next_fire(row.cron_expression, after=now, timezone=row.cron_timezone or "UTC")
         try:
             r = await session.execute(
@@ -1526,6 +1546,16 @@ async def fire_due_triggers() -> dict[str, Any]:
                         # already enqueued the same epoch) — handled, so the
                         # catch-up scan must not re-fire it this tick.
                         advanced_this_tick.add(row.id)
+                        # Finding 1 (review PR #982): ALSO mark the consumed epoch
+                        # so the catch-up scan does not re-fire it on the NEXT
+                        # tick while the fire job is still pending. row.next_fire_at
+                        # still holds the pre-advance value = the epoch consumed.
+                        try:
+                            await _mark_catchup_fired(redis_client, row.id, int(row.next_fire_at.timestamp()))
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            _log.exception("fire_due_triggers: catchup_marker_write_failed %s", row.id)
                     except asyncio.CancelledError:
                         raise
                     except Exception:

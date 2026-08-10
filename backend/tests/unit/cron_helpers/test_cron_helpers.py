@@ -628,7 +628,7 @@ class TestFireDueTriggers:
         )
         factory = MagicMock(return_value=session)
         redis_client = AsyncMock()
-        redis_client.get.return_value = None  # no catch-up marker yet
+        redis_client.set.return_value = True  # atomic claim wins — no marker yet
 
         with (
             patch.object(ch, "_open_factory", return_value=factory),
@@ -789,7 +789,7 @@ class TestFireDueTriggers:
         )
         factory = MagicMock(return_value=session)
         redis_client = AsyncMock()
-        redis_client.get.return_value = "1"  # marker present -> already caught up
+        redis_client.set.return_value = None  # SET NX returns None — marker present, claim lost
 
         with (
             patch.object(ch, "_open_factory", return_value=factory),
@@ -2374,3 +2374,191 @@ class TestDispatcherReconcileSharedStats:
                 raise RuntimeError("redis down")
 
         assert (await ch.write_dispatcher_reconcile_stats(_BrokenRedis(), {"scanned": 0})) is None
+
+
+# ---------------------------------------------------------------------------
+# Review PR #982 findings 1-3: catch-up marker dedup, skip-attempt recording,
+# atomic claim, TTL coverage.
+# ---------------------------------------------------------------------------
+
+
+class TestCatchupReviewFindings:
+    """Regression tests for the PR #982 review findings on the missed-fire
+    catch-up design."""
+
+    @pytest.mark.asyncio
+    async def test_normal_enqueue_writes_catchup_marker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 1: a NORMAL-path successful enqueue writes the catch-up
+        marker for the consumed epoch, so the catch-up scan on the NEXT tick
+        does not re-fire a legitimately-enqueued fire."""
+        _patch_env(monkeypatch)
+        now_val = datetime.now(UTC)
+        due = now_val - timedelta(seconds=1)  # normal loop fires this due epoch
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=due, last_fired_at=None)]),
+                _mock_result(fetchone=("advanced-id",)),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result([]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_client.set.return_value = True
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1"),
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_enqueued"] == 1
+        # The normal path wrote a catch-up marker keyed by the consumed epoch.
+        marker_calls = [c for c in redis_client.set.await_args_list if "catchup" in str(c.args)]
+        assert marker_calls, "normal enqueue must write the catch-up marker"
+        marker_key = str(marker_calls[0].args[0])
+        assert f"{ch._CATCHUP_MARKER_PREFIX}:{TRIGGER_A}:" in marker_key
+        # The marker epoch equals the consumed epoch (pre-advance next_fire_at).
+        assert marker_key.endswith(str(int(due.timestamp())))
+
+    @pytest.mark.asyncio
+    async def test_marker_ttl_covers_worst_case_inflight(self) -> None:
+        """Finding 3: the marker TTL covers the worst-case fire-job in-flight
+        window (timeout x (retries+1)) so a pending job cannot outlive its
+        marker and get re-fired."""
+        assert ch._CATCHUP_MARKER_TTL >= ch.FIRE_JOB_TIMEOUT * (ch.FIRE_JOB_RETRIES + 1)
+
+    @pytest.mark.asyncio
+    async def test_claim_is_atomic_set_nx(self) -> None:
+        """Finding 3: the catch-up marker is claimed with a single atomic
+        SET NX EX - the first caller wins, concurrent callers lose."""
+        redis_client = AsyncMock()
+        redis_client.set.return_value = True  # first claim wins
+        won = await ch._claim_catchup_marker(redis_client, TRIGGER_A, 1234)
+        assert won is True
+        call = redis_client.set.await_args
+        assert call.kwargs.get("nx") is True, "claim must use SET NX (atomic)"
+        assert call.kwargs.get("ex") == ch._CATCHUP_MARKER_TTL
+        # second concurrent claim loses
+        redis_client.set.return_value = None  # SET NX returns None when key exists
+        lost = await ch._claim_catchup_marker(redis_client, TRIGGER_A, 1234)
+        assert lost is False
+
+    @pytest.mark.asyncio
+    async def test_claim_fails_open_on_redis_error(self) -> None:
+        """Finding 3: a Redis failure during the claim fails OPEN (the fire is
+        allowed) - the enqueue itself fails loudly if Redis is really down."""
+        redis_client = AsyncMock()
+        redis_client.set.side_effect = ConnectionError("redis down")
+        won = await ch._claim_catchup_marker(redis_client, TRIGGER_A, 1234)
+        assert won is True
+
+    @pytest.mark.asyncio
+    async def test_concurrency_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 2: a concurrency-limited fire records the attempt
+        (last_fired_at) so the catch-up scan never re-fires it forever."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(max_concurrent_runs=2)
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=2),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "concurrency_limit"
+        updates = [p for s, p in session.executed if "UPDATE triggers" in str(s) and "last_fired_at" in str(s)]
+        assert updates, "concurrency skip must record last_fired_at (attempted state)"
+
+    @pytest.mark.asyncio
+    async def test_spend_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 2: a spend-limited fire records the attempt so the catch-up
+        scan never re-fires it forever."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(daily_spend_limit=10.0)
+        # Execution order inside fire_cron_trigger: advisory lock -> trigger
+        # select -> daily-cost SUM. The cost result must be the LAST slot so the
+        # lock and trigger reads consume their own results first.
+        fake_result = MagicMock()
+        fake_result.scalar_one.return_value = 50.0
+        session = _MockSession([_lock_result(True), _trigger_result(trigger), fake_result])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+            patch(
+                "modulo.core.cost_controller.created_at_day_start",
+                return_value=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            patch(
+                "modulo.db.crud.run.Run",
+                MagicMock(),
+            ),
+            patch.object(ch, "select"),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "spend_limit"
+        updates = [p for s, p in session.executed if "UPDATE triggers" in str(s) and "last_fired_at" in str(s)]
+        assert updates, "spend skip must record last_fired_at (attempted state)"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_missing_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 2: a pipeline-missing fire records the attempt so the
+        catch-up scan never re-fires it forever."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+            patch(
+                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "pipeline_not_found"
+        updates = [p for s, p in session.executed if "UPDATE triggers" in str(s) and "last_fired_at" in str(s)]
+        assert updates, "pipeline-missing skip must record last_fired_at (attempted state)"
