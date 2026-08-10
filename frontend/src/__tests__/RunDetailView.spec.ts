@@ -123,20 +123,20 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it('shows prompt hidden state for nodes', async () => {
+  it('shows a single view-prompt button for each node', async () => {
     router.push('/runs/test-run-id')
     await router.isReady()
     const wrapper = createWrapper()
     await nextTick()
     await flushPromises()
     await nextTick()
-    const revealBtns = wrapper.findAll('[data-testid="run-detail-reveal-prompt"]')
-    expect(revealBtns.length).toBeGreaterThanOrEqual(1)
-    expect(revealBtns[0].text()).toContain('Prompt hidden')
+    const promptBtns = wrapper.findAll('[data-testid="run-detail-show-prompt"]')
+    expect(promptBtns.length).toBeGreaterThanOrEqual(1)
+    expect(promptBtns[0].text()).toContain('View prompt')
     wrapper.unmount()
   })
 
-  it('reveals prompt on click and shows dialog', async () => {
+  it('reveals the prompt and opens the dialog on a single click', async () => {
     router.push('/runs/test-run-id')
     await router.isReady()
     const wrapper = createWrapper()
@@ -144,16 +144,11 @@ describe('RunDetailView', () => {
     await flushPromises()
     await nextTick()
 
-    const revealBtn = wrapper.find('[data-testid="run-detail-reveal-prompt"]')
-    expect(revealBtn.exists()).toBe(true)
-    await revealBtn.trigger('click')
+    const promptBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
+    expect(promptBtn.exists()).toBe(true)
+    await promptBtn.trigger('click')
     await nextTick()
     await flushPromises()
-
-    const showBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
-    expect(showBtn.exists()).toBe(true)
-    await showBtn.trigger('click')
-    await nextTick()
 
     expect(document.body.textContent).toContain('helpful assistant')
     expect(document.body.textContent).toContain('25')
@@ -171,20 +166,58 @@ describe('RunDetailView', () => {
     await flushPromises()
     await nextTick()
 
-    const revealBtn = wrapper.find('[data-testid="run-detail-reveal-prompt"]')
-    await revealBtn.trigger('click')
+    const promptBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
+    await promptBtn.trigger('click')
     await nextTick()
     await flushPromises()
-
-    const showBtn = wrapper.find('[data-testid="run-detail-show-prompt"]')
-    await showBtn.trigger('click')
-    await nextTick()
 
     const copyBtn = document.querySelector('[data-testid="run-detail-copy-prompt"]')
     expect(copyBtn).not.toBeNull()
     ;(copyBtn as HTMLElement).click()
     expect(writeText).toHaveBeenCalled()
     expect(writeText.mock.calls[0][0]).toContain('helpful assistant')
+    wrapper.unmount()
+  })
+
+  it('shows node input and output values from normalized outputs_json', async () => {
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    // Complete runs auto-expand the last node's IO row.
+    expect(wrapper.text()).toContain('hello')
+    expect(wrapper.text()).toContain('response')
+    wrapper.unmount()
+  })
+
+  it('shows empty-state messages instead of the string null for a node with no input/output', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: { ...baseDetail(), node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } } }, error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: { 'node-a': {} } }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const noInput = wrapper.find('[data-testid="run-detail-no-input"]')
+    const noOutput = wrapper.find('[data-testid="run-detail-no-output"]')
+    expect(noInput.exists()).toBe(true)
+    expect(noOutput.exists()).toBe(true)
+    expect(noInput.text()).toContain('No input data')
+    expect(noOutput.text()).toContain('No output data')
+    expect(noInput.text()).not.toContain('null')
     wrapper.unmount()
   })
 

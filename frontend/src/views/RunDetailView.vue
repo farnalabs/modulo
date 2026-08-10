@@ -258,22 +258,13 @@
               </td>
               <td class="py-3">
                 <button
-                  v-if="revealedPrompts[node.name]?.prompt"
                   data-testid="run-detail-show-prompt"
-                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
-                  @click="showPrompt(node.name)"
-                >
-                  {{ $t('views.RunDetailView.view') }}
-                </button>
-                <button
-                  v-else-if="revealedPrompts[node.name] === undefined"
-                  data-testid="run-detail-reveal-prompt"
-                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-primary"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                  :disabled="promptLoading.has(node.name)"
                   @click="revealPrompt(node.name)"
                 >
-                  {{ $t('views.RunDetailView.prompt_hidden_click_to_reveal') }}
+                  {{ $t('views.RunDetailView.view_prompt') }}
                 </button>
-                <span v-else class="text-xs text-muted-foreground">—</span>
               </td>
             </tr>
 
@@ -286,11 +277,13 @@
               <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.input') }}</h4>
-                  <JsonViewer :data="node.io?.input ?? null" :show-toolbar="false" :max-height="'16rem'" />
+                  <JsonViewer v-if="node.io?.input != null" :data="node.io.input" :show-toolbar="false" :max-height="'16rem'" />
+                  <p v-else data-testid="run-detail-no-input" class="text-sm text-muted-foreground">{{ $t('views.RunDetailView.no_input_data') }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.output') }}</h4>
-                  <JsonViewer :data="node.io?.output ?? null" :show-toolbar="false" :max-height="'16rem'" />
+                  <JsonViewer v-if="node.io?.output != null" :data="node.io.output" :show-toolbar="false" :max-height="'16rem'" />
+                  <p v-else data-testid="run-detail-no-output" class="text-sm text-muted-foreground">{{ $t('views.RunDetailView.no_output_data') }}</p>
                 </div>
               </td>
             </tr>
@@ -636,6 +629,11 @@ async function copyText(text: string) {
 }
 
 async function revealPrompt(nodeName: string) {
+  const cached = revealedPrompts.value[nodeName]
+  if (cached?.prompt) {
+    showPrompt(nodeName)
+    return
+  }
   if (promptLoading.value.has(nodeName)) return
   const runId = route.params.id as string
   if (!runId) return
@@ -666,9 +664,7 @@ async function revealPrompt(nodeName: string) {
       promptAlwaysVisible: d.prompt_always_visible,
     }
     revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: revealed }
-    if (d.prompt_always_visible) {
-      showPrompt(nodeName)
-    }
+    showPrompt(nodeName)
   } finally {
     const s = new Set(promptLoading.value)
     s.delete(nodeName)
@@ -1003,6 +999,37 @@ async function rejectGate() {
   }
 }
 
+function resolveNodeIO(nodeOutput: Record<string, unknown> | undefined): { input: unknown; output: unknown } | null {
+  if (nodeOutput == null) return null
+  if (!Array.isArray(nodeOutput) && typeof nodeOutput === 'object') {
+    if ('artifacts' in nodeOutput) {
+      // Legacy mixed envelope — the meaningful output is under `output`.
+      return {
+        input: nodeOutput.input ?? runIO.value?.input_payload ?? null,
+        output: nodeOutput.output ?? null,
+      }
+    }
+    // P1+ pure return — honour an explicit `input` key, otherwise fall back to
+    // the run-level input payload; the value itself is the output when there is
+    // no `output` wrapper. An empty object carries no data — treat as absent.
+    if (Object.keys(nodeOutput).length === 0) {
+      return {
+        input: runIO.value?.input_payload ?? null,
+        output: null,
+      }
+    }
+    return {
+      input: nodeOutput.input ?? runIO.value?.input_payload ?? null,
+      output: nodeOutput.output !== undefined ? nodeOutput.output : nodeOutput,
+    }
+  }
+  // Pure scalar/array return — the value itself is the output.
+  return {
+    input: runIO.value?.input_payload ?? null,
+    output: nodeOutput,
+  }
+}
+
 const nodeEntries = computed<NodeEntry[]>(() => {
   const r = run.value
   if (!r) return []
@@ -1030,12 +1057,7 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       outputTokens: usage?.output_tokens ?? null,
       cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
       traceId: run.value?.trace_id ?? null,
-      io: nodeOutput
-        ? {
-            input: nodeOutput.input ?? null,
-            output: nodeOutput.output ?? null,
-          }
-        : null,
+      io: resolveNodeIO(nodeOutput),
       hasLogs,
       stallReason,
     }

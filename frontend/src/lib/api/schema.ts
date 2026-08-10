@@ -11760,6 +11760,21 @@ export interface components {
              * @default 0.000000
              */
             aggregate_cost_usd: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at?: string | null;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at?: string | null;
         };
         /** RunSummary */
         RunSummary: {
