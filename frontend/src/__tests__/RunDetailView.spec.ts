@@ -39,7 +39,24 @@ vi.mock('../lib/api/client', () => {
           })
         }
         if (url === '/api/v1/runs/{run_id}/io') {
-          return Promise.resolve({ data: { outputs_json: { 'node-a': { input: { q: 'hello' }, output: 'response' } } }, error: undefined })
+          return Promise.resolve({
+            data: {
+              outputs_json: { 'node-a': { result: 'pure agent return', summary: 'return-level summary' } },
+              node_telemetry: {
+                'node-a': {
+                  status: 'complete',
+                  exit_code: 0,
+                  wall_clock_time_ms: 12345,
+                  cost_estimate_usd: 0.0123,
+                  agent_stdout: 'Building widget...\nWidget built.\n',
+                  agent_stderr: 'Warning: legacy config detected.\n',
+                  stall_reason: 'waiting on upstream',
+                  summary: 'telemetry-level summary',
+                },
+              },
+            },
+            error: undefined,
+          })
         }
         return Promise.resolve({ data: null, error: undefined })
       }),
@@ -263,6 +280,55 @@ describe('RunDetailView', () => {
     return wrapper
   }
 
+  function normalizedIOData() {
+    return {
+      outputs_json: { 'node-a': { result: 'pure agent return', summary: 'return-level summary' } },
+      node_telemetry: {
+        'node-a': {
+          status: 'complete',
+          exit_code: 0,
+          wall_clock_time_ms: 12345,
+          cost_estimate_usd: 0.0123,
+          agent_stdout: 'Building widget...\nWidget built.\n',
+          agent_stderr: 'Warning: legacy config detected.\n',
+          stall_reason: 'waiting on upstream',
+          summary: 'telemetry-level summary',
+        },
+      },
+    }
+  }
+
+  async function mountWithNormalizedIO() {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            run_id: 'test-run-id',
+            pipeline_id: 'test-pipeline',
+            status: 'complete',
+            total_cost_usd: 1.23,
+            token_consumption: null,
+            node_token_usage: { 'node-a': { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+            trace_id: null,
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: normalizedIOData(), error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
   it('shows aggregate cost line when child runs exist', async () => {
     const wrapper = await mountWithDetail({
       ...baseDetail(),
@@ -357,6 +423,222 @@ describe('RunDetailView', () => {
     expect(wrapper.text()).toContain('Failed to cancel:')
     expect(wrapper.text()).toContain('run_already_terminal')
     expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders the PURE agent return in the IO output tree with no telemetry keys', async () => {
+    const wrapper = await mountWithNormalizedIO()
+
+    const toggleIo = wrapper.find('[data-testid="run-detail-toggle-io"]')
+    expect(toggleIo.exists()).toBe(true)
+    await toggleIo.trigger('click')
+    await nextTick()
+
+    const ioRow = wrapper.find('[data-testid="run-detail-io-row"]')
+    expect(ioRow.exists()).toBe(true)
+    const viewers = ioRow.findAll('[data-testid="json-viewer"]')
+    expect(viewers.length).toBe(2)
+    const outputPanel = viewers[1]
+    expect(outputPanel.text()).toContain('pure agent return')
+    expect(outputPanel.text()).toContain('return-level summary')
+    expect(outputPanel.text()).not.toContain('agent_stdout')
+    expect(outputPanel.text()).not.toContain('agent_stderr')
+    expect(outputPanel.text()).not.toContain('exit_code')
+    expect(outputPanel.text()).not.toContain('stall_reason')
+    expect(outputPanel.text()).not.toContain('wall_clock_time')
+    wrapper.unmount()
+  })
+
+  it('renders agent telemetry/logs (stdout, stderr, stall_reason) in the Logs section', async () => {
+    const wrapper = await mountWithNormalizedIO()
+
+    const toggleLogs = wrapper.find('[data-testid="run-detail-toggle-logs"]')
+    expect(toggleLogs.exists()).toBe(true)
+    await toggleLogs.trigger('click')
+    await nextTick()
+
+    const logRow = wrapper.find('[data-testid="run-detail-log-row"]')
+    expect(logRow.exists()).toBe(true)
+    const text = logRow.text()
+    expect(text).toContain('Agent Telemetry')
+    expect(text).toContain('Building widget...')
+    expect(text).toContain('Warning: legacy config detected.')
+    expect(text).toContain('Agent stalled: waiting on upstream')
+    expect(text).toContain('return-level summary')
+    // Exit code 0 (success) does not render an "Exit code" chip.
+    expect(text).not.toContain('Exit code')
+    wrapper.unmount()
+  })
+
+  it('renders the exit-code chip when the telemetry exit code is non-zero', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: baseDetail(), error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: null,
+            node_telemetry: {
+              'node-a': { status: 'failed', exit_code: 2, agent_stderr: 'boom' },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await nextTick()
+
+    const logRow = wrapper.find('[data-testid="run-detail-log-row"]')
+    expect(logRow.text()).toContain('Exit code: 2')
+    wrapper.unmount()
+  })
+
+  it('shows the telemetry card for nodes that have telemetry but no stdout/stderr logs', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: baseDetail(), error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: { 'gate-a': { result: 'passed' } },
+            node_telemetry: {
+              'gate-a': {
+                status: 'complete',
+                exit_code: 0,
+                wall_clock_time_ms: 99,
+                cost_estimate_usd: 0.0001,
+                summary: 'gate ran cleanly',
+              },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const toggleLogs = wrapper.find('[data-testid="run-detail-toggle-logs"]')
+    expect(toggleLogs.exists()).toBe(true)
+    await toggleLogs.trigger('click')
+    await nextTick()
+
+    const telemetry = wrapper.find('[data-testid="run-detail-node-telemetry"]')
+    expect(telemetry.exists()).toBe(true)
+    expect(telemetry.text()).toContain('Agent Telemetry')
+    expect(telemetry.text()).toContain('99')
+    expect(telemetry.text()).toContain('gate ran cleanly')
+    wrapper.unmount()
+  })
+
+  it('prefers the pure return summary over telemetry summary for non-failed nodes', async () => {
+    const wrapper = await mountWithNormalizedIO()
+
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await nextTick()
+
+    const summary = wrapper.find('[data-testid="run-detail-node-summary"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toContain('return-level summary')
+    expect(summary.text()).not.toContain('telemetry-level summary')
+    wrapper.unmount()
+  })
+
+  it('falls back to the telemetry summary when the node status is failed', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: baseDetail(), error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: { 'node-a': { result: 'partial return', summary: 'return-level summary' } },
+            node_telemetry: {
+              'node-a': { status: 'failed', exit_code: 1, agent_stderr: 'boom', summary: 'telemetry-level summary' },
+            },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="run-detail-toggle-logs"]').trigger('click')
+    await nextTick()
+
+    const summary = wrapper.find('[data-testid="run-detail-node-summary"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toContain('telemetry-level summary')
+    wrapper.unmount()
+  })
+
+  it('legacy rows (envelope outputs_json, no node_telemetry) render the full envelope in the IO output panel', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({ data: baseDetail(), error: undefined })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({
+          data: {
+            outputs_json: { 'node-a': { input: { q: 'hello' }, output: { result: 'legacy response', agent_stdout: 'legacy stdout' } } },
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const toggleIo = wrapper.find('[data-testid="run-detail-toggle-io"]')
+    expect(toggleIo.exists()).toBe(true)
+    await toggleIo.trigger('click')
+    await nextTick()
+
+    const ioRow = wrapper.find('[data-testid="run-detail-io-row"]')
+    const outputPanel = ioRow.findAll('[data-testid="json-viewer"]')[1]
+    expect(outputPanel.text()).toContain('legacy response')
+    expect(outputPanel.text()).toContain('hello')
+    expect(outputPanel.text()).toContain('legacy stdout')
+    expect(outputPanel.text()).toContain('agent_stdout')
+
+    // No node_telemetry -> no Logs toggle, no telemetry card.
+    expect(wrapper.find('[data-testid="run-detail-toggle-logs"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="run-detail-node-telemetry"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })
