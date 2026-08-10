@@ -352,8 +352,6 @@ def _enrich_union(
                 missing_node_type.append(node_id)
             if is_terminal:
                 schema_drift = output_obj.get("schema_drift")
-                if schema_drift is None and isinstance(output_obj.get("output_json"), dict):
-                    schema_drift = output_obj["output_json"].get("schema_drift")
                 if schema_drift and output_obj.get("pin_failed") is not True and map_type == NODE_TYPE_SANDBOX_AGENT:
                     record_schema_drift()
 

@@ -205,6 +205,7 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.snapshot_id.label("snapshot_id"),
             Run.run_number.label("run_number"),
             sa.func.length(sa.cast(Run.outputs_json, sa.Text)).label("output_bytes"),
+            sa.func.length(sa.cast(Run.node_telemetry_json, sa.Text)).label("telemetry_bytes"),
             Run.rate_limit_key.is_not(None).label("rate_limited"),
         )
         .select_from(Run)
@@ -250,6 +251,7 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.snapshot_id,
                 RunDailyFact.run_number,
                 RunDailyFact.output_bytes,
+                RunDailyFact.telemetry_bytes,
                 RunDailyFact.rate_limited,
             ],
             select_stmt,

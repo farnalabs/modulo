@@ -867,7 +867,9 @@ async def create_eval_from_run(
 
             outputs = run.outputs_json or {}
             node_output = (
-                node_return(outputs, None, str(req.node_id)) or node_return(outputs, None, req.node_id.hex) or {}
+                node_return(outputs, run.node_telemetry_json, str(req.node_id))
+                or node_return(outputs, run.node_telemetry_json, req.node_id.hex)
+                or {}
             )
 
             sample_output = node_output if isinstance(node_output, dict) else {"output": str(node_output)}

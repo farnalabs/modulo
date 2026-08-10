@@ -95,6 +95,9 @@ class RunDailyFact(OrgScoped):
     output_bytes: Mapped[int | None] = mapped_column(
         BigInteger, comment="serialised size of Run.outputs_json (json.dumps length) when present"
     )
+    telemetry_bytes: Mapped[int | None] = mapped_column(
+        BigInteger, comment="serialised size of Run.node_telemetry_json (json.dumps length) when present"
+    )
     rate_limited: Mapped[bool | None] = mapped_column(Boolean, comment="True when Run.rate_limit_key is not null")
 
     team: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_id])

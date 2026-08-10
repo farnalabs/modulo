@@ -1,5 +1,6 @@
 """Unit tests for FeedbackManager service."""
 
+import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -970,6 +971,47 @@ class TestRunPostCorrectionEval:
         assert outcome["passed"] is True
         assert outcome["detail"] == "All checks passed"
         assert outcome["needs_human_review"] is False
+
+    async def test_feeds_pure_return_to_standalone_evaluate(
+        self,
+        mock_session: AsyncMock,
+        mgr: FeedbackManager,
+        correcting_record: MagicMock,
+    ) -> None:
+        correcting_record.feedback_handler_type = "ai_correction"
+
+        correction_run = MagicMock()
+        correction_run.id = uuid.uuid4()
+        correction_run.status = "complete"
+        correction_run.outputs_json = {"node-a": {"summary": "corrected output"}}
+        correction_run.node_telemetry_json = {
+            "node-a": {"status": "completed", "agent_stdout": "console noise", "error_message": "boom"}
+        }
+
+        mock_eval_engine = MagicMock()
+        mock_eval_result = MagicMock()
+        mock_eval_result.passed = True
+        mock_eval_result.detail = "All checks passed"
+        mock_eval_result.score = 1.0
+        mock_eval_engine.standalone_evaluate = MagicMock(return_value=mock_eval_result)
+
+        mock_exec_result = MagicMock()
+        mock_exec_result.scalar_one_or_none.return_value = correcting_record
+        mock_session.execute = AsyncMock(return_value=mock_exec_result)
+
+        with (
+            patch.object(mgr, "get_feedback_record", return_value=correcting_record),
+            patch("modulo.core.feedback_manager.get_run", return_value=correction_run),
+        ):
+            await mgr.run_post_correction_eval(
+                correcting_record.id,
+                eval_engine=mock_eval_engine,
+            )
+
+        called_with = mock_eval_engine.standalone_evaluate.call_args[0][0]
+        assert called_with == {"node-a": {"summary": "corrected output"}}
+        assert "agent_stdout" not in json.dumps(called_with)
+        assert "error_message" not in json.dumps(called_with)
 
     async def test_marks_needs_review_for_human_review_handler(
         self,

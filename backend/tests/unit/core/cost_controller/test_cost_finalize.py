@@ -218,6 +218,16 @@ def test_enrich_union_reads_split_telemetry_column() -> None:
     assert entry["is_sandbox_for_wallclock"] is True
 
 
+def test_enrich_union_schema_drift_detected_from_split_telemetry() -> None:
+    """P2b: schema-drift is read DIRECTLY from the telemetry entry (the former
+    output_json sub-lookup is gone) — still detected for a split row."""
+    outputs = {"node-a": {"summary": "agent summary"}}  # pure return
+    telemetry = {"node-a": {"schema_drift": True}}
+    with patch("modulo.core.cost_controller.finalize.record_schema_drift") as mock_counter:
+        _enrich_union({}, outputs, {"node-a": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
+    mock_counter.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # _write_back_node_cost / _derive_total_tokens / derive_node_type_map
 # ---------------------------------------------------------------------------
