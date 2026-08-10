@@ -121,7 +121,7 @@
           <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
           {{ cancelling ? $t('views.RunDetailView.stopping') : $t('views.RunDetailView.stop') }}
         </button>
-        <span v-if="cancelError" class="ml-3 text-xs text-destructive">{{ cancelError }}</span>
+        <span v-if="cancelError" role="alert" class="ml-3 text-xs text-destructive">{{ cancelError }}</span>
       </div>
 
       <!-- Trace ID -->
@@ -481,6 +481,8 @@ import DialogDescription from '../components/ui/dialog/DialogDescription.vue'
 import DialogFooter from '../components/ui/dialog/DialogFooter.vue'
 import Button from '../components/ui/button/Button.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { requestRunCancellation } from '../lib/api/runs'
+import { isTerminalStatus } from '../constants/runStatuses'
 import { shortId, formatRun } from '../utils/format'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
@@ -722,9 +724,9 @@ const statusBadgeClass = computed(() => {
   return map[s] ?? 'badge badge-context-slate'
 })
 
-const isTerminal = computed(() => run.value != null && TERMINAL_STATUSES.includes(run.value.status))
+const isTerminal = computed(() => run.value != null && isTerminalStatus(run.value.status))
 
-const canCancel = computed(() => run.value != null && !TERMINAL_STATUSES.includes(run.value.status))
+const canCancel = computed(() => run.value != null && !isTerminalStatus(run.value.status))
 
 function nodeStatusBadgeClass(node: NodeEntry): string {
   const map: Record<string, string> = {
@@ -783,8 +785,6 @@ const childRunCount = computed(() => {
   const c = run.value?.child_runs_count
   return Number.isInteger(c) && (c ?? 0) > 0 ? (c as number) : 0
 })
-
-const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed']
 
 const breakdownRaw = computed<CostBreakdownEntry[]>(() => {
   const raw = run.value?.cost_breakdown
@@ -928,11 +928,9 @@ async function cancelRun() {
   cancelling.value = true
   cancelError.value = null
   try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/cancel', {
-      params: { path: { run_id: runId } },
-    })
-    if (err) {
-      cancelError.value = `${t('views.RunDetailView.cancel_failed')} ${formatApiError(err)}`
+    const { error } = await requestRunCancellation(runId, t('views.RunDetailView.cancel_failed'))
+    if (error) {
+      cancelError.value = error
     } else {
       if (run.value) run.value.status = 'cancelled'
       if (pollInterval.value) {
@@ -940,8 +938,6 @@ async function cancelRun() {
         pollInterval.value = null
       }
     }
-  } catch (e: unknown) {
-    cancelError.value = `${t('views.RunDetailView.cancel_failed')} ${formatApiError(e)}`
   } finally {
     cancelling.value = false
   }
@@ -1084,7 +1080,7 @@ async function fetchRunData(runId: string) {
 }
 
 async function fetchLiveOutput(runId: string) {
-  if (run.value && TERMINAL_STATUSES.includes(run.value.status)) return
+  if (run.value && isTerminalStatus(run.value.status)) return
   try {
     const data = await useApi().get<{ events?: RunChunkEvent[] }>(
       `/api/v1/runs/${runId}/events?since_seq=${liveOutputSeq.value}`,
@@ -1111,7 +1107,7 @@ async function fetchLiveOutput(runId: string) {
 
 function startPolling(runId: string) {
   pollInterval.value = setInterval(async () => {
-    if (run.value && TERMINAL_STATUSES.includes(run.value.status)) {
+    if (run.value && isTerminalStatus(run.value.status)) {
       clearInterval(pollInterval.value!)
       pollInterval.value = null
       return

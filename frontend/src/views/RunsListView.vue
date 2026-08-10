@@ -96,7 +96,7 @@
           <template #cell-actions="{ row }">
             <div class="text-right">
               <button
-                v-if="isNonTerminal(row.status as string)"
+                v-if="isNonTerminalStatus(row.status as string)"
                 :disabled="cancellingIds.has(row.run_id as string)"
                 :data-testid="`runs-list-cancel-${row.run_id}`"
                 class="inline-flex items-center gap-1 rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
@@ -151,8 +151,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { fetchRuns, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
-import { api } from '../lib/api/client'
+import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -162,6 +161,7 @@ import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
+import { isNonTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
@@ -169,8 +169,6 @@ const router = useRouter()
 const route = useRoute()
 const { currencyCode, loadCurrency } = useOrgCurrency()
 const { t } = useI18n()
-
-const NON_TERMINAL_STATUSES = ['pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock']
 
 const confirmingIds = ref(new Set<string>())
 const cancellingIds = ref(new Set<string>())
@@ -275,10 +273,6 @@ function navigateToDetail(id: string) {
   router.push(`/runs/${id}`)
 }
 
-function isNonTerminal(status: string): boolean {
-  return NON_TERMINAL_STATUSES.includes(status)
-}
-
 function cancelLabel(runId: string): string {
   if (cancellingIds.value.has(runId)) return t('views.RunsListView.stopping')
   if (confirmingIds.value.has(runId)) return t('views.RunsListView.stop_confirm')
@@ -287,7 +281,7 @@ function cancelLabel(runId: string): string {
 
 async function cancelRun(run: RunListItem) {
   const runId = run.run_id
-  if (!isNonTerminal(run.status)) return
+  if (!isNonTerminalStatus(run.status)) return
   if (cancellingIds.value.has(runId)) return
   if (!confirmingIds.value.has(runId)) {
     confirmingIds.value = new Set([...confirmingIds.value, runId])
@@ -297,11 +291,9 @@ async function cancelRun(run: RunListItem) {
   cancellingIds.value = new Set([...cancellingIds.value, runId])
   cancelErrors.value = { ...cancelErrors.value, [runId]: '' }
   try {
-    const { error: err } = await api.POST('/api/v1/runs/{run_id}/cancel', {
-      params: { path: { run_id: runId } },
-    })
-    if (err) {
-      cancelErrors.value = { ...cancelErrors.value, [runId]: `${t('views.RunsListView.cancel_failed')} ${formatApiError(err)}` }
+    const { error } = await requestRunCancellation(runId, t('views.RunsListView.cancel_failed'))
+    if (error) {
+      cancelErrors.value = { ...cancelErrors.value, [runId]: error }
       return
     }
     if (runsData.value) {
@@ -311,8 +303,6 @@ async function cancelRun(run: RunListItem) {
       }
     }
     await loadRuns()
-  } catch (e: unknown) {
-    cancelErrors.value = { ...cancelErrors.value, [runId]: `${t('views.RunsListView.cancel_failed')} ${formatApiError(e)}` }
   } finally {
     cancellingIds.value = new Set([...cancellingIds.value].filter((id) => id !== runId))
   }
