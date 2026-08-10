@@ -831,6 +831,10 @@ export default {
       "cost_includes_child_runs": "(+child)",
       "cost_includes_child_runs_count": "(+{count} child) | (+{count} children)",
       "no_runs_found": "No runs found",
+      "stop": "Stop",
+      "stop_confirm": "Confirm?",
+      "stopping": "Stopping...",
+      "cancel_failed": "Failed to cancel:",
     },
     "AnalyticsView": {
       "analytics": "Analytics",
@@ -1085,7 +1089,10 @@ export default {
       "total_clamped_to_column_capacity": "Total clamped to column capacity — true spend is higher. See per-run amounts.",
       "total_including_child_runs": "Total including child runs:",
       "total_including_child_runs_count": "Total including {count} child run: | Total including {count} child runs:",
-      "includes_child_run_cost": "includes {amount} child-run cost"
+      "includes_child_run_cost": "includes {amount} child-run cost",
+      "stop": "Stop Run",
+      "stopping": "Stopping...",
+      "cancel_failed": "Failed to cancel:",
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",

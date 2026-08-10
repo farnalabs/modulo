@@ -25,7 +25,46 @@ vi.mock('../lib/api/client', () => {
   }
 })
 
+const routerMocks = vi.hoisted(() => ({
+  push: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('vue-router', () => ({
+  useRoute: vi.fn(() => ({
+    path: '/runs',
+    fullPath: '/runs',
+    params: {},
+    query: {},
+    hash: '',
+    matched: [],
+    name: 'runs-list',
+    redirectedFrom: undefined,
+    meta: {},
+  })),
+  useRouter: vi.fn(() => ({
+    push: routerMocks.push,
+    replace: vi.fn(),
+    resolve: vi.fn(),
+    go: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    onError: vi.fn(),
+    currentRoute: { value: {} },
+    getRoutes: vi.fn(() => []),
+    addRoute: vi.fn(),
+    removeRoute: vi.fn(),
+    hasRoute: vi.fn(() => false),
+    isReady: vi.fn().mockResolvedValue(undefined),
+    install: vi.fn(),
+  })),
+  createRouter: vi.fn(),
+  createWebHistory: vi.fn(() => ({})),
+}))
+
 import RunsListView from '../views/RunsListView.vue'
+import { api } from '../lib/api/client'
 
 const baseRun = {
   run_id: 'run1',
@@ -160,5 +199,134 @@ describe('RunsListView', () => {
     expect(wrapper.text()).toContain('0.5000')
     expect(wrapper.text()).not.toContain('NaN')
     expect(wrapper.text()).not.toContain('(+child)')
+  })
+
+  it.each(['pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock'])('renders a stop button for %s runs', async (status) => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    expect(stopBtn.exists()).toBe(true)
+    expect(stopBtn.text()).toContain('Stop')
+    wrapper.unmount()
+  })
+
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed'])('renders no stop button for %s runs', async (status) => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="runs-list-cancel-run1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('disables the stop button while the cancel request is in flight', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'running' }])
+    let resolvePost!: (value: unknown) => void
+    ;(api.POST as any).mockImplementation(() => new Promise((resolve) => { resolvePost = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    await stopBtn.trigger('click')
+    await nextTick()
+
+    expect(stopBtn.attributes('disabled')).toBeDefined()
+
+    resolvePost({ data: null, error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="runs-list-cancel-run1"]').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('does not navigate to run detail when the stop button is clicked', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    await stopBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(routerMocks.push).not.toHaveBeenCalled()
+
+    const row = wrapper.find('tbody tr')
+    await row.trigger('click')
+    expect(routerMocks.push).toHaveBeenCalledWith('/runs/run1')
+    wrapper.unmount()
+  })
+
+  it('does not navigate when the stop button is activated via keyboard', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    await stopBtn.trigger('keydown', { key: ' ' })
+    await nextTick()
+
+    expect(routerMocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('calls the cancel endpoint after a two-step confirm and updates the row status', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+    ;(api.POST as any).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/runs/{run_id}/cancel') {
+        mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'cancelled' }])
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    expect(stopBtn.text()).toContain('Confirm')
+
+    await stopBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/runs/{run_id}/cancel', {
+      params: { path: { run_id: 'run1' } },
+    })
+    expect(wrapper.text()).toContain('cancelled')
+    wrapper.unmount()
+  })
+
+  it('shows an inline error when the cancel request fails', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'running' }])
+    ;(api.POST as any).mockResolvedValue({ data: null, error: { detail: 'run_already_terminal' } })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('click')
+    await nextTick()
+    await stopBtn.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const errorEl = wrapper.find('[data-testid="runs-list-cancel-error-run1"]')
+    expect(errorEl.exists()).toBe(true)
+    expect(errorEl.text()).toContain('run_already_terminal')
+    wrapper.unmount()
   })
 })
