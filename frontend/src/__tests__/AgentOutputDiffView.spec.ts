@@ -163,4 +163,50 @@ describe('AgentOutputDiffView', () => {
 
     expect(wrapper.text()).toContain('Run not found')
   })
+
+  it('renders pure-return node outputs with no telemetry keys', async () => {
+    vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
+      data: {
+        run_id_a: 'aaa',
+        run_id_b: 'bbb',
+        node_output_a: { summary: 'x', result: 'ok' },
+        node_output_b: { summary: 'y', result: 'ok' },
+        diff_lines: [
+          { type: 'unchanged', content: '{', line_a: 1, line_b: 1 },
+          { type: 'removed', content: '  "summary": "x"', line_a: 2, line_b: null },
+          { type: 'added', content: '  "summary": "y"', line_a: null, line_b: 2 },
+          { type: 'unchanged', content: '}', line_a: 3, line_b: 3 },
+        ],
+        has_diff: true,
+      },
+      error: undefined,
+    })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+
+    await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
+    await wrapper.find('[data-testid="diff-node-id"]').setValue('node-1')
+    await wrapper.find('[data-testid="diff-run-id-b"]').setValue('run-b')
+    await wrapper.find('[data-testid="diff-compare-btn"]').trigger('click')
+
+    await flushPromises()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    const viewers = wrapper.findAll('[data-testid="json-viewer"]')
+    expect(viewers.length).toBeGreaterThanOrEqual(2)
+    const text = viewers.map(v => v.text()).join(' ')
+    expect(text).toContain('summary')
+    expect(text).toContain('result')
+    expect(text).toContain('ok')
+    expect(text).not.toContain('agent_stdout')
+    expect(text).not.toContain('agent_stderr')
+    expect(text).not.toContain('exit_code')
+  })
 })
