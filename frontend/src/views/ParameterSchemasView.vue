@@ -19,12 +19,11 @@
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadSchemas" />
 
       <template v-else>
-        <div v-if="schemas.length === 0" class="card p-8 text-center">
-          <p class="text-lg font-medium">{{ $t('views.ParameterSchemasView.no_schemas') }}</p>
-          <p class="mt-1 text-sm text-muted-foreground">
-            {{ $t('views.ParameterSchemasView.no_schemas_hint') }}
-          </p>
-        </div>
+        <EmptyState
+          v-if="schemas.length === 0"
+          :title="$t('views.ParameterSchemasView.no_schemas')"
+          :description="$t('views.ParameterSchemasView.no_schemas_hint')"
+        />
 
         <div v-else class="overflow-x-auto rounded-lg border">
           <table class="w-full text-left text-sm">
@@ -51,12 +50,11 @@
                 <td class="px-4 py-3 text-right">
                   <button
                     class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
-                    :title="$t('views.ParameterSchemasView.delete')"
+                    :aria-label="$t('views.ParameterSchemasView.delete')"
+                    data-testid="paramschema-delete"
                     @click.stop="confirmDelete(schema)"
                   >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
+                    <Trash2 class="h-4 w-4" aria-hidden="true" />
                   </button>
                 </td>
               </tr>
@@ -93,9 +91,10 @@
       <div class="mb-4">
         <button
           class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          data-testid="paramschema-back"
           @click="closeEditor"
         >
-          <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+          <ChevronLeft class="h-4 w-4" aria-hidden="true" />
           {{ $t('views.ParameterSchemasView.back') }}
         </button>
       </div>
@@ -147,7 +146,7 @@
                 v-model="schemaForm.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="My Parameter Schema"
+                :placeholder="$t('views.ParameterSchemasView.name_placeholder')"
                 data-testid="paramschema-name-input"
               />
             </div>
@@ -157,7 +156,7 @@
                 v-model="schemaForm.description"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
                 rows="2"
-                placeholder="Optional description"
+                :placeholder="$t('views.ParameterSchemasView.desc_placeholder')"
                 data-testid="paramschema-desc-input"
               />
             </div>
@@ -193,7 +192,7 @@
                         v-model="param.name"
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm font-mono"
-                        placeholder="param_name"
+                        :placeholder="$t('views.ParameterSchemasView.param_name_placeholder')"
                       />
                       </div>
                       <div>
@@ -203,7 +202,7 @@
                         v-model="param.label"
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-                        placeholder="Display label"
+                        :placeholder="$t('views.ParameterSchemasView.param_label_placeholder')"
                       />
                       </div>
                     </div>
@@ -214,7 +213,7 @@
                         v-model="param.description"
                         type="text"
                         class="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-                        placeholder="Parameter description"
+                        :placeholder="$t('views.ParameterSchemasView.param_desc_placeholder')"
                       />
                     </div>
                     <div class="grid grid-cols-2 gap-3">
@@ -274,13 +273,15 @@
                             type="text"
                             :aria-label="$t('views.ParameterSchemasView.param_options')"
                             class="flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm"
-                            placeholder="Option value"
+                            :placeholder="$t('views.ParameterSchemasView.option_placeholder')"
                           />
                           <button
                             class="rounded p-1 text-muted-foreground hover:text-destructive"
+                            :aria-label="$t('views.ParameterSchemasView.remove_option')"
+                            data-testid="paramschema-remove-option"
                             @click="(param.options ?? []).splice(oi, 1)"
                           >
-                            <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                            <X class="h-3 w-3" aria-hidden="true" />
                           </button>
                         </div>
                         <button
@@ -331,11 +332,11 @@
                   </div>
                   <button
                     class="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
-                    :title="$t('views.ParameterSchemasView.remove_param')"
+                    :aria-label="$t('views.ParameterSchemasView.remove_param')"
                     @click="removeParameter(idx)"
                     data-testid="paramschema-remove-param"
                   >
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    <X class="h-4 w-4" aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -386,9 +387,11 @@
                 </button>
                 <button
                   class="rounded px-2 py-1 text-xs text-muted-foreground hover:text-destructive"
+                  :aria-label="$t('views.ParameterSchemasView.delete')"
+                  data-testid="paramschema-delete-set"
                   @click="confirmDeleteSet(set)"
                 >
-                  <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                  <Trash2 class="h-3 w-3" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -405,7 +408,7 @@
                 v-model="setForm.name"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="My parameter set"
+                :placeholder="$t('views.ParameterSchemasView.set_name_placeholder')"
                 data-testid="paramschema-set-name"
               />
               </div>
@@ -415,7 +418,7 @@
                 v-model="setForm.description"
                 type="text"
                 class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                placeholder="Optional description"
+                :placeholder="$t('views.ParameterSchemasView.desc_placeholder')"
               />
               </div>
             </div>
@@ -652,14 +655,17 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Trash2, ChevronLeft, X } from '@lucide/vue'
 
 interface ParameterDef {
   name: string
@@ -715,6 +721,8 @@ interface ModelBackendItem {
   id: string
   name: string
 }
+
+const { t } = useI18n()
 
 const { loading, error, data: schemasResp, load: loadSchemas } = useDataFetch<SchemaListResponse>(
   () => api.GET('/api/v1/parameter-schemas', {
@@ -821,8 +829,8 @@ async function saveSchema() {
       return
     }
     saveSuccess.value = isNew.value
-      ? 'Schema created successfully.'
-      : 'Schema saved as new version.'
+      ? t('views.ParameterSchemasView.schema_created')
+      : t('views.ParameterSchemasView.schema_saved_new_version')
     await loadSchemas()
     if (!isNew.value && resp?.data) {
       editingSchema.value = resp.data as unknown as SchemaItem
@@ -857,7 +865,7 @@ async function doDelete() {
     if (resp.error) {
       const msg = formatApiError(resp.error)
       if (resp.response?.status === 409) {
-        deleteRefError.value = 'Cannot delete: schema is referenced by agents or parameter sets.'
+        deleteRefError.value = t('views.ParameterSchemasView.delete_referenced_error')
       } else {
         deleteRefError.value = msg
       }
@@ -920,7 +928,7 @@ function editSet(set: SetItem) {
 function cloneSet(set: SetItem) {
   editingSet.value = true
   editingSetId.value = null
-  setForm.value = { name: `${set.name} (clone)`, description: set.description || '', values: { ...(set.values || {}) } }
+  setForm.value = { name: t('views.ParameterSchemasView.cloned_set_name', { name: set.name }), description: set.description || '', values: { ...(set.values || {}) } }
   setSaveError.value = null
 }
 
