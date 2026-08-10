@@ -159,7 +159,7 @@ async function handleSeed() {
 }
 
 onMounted(() => {
-  if (store.isActive && store.actions.length === 0) {
+  if (!store.ready) {
     store.fetchStatus()
   }
 })
