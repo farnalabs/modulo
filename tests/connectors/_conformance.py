@@ -8,6 +8,7 @@ NOTE: This module has a sibling copy for standalone root-level test collection
 file byte-identical.
 """
 
+import json
 from typing import Any
 
 # ── Registry ────────────────────────────────────────────────────────────────
@@ -35,6 +36,14 @@ def get_registered_fixture(name: str) -> str | None:
 # ── Helper assertions for conformance scenarios ─────────────────────────────
 
 
+def _assert_json_serializable(value: Any, label: str) -> None:
+    """Assert *value* survives a ``json.dumps`` round-trip."""
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError) as exc:
+        raise AssertionError(f"{label} is not JSON-serializable: {exc}") from exc
+
+
 def assert_result_shape(result: Any) -> None:
     from modulo.connectors.base import ConnectorResult
 
@@ -45,6 +54,16 @@ def assert_result_shape(result: Any) -> None:
     assert result.total is None or isinstance(result.total, int)
     if result.total is not None:
         assert result.total >= 0, f"ConnectorResult.total must be non-negative, got {result.total}"
+    # Records feed into JMESPath evaluation, JSON API responses, and LangGraph
+    # state — non-serializable values would only fail at runtime, not in tests.
+    _assert_json_serializable(result.records, "ConnectorResult.records")
+    _assert_json_serializable(result.metadata, "ConnectorResult.metadata")
+
+
+def assert_write_result_shape(result: Any) -> None:
+    """Assert a connector ``write()`` result is a JSON-serializable dict."""
+    assert isinstance(result, dict), f"Expected dict from write(), got {type(result).__name__}"
+    _assert_json_serializable(result, "write() result")
 
 
 def assert_health_shape(result: Any) -> None:
