@@ -129,19 +129,24 @@ async def _mark_run_failed(run_id: str, org_id: str, claim_token: str | None = N
     task_failure a run that a successor already re-claimed. CANCEL-WINS:
     ``cancellation_requested = false``.
     """
+    clauses = [
+        "UPDATE runs SET status='failed', error_code='task_failure', completed_at=now() ",
+        "WHERE id=:rid AND organisation_id=:oid ",
+        "AND status NOT IN ('complete', 'cancelled', 'failed') ",
+        "AND cancellation_requested = false ",
+    ]
+    params: dict[str, Any] = {"rid": run_id, "oid": org_id}
+    if claim_token is not None:
+        clauses.append("AND claim_token = CAST(:tok AS text)")
+        params["tok"] = claim_token
+
     async with _open_factory()() as session, session.begin():
         from modulo.db.rls import set_rls_org
 
         await set_rls_org(session, uuid.UUID(org_id))
         await session.execute(
-            text(
-                "UPDATE runs SET status='failed', error_code='task_failure', completed_at=now() "
-                "WHERE id=:rid AND organisation_id=:oid "
-                "AND status NOT IN ('complete', 'cancelled', 'failed') "
-                "AND cancellation_requested = false "
-                "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text))"
-            ),
-            {"rid": run_id, "oid": org_id, "tok": claim_token},
+            text("".join(clauses)),
+            params,
         )
 
 

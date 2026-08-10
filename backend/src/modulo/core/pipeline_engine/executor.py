@@ -1128,9 +1128,13 @@ class PipelineExecutor:
             )
 
             initial_state = _seed_state(snapshot, input_payload)
-            initial_state["_run_id"] = run_id
-            initial_state["_org_id"] = org_id
-            initial_state["_claim_lease"] = self._claim_token
+            initial_state.update(
+                {
+                    "_run_id": run_id,
+                    "_org_id": org_id,
+                    "_claim_lease": self._claim_token,
+                }
+            )
             config = {"configurable": {"thread_id": thread_id}}
             node_ids = {str(n["id"]) for n in graph_json.get("nodes", [])}
             node_token_budgets: dict[str, int] = {
