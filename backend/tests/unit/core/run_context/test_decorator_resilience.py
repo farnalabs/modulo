@@ -1,14 +1,20 @@
 """Unit tests for decorator resilience: DB check failure, reserved key protection."""
 
+import asyncio
 import logging
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
     cancellable_node,
+    get_connector_hub,
+    get_model_backend_hub,
     set_cancellation_check,
+    set_connector_hub,
+    set_model_backend_hub,
 )
 
 
@@ -147,3 +153,103 @@ class TestReservedKeyProtection:
         state: dict[str, Any] = {"run_context": {"cancelled": False}}
         with pytest.raises(ContextSetterViolationError):
             await bad_node(state)
+
+
+class TestHubContextVars:
+    """Per-run ModelBackendHub / ConnectorHub ContextVar accessors."""
+
+    async def test_connector_hub_defaults_to_none(self) -> None:
+        set_connector_hub(None)
+        assert get_connector_hub() is None
+
+    async def test_connector_hub_roundtrip(self) -> None:
+        hub = MagicMock()
+        set_connector_hub(hub)
+        try:
+            assert get_connector_hub() is hub
+        finally:
+            set_connector_hub(None)
+        assert get_connector_hub() is None
+
+    async def test_model_backend_hub_defaults_to_none(self) -> None:
+        set_model_backend_hub(None)
+        assert get_model_backend_hub() is None
+
+    async def test_model_backend_hub_roundtrip(self) -> None:
+        hub = MagicMock()
+        set_model_backend_hub(hub)
+        try:
+            assert get_model_backend_hub() is hub
+        finally:
+            set_model_backend_hub(None)
+        assert get_model_backend_hub() is None
+
+
+class TestCancellationEdges:
+    """State fast-path cancellation and CancelledError propagation."""
+
+    async def test_state_cancelled_raises_before_node_runs(self) -> None:
+        call_count = 0
+
+        @cancellable_node(role="agent")
+        async def my_node(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal call_count
+            call_count += 1
+            return {"artifact": "done"}
+
+        state: dict[str, Any] = {"run_context": {"cancelled": True}}
+        with pytest.raises(RunCancelledError, match="before node"):
+            await my_node(state)
+        assert call_count == 0
+
+    async def test_state_missing_cancelled_key_runs_node(self) -> None:
+        @cancellable_node(role="agent")
+        async def my_node(state: dict[str, Any]) -> dict[str, Any]:
+            return {"artifact": "done"}
+
+        state: dict[str, Any] = {}
+        result = await my_node(state)
+        assert result == {"artifact": "done"}
+
+    async def test_db_check_cancelled_error_propagates(self) -> None:
+        """asyncio.CancelledError from the DB check must NOT be swallowed."""
+
+        async def cancelling_check() -> bool:
+            msg = "outer task cancelled"
+            raise asyncio.CancelledError(msg)
+
+        set_cancellation_check(cancelling_check)
+        try:
+
+            @cancellable_node(role="agent")
+            async def my_node(state: dict[str, Any]) -> dict[str, Any]:
+                return {"artifact": "done"}
+
+            state: dict[str, Any] = {"run_context": {"cancelled": False}}
+            with pytest.raises(asyncio.CancelledError):
+                await my_node(state)
+        finally:
+            set_cancellation_check(None)
+
+
+class TestTimeout:
+    """Per-node timeout wrapping."""
+
+    async def test_timeout_exceeded_raises(self) -> None:
+        @cancellable_node(role="agent", timeout=0.01)
+        async def slow_node(state: dict[str, Any]) -> dict[str, Any]:
+            await asyncio.sleep(10.0)
+            return {"artifact": "done"}
+
+        state: dict[str, Any] = {"run_context": {"cancelled": False}}
+        with pytest.raises(TimeoutError, match=r"exceeded 0.01s timeout"):
+            await slow_node(state)
+
+    async def test_timeout_not_exceeded_returns_result(self) -> None:
+        @cancellable_node(role="agent", timeout=5.0)
+        async def quick_node(state: dict[str, Any]) -> dict[str, Any]:
+            return {"artifact": "done"}
+
+        state: dict[str, Any] = {"run_context": {"cancelled": False}}
+        result = await quick_node(state)
+        assert result == {"artifact": "done"}

@@ -73,6 +73,56 @@ class TestSeedContext:
         assert "artifacts" in state
         assert state["artifacts"] == []
 
+    def test_feedback_correction_promoted_and_removed_from_input(self) -> None:
+        snapshot = MagicMock()
+        snapshot.run_context_defaults = {}
+        snapshot.default_autonomy_level = None
+
+        state = _seed_state(snapshot, {"_feedback_correction": {"reason": "bad"}, "task": "deploy"})
+
+        assert state["run_context"]["feedback_correction"] == {"reason": "bad"}
+        assert "_feedback_correction" not in state["run_context"]["input"]
+        assert state["run_context"]["input"]["task"] == "deploy"
+
+    def test_feedback_correction_empty_value_not_promoted(self) -> None:
+        snapshot = MagicMock()
+        snapshot.run_context_defaults = {}
+        snapshot.default_autonomy_level = None
+
+        state = _seed_state(snapshot, {"_feedback_correction": {}, "task": "deploy"})
+
+        assert "feedback_correction" not in state["run_context"]
+        assert state["run_context"]["input"]["task"] == "deploy"
+
+    def test_seed_does_not_mutate_caller_payload(self) -> None:
+        snapshot = MagicMock()
+        snapshot.run_context_defaults = {}
+        snapshot.default_autonomy_level = None
+        payload: dict[str, Any] = {"_feedback_correction": {"reason": "bad"}, "task": "deploy"}
+
+        _seed_state(snapshot, payload)
+
+        assert "_feedback_correction" in payload
+        assert payload["task"] == "deploy"
+
+    def test_autonomy_seeded_from_snapshot_default(self) -> None:
+        snapshot = MagicMock()
+        snapshot.run_context_defaults = {}
+        snapshot.default_autonomy_level = "fully_autonomous"
+
+        state = _seed_state(snapshot, {})
+
+        assert state["run_context"]["_pipeline_default_autonomy"] == "fully_autonomous"
+
+    def test_no_autonomy_seeded_when_snapshot_default_is_none(self) -> None:
+        snapshot = MagicMock()
+        snapshot.run_context_defaults = {}
+        snapshot.default_autonomy_level = None
+
+        state = _seed_state(snapshot, {})
+
+        assert "_pipeline_default_autonomy" not in state["run_context"]
+
 
 # ===================================================================
 #  Context-setter writes
