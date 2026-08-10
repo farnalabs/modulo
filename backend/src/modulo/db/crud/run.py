@@ -14,7 +14,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any
 
-from sqlalchemy import Date, case, cast, delete, func, select, text
+from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -37,6 +37,20 @@ ERROR_CODE_CAPACITY_TIMEOUT = "capacity_timeout"
 # Non-terminal markers that operators must be able to distinguish from real
 # failures. The stale-run sweep exempts runs carrying these markers.
 CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELINE_CAPACITY})
+
+# The canonical whitelist of run statuses (subset of the ``ck_runs_status``
+# CHECK constraint). ``transition_run`` and ``update_run_status`` refuse any
+# status outside this set (a typo would otherwise silently violate the CHECK
+# constraint at commit time, or worse write an unknown status on backends
+# without the constraint).
+RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
+    {"pending", "running", "awaiting_human", "claimed", "complete", "failed", "cancelled", "eval_failed"}
+)
+
+# Claimed-but-nodeless zombie repair code (shared). Another worker owns the
+# consumer (cron_helpers) that uses this; this module is the single definition
+# so the constant cannot drift between the define site and the consume site.
+NODELESS_ZOMBIE_ERROR_CODE = "nodeless_zombie"
 
 # Trigger types exempt from the org-wide pause. A new trigger type defaults to
 # PAUSED (fail-closed) unless explicitly added here AND it passes trigger_id to
@@ -316,7 +330,28 @@ async def update_run_status(
     node_telemetry_json: dict[str, Any] | None = None,
     claimed_by: str | None = None,
     clear_error_code: bool = False,
+    claim_token: str | None = None,
+    from_status: str | None = None,
 ) -> Run | None:
+    if status not in RUN_STATUS_WHITELIST:
+        raise ValueError(f"invalid run status: {status!r}")
+    if claim_token is not None:
+        return await _update_run_status_fenced(
+            session,
+            run_id,
+            status,
+            error_code=error_code,
+            error_detail=error_detail,
+            total_tokens=total_tokens,
+            total_cost_usd=total_cost_usd,
+            cost_breakdown=cost_breakdown,
+            node_token_usage=node_token_usage,
+            outputs_json=outputs_json,
+            claimed_by=claimed_by,
+            clear_error_code=clear_error_code,
+            claim_token=claim_token,
+            from_status=from_status,
+        )
     result = await session.execute(select(Run).where(Run.id == run_id).with_for_update())
     run = result.scalar_one_or_none()
     if run is None:
@@ -359,6 +394,167 @@ async def update_run_status(
         run.node_telemetry_json = node_telemetry_json
     await session.flush()
     return run
+
+
+_UPDATE_STATUS_FENCED_SQL = text(
+    "UPDATE runs SET "
+    "status = CASE "
+    "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN 'cancelled' "
+    "  ELSE :status END, "
+    "started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN now() ELSE started_at END, "
+    "completed_at = CASE "
+    "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
+    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed') THEN now() "
+    "  ELSE completed_at END, "
+    "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
+    "error_code = CASE WHEN :clear_error_code THEN NULL "
+    "  ELSE COALESCE(CAST(:error_code AS text), error_code) END, "
+    "error_detail = CASE WHEN :clear_error_code THEN NULL "
+    "  WHEN CAST(:error_code AS text) IS NOT NULL THEN CAST(:error_detail AS text) ELSE error_detail END, "
+    "total_tokens = COALESCE(:total_tokens, total_tokens), "
+    "total_cost_usd = COALESCE(:total_cost_usd, total_cost_usd), "
+    "cost_breakdown = CASE WHEN :cost_breakdown_sentinel THEN cost_breakdown "
+    "  ELSE CAST(:cost_breakdown AS json) END, "
+    "node_token_usage = CASE WHEN CAST(:node_token_usage AS json) IS NOT NULL "
+    "  THEN CAST(:node_token_usage AS json) ELSE node_token_usage END, "
+    "outputs_json = CASE WHEN CAST(:outputs_json AS json) IS NOT NULL "
+    "  THEN CAST(:outputs_json AS json) ELSE outputs_json END "
+    "WHERE id=:rid "
+    "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
+    "AND (CAST(:from_status AS text) IS NULL OR status = CAST(:from_status AS text)) "
+    "AND (cancellation_requested = false OR :status IN ('cancelled', 'awaiting_human', 'complete')) "
+    "RETURNING id"
+)
+
+
+async def _update_run_status_fenced(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    status: str,
+    *,
+    error_code: str | None,
+    error_detail: str | None,
+    total_tokens: int | None,
+    total_cost_usd: Decimal | None,
+    cost_breakdown: Any,
+    node_token_usage: dict[str, Any] | None,
+    outputs_json: dict[str, Any] | None,
+    claimed_by: str | None,
+    clear_error_code: bool,
+    claim_token: str,
+    from_status: str | None,
+) -> Run | None:
+    """Fenced variant of :func:`update_run_status` (dist/runtime-core A1).
+
+    A single conditional UPDATE guarded by ``claim_token = :tok`` (a superseded
+    executor cannot terminalize the run out from under a successor), an optional
+    ``status = :from_status`` source-state constraint (used by the capacity
+    demotion), and CANCEL-WINS precedence (``cancellation_requested = false``
+    unless the write is a ``cancelled`` write). An ``awaiting_human``/``complete``
+    write against a cancellation-requested row is rewritten to ``cancelled`` in
+    the same statement. Returns the refreshed Run row, or ``None`` when the
+    guards rejected the write (superseded / wrong source state /
+    cancelled-and-not-a-cancel-write / missing).
+    """
+    result = await session.execute(
+        _UPDATE_STATUS_FENCED_SQL,
+        {
+            "status": status,
+            "rid": str(run_id),
+            "tok": claim_token,
+            "from_status": from_status,
+            "error_code": error_code,
+            "error_detail": error_detail,
+            "total_tokens": total_tokens,
+            "total_cost_usd": total_cost_usd,
+            "cost_breakdown_sentinel": cost_breakdown is _COST_BREAKDOWN_SENTINEL,
+            # When the sentinel is used the ELSE branch is never taken, but the
+            # parameter still must be bindable (NULL json) — never the sentinel
+            # object itself.
+            "cost_breakdown": None if cost_breakdown is _COST_BREAKDOWN_SENTINEL else cost_breakdown,
+            "node_token_usage": node_token_usage,
+            "outputs_json": outputs_json,
+            "claimed_by": claimed_by,
+            "clear_error_code": clear_error_code,
+        },
+    )
+    if result.fetchone() is None:
+        return None
+    refreshed = await session.execute(select(Run).where(Run.id == run_id))
+    return refreshed.scalar_one_or_none()
+
+
+_TRANSITION_SQL = text(
+    "UPDATE runs SET status=CAST(:target AS text), "
+    "completed_at = CASE WHEN CAST(:target AS text) IN ('complete', 'failed', 'cancelled', 'eval_failed') "
+    "THEN now() ELSE completed_at END, "
+    "error_code = COALESCE(CAST(:error_code AS text), error_code), "
+    "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "
+    "THEN CAST(:error_detail AS text) ELSE error_detail END "
+    "WHERE id=:rid AND organisation_id=:oid "
+    "AND status IN :allowed_from "
+    "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
+    "AND cancellation_requested = false "
+    "RETURNING id"
+).bindparams(bindparam("allowed_from", expanding=True))
+
+
+async def transition_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    target_status: str,
+    error_code: str | None = None,
+    error_detail: str | None = None,
+    claim_token: str | None = None,
+    allowed_from: frozenset[str] | None = None,
+) -> bool:
+    """The single fenced run-transition authority (dist/runtime-core A1).
+
+    Performs ONE conditional ``UPDATE ... WHERE ... RETURNING id`` that is safe
+    under concurrency:
+
+    * ``status IN (allowed_from)`` — the transition only applies when the row
+      is currently in an admissible source state (terminal writes pass the
+      non-terminal states).
+    * ``(:tok IS NULL OR claim_token = :tok)`` — when *claim_token* is given the
+      write is FENCED to the claim that owns the run; a superseded executor's
+      token no longer matches and the write is a no-op (rowcount 0).
+    * ``cancellation_requested = false`` — CANCEL-WINS precedence: once a
+      cancellation is requested, no non-cancelled writer can transition the row;
+      only the cancel path (which sets ``cancellation_requested``) may write
+      ``cancelled``.
+
+    ``completed_at`` is stamped only for terminal targets; ``error_code`` /
+    ``error_detail`` are written only when *error_code* is provided (an explicit
+    ``None`` never clears a prior marker — callers use the ``clear_error_code``
+    path of :func:`update_run_status` for that).
+
+    Returns ``True`` when exactly one row was transitioned (``RETURNING id``
+    yielded a row), ``False`` when the guards rejected the write (superseded /
+    wrong source state / cancellation requested / row missing).
+
+    RLS org context must be set by the caller (all ``db.crud.run`` functions
+    require it).
+    """
+    if target_status not in RUN_STATUS_WHITELIST:
+        raise ValueError(f"invalid run status: {target_status!r}")
+    if allowed_from is None:
+        allowed_from = RUN_STATUS_WHITELIST
+    result = await session.execute(
+        _TRANSITION_SQL,
+        {
+            "target": target_status,
+            "rid": str(run_id),
+            "oid": str(org_id),
+            "error_code": error_code,
+            "error_detail": error_detail,
+            "tok": claim_token,
+            "allowed_from": sorted(allowed_from),
+        },
+    )
+    return result.fetchone() is not None
 
 
 async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run | None:

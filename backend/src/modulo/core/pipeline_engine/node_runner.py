@@ -80,6 +80,27 @@ from modulo.db.rls import set_rls_org
 _log = logging.getLogger(__name__)
 
 
+class SandboxNodeFailedError(Exception):
+    """A sandbox-agent node failed due to sandbox infrastructure (retryable).
+
+    Raised for a stall (idle watchdog), a command timeout, or a non-zero exit
+    code with no parseable ``output.json``. The executor maps this to the
+    retryable path (fenced reset to ``pending`` + SAQ retry) instead of a
+    silent wrong-success completion.
+    """
+
+
+class SupersededNodeError(Exception):
+    """The sandbox dispatch marker was denied (claim superseded / not running).
+
+    Raised when the DB-atomic dispatch marker UPDATE matched zero rows — a
+    successor rotated the run's claim token or the run is no longer running, so
+    a sandbox MUST NOT be created. The executor maps this to a terminal
+    ``superseded`` failure (a token-guarded no-op if a successor already owns
+    the run) — never a completed run with zero work.
+    """
+
+
 _is_truthy = bool
 
 # Cap for the stored artifact stdout/stderr blobs. 512KB keeps storage bounded
@@ -1067,97 +1088,125 @@ def make_sandbox_agent_fn(
 
         start_time = time.monotonic()
         sandbox: AsyncSandbox | None = None
-        e2b_claim_token: str | None = None
-        e2b_fenced = False
+        # The executor's CAPTURED claim token (seeded into LangGraph state as
+        # ``_claim_lease`` at execute/resume start). Used to fence the DB-atomic
+        # dispatch marker so a superseded original cannot set a marker / create a
+        # sandbox for a run a successor owns.
+        claim_lease: str | None = state.get("_claim_lease")
+        dispatch_marker_set = False
 
         _stdout_len = 0
         _stderr_len = 0
         _sandbox_id: str | None = None
         _sandbox_log_tail: str = ""
 
-        async def _read_current_claim_token() -> str | None:
-            """Read the run's current ``runs.claim_token`` via the shared session factory.
+        async def _acquire_dispatch_marker() -> bool:
+            """DB-atomic dispatch marker (dist/runtime-core A4): one UPDATE claims
+            the dispatch slot immediately BEFORE ``AsyncSandbox.create``.
 
-            This is the executor's own claim token (the claim wrote it) — a
-            successor claim rotates it, so a superseded original reads a
-            different value and its fence acquire is refused.
+            ``UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid
+            WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND
+            status='running'`` — atomic, no read-then-create TOCTOU. Rowcount 0
+            means the claim is superseded or the run is not running; the caller
+            raises :class:`SupersededNodeError` and MUST NOT create a sandbox.
+            Fail-open (returns True without writing) when no session factory or
+            no claim lease is available.
             """
-            if session_factory is None:
-                return None
+            if session_factory is None or not claim_lease:
+                return True
             org_id_raw = state.get("_org_id")
             try:
                 org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
             except (TypeError, ValueError):
                 org_uuid = None
             if org_uuid is None:
-                return None
-            try:
-                from sqlalchemy import text as _sql_text
+                return True
+            from sqlalchemy import text as _sql_text
 
-                from modulo.db.rls import set_rls_org
+            from modulo.db.rls import set_rls_org
 
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_uuid)
-                    result = await session.execute(
-                        _sql_text("SELECT claim_token FROM runs WHERE id=:rid"),
-                        {"rid": run_id},
-                    )
-                    row = result.first()
-                    return str(row[0]) if row and row[0] else None
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception(
-                    "sandbox_agent.claim_token_read_failed",
-                    extra={"node_id": node_id, "run_id": run_id},
+            async with session_factory() as session, session.begin():
+                await set_rls_org(session, org_uuid)
+                result = await session.execute(
+                    _sql_text(
+                        "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid "
+                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
+                        "RETURNING id"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease, "sid": None},
                 )
-                return None
+                return result.fetchone() is not None
+
+        async def _store_dispatch_marker_sandbox(sandbox_id_value: str | None) -> None:
+            """Persist the real sandbox id onto the runs row after a successful create."""
+            if session_factory is None or not claim_lease:
+                return
+            org_id_raw = state.get("_org_id")
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+            except (TypeError, ValueError):
+                org_uuid = None
+            if org_uuid is None:
+                return
+            from sqlalchemy import text as _sql_text
+
+            from modulo.db.rls import set_rls_org
+
+            async with session_factory() as session, session.begin():
+                await set_rls_org(session, org_uuid)
+                await session.execute(
+                    _sql_text(
+                        "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid "
+                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease, "sid": sandbox_id_value},
+                )
+
+        async def _clear_dispatch_marker() -> None:
+            """Fenced marker clear — only when the claim token still matches.
+
+            A superseded original (token rotated by a successor) must not clear
+            the successor's dispatch marker / sandbox id.
+            """
+            if session_factory is None or not claim_lease:
+                return
+            org_id_raw = state.get("_org_id")
+            try:
+                org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+            except (TypeError, ValueError):
+                org_uuid = None
+            if org_uuid is None:
+                return
+            from sqlalchemy import text as _sql_text
+
+            from modulo.db.rls import set_rls_org
+
+            async with session_factory() as session, session.begin():
+                await set_rls_org(session, org_uuid)
+                await session.execute(
+                    _sql_text(
+                        "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
+                        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
+                    ),
+                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                )
 
         try:
-            # E2B idempotency fence (plan F3a) — SETNX-before-dispatch so exactly
-            # ONE executor creates a sandbox for this run. A superseded claim (run
-            # re-claimed after an event-loop stall) is refused before any sandbox
-            # is created; a transient retry within the same claim is likewise
-            # refused (no second sandbox). If the claim token is unavailable
-            # (no session factory / DB read failed) the fence is skipped
-            # fail-open — the heartbeat claim fence remains the primary guard.
-            from modulo.core.pipeline_execution import (
-                E2BIdempotencyDeniedError,
-                e2b_dispatch_acquire,
-                e2b_dispatch_release_fenced,
-                e2b_idempotency_enabled,
-            )
-
-            if e2b_idempotency_enabled():
-                e2b_claim_token = await _read_current_claim_token()
-                if e2b_claim_token is not None:
-                    try:
-                        await e2b_dispatch_acquire(run_id, e2b_claim_token)
-                        e2b_fenced = True
-                    except E2BIdempotencyDeniedError:
-                        _log.warning(
-                            "sandbox_agent.e2b_dispatch_denied",
-                            extra={"node_id": node_id, "run_id": run_id},
-                        )
-                        return {
-                            "artifacts": [
-                                {
-                                    "node_id": node_id,
-                                    "status": "superseded",
-                                    "output": {
-                                        "status": "superseded",
-                                        "summary": "E2B dispatch superseded by a newer claim — sandbox not created",
-                                        "exit_code": -1,
-                                        "wall_clock_time_ms": 0,
-                                    },
-                                }
-                            ],
-                            "output": {
-                                "status": "superseded",
-                                "summary": "E2B dispatch superseded by a newer claim — sandbox not created",
-                                "wall_clock_time_ms": 0,
-                            },
-                        }
+            # DB-atomic dispatch marker (dist/runtime-core A4) — replaces the
+            # retired Redis SETNX E2B fence. Exactly ONE executor wins the
+            # dispatch slot; a superseded claim / non-running run is refused
+            # BEFORE any sandbox is created. Fail-open when no session factory
+            # or no claim lease is available (the heartbeat claim fence remains
+            # the primary guard).
+            if not await _acquire_dispatch_marker():
+                _log.warning(
+                    "sandbox_agent.dispatch_marker_denied",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+                raise SupersededNodeError(
+                    "E2B dispatch marker denied — run superseded or not running; sandbox not created"
+                )
+            dispatch_marker_set = True
 
             sandbox = await asyncio.wait_for(
                 AsyncSandbox.create(template=template_id, timeout=sandbox_timeout),
@@ -1165,6 +1214,9 @@ def make_sandbox_agent_fn(
             )
             assert sandbox is not None, "Sandbox was not created before use"
             _sandbox_id = getattr(sandbox, "sandbox_id", None) or None
+            # Persist the real sandbox id so the heartbeat-lost path
+            # (run_executor_with_watchdog) can kill the sandbox by id.
+            await _store_dispatch_marker_sandbox(_sandbox_id)
             for path, content in context_files.items():
                 if path.endswith(".b64"):
                     content = base64.b64decode(content).decode()
@@ -1440,6 +1492,11 @@ def make_sandbox_agent_fn(
                         "sandbox_agent.kill_before_output_read_failed",
                         extra={"node_id": node_id},
                     )
+                # A6: a stall or total timeout is a retryable sandbox-infra
+                # failure — RAISE (never a silent completed/wrong-success node).
+                raise SandboxNodeFailedError(
+                    command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)"
+                )
 
             raw_output: str = ""
             output_json: Any = None
@@ -1459,6 +1516,15 @@ def make_sandbox_agent_fn(
                         "sandbox_agent.no_output_json",
                         extra={"node_id": node_id, "exit_code": exit_code, "command_error": command_error},
                     )
+
+            # A6: an agent that produced no parseable output.json (regardless of
+            # exit code) is a retryable sandbox-infra failure — a node with zero
+            # usable work must never complete the run silently.
+            if output_json is None:
+                raise SandboxNodeFailedError(
+                    "Sandbox agent produced no parseable output.json"
+                    + (f" (exit code {exit_code})" if cmd_result is not None else "")
+                )
 
             _span = _otel_trace.get_current_span()
             if _span.is_recording():
@@ -1583,17 +1649,13 @@ def make_sandbox_agent_fn(
 
         except asyncio.CancelledError:
             raise
+        except (SupersededNodeError, SandboxNodeFailedError):
+            # A6: the retryable/superseded node-failure classes propagate to the
+            # executor — they must NOT be swallowed into a failed-node output
+            # dict (a superseded dispatch must never look like a completed/failed
+            # node, and a retryable infra failure must reach the retry path).
+            raise
         except Exception as _exc:
-            # Dispatch FAILURE (the sandbox was never created): fenced release so
-            # a later claim/retry can legitimately re-dispatch (plan F3a).
-            if e2b_fenced and sandbox is None:
-                try:
-                    await e2b_dispatch_release_fenced(run_id, e2b_claim_token or "")
-                except Exception:
-                    _log.exception(
-                        "sandbox_agent.e2b_fence_release_failed",
-                        extra={"node_id": node_id, "run_id": run_id},
-                    )
             elapsed = time.monotonic() - start_time
             import traceback as _tb
 
@@ -1667,8 +1729,10 @@ def make_sandbox_agent_fn(
         finally:
             if sandbox is not None:
                 try:
+                    # Shield the kill so a second CancelledError cannot abort the
+                    # sandbox teardown (dist/runtime-core A3).
                     await asyncio.wait_for(
-                        sandbox.kill(request_timeout=_OUTPUT_READ_TIMEOUT),
+                        asyncio.shield(sandbox.kill(request_timeout=_OUTPUT_READ_TIMEOUT)),
                         timeout=_OUTPUT_READ_TIMEOUT,
                     )
                 except Exception:
@@ -1676,16 +1740,18 @@ def make_sandbox_agent_fn(
                         "sandbox_agent.kill_failed",
                         extra={"node_id": node_id},
                     )
-            # Sandbox teardown — release the dispatch fence (fenced: only if the
-            # key is still ours). Success path keeps the lock for the sandbox's
-            # lifetime; releasing at teardown lets a later claim re-dispatch a
-            # fresh sandbox (plan F3a).
-            if e2b_fenced and sandbox is not None:
+            # Fenced dispatch-marker clear (3.11): runs in a finally REGARDLESS
+            # of whether ``sandbox`` was assigned (covers the cancel-during-create
+            # leak). Only clears when the claim token still matches — a
+            # superseded original must not clear the successor's marker.
+            if dispatch_marker_set:
                 try:
-                    await e2b_dispatch_release_fenced(run_id, e2b_claim_token or "")
+                    await _clear_dispatch_marker()
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     _log.exception(
-                        "sandbox_agent.e2b_fence_release_failed",
+                        "sandbox_agent.dispatch_marker_clear_failed",
                         extra={"node_id": node_id, "run_id": run_id},
                     )
 

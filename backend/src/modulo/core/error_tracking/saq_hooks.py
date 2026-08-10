@@ -120,8 +120,15 @@ def _classify(function: str, status: Any, error: str | None, kwargs: dict[str, A
 # ---------------------------------------------------------------------------
 
 
-async def _mark_run_failed(run_id: str, org_id: str) -> None:
-    """Mark a run failed task_failure — guarded NOT IN terminal states (F3d)."""
+async def _mark_run_failed(run_id: str, org_id: str, claim_token: str | None = None) -> None:
+    """Mark a run failed task_failure — guarded NOT IN terminal states (F3d).
+
+    FENCED by *claim_token* (dist/runtime-core A1): when the failed job stamped
+    its claim token (saq_worker.execute_run / pipeline_execution.resume_run),
+    the write also requires ``claim_token = :tok`` so a failed job cannot
+    task_failure a run that a successor already re-claimed. CANCEL-WINS:
+    ``cancellation_requested = false``.
+    """
     async with _open_factory()() as session, session.begin():
         from modulo.db.rls import set_rls_org
 
@@ -130,9 +137,11 @@ async def _mark_run_failed(run_id: str, org_id: str) -> None:
             text(
                 "UPDATE runs SET status='failed', error_code='task_failure', completed_at=now() "
                 "WHERE id=:rid AND organisation_id=:oid "
-                "AND status NOT IN ('complete', 'cancelled', 'failed')"
+                "AND status NOT IN ('complete', 'cancelled', 'failed') "
+                "AND cancellation_requested = false "
+                "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text))"
             ),
-            {"rid": run_id, "oid": org_id},
+            {"rid": run_id, "oid": org_id, "tok": claim_token},
         )
 
 
@@ -195,7 +204,7 @@ async def after_process(ctx: dict[str, Any]) -> None:
                 function,
                 outcome["run_id"],
             )
-            await _mark_run_failed(outcome["run_id"], outcome["org_id"])
+            await _mark_run_failed(outcome["run_id"], outcome["org_id"], claim_token=kwargs.get("claim_token"))
         elif action == "ingest_error":
             _log.error("SAQ job %s failed: %s", function, error)
             await _ingest_error_event(
