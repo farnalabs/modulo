@@ -1,7 +1,7 @@
 """Add telemetry_bytes to run_daily_facts (FAR-125 telemetry sizing).
 
-Revision ID: 0077_run_daily_facts_telemetry_bytes
-Revises: 0076_analytics_concurrency_columns
+Revision ID: 0078_run_daily_facts_telemetry_bytes
+Revises: 0077_add_stalled_status
 Create Date: 2026-08-10
 
 Adds ``telemetry_bytes`` to the analytics fact table: the serialised size of
@@ -26,8 +26,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0077_run_daily_facts_telemetry_bytes"
-down_revision: str | None = "0076_analytics_concurrency_columns"
+revision: str = "0078_run_daily_facts_telemetry_bytes"
+down_revision: str | None = "0077_add_stalled_status"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
