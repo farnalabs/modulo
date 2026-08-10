@@ -88,7 +88,13 @@ function listWith(items: unknown[]) {
 function mountView() {
   return mount(RunsListView, {
     global: {
-      stubs: { ErrorAlert: true },
+      stubs: {
+        ErrorAlert: true,
+        'router-link': {
+          props: ['to'],
+          template: '<a :data-to="typeof to === \'string\' ? to : to.path"><slot /></a>',
+        },
+      },
     },
   })
 }
@@ -260,9 +266,9 @@ describe('RunsListView', () => {
 
     expect(routerMocks.push).not.toHaveBeenCalled()
 
-    const row = wrapper.find('tbody tr')
-    await row.trigger('click')
-    expect(routerMocks.push).toHaveBeenCalledWith('/runs/run1')
+    const viewLink = wrapper.find('[data-testid="runs-list-view-run1"]')
+    expect(viewLink.exists()).toBe(true)
+    expect(viewLink.attributes('data-to')).toBe('/runs/run1')
     wrapper.unmount()
   })
 
