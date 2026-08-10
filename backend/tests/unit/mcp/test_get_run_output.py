@@ -9,9 +9,10 @@ _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 
-def _make_mock_run(*, outputs_json: dict | None = None) -> MagicMock:
+def _make_mock_run(*, outputs_json: dict | None = None, node_telemetry_json: dict | None = None) -> MagicMock:
     r = MagicMock()
     r.outputs_json = outputs_json
+    r.node_telemetry_json = node_telemetry_json
     return r
 
 
@@ -193,6 +194,102 @@ class TestGetRunOutputSuccess:
         run_id = uuid.uuid4()
         mock_get_run.return_value = _make_mock_run(
             outputs_json={"node1": {"result": "hello"}},
+        )
+
+        result = await get_run_output(run_id=str(run_id), node_id="nonexistent")
+        assert result["error"] == "node_output_not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_new_shape_returns_pure_return_with_no_telemetry_keys(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        run_id = uuid.uuid4()
+        pure_return = {"summary": "agent summary", "changed_files": ["a.py"]}
+        mock_get_run.return_value = _make_mock_run(
+            outputs_json={"node1": pure_return},
+            node_telemetry_json={
+                "node1": {
+                    "status": "completed",
+                    "agent_stdout": "console output",
+                    "agent_stderr": "traceback",
+                    "error_message": "boom",
+                    "wall_clock_time_ms": 12345,
+                    "cost_estimate_usd": 0.5,
+                    "sandbox_log_tail": "tail",
+                }
+            },
+        )
+
+        result = await get_run_output(run_id=str(run_id), node_id="node1")
+
+        assert result["node_id"] == "node1"
+        assert result["output"] == pure_return
+        for key in (
+            "status",
+            "agent_stdout",
+            "agent_stderr",
+            "error_message",
+            "wall_clock_time_ms",
+            "cost_estimate_usd",
+            "sandbox_log_tail",
+        ):
+            assert key not in result["output"]
+        assert result["masked_fields"] == []
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_derived_status_fallback_when_return_none(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        run_id = uuid.uuid4()
+        mock_get_run.return_value = _make_mock_run(
+            outputs_json={},
+            node_telemetry_json={"node1": {"status": "failed", "summary": "command failed"}},
+        )
+
+        result = await get_run_output(run_id=str(run_id), node_id="node1")
+
+        assert result["node_id"] == "node1"
+        assert result["output"] == {"status": "failed", "summary": "command failed"}
+        assert result["masked_fields"] == []
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_node_not_found_when_absent_from_both_columns(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_session.return_value = mock_cm
+
+        run_id = uuid.uuid4()
+        mock_get_run.return_value = _make_mock_run(
+            outputs_json={"node1": {"result": "hello"}},
+            node_telemetry_json={"node2": {"status": "completed", "summary": "ok"}},
         )
 
         result = await get_run_output(run_id=str(run_id), node_id="nonexistent")
