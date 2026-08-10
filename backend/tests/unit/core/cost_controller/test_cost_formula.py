@@ -189,8 +189,8 @@ def test_validate_formula_none_is_noop() -> None:
     # skipped entirely: no grammar check and no identifier validation. An empty
     # allowlist would reject every identifier, so passing here proves None is
     # never parsed.
-    validate_formula(None, _SANDBOX)
-    validate_formula(None, frozenset())
+    assert validate_formula(None, _SANDBOX) is None
+    assert validate_formula(None, frozenset()) is None
 
 
 def test_newline_inside_formula_is_unexpected_character() -> None:

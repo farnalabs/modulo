@@ -113,11 +113,11 @@ LEGITIMATE_SNIPPETS = [
 ]
 
 
-@pytest.mark.parametrize("name,source", DANGEROUS_SNIPPETS)
+@pytest.mark.parametrize(("name", "source"), DANGEROUS_SNIPPETS)
 def test_dangerous_silent_reraise_is_flagged(name: str, source: str) -> None:
     assert _matches(source), f"rule should flag: {name}"
 
 
-@pytest.mark.parametrize("name,source", LEGITIMATE_SNIPPETS)
+@pytest.mark.parametrize(("name", "source"), LEGITIMATE_SNIPPETS)
 def test_legitimate_reraise_is_not_flagged(name: str, source: str) -> None:
     assert not _matches(source), f"rule should NOT flag: {name}"
