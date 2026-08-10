@@ -7760,10 +7760,16 @@ export interface components {
         /**
          * ConcurrencyBucket
          * @description One slot-utilization bucket — max/avg concurrent active + queued runs.
+         *
+         *     ``key`` is always ``None`` (concurrency is an overall-series surface) and
+         *     ``pool_reference`` mirrors the top-level reference on every bucket — both
+         *     are surfaced so REST and the MCP tool return the identical schema.
          */
         ConcurrencyBucket: {
             /** Date */
             date: string;
+            /** Key */
+            key?: string | null;
             /**
              * Max Active
              * @default 0
@@ -7784,6 +7790,8 @@ export interface components {
              * @default 0
              */
             avg_queued: number;
+            /** Pool Reference */
+            pool_reference?: number | null;
         };
         /** ConcurrencyResponse */
         ConcurrencyResponse: {
