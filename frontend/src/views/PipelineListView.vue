@@ -3,11 +3,13 @@
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="mx-auto flex flex-wrap items-center justify-between gap-3 max-w-6xl">
         <PageHeader :title="$t('views.PipelineListView.title')" />
-        <FilterBar
-          :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
-          :search-value="search"
-          @update:search="search = $event; page = 1"
-        />
+        <div class="w-48 sm:w-auto">
+          <FilterBar
+            :search="{ placeholder: $t('views.PipelineListView.search_pipelines') }"
+            :search-value="search"
+            @update:search="search = $event; page = 1"
+          />
+        </div>
         <div class="flex items-center gap-1 border border-border rounded-lg p-0.5" role="group" :aria-label="$t('views.PipelineListView.view_mode')">
           <button
             :class="viewMode === 'table' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground'"
@@ -63,6 +65,15 @@
           </button>
         </div>
         <div v-if="loading || !foldersReady">
+          <!-- Reserve the mobile folder-filter row and the breadcrumb row that the
+               real content renders above the table, so the table does not drop
+               (layout shift) when the skeleton is replaced by the loaded content. -->
+          <div class="md:hidden mb-4" aria-hidden="true">
+            <div class="h-9 w-full rounded-lg border border-input bg-muted animate-pulse" />
+          </div>
+          <div class="mb-4" aria-hidden="true">
+            <div class="h-6 w-40 bg-muted rounded animate-pulse" />
+          </div>
           <div v-if="viewMode === 'table'" class="card rounded-lg border border-border overflow-hidden animate-pulse" aria-hidden="true">
             <div class="overflow-x-auto">
               <table class="w-full text-left text-sm">
