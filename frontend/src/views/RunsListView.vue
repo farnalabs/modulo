@@ -291,7 +291,7 @@ async function cancelRun(run: RunListItem) {
   cancellingIds.value = new Set([...cancellingIds.value, runId])
   cancelErrors.value = { ...cancelErrors.value, [runId]: '' }
   try {
-    const { error } = await requestRunCancellation(runId)
+    const { error } = await requestRunCancellation(runId, t('views.RunsListView.cancel_failed'))
     if (error) {
       cancelErrors.value = { ...cancelErrors.value, [runId]: error }
       return

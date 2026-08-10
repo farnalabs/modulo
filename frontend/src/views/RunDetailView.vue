@@ -928,7 +928,7 @@ async function cancelRun() {
   cancelling.value = true
   cancelError.value = null
   try {
-    const { error } = await requestRunCancellation(runId)
+    const { error } = await requestRunCancellation(runId, t('views.RunDetailView.cancel_failed'))
     if (error) {
       cancelError.value = error
     } else {
