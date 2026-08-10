@@ -143,7 +143,30 @@
       </div>
     </div>
 
-    <LoadingSpinner v-if="loading" />
+    <div v-if="loading" aria-hidden="true" class="table-wrapper overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr>
+            <th class="table-header">{{ $t('views.AdminAuditView.timestamp') }}</th>
+            <th class="table-header">{{ $t('views.AdminAuditView.event_type') }}</th>
+            <th class="table-header">{{ $t('views.AdminAuditView.actor') }}</th>
+            <th class="table-header">{{ $t('views.AdminAuditView.target') }}</th>
+            <th class="table-header">{{ $t('views.AdminAuditView.summary') }}</th>
+            <th class="w-8 table-header" />
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          <tr v-for="row in 8" :key="row">
+            <td class="table-cell whitespace-nowrap"><div class="h-4 w-28 rounded bg-muted/50" /></td>
+            <td class="table-cell"><div class="h-4 w-24 rounded bg-muted/50" /></td>
+            <td class="table-cell"><div class="h-4 w-32 rounded bg-muted/50" /></td>
+            <td class="table-cell"><div class="h-4 w-20 rounded bg-muted/50" /></td>
+            <td class="table-cell"><div class="h-4 w-full max-w-sm rounded bg-muted/50" /></td>
+            <td class="table-cell"><div class="ml-auto h-4 w-4 rounded bg-muted/50" /></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadEvents" />
 
@@ -297,7 +320,6 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatError } from '../lib/utils'

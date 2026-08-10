@@ -7,7 +7,26 @@
     <div class="page-wide">
     <PageHeader :title="$t('views.SchemaListView.schemas')" :subtitle="$t('views.SchemaListView.manage_schemas_and_deprecate_outdated_definitions')" />
 
-    <LoadingSpinner v-if="loading" />
+    <div v-if="loading" aria-hidden="true" class="overflow-x-auto rounded-lg border">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-muted/50">
+          <tr>
+            <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.name') }}</th>
+            <th class="px-4 py-3 font-medium">{{ $t('views.SchemaListView.description') }}</th>
+            <th class="px-4 py-3 font-medium capitalize">{{ $t('views.SchemaListView.status') }}</th>
+            <th class="px-4 py-3 font-medium text-right">{{ $t('views.SchemaListView.actions') }}</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          <tr v-for="row in 6" :key="row">
+            <td class="px-4 py-3"><div class="h-4 w-32 rounded bg-muted/50" /></td>
+            <td class="px-4 py-3"><div class="h-4 w-full max-w-md rounded bg-muted/50" /></td>
+            <td class="px-4 py-3"><div class="h-4 w-16 rounded bg-muted/50" /></td>
+            <td class="px-4 py-3"><div class="ml-auto h-4 w-8 rounded bg-muted/50" /></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <ErrorAlert v-else-if="error" :message="error" />
 
@@ -109,7 +128,6 @@ import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import { Button } from '@/components/ui/button'
