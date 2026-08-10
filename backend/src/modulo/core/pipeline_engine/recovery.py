@@ -117,9 +117,13 @@ async def recover_node(
 
     node_type = node_def.get("node_type", "agent")
 
-    # Check for already-completed node in outputs.
+    # Check for already-completed node in either output column. A skipped
+    # recovery marker lives ONLY in node_telemetry_json (its outputs key is
+    # omitted), so the guard must check both columns (Agent Return Contract,
+    # FAR-125 P1c).
     outputs = dict(run.outputs_json) if run.outputs_json else {}
-    if node_id in outputs:
+    telemetry = dict(run.node_telemetry_json) if run.node_telemetry_json else {}
+    if node_id in outputs or node_id in telemetry:
         raise NodeAlreadyCompletedError(run_id, node_id)
 
     # Serialise status update with optimistic locking via the WHERE clause.
@@ -140,21 +144,20 @@ async def recover_node(
 
     run.status = new_status
 
-    # Store recovery output in outputs_json.
+    # Store recovery markers in the split output columns (Agent Return
+    # Contract, FAR-125). The PURE return lands in outputs_json and the marker
+    # in node_telemetry_json; a skipped node OMITS its outputs key entirely
+    # (the telemetry entry is the sole record). Both columns are written on the
+    # same ORM object and flushed once so the pair lands atomically — the same
+    # pattern as update_run_outputs / update_run_status.
     if input_data is not None:
-        outputs[node_id] = {
-            "input": input_data,
-            "output": input_data,
-            "recovered": True,
-        }
+        outputs[node_id] = input_data
+        telemetry[node_id] = {"recovered": True, "recovery_input": input_data}
     else:
-        outputs[node_id] = {
-            "input": None,
-            "output": None,
-            "skipped": True,
-        }
+        telemetry[node_id] = {"skipped": True}
 
     run.outputs_json = outputs
+    run.node_telemetry_json = telemetry
     await session.flush()
 
     try:
