@@ -89,6 +89,21 @@ def _fact_queue_wait_ms(run: Run) -> int | None:
     return None
 
 
+def _fact_total_queue_wait_ms(run: Run) -> int | None:
+    """Run.started_at - Run.created_at in ms — the FULL queue wait (FAR-134).
+
+    Unlike ``queue_wait_ms`` (started minus dispatched — the SAQ worker queue
+    only), this covers the whole wait from run creation to execution start:
+    capacity-deferral backoff PLUS the SAQ queue. NULL when either side is
+    missing. ``created_at`` is read via ``getattr`` to mirror the file's
+    defensive pattern for legacy run-shaped fakes.
+    """
+    created_at = getattr(run, "created_at", None)
+    if created_at is not None and run.started_at is not None:
+        return int((run.started_at - created_at).total_seconds() * 1000)
+    return None
+
+
 def _fact_final_idle_ms(run: Run) -> int | None:
     """Run.completed_at - Run.heartbeat_at — the stuck-with-no-heartbeat window.
 
@@ -252,6 +267,13 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "output_bytes": _fact_output_bytes(run),
             "telemetry_bytes": _fact_telemetry_bytes(run),
             "rate_limited": getattr(run, "rate_limit_key", None) is not None,
+            # FAR-134 concurrency columns — absolute run-lifecycle instants +
+            # the full queue wait (started - created). getattr defensively for
+            # legacy run-shaped objects that predate the Run fields.
+            "dispatched_at": getattr(run, "dispatched_at", None),
+            "started_at": run.started_at,
+            "completed_at": run.completed_at,
+            "total_queue_wait_ms": _fact_total_queue_wait_ms(run),
         }
         async with session.begin_nested():
             stmt = pg_insert(RunDailyFact).values(**values)
@@ -283,6 +305,10 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "output_bytes": stmt.excluded.output_bytes,
                 "telemetry_bytes": stmt.excluded.telemetry_bytes,
                 "rate_limited": stmt.excluded.rate_limited,
+                "dispatched_at": stmt.excluded.dispatched_at,
+                "started_at": stmt.excluded.started_at,
+                "completed_at": stmt.excluded.completed_at,
+                "total_queue_wait_ms": stmt.excluded.total_queue_wait_ms,
             }
             await session.execute(stmt.on_conflict_do_update(index_elements=[RunDailyFact.run_id], set_=update_cols))
     except asyncio.CancelledError:

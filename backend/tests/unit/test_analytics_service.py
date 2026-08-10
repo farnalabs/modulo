@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from typing import Self
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -123,3 +125,125 @@ class TestCheckHourCap:
 
     def test_day_grouping_ignores_span(self) -> None:
         assert _check_hour_cap(AnalyticsGroupBy.DAY, date(2026, 1, 1), date(2026, 8, 1)) is None
+
+
+# ── pool_reference resolution (FAR-134) ──────────────────────────────
+
+
+class _FakePoolSession:
+    """Async-session shaped fake: ``async with`` + ``begin()`` + ``execute()``.
+
+    ``execute`` returns a result whose ``scalar_one_or_none`` yields
+    *pipeline_max_concurrent* (the single-pipeline reference path). The org
+    path bypasses ``execute`` entirely and calls the org-limit reader.
+    """
+
+    def __init__(self, pipeline_max_concurrent: int | None) -> None:
+        self._pipeline_max_concurrent = pipeline_max_concurrent
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args) -> bool:
+        return False
+
+    def begin(self):
+        return self
+
+    async def execute(self, stmt, params=None):
+        result = AsyncMock()
+        result.scalar_one_or_none = MagicMock(return_value=self._pipeline_max_concurrent)
+        return result
+
+
+class TestResolvePoolReference:
+    """``_resolve_pool_reference``: no filter → org run_concurrency_limit; a
+    single pipeline filter → that pipeline's max_concurrent_runs (FAR-134)."""
+
+    def _settings(self):
+        return MagicMock()
+
+    def _call(self, factory, *, pipeline_ids=(), account_id=None, org_role=None):
+        org = uuid.uuid4()
+        return svc._resolve_pool_reference(
+            factory,
+            self._settings(),
+            org_id=org,
+            account_id=account_id,
+            org_role=org_role,
+            pipeline_ids=pipeline_ids,
+        )
+
+    async def test_no_pipeline_filter_reads_org_run_concurrency_limit(self) -> None:
+        session = _FakePoolSession(pipeline_max_concurrent=None)
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock) as mock_rls,
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock) as mock_user,
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=20)) as mock_org,
+        ):
+            value = await self._call(factory, account_id=uuid.uuid4(), org_role="admin")
+        assert value == 20, "no pipeline filter must use the org's run_concurrency_limit"
+        mock_org.assert_awaited_once()
+        assert mock_org.await_args.args[1] is not None, "the org id must be passed to the org-limit reader"
+        mock_rls.assert_awaited_once()
+        mock_user.assert_awaited_once()
+
+    async def test_single_pipeline_filter_reads_pipeline_max_concurrent_runs(self) -> None:
+        session = _FakePoolSession(pipeline_max_concurrent=7)
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock(return_value=20)) as mock_org,
+        ):
+            value = await self._call(factory, pipeline_ids=(uuid.uuid4(),))
+        assert value == 7, "a single pipeline filter must use that pipeline's max_concurrent_runs"
+        mock_org.assert_not_awaited(), "the org limit must NOT be read when a single pipeline is filtered"
+
+    async def test_single_pipeline_missing_row_returns_none(self) -> None:
+        session = _FakePoolSession(pipeline_max_concurrent=None)
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock()) as mock_org,
+        ):
+            value = await self._call(factory, pipeline_ids=(uuid.uuid4(),))
+        assert value is None, "a missing pipeline row must degrade to None, not raise"
+        mock_org.assert_not_awaited()
+
+    async def test_org_limit_reader_failure_degrades_to_none(self) -> None:
+        session = _FakePoolSession(pipeline_max_concurrent=None)
+        factory = MagicMock(return_value=session)
+        from sqlalchemy.exc import SQLAlchemyError
+
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(
+                svc,
+                "get_org_run_concurrency_limit",
+                new=AsyncMock(side_effect=SQLAlchemyError("db down")),
+            ),
+        ):
+            value = await self._call(factory)
+        assert value is None, "a reference-read failure must degrade to None, never raise"
+
+    async def test_pipeline_query_failure_degrades_to_none(self) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        async def _boom(stmt, params=None) -> None:
+            raise SQLAlchemyError("db down")
+
+        session = _FakePoolSession(pipeline_max_concurrent=None)
+        session.execute = _boom  # type: ignore[method-assign]
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(svc, "set_rls_org", new_callable=AsyncMock),
+            patch.object(svc, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(svc, "get_org_run_concurrency_limit", new=AsyncMock()) as mock_org,
+        ):
+            value = await self._call(factory, pipeline_ids=(uuid.uuid4(),))
+        assert value is None, "a pipeline-query failure must degrade to None, never raise"
+        mock_org.assert_not_awaited()

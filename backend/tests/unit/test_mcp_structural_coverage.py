@@ -57,6 +57,7 @@ _EXPECTED_TOOLS = frozenset(
         "list_housekeeping",
         "perform_housekeeping",
         "query_analytics",
+        "query_analytics_concurrency",
     }
 )
 

@@ -4247,6 +4247,15 @@ The facts table is enriched with stall-dimension and run-lifecycle columns so th
 - **Export**: `GET /api/v1/analytics/export` returns raw fact rows (no bucketing, all fact columns) filtered by the same typed params, ordered by `run_date`/`created_at`, paginated (`offset`/`limit`, default 500, max 5000), org-scoped, rate-limited, permission + feature gated. `format=json` (default) or `format=csv` (Content-Disposition attachment).
 - **MCP**: the `query_analytics` MCP tool mirrors the REST surface (typed params incl. repeated `pipeline_id`, `error_code`, date range, limit), enforcing the `analytics.query` permission and the `analytics_page` feature gate. Both REST and MCP funnel through the same shared service, so org predicate, rate limit, statement timeout, bucketing, and error semantics stay identical.
 
+#### 8.32.10 Concurrency / Slot Utilization (FAR-134)
+
+A dedicated `GET /api/v1/analytics/concurrency` endpoint (and the `query_analytics_concurrency` MCP tool) reconstructs "how many runs were running / queued at any instant" from the retained facts — no live `runs` reads. It requires the same `analytics.query` permission and `analytics_page` feature as the bucketed query and funnels through the same shared service (org predicate, rate limit, statement timeout, error semantics).
+
+- **Fact columns**: `run_daily_facts` gains `dispatched_at`, `started_at`, `completed_at` (absolute UTC instants copied from the source run — deliberately NOT FKs, facts survive the run purge) and `total_queue_wait_ms` (`started_at − created_at` — the FULL wait from run creation to execution start, covering capacity-deferral backoff plus the SAQ queue; NULL when either side is missing). The live writer and the daily backfill both populate them; a backfilled fact never carries NULL where the source provides a value.
+- **Semantics**: per bucket, `max_active`/`avg_active` are the peak and time-weighted mean of the concurrent-run count computed from the `[started_at, completed_at)` overlap (a run spanning a bucket boundary counts in BOTH buckets; a never-completed run — `completed_at` NULL — counts as active through the bucket's end). `max_queued`/`avg_queued` are the peak and time-weighted mean queue depth: runs with `created_at <= t < started_at`, with never-started runs (`started_at` NULL) counting as queued through the end of the range.
+- **`pool_reference`**: the binding concurrency cap for the query scope — the org's `run_concurrency_limit`, or a single filtered pipeline's `max_concurrent_runs` when a `pipeline_id` filter is present.
+- **Params**: `group_by` (hour/day/week, with auto-granularity), `trigger_type`, `status`, repeated `pipeline_id`, `folder_id`, `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). There is no dimension split — concurrency is an overall-series surface.
+
 ---
 
 ## 15. Resolved Design Decisions
