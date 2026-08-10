@@ -22,6 +22,21 @@ Feature: Error Forwarders
     Then the response status is 200
     And the response includes "forwarder_type" set to "sentry"
 
+  Scenario: Configure forwarder without required field returns 422
+    When I PUT "/api/v1/errors/forwarders/sentry" with body {"config_json": {"org_slug": "acme"}}
+    Then the response status is 422
+    And the error mentions "dsn"
+
+  Scenario: Configure forwarder with empty required field returns 422
+    When I PUT "/api/v1/errors/forwarders/datadog" with body {"config_json": {"api_key": ""}}
+    Then the response status is 422
+    And the error mentions "api_key"
+
+  Scenario: Configure forwarder with wrong-type field returns 422
+    When I PUT "/api/v1/errors/forwarders/loki" with body {"config_json": {"push_url": "https://loki.example.com", "labels": "app=modulo"}}
+    Then the response status is 422
+    And the error mentions "labels must be a dict"
+
   Scenario: Configure unknown forwarder type returns 404
     When I PUT "/api/v1/errors/forwarders/unknown" with body {"config_json": {}}
     Then the response status is 404
