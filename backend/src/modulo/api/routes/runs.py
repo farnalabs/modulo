@@ -74,7 +74,7 @@ _RETRY_TRANSIENT = retry(
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
-_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
 
 # Child-run cost rollup. `total_cost_usd` keeps its own-run semantics; the
 # aggregate is a derived display value and never mutates the stored field.

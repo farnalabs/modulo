@@ -13,14 +13,18 @@ import uuid
 from typing import Any
 from unittest.mock import MagicMock
 
-from sqlalchemy import CheckConstraint
+import pytest
+from sqlalchemy import CheckConstraint, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.pipeline_engine.executor import (
     _TERMINAL_STATUSES,
     PipelineExecutor,
     _node_output_stall_reason,
 )
-from modulo.db.models.run import Run
+from modulo.db.crud.run import RUN_STATUS_WHITELIST, update_run_status
+from modulo.db.models.base import Base
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 
 def _stalled_event(stall_reason: str) -> dict[str, Any]:
@@ -120,3 +124,63 @@ def test_run_model_check_constraint_allows_stalled():
         arg.sqltext.text for arg in table_args if isinstance(arg, CheckConstraint) and arg.name == "ck_runs_status"
     )
     assert "'stalled'" in check_sql
+
+
+def test_run_status_whitelist_includes_stalled():
+    """The persistence whitelist accepts 'stalled' — without this,
+    update_run_status / transition_run raise ValueError and a stalled run is
+    never recorded (the _stream_graph-only tests never reached this layer)."""
+    assert "stalled" in RUN_STATUS_WHITELIST
+
+
+def test_terminal_statuses_include_stalled():
+    """The shared single-source-of-truth terminal set includes 'stalled' so
+    org-deletion, the analytics backfill, and the purge treat it as terminal."""
+    assert "stalled" in TERMINAL_STATUSES
+
+
+@pytest.fixture
+async def _sqlite_runs_engine():
+    eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+    async with eng.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__]))
+    yield eng
+    await eng.dispose()
+
+
+async def test_update_run_status_persists_stalled_with_completed_at(_sqlite_runs_engine):
+    """Persistence-layer coverage: update_run_status accepts 'stalled' and
+    stamps completed_at on the real row — the end-to-end write a stalled run
+    goes through in finalize_cost. Without the whitelist + completed_at
+    wiring this raises ValueError or leaves completed_at NULL."""
+    factory = async_sessionmaker(_sqlite_runs_engine, expire_on_commit=False)
+    org_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    async with factory() as session, session.begin():
+        session.add(
+            Run(
+                id=run_id,
+                organisation_id=org_id,
+                pipeline_id=uuid.uuid4(),
+                snapshot_id=uuid.uuid4(),
+                trigger_type="manual",
+                status="running",
+                run_number=1,
+                input_hash="a" * 64,
+                langgraph_thread_id=f"thread-{run_id}",
+            )
+        )
+        await session.flush()
+
+    async with factory() as session, session.begin():
+        run = await update_run_status(session, run_id, "stalled")
+        assert run is not None
+        assert run.status == "stalled"
+        assert run.completed_at is not None
+
+    async with factory() as session:
+        persisted = await session.execute(select(Run).where(Run.id == run_id))
+        row = persisted.scalar_one_or_none()
+    assert row is not None
+    assert row.status == "stalled"
+    assert row.completed_at is not None

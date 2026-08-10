@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Single source of truth for terminal run statuses (ADR 020). Used by the
 # analytics facts writer, the maintenance backfill, and the run purge. Must be
 # a subset of the ``ck_runs_status`` CHECK-constraint values.
-TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
 
 
 class _GenRandomUuid(expression.FunctionElement[str]):

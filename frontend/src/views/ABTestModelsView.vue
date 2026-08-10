@@ -299,6 +299,7 @@ import {
 } from '@/components/ui/select'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { TERMINAL_STATUSES } from '../constants/runStatuses'
 
 const { currencyCode, loadCurrency } = useOrgCurrency()
 
@@ -388,7 +389,7 @@ watch(() => backendsData.value, (data) => {
   }
 })
 
-const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
+const terminalStatuses: Set<string> = new Set(TERMINAL_STATUSES)
 
 const filteredGroups = computed(() =>
   variantGroups.value.filter(g => g.pipeline_id === selectedPipelineId.value)
