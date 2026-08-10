@@ -48,6 +48,37 @@ _MAX_DELAY = 30.0
 # Actions accepted by the Commits API for multi-file (batch) operations
 _COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move", "chmod"})
 
+# Per-operation scope requirements. GitLab PAT scopes are coarse: ``api``
+# grants full read/write API access, ``write_repository`` grants repository
+# (git + repository-files API) writes, and ``read_api`` is read-only.
+# Repository-file writes require ``write_repository`` (the ``api`` superset
+# also satisfies them); every other write operation requires ``api``.
+_WRITE_SCOPE_REQUIREMENTS: dict[str, str] = {
+    "file": "write_repository",
+    "files": "write_repository",
+    "commit": "write_repository",
+    "file_delete": "write_repository",
+    "mr": "api",
+    "merge_request": "api",
+    "mr_comment": "api",
+    "mr_note": "api",
+    "mr_merge": "api",
+    "mr_approve": "api",
+    "mr_approval_request": "api",
+    "mr_labels": "api",
+    "issue": "api",
+    "issue_update": "api",
+    "issue_note": "api",
+    "issue_label": "api",
+    "label": "api",
+    "milestone": "api",
+    "pipeline_run": "api",
+}
+
+# How long declared-scope results are cached before a write re-probes the
+# instance. Bounds per-write token-info round-trips to one per window.
+_SCOPE_CACHE_TTL = 300.0
+
 
 def _instance_root(base_url: str) -> str:
     """Derive the GitLab instance root from an API base URL.
@@ -264,6 +295,7 @@ class GitLabConnector(ConnectorBase):
     def __init__(self, token: str, base_url: str = _GITLAB_API) -> None:
         self._token = token
         self._base_url = base_url.rstrip("/")
+        self._scope_cache: tuple[float, frozenset[str]] | None = None
 
     @staticmethod
     def _jitter(delay: float, *, tight: bool = False) -> float:
@@ -398,14 +430,14 @@ class GitLabConnector(ConnectorBase):
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers(), timeout=30)
 
-    async def _missing_scopes(self, client: httpx.AsyncClient) -> frozenset[str]:
-        """Return the required scopes the token does not declare.
+    async def _declared_effective_scopes(self, client: httpx.AsyncClient) -> frozenset[str]:
+        """Return the token's declared scopes, expanded through superset relations.
 
         Reads the token's declared scopes from the instance ``/oauth/token/info``
         endpoint (best-effort, reusing the open *client*). When the endpoint is
         unavailable (older self-hosted versions return 404), unreachable, or
-        returns no usable scope list, returns an empty set so the health check
-        degrades to the endpoint probes already performed.
+        returns no usable scope list, returns an empty set so callers degrade
+        to the endpoint probes already performed.
         """
         root = _instance_root(self._base_url)
         try:
@@ -430,7 +462,76 @@ class GitLabConnector(ConnectorBase):
         declared = frozenset(s for s in raw if isinstance(s, str) and s)
         if not declared:
             return frozenset()
-        return REQUIRED_SCOPES - _effective_scopes(declared)
+        return _effective_scopes(declared)
+
+    async def _probe_declared_scopes(self) -> frozenset[str]:
+        """Probe the instance for the token's declared scopes via a fresh client.
+
+        Strictly best-effort and never raises: any failure (network error,
+        non-2xx, unparseable body, unavailable endpoint, or a test harness
+        rejecting the request) yields an empty set so callers treat an unknown
+        scope set as "allow and let the GitLab API enforce".
+        """
+        try:
+            async with self._client() as client:
+                return await self._declared_effective_scopes(client)
+        except Exception:
+            return frozenset()
+
+    async def _declared_scopes_cached(self) -> frozenset[str]:
+        """Return the token's effective declared scopes, cached for ``_SCOPE_CACHE_TTL``.
+
+        Populates the cache with a best-effort probe on first use. A failure to
+        determine the scopes caches an empty set (unknown) so write verification
+        degrades to allow rather than failing closed on a flaky endpoint.
+        """
+        now = time.monotonic()
+        if self._scope_cache is not None:
+            cached_at, scopes = self._scope_cache
+            if now - cached_at < _SCOPE_CACHE_TTL:
+                return scopes
+        scopes = await self._probe_declared_scopes()
+        self._scope_cache = (now, scopes)
+        return scopes
+
+    async def verify_write_scopes(self, resource: str) -> frozenset[str]:
+        """Return the scopes a write resource requires that the token lacks.
+
+        Probes the instance for the token's declared scopes (cached per instance
+        for ``_SCOPE_CACHE_TTL`` seconds). Returns an empty set when the token
+        satisfies the requirement or when the token's declared scopes cannot be
+        determined (best-effort — the GitLab API enforces scopes on every call).
+        """
+        required = _WRITE_SCOPE_REQUIREMENTS.get(resource)
+        if required is None:
+            return frozenset()
+        declared = await self._declared_scopes_cached()
+        if not declared:
+            return frozenset()
+        if required in declared:
+            return frozenset()
+        return frozenset({required})
+
+    async def _ensure_write_scope(self, resource: str) -> None:
+        """Fail fast when the token lacks the scope a write operation requires.
+
+        Best-effort: when the token's declared scopes cannot be determined the
+        check is skipped (the API still enforces scope). Declared scopes are
+        cached per instance so the token-info round-trip happens at most once
+        per ``_SCOPE_CACHE_TTL`` window rather than on every write.
+        """
+        required = _WRITE_SCOPE_REQUIREMENTS.get(resource)
+        if required is None:
+            return
+        declared = await self._declared_scopes_cached()
+        if not declared or required in declared:
+            return
+        raise ValueError(
+            f"GitLab write resource {resource!r} requires scope {required!r}; "
+            f"token declares: {', '.join(sorted(declared))}. "
+            "Grant the scope or use a token with the 'api' scope, which covers "
+            "all GitLab write operations.",
+        )
 
     @staticmethod
     def _result(records: list[dict[str, Any]], response: httpx.Response, total: int | None = None) -> ConnectorResult:
@@ -497,7 +598,14 @@ class GitLabConnector(ConnectorBase):
                 # Doorkeeper token-introspection endpoint so the
                 # write_repository/api scopes can be reported individually
                 # instead of only being inferred from endpoint HTTP status.
-                missing_scopes = await self._missing_scopes(client)
+                # Also warms the instance scope cache so the first write() after
+                # a successful health check is verified without re-probing.
+                declared_scopes = await self._declared_effective_scopes(client)
+                if declared_scopes:
+                    self._scope_cache = (time.monotonic(), declared_scopes)
+                    missing_scopes = REQUIRED_SCOPES - declared_scopes
+                else:
+                    missing_scopes = frozenset()
 
             if missing_scopes:
                 return HealthResult(
@@ -751,6 +859,7 @@ class GitLabConnector(ConnectorBase):
                 raise ValueError(f"Unsupported GitLab resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        await self._ensure_write_scope(payload.resource)
         match payload.resource:
             case "file":
                 project = self._require_filter(payload.data, "project", payload.resource)
