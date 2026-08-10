@@ -149,6 +149,10 @@ class Run(OrgScoped):
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # Per-node telemetry (status, wall_clock_time_ms, exit_code, ...) split out
+    # of outputs_json by the Agent Return Contract (FAR-125). NULL for
+    # pre-split runs. Written atomically with outputs_json (migration 0074).
+    node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     snapshot: Mapped["PipelineSnapshot"] = relationship()

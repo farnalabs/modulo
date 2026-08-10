@@ -8,7 +8,7 @@
 
 ---
 
-## 1. Default Configuration — Zero Egress
+## 1. Default Configuration – Zero Egress
 
 With default settings and **no connectors configured**, Modulo makes **zero
 external network calls**. There are no hardcoded DNS resolutions, phone-home
@@ -35,7 +35,7 @@ This satisfies the "no external DNS calls in default config" requirement.
 |---|---|---|
 | `MODULO_TELEMETRY_ENABLED` | `false` | When `true`: writes JSON lines to stdout (no network) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | not set | When set + telemetry enabled: HTTPS POST to configured endpoint |
-| OTel test connection (`POST /api/v1/settings/observability/test`) | — | Manual test: HTTPS POST to user-specified endpoint |
+| OTel test connection (`POST /api/v1/settings/observability/test`) | – | Manual test: HTTPS POST to user-specified endpoint |
 
 ✅ **Data residency OK**: Telemetry is opt-in. No telemetry data leaves the
 process without explicit operator configuration.
@@ -66,7 +66,7 @@ makes outbound calls until a user creates a ConnectorInstance with credentials.
 
 ### Default credential URLs
 
-The Ollama model backend defaults to `http://localhost:11434/v1` — a local-only
+The Ollama model backend defaults to `http://localhost:11434/v1` – a local-only
 address. All other model backends (Anthropic, OpenAI) require explicit
 configuration of API keys and endpoints.
 
@@ -123,10 +123,10 @@ No third-party CDNs, analytics scripts, or tracking pixels are loaded.
 
 | Category | Default Egress | User-Configurable Egress |
 |---|---|---|
-| Telemetry (OTel) | None | Yes — when `MODULO_TELEMETRY_ENABLED=true` |
-| Connectors | None | Yes — per-connector API config |
-| Webhooks | None | Yes — per-webhook URL config |
-| SSO/OIDC | None | Yes — IdP discovery URL |
+| Telemetry (OTel) | None | Yes – when `MODULO_TELEMETRY_ENABLED=true` |
+| Connectors | None | Yes – per-connector API config |
+| Webhooks | None | Yes – per-webhook URL config |
+| SSO/OIDC | None | Yes – IdP discovery URL |
 | Library registry | None | None (TBD v2) |
 | License check | None | None |
 | Frontend | None | None |

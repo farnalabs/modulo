@@ -63,6 +63,11 @@ from modulo.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     build_telemetry,
 )
+from modulo.core.node_output_split import (
+    extend_node_type_map_from_edges,
+    node_telemetry,
+    split_node_output,
+)
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -114,15 +119,110 @@ def _merge(stored: Any, segment: Any, *, segment_wins: bool = True) -> dict[str,
     return merged
 
 
-def _node_output_dict(merged_outputs: Any, node_id: str) -> dict[str, Any] | None:
-    """The inner ``output`` dict of a completed node (or ``None``)."""
-    if not isinstance(merged_outputs, dict):
-        return None
-    node_output = merged_outputs.get(node_id)
-    if not isinstance(node_output, dict):
-        return None
-    inner = node_output.get("output")
-    return inner if isinstance(inner, dict) else node_output
+_RECOVERY_TELEMETRY_FIELDS = ("recovered", "recovery_input")
+
+
+def _preserve_recovery_fields(stored_entry: Any, telemetry: dict[str, Any]) -> None:
+    """Recovery-vs-finalize: NEVER clobber a node's stored recovery telemetry.
+
+    When a node's stored telemetry carries ``recovered`` / ``recovery_input``
+    and the freshly split telemetry (from a segment value that has moved past
+    the recovery marker) lacks them, fold the stored fields in. The
+    already-pure idempotence branch never reaches this (the stored entry IS the
+    telemetry); it guards the re-split branch so a later finalize merge keeps
+    recovery facts instead of overwriting them.
+    """
+    if not isinstance(stored_entry, dict):
+        return
+    for key in _RECOVERY_TELEMETRY_FIELDS:
+        if key in stored_entry and key not in telemetry:
+            telemetry[key] = stored_entry[key]
+
+
+def _log_output_resplit(run_id: str | None, node_id: str) -> None:
+    """Log a LEGACY row being re-split (FAR-125 P1b) — observable migration signal."""
+    _log.info("cost_finalize.legacy_output_resplit", extra={"run_id": run_id, "node_id": node_id})
+
+
+def _split_merge_outputs(
+    stored_outputs: Any,
+    stored_telemetry: Any,
+    segment: Any,
+    node_type_map: dict[str, str],
+    *,
+    run_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split-then-merge a segment into the two LOCKSTEP output columns.
+
+    For EVERY node in *segment* the value is routed through
+    ``node_output_split.split_node_output``:
+      - an already-pure node (a stored telemetry entry exists) is an
+        IDEMPOTENT NO-OP — the return and the stored telemetry pass through
+        unchanged (``stored_telemetry`` is the P1 split signal);
+      - a legacy row is RE-SPLIT (logged with run_id + node_id) into its pure
+        return + exhaustive telemetry.
+
+    The pure returns land in the ``outputs_json`` merge and the telemetry in
+    the parallel ``node_telemetry_json`` merge — LOCKSTEP: every
+    ``outputs_json`` key is guaranteed a telemetry key (``{}`` at minimum). A
+    skipped recovery marker is the sole exception: its ``outputs_json`` key is
+    OMITTED (the telemetry entry is the sole record). Stored rows absent from
+    the segment carry over verbatim (legacy stored rows re-split so lockstep
+    holds). Segment collisions are segment-wins, never summed.
+
+    NEVER raises: ``split_node_output`` is never-raises and malformed rows
+    degrade to best-effort splits.
+    """
+    merged_outputs: dict[str, Any] = {}
+    merged_telemetry: dict[str, Any] = {}
+
+    stored_out = stored_outputs if isinstance(stored_outputs, dict) else {}
+    stored_tel = stored_telemetry if isinstance(stored_telemetry, dict) else {}
+
+    for node_id, value in stored_out.items():
+        node_id = str(node_id)
+        if node_id in stored_tel:
+            merged_outputs[node_id] = value
+            merged_telemetry[node_id] = stored_tel[node_id]
+            continue
+        _log_output_resplit(run_id, node_id)
+        ret, telemetry = split_node_output(value, node_type_map.get(node_id, ""), None, run_id=run_id, node_id=node_id)
+        if not (ret is None and telemetry.get("skipped") is True):
+            merged_outputs[node_id] = ret
+        merged_telemetry[node_id] = telemetry
+
+    if isinstance(segment, dict):
+        for node_id, seg_value in segment.items():
+            node_id = str(node_id)
+            stored_entry = stored_tel.get(node_id)
+            ret, telemetry = split_node_output(
+                seg_value,
+                node_type_map.get(node_id, ""),
+                stored_entry,
+                run_id=run_id,
+                node_id=node_id,
+            )
+            if stored_entry is None:
+                _log_output_resplit(run_id, node_id)
+            _preserve_recovery_fields(stored_entry, telemetry)
+            if not (ret is None and telemetry.get("skipped") is True):
+                merged_outputs[node_id] = ret
+            merged_telemetry[node_id] = telemetry
+
+    return merged_outputs, merged_telemetry
+
+
+def _node_output_dict(merged_outputs: Any, node_id: str, merged_telemetry: Any = None) -> dict[str, Any] | None:
+    """The inner ``output`` dict of a completed node (or ``None``).
+
+    Routes through ``node_output_split.node_telemetry`` so the legacy
+    extraction is SHARED and identical everywhere (FAR-124 P0). When a split
+    telemetry entry exists (FAR-125 P1 rows) it is returned verbatim; ``None``
+    here means "no telemetry entry", which selects the legacy-row branch that
+    mirrors the historical implementation exactly.
+    """
+    value = node_telemetry(merged_telemetry, merged_outputs, node_id)
+    return value if isinstance(value, dict) else None
 
 
 def _pop_model_cost_fields(node_dict: dict[str, Any]) -> None:
@@ -196,6 +296,7 @@ def _enrich_union(
     merged_outputs: dict[str, Any],
     node_type_map: dict[str, str],
     is_terminal: bool = False,
+    merged_telemetry: Any = None,
 ) -> dict[str, dict[str, Any]]:
     """Fold per-node cost summaries from the completed-node output dicts into
     the union BEFORE ``build_telemetry`` (§4.2).
@@ -205,6 +306,11 @@ def _enrich_union(
     entries from ``node_token_usage``; sandbox nodes contribute 0. Agent
     ``token_usage`` is never folded in (v22 M1). The SPLIT sandbox signal is
     set from the run-frozen node-type map, NOT field presence.
+
+    Per-node telemetry is read from the split ``node_telemetry_json`` column
+    when present (FAR-125 P1b); legacy rows fall back to the shared
+    ``node_telemetry`` extraction so the enriched shape is identical either
+    way.
 
     The SCHEMA-DRIFT counter increment happens here (the frozen map is in
     scope) and is TERMINAL-ONLY, gated on ``pin_failed == false`` AND the node
@@ -227,7 +333,7 @@ def _enrich_union(
     executed_types: Counter[str] = Counter()
 
     for node_id, node_dict in union.items():
-        output_obj = _node_output_dict(merged_outputs, node_id)
+        output_obj = _node_output_dict(merged_outputs, node_id, merged_telemetry)
         has_wallclock = isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float))
         if isinstance(output_obj, dict) and isinstance(output_obj.get("wall_clock_time_ms"), (int, float)):
             node_dict["wall_clock_time_ms"] = output_obj["wall_clock_time_ms"]
@@ -350,21 +456,21 @@ def _token_cost(merged_usage: dict[str, Any]) -> Decimal:
     return total
 
 
-def _legacy_sandbox_cost(merged_outputs: dict[str, Any]) -> Decimal:
+def _legacy_sandbox_cost(merged_outputs: dict[str, Any], merged_telemetry: Any = None) -> Decimal:
     """Legacy-fallback sandbox cost — SERVER-VERIFIED WALL-CLOCK ONLY.
 
     ``elapsed/3600 * E2B_SANDBOX_USD_PER_HOUR`` over all completed sandbox
     nodes. The fallback DE-TRUSTS agent ``cost_estimate_usd`` (§1.5) — a hostile
     legacy ``cost_estimate_usd`` can no longer inflate the fallback total.
+    Per-node telemetry is read from the split ``node_telemetry_json`` column
+    when present (FAR-125 P1b) with the legacy extraction fallback.
     """
     if not isinstance(merged_outputs, dict):
         return Decimal(0)
     total = Decimal(0)
     rate = _e2b_rate()
-    for node_output in merged_outputs.values():
-        if not isinstance(node_output, dict):
-            continue
-        out = node_output.get("output")
+    for node_id in merged_outputs:
+        out = node_telemetry(merged_telemetry, merged_outputs, node_id)
         if not isinstance(out, dict):
             continue
         wall_ms = out.get("wall_clock_time_ms")
@@ -384,6 +490,7 @@ async def _fallback_write(
     status: str,
     merged_usage: dict[str, Any],
     merged_outputs: dict[str, Any],
+    merged_telemetry: dict[str, Any],
     error_code: str | None,
     error_detail: str | None,
     is_terminal: bool = False,
@@ -393,21 +500,22 @@ async def _fallback_write(
     Persists the UN-ENRICHED merged set (so the cumulative write-back invariant
     survives a cost-path exception) with ``total = token_cost +
     legacy_sandbox_cost`` — wall-clock ONLY, flat-clamped with the shared
-    ``total_clamped`` marker. On a terminal write the analytics fact is
-    recorded in the SAME transaction (fail-open, ADR 020).
+    ``total_clamped`` marker. The two output columns are written SHAPE-IDENTICAL
+    to the main path (FAR-125 P1b): ``outputs_json`` holds the PURE returns and
+    ``node_telemetry_json`` the split telemetry — never an un-split envelope.
+    On a terminal write the analytics fact is recorded in the SAME transaction
+    (fail-open, ADR 020).
     """
     total_tokens = _derive_total_tokens(merged_usage)
     token_cost = _token_cost(merged_usage)
-    sandbox_cost = _legacy_sandbox_cost(merged_outputs)
+    sandbox_cost = _legacy_sandbox_cost(merged_outputs, merged_telemetry)
     total = token_cost + sandbox_cost
     if not total.is_finite():
         total = Decimal(0)
     wall_hours = 0.0
     if isinstance(merged_outputs, dict):
-        for node_output in merged_outputs.values():
-            if not isinstance(node_output, dict):
-                continue
-            out = node_output.get("output")
+        for node_id in merged_outputs:
+            out = node_telemetry(merged_telemetry, merged_outputs, node_id)
             if isinstance(out, dict) and isinstance(out.get("wall_clock_time_ms"), (int, float)):
                 wall_hours += float(out["wall_clock_time_ms"]) / 3600000.0
     breakdown: list[dict[str, Any]] = [
@@ -451,6 +559,7 @@ async def _fallback_write(
         cost_breakdown=breakdown,
         node_token_usage=merged_usage,
         outputs_json=merged_outputs,
+        node_telemetry_json=merged_telemetry,
         total_tokens=total_tokens,
     )
     if is_terminal:
@@ -704,9 +813,15 @@ async def finalize_cost(
         return
 
     merged_usage = _merge(run.node_token_usage, segment_node_token_usage, segment_wins=True)
-    merged_outputs = _merge(run.outputs_json, segment_completed_node_outputs, segment_wins=True)
+    merged_outputs, merged_telemetry = _split_merge_outputs(
+        run.outputs_json,
+        run.node_telemetry_json,
+        segment_completed_node_outputs,
+        node_type_map,
+        run_id=str(run.id),
+    )
 
-    if not merged_usage and not merged_outputs:
+    if not merged_usage and not merged_outputs and not merged_telemetry:
         # Pre-component-read terminal: total 0, breakdown NULL, no ledger.
         await update_run_status(
             session,
@@ -724,7 +839,13 @@ async def finalize_cost(
     # --- the never-fail envelope: component read + build + run write (§1.5) ---
     try:
         live_components = await load_live_components(session, run.organisation_id)
-        enriched = _enrich_union(merged_usage, merged_outputs, node_type_map, is_terminal=is_terminal)
+        enriched = _enrich_union(
+            merged_usage,
+            merged_outputs,
+            node_type_map,
+            is_terminal=is_terminal,
+            merged_telemetry=merged_telemetry,
+        )
         from modulo.settings import get_settings
 
         telemetry, per_node_cost = build_telemetry(enriched, live_components)
@@ -746,6 +867,7 @@ async def finalize_cost(
             cost_breakdown=breakdown,
             node_token_usage=enriched,
             outputs_json=merged_outputs,
+            node_telemetry_json=merged_telemetry,
             total_tokens=total_tokens,
         )
     except asyncio.CancelledError:
@@ -759,6 +881,7 @@ async def finalize_cost(
             status,
             merged_usage,
             merged_outputs,
+            merged_telemetry,
             error_code,
             error_detail,
             is_terminal=is_terminal,
@@ -782,6 +905,7 @@ async def finalize_cost(
                 "cost_breakdown": breakdown,
                 "node_token_usage": enriched,
                 "outputs_json": merged_outputs,
+                "node_telemetry_json": merged_telemetry,
                 "total_tokens": total_tokens,
             },
             session_factory=session_factory,
@@ -795,8 +919,15 @@ async def finalize_cost(
 
 
 async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:
+    """Derive the run-frozen node-type map from the snapshot's ``graph_json``.
+
+    Edge-synthesized HITL gate nodes are absent from ``graph_json.nodes`` but
+    encoded on the edges, so the derived map is EXTENDED from the edges —
+    gate envelopes resolve by type in the split-then-merge (FAR-125 P1b).
+    """
     result = await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
-    return derive_node_type_map(result.scalar_one_or_none())
+    graph_json = result.scalar_one_or_none()
+    return extend_node_type_map_from_edges(derive_node_type_map(graph_json), graph_json)
 
 
 async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -804,18 +935,24 @@ async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, or
 
     The cancel path runs in a SEPARATE process from the executor, so the
     in-memory accumulated sets are NOT available. It RE-READS the STORED
-    cumulative sets (``run.outputs_json`` + ``run.node_token_usage``) and
-    passes THOSE to ``finalize_cost`` (§4.2 DATA SOURCE PINNED). A streamed run
-    that HAS PAUSED at least once has stored sets → a partial breakdown + ONE
-    ledger row. A NEVER-PAUSED in-flight run has NO stored sets → its accrued
-    cost is FORFEITED and only the ``cost_components_partial_spend_lost``
-    diagnostic log fires (run_id only — the cancel process lacks the in-memory
-    dicts, so the accrued segment count is never determinable).
+    cumulative sets (``run.outputs_json`` + ``run.node_token_usage`` +
+    ``run.node_telemetry_json``) and passes THOSE to ``finalize_cost`` (§4.2
+    DATA SOURCE PINNED). A streamed run that HAS PAUSED at least once has
+    stored sets → a partial breakdown + ONE ledger row. A NEVER-PAUSED in-flight
+    run has NO stored sets → its accrued cost is FORFEITED and only the
+    ``cost_components_partial_spend_lost`` diagnostic log fires (run_id only —
+    the cancel process lacks the in-memory dicts, so the accrued segment count
+    is never determinable).
+
+    Both stored output columns are re-fed (FAR-125 P1b): ``outputs_json`` as
+    the segment and ``node_telemetry_json`` as the split signal read inside
+    ``finalize_cost``, so already-pure rows are idempotent no-ops and legacy
+    rows are split exactly once.
     """
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         return
-    if not (run.outputs_json or run.node_token_usage):
+    if not (run.outputs_json or run.node_token_usage or run.node_telemetry_json):
         _log.warning("cost_components_partial_spend_lost", extra={"run_id": str(run_id)})
         return
     node_type_map = await _load_node_type_map(session, run.snapshot_id)

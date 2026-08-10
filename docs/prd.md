@@ -262,9 +262,9 @@ class PlanContext(Protocol):
         ...
 ```
 
-**`CommunityTierPlanContext`** (default when no valid license key is present): returns `False` for all Team-tier features listed below, `None` for all limits (unbounded within the Community tier). This is the default for self-hosted instances without a license key.
+**`CommunityTier`** (default when no valid license key is present): returns `False` for all Team-tier features listed below, `None` for all limits (unbounded within the Community tier). This is the default for self-hosted instances without a license key.
 
-**`LicenseKeyPlanContext`** (self-hosted with `MODULO_LICENSE_KEY` set): on startup, the application verifies the signed JSON payload in `MODULO_LICENSE_KEY` using the embedded Ed25519 public key. If the signature is valid and the key has not expired, the enabled features listed in the payload's `features` array are activated; all others remain disabled. If the key is invalid, expired, or malformed, startup logs a warning and falls back to `CommunityTierPlanContext`.
+**`LicenseKeyTier`** (self-hosted with `MODULO_LICENSE_KEY` set): on startup, the application verifies the signed JSON payload in `MODULO_LICENSE_KEY` using the embedded Ed25519 public key. If the signature is valid and the key has not expired, the enabled features listed in the payload's `features` array are activated; all others remain disabled. If the key is invalid, expired, or malformed, startup logs a warning and falls back to `CommunityTier`.
 
 **License key format**: a base64-encoded signed JSON payload, e.g.:
 ```json
@@ -280,7 +280,7 @@ Signed offline by the Modulo private key. Verified on startup using the public k
 
 > **Resolved (2026-06-30)**: a read-only recent-events endpoint (`GET /api/v1/admin/audit`) with chain verification (`GET /api/v1/admin/audit/verify`) stays Community — max 50 events, no export. This gives regulated teams tamper-evidence proof during evaluation without requiring a Team license. Bulk export (CSV/JSONL) and batch-detail endpoints remain Team-gated.
 
-**`CloudPlanContext`** (V3 SaaS — not yet built): would be injected by the modulo-cloud gateway middleware per-org, enforcing SaaS plan-tier flags and rate limits. Core never knows the plan tier — it only calls the interface.
+**`CloudPlanContext`** (V3 SaaS — not yet implemented): would be injected by the modulo-cloud gateway middleware per-org, enforcing SaaS plan-tier flags and rate limits. Core never knows the plan tier — it only calls the interface.
 
 Named feature flags used by core (exhaustive list as of v0.24):
 
@@ -1206,7 +1206,7 @@ pending
 
 **Cancel from `waiting_for_lock`**: immediately releases the advisory lock via `pg_advisory_unlock` and transitions to `cancelled`.
 
-**UI behaviour**: the run detail page shows a "Cancel" button for non-terminal runs. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
+**UI behaviour**: the run detail page shows a "Cancel" button for all non-terminal runs (`pending`, `running`, `awaiting_human`, `claimed`, `waiting_for_lock`). The runs list page shows a per-row Stop action (two-step inline confirm) for the same non-terminal statuses; terminal rows show no action. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
 
 #### HITL Gate Definition
 Each gate carries:
@@ -4240,7 +4240,7 @@ The `/analytics` page (sidebar group Core, `analytics.query` permission, communi
 
 #### 8.32.9 Queryable-Data Layer (FAR-102)
 
-The facts table is enriched with stall-dimension and run-lifecycle columns so the analytics surface can answer "why did runs fail / stall" without reading live `runs`: `error_code` (the stall dimension), `claim_count`, `queue_wait_ms` (dispatched − started), `final_idle_ms` (completed − heartbeat — the stuck-with-no-heartbeat window), `cancellation_requested`, `dispatcher`, `node_count` / `sandbox_agent_node_count` / `max_node_timeout_seconds` (derived from the snapshot `graph_json`, NULL-safe), `parent_run_id`, `snapshot_id` (both NO FKs — facts survive purge), `run_number`, `output_bytes` (serialised `outputs_json` size), and `rate_limited`. All are nullable where the source run may not carry the value. The live writer and the daily backfill both populate them — a backfilled fact never carries NULL where the source provides a value.
+The facts table is enriched with stall-dimension and run-lifecycle columns so the analytics surface can answer "why did runs fail / stall" without reading live `runs`: `error_code` (the stall dimension), `claim_count`, `queue_wait_ms` (started − dispatched), `final_idle_ms` (completed − heartbeat — the stuck-with-no-heartbeat window), `cancellation_requested`, `dispatcher`, `node_count` / `sandbox_agent_node_count` / `max_node_timeout_seconds` (derived from the snapshot `graph_json`, NULL-safe), `parent_run_id`, `snapshot_id` (both NO FKs — facts survive purge), `run_number`, `output_bytes` (serialised `outputs_json` size), and `rate_limited`. All are nullable where the source run may not carry the value. The live writer and the daily backfill both populate them — a backfilled fact never carries NULL where the source provides a value.
 
 - **Per-bucket metrics**: the query surface adds `failure_count`, `stall_count`, `avg_queue_wait_ms`, `avg_final_idle_ms`, and `avg_output_bytes` to every bucket. A **stall** is a run whose `status == "failed"` and `error_code` is in a fixed `STALL_ERROR_CODES` set (`executor_stalled`, `node_timeout`, `TimeoutError` — the no-progress error codes the executor actually emits).
 - **Comparison**: a repeated `pipeline_id` query param returns an "A vs B" series in a single request (the builder bounds it via an allowlisted, parameterised `IN` — never string interpolation).

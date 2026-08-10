@@ -6,7 +6,7 @@ Pipeline graphs are validated at three enforcement layers. Each layer catches di
 
 ### Layer 1: Pydantic Model (`PipelineGraphNode`)
 
-Caught at HTTP request deserialisation — blocks the API call with a 422 response.
+Caught at HTTP request deserialisation – blocks the API call with a 422 response.
 
 | Code | Severity | Rule |
 |---|---|---|

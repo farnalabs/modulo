@@ -325,7 +325,7 @@ Set `MODULO_DEMO_MODE=true` in your `.env`. The pre-loaded `prd-to-requirements`
 
 ## Feature Flag State
 
-All feature flags in alpha default to **enabled** (no license key enforcement). The `FreeTierPlanContext` is the default when no `MODULO_LICENSE_KEY` is set.
+All feature flags in alpha default to **enabled** (no license key enforcement). The `CommunityTier` is the default when no `MODULO_LICENSE_KEY` is set.
 
 ### Always Enabled (Free Tier)
 

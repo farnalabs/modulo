@@ -6,17 +6,17 @@ How to upgrade an existing Modulo deployment with minimal downtime. Covers versi
 
 ## Before You Start
 
-1. **Read the release notes** for the target version — check for breaking changes, new required env vars, and deprecated features.
-2. **Check the Alembic migration chain** — review what schema changes will be applied:
+1. **Read the release notes** for the target version – check for breaking changes, new required env vars, and deprecated features.
+2. **Check the Alembic migration chain** – review what schema changes will be applied:
    ```bash
    uv run alembic history
    uv run alembic upgrade head --sql  # preview SQL without applying
    ```
-3. **Back up the database** — always take a backup before upgrading:
+3. **Back up the database** – always take a backup before upgrading:
    ```bash
    uv run scripts/backup.py --output /backups/pre-upgrade-$(date +%Y%m%d).tar.gz.enc
    ```
-4. **Test in staging first** — apply the upgrade to a staging environment with a copy of production data.
+4. **Test in staging first** – apply the upgrade to a staging environment with a copy of production data.
 
 ---
 
@@ -96,7 +96,7 @@ between machine groups.
 ### Application Rollback
 
 ```bash
-# Docker Compose — re-tag and restart
+# Docker Compose – re-tag and restart
 docker compose -f docker-compose.prod.yml stop modulo-api
 docker tag modulo-backend:old modulo-backend:latest
 docker compose -f docker-compose.prod.yml up -d
@@ -118,7 +118,7 @@ docker compose -f docker-compose.prod.yml exec modulo uv run alembic current
 # Preview the downgrade SQL
 docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade --sql -1
 
-# Downgrade (use with extreme caution — data loss possible)
+# Downgrade (use with extreme caution – data loss possible)
 docker compose -f docker-compose.prod.yml exec modulo uv run alembic downgrade -1
 ```
 
@@ -136,11 +136,11 @@ uv run scripts/restore.py --input /backups/pre-upgrade-<date>.tar.gz.enc --full
 
 When upgrading, check for changes to:
 
-1. **New required environment variables** — the application refuses to start if missing
-2. **Deprecated environment variables** — log warnings indicate removal in a future version
-3. **Changed defaults** — review [`docs/configuration-reference.md`](./configuration-reference.md) for current defaults
-4. **New service dependencies** — e.g., Redis becoming required for new features
-5. **API changes** — breaking endpoint changes are documented in release notes
+1. **New required environment variables** – the application refuses to start if missing
+2. **Deprecated environment variables** – log warnings indicate removal in a future version
+3. **Changed defaults** – review [`docs/configuration-reference.md`](./configuration-reference.md) for current defaults
+4. **New service dependencies** – e.g., Redis becoming required for new features
+5. **API changes** – breaking endpoint changes are documented in release notes
 
 ---
 

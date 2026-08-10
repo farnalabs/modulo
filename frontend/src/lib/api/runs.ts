@@ -1,5 +1,5 @@
 import { api } from './client'
-import { throwOnError } from './formatError'
+import { formatApiError, throwOnError } from './formatError'
 
 export interface RunListItem extends Record<string, unknown> {
   run_id: string
@@ -55,4 +55,22 @@ export async function fetchRuns(params: FetchRunsParams = {}): Promise<RunListRe
   return throwOnError(await getRuns('/api/v1/runs', {
     params: { query: q },
   }))
+}
+
+/**
+ * Requests cancellation of a run. Never throws — returns a formatted error
+ * string on failure so callers can render it directly in their inline error UI.
+ * @param errorPrefix the already-translated user-facing prefix for error
+ *   messages, e.g. `t('views.RunsListView.cancel_failed')`.
+ */
+export async function requestRunCancellation(runId: string, errorPrefix: string): Promise<{ error?: string }> {
+  try {
+    const { error } = await api.POST('/api/v1/runs/{run_id}/cancel', {
+      params: { path: { run_id: runId } },
+    })
+    if (error) return { error: `${errorPrefix} ${formatApiError(error)}` }
+    return {}
+  } catch (e: unknown) {
+    return { error: `${errorPrefix} ${formatApiError(e)}` }
+  }
 }

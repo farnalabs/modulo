@@ -1,6 +1,8 @@
 """Unit tests for RunEventBroker and BrokerRegistry."""
 
 import asyncio
+import logging
+import time
 import uuid
 
 import pytest
@@ -10,6 +12,9 @@ from modulo.core.pipeline_engine.event_broker import (
     BrokerRegistry,
     RunEvent,
     RunEventBroker,
+    _log_redis_error,
+    configure_registry,
+    get_registry,
 )
 
 # ---------------------------------------------------------------------------
@@ -44,6 +49,13 @@ async def test_subscribe_receives_published_events():
     event = broker.publish("node_started", {"node_id": "a"})
     received = await asyncio.wait_for(q.get(), timeout=1.0)
     assert received is event
+
+
+def test_subscribe_to_closed_broker_raises():
+    broker = RunEventBroker(uuid.uuid4())
+    broker.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        broker.subscribe()
 
 
 async def test_multiple_subscribers_all_receive_event():
@@ -131,6 +143,23 @@ def test_replay_since_returns_empty_when_up_to_date():
     assert broker.replay_since(1) == []
 
 
+def test_replay_since_empty_buffer_returns_empty():
+    broker = RunEventBroker(uuid.uuid4())
+    assert broker.replay_since(0) == []
+    assert broker.replay_since(5) == []
+
+
+def test_replay_since_older_than_oldest_buffered_returns_empty():
+    broker = RunEventBroker(uuid.uuid4())
+    # Fill the ring buffer so seq=1..2 are evicted; the oldest buffered seq
+    # is now > 1. replay_since must treat the request as "older than we can
+    # replay" and return [] rather than a partial/incorrect replay.
+    for _ in range(_RING_BUFFER_SIZE + 2):
+        broker.publish("x", {})
+    assert broker._buffer[0].seq > 1
+    assert broker.replay_since(1) == []
+
+
 # ---------------------------------------------------------------------------
 # RunEvent.to_json
 # ---------------------------------------------------------------------------
@@ -148,8 +177,122 @@ def test_run_event_to_json_shape():
 
 
 # ---------------------------------------------------------------------------
+# Redis broker attachment (fire-and-forget cross-worker broadcast)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRedisBroker:
+    """Stand-in for RedisEventBroker that records fire-and-forget calls."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict]] = []
+        self.close_count = 0
+
+    async def publish(self, channel: str, data: dict) -> None:
+        self.published.append((channel, data))
+
+    async def close(self) -> None:
+        self.close_count += 1
+
+
+async def test_publish_with_redis_broker_broadcasts_event():
+    redis = _FakeRedisBroker()
+    broker = RunEventBroker(uuid.uuid4(), redis_broker=redis)
+    event = broker.publish("node_started", {"node_id": "a"})
+    await asyncio.sleep(0)  # let the fire-and-forget task run
+    assert redis.published == [(str(broker.run_id), event.to_json())]
+
+
+async def test_close_with_redis_broker_closes_redis():
+    redis = _FakeRedisBroker()
+    broker = RunEventBroker(uuid.uuid4(), redis_broker=redis)
+    broker.close()
+    await asyncio.sleep(0)
+    assert redis.close_count == 1
+
+
+async def test_redis_publish_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    class _FailingRedisBroker:
+        async def publish(self, channel: str, data: dict) -> None:
+            raise RuntimeError("redis down")
+
+        async def close(self) -> None:
+            return None
+
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.event_broker"):
+        broker = RunEventBroker(uuid.uuid4(), redis_broker=_FailingRedisBroker())
+        broker.publish("node_started", {"node_id": "a"})
+        for _ in range(5):  # let the failing task complete and be observed
+            await asyncio.sleep(0)
+    assert any("redis.publish_failed" in record.message for record in caplog.records)
+
+
+async def test_log_redis_error_noop_on_successful_task(caplog: pytest.LogCaptureFixture) -> None:
+    async def _ok() -> int:
+        return 1
+
+    task = asyncio.create_task(_ok())
+    await task
+    _log_redis_error(task)
+    assert not any("redis.publish_failed" in record.message for record in caplog.records)
+
+
+async def test_log_redis_error_tolerates_cancelled_task() -> None:
+    task = asyncio.create_task(asyncio.sleep(10))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # task.exception() raises CancelledError for a cancelled task — the
+    # done-callback helper must swallow it instead of propagating.
+    _log_redis_error(task)
+
+
+# ---------------------------------------------------------------------------
 # BrokerRegistry
 # ---------------------------------------------------------------------------
+
+
+def test_cleanup_stale_removes_old_open_brokers():
+    registry = BrokerRegistry()
+    rid = uuid.uuid4()
+    registry.get_or_create(rid)
+    stale = registry.get(rid)
+    assert stale is not None
+    stale._created_at = time.monotonic() - 10_000
+    registry.cleanup_stale(max_age_seconds=60)
+    assert registry.get(rid) is None
+    assert registry.active_run_count == 0
+
+
+def test_cleanup_stale_keeps_fresh_brokers():
+    registry = BrokerRegistry()
+    rid = uuid.uuid4()
+    registry.get_or_create(rid)
+    registry.cleanup_stale(max_age_seconds=60)
+    assert registry.get(rid) is not None
+    assert registry.active_run_count == 1
+
+
+def test_cleanup_stale_does_not_sweep_closed_brokers():
+    # Contract test: cleanup_stale only sweeps open-and-stale brokers. A closed
+    # broker that was never registry.close()'d is left in place (docstring says
+    # "closed OR older than max_age" but the sweep excludes closed brokers).
+    registry = BrokerRegistry()
+    rid = uuid.uuid4()
+    broker = registry.get_or_create(rid)
+    broker._created_at = time.monotonic() - 10_000
+    broker.close()
+    registry.cleanup_stale(max_age_seconds=60)
+    assert registry.get(rid) is not None
+
+
+def test_configure_registry_sets_redis_broker():
+    redis = _FakeRedisBroker()
+    try:
+        configure_registry(redis)
+        assert get_registry()._redis_broker is redis
+    finally:
+        configure_registry(None)
 
 
 def test_registry_get_or_create_returns_same_instance():

@@ -142,12 +142,12 @@
 
                 <div>
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.rejected_output') }}</h3>
-                  <pre class="max-h-64 overflow-auto rounded-lg bg-muted p-4 text-xs"><code>{{ formatJson(detailMap[record.id].rejected_output) }}</code></pre>
+                  <JsonViewer :data="detailMap[record.id].rejected_output ?? null" :show-toolbar="true" :max-height="'16rem'" />
                 </div>
 
                 <div v-if="detailMap[record.id].correction_proposal">
                   <h3 class="mb-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">{{ $t('views.FeedbackInboxView.correction_proposal') }}</h3>
-                  <pre class="max-h-48 overflow-auto rounded-lg border border-primary/20 bg-primary/5 p-4 text-xs"><code>{{ formatJson(detailMap[record.id].correction_proposal) }}</code></pre>
+                  <JsonViewer :data="detailMap[record.id].correction_proposal ?? null" :show-toolbar="true" :max-height="'12rem'" />
                 </div>
 
                 <div v-if="detailMap[record.id].feedback_status === 'pending' || detailMap[record.id].feedback_status === 'routing'">
@@ -219,6 +219,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { Button } from '@/components/ui/button'
@@ -290,14 +291,6 @@ function handlerTypeLabel(type: string): string {
   const key = `views.FeedbackInboxView.handler_${type}`
   const label = t(key)
   return label !== key ? label : type
-}
-
-function formatJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }
 
 const { loading, error, data: feedbackResp, load: loadFeedback } = useDataFetch(

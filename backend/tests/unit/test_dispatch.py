@@ -3,16 +3,25 @@
 Mock/fake based — no Postgres, no Redis. Covers:
   * capacity -> deferred (no enqueue, no dispatched_at)
   * SAQ route + dispatcher 'saq' + enqueued (PR C: SAQ is the only path)
-  * enqueued vs deduped
+  * enqueued vs deduped (incl. the deterministic job-id dedup path)
   * enqueue failure -> dispatch_failed + webhook dedup expiry (non-webhook)
   * fail-fast (webhook) enqueue failure -> deferred, no block
+  * enqueue retry (transient -> enqueued) and CancelledError propagation
   * claim_token distinct from saq_job_id
+  * the _capacity_deferred pipeline gate (missing run/pipeline, cap 0, at/under cap)
+  * the org-capacity gate (cap hit marker, non-pending deferral without demotion,
+    resume bypass, fail-open readers, CancelledError re-raise)
+  * the SQL writers' contracts: dispatched_at before enqueue, dispatcher 'saq' +
+    claim_token preserved once a worker claims, dispatch_failed never overwriting
+    terminal runs, webhook dedup-hash expiry
+  * _open_session reuses the shared tuned app engine
   * error enum: 'saq' accepted by the validator, unknown rejected
   * the call sites route through dispatch_run (on-loop via BackgroundTasks)
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -213,6 +222,80 @@ class TestDispatchRunRouting:
         assert job_id is None
         mark_failed.assert_not_called()
         expire_dedup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failure_retries_then_enqueues(self) -> None:
+        """A transient enqueue failure is retried (1s/2s/3s) before giving up.
+
+        The retry that succeeds must still record the SAQ job and report
+        ``enqueued`` -- never ``deferred`` or ``enqueue_failed``.
+        """
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
+            _enqueue_patch(side_effect=[RuntimeError("transient"), (JOB_ID, False)]),
+            patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
+            patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock) as saq_job,
+            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+            patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock) as expire_dedup,
+        ):
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "enqueued"
+        assert job_id == JOB_ID
+        saq_job.assert_awaited_once()
+        mark_failed.assert_not_called()
+        expire_dedup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_cancelled_error_reraises_no_retry(self) -> None:
+        """Cancellation during the FIRST enqueue must propagate, not retry.
+
+        Swallowing cancellation into the 1s/2s/3s retry loop would delay an
+        abort (shutdown) by ~6s while pretending the run is still dispatchable.
+        """
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
+            _enqueue_patch(side_effect=asyncio.CancelledError()),
+            patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
+            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        mark_failed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_retry_cancelled_error_reraises(self) -> None:
+        """Cancellation DURING a retry must also propagate immediately.
+
+        After a transient failure, a cancelled retry aborts the loop rather
+        than falling through to the ``dispatch_failed`` terminal path.
+        """
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
+            _enqueue_patch(side_effect=[RuntimeError("transient"), asyncio.CancelledError()]),
+            patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
+            patch.object(dispatch, "_mark_dispatch_failed", new_callable=AsyncMock) as mark_failed,
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        mark_failed.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +641,126 @@ class TestOrgCapacityDeferred:
         assert deferred is False, "fail-open: a count error must ADMIT the run"
         update_status.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_cancelled_error_reraises_not_fail_open(self) -> None:
+        """Cancellation is NOT a fail-open condition: it must propagate.
+
+        The fail-open ``except Exception`` must not swallow
+        ``asyncio.CancelledError`` -- a cancelled dispatch must stay cancelled
+        so the caller can abort cleanly instead of silently admitting the run.
+        """
+        with (
+            pytest.raises(asyncio.CancelledError),
+            patch(
+                "modulo.db.crud.run.get_org_run_concurrency_limit",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+        ):
+            await dispatch._org_capacity_deferred(AsyncMock(), uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+
+# ---------------------------------------------------------------------------
+# _capacity_deferred — per-pipeline max_concurrent_runs gate (plan F3b)
+# ---------------------------------------------------------------------------
+
+
+class TestCapacityDeferred:
+    @pytest.mark.asyncio
+    async def test_missing_run_defers(self) -> None:
+        """A run that vanished before the capacity check cannot be enqueued."""
+        session = AsyncMock()
+        with patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=None):
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is True
+        session.get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_pipeline_defers(self) -> None:
+        """A run whose pipeline was deleted is deferred, never enqueued."""
+        run = MagicMock()
+        run.pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        session.get = AsyncMock(return_value=None)
+        with patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run):
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is True
+        session.get.assert_awaited_once()
+
+    @pytest.mark.parametrize("max_concurrent", [0, -1])
+    @pytest.mark.asyncio
+    async def test_zero_or_negative_cap_admits(self, max_concurrent: int) -> None:
+        """max_concurrent_runs <= 0 means no limit -- never defer on it."""
+        run = MagicMock()
+        run.pipeline_id = uuid.uuid4()
+        pipeline = MagicMock()
+        pipeline.max_concurrent_runs = max_concurrent
+        session = AsyncMock()
+        session.get = AsyncMock(return_value=pipeline)
+        with (
+            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+            patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock) as count,
+        ):
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is False
+        count.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_at_cap_defers(self) -> None:
+        run = MagicMock()
+        run.pipeline_id = uuid.uuid4()
+        pipeline = MagicMock()
+        pipeline.max_concurrent_runs = 2
+        session = AsyncMock()
+        session.get = AsyncMock(return_value=pipeline)
+        with (
+            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_pipeline",
+                new_callable=AsyncMock,
+                return_value=2,
+            ) as count,
+        ):
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is True
+        # The run itself is excluded so a resume never counts against its own slot.
+        count.assert_awaited_once_with(
+            session,
+            run.pipeline_id,
+            include_pending=False,
+            exclude_run_id=uuid.UUID(RUN_ID),
+        )
+
+    @pytest.mark.asyncio
+    async def test_under_cap_admits(self) -> None:
+        run = MagicMock()
+        run.pipeline_id = uuid.uuid4()
+        pipeline = MagicMock()
+        pipeline.max_concurrent_runs = 3
+        session = AsyncMock()
+        session.get = AsyncMock(return_value=pipeline)
+        with (
+            patch("modulo.db.crud.run.get_run", new_callable=AsyncMock, return_value=run),
+            patch(
+                "modulo.db.crud.run.count_active_runs_for_pipeline",
+                new_callable=AsyncMock,
+                return_value=1,
+            ) as count,
+        ):
+            deferred = await dispatch._capacity_deferred(session, uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+        assert deferred is False
+        count.assert_awaited_once_with(
+            session,
+            run.pipeline_id,
+            include_pending=False,
+            exclude_run_id=uuid.UUID(RUN_ID),
+        )
+
 
 # ---------------------------------------------------------------------------
 # dispatch_run org-cap wiring
@@ -762,6 +965,161 @@ class TestEnqueueSaq:
         assert call_args.args[0] == dispatch.SAQ_RESUME_RUN_FUNCTION
         call_kwargs = call_args.kwargs
         assert call_kwargs["resume_data"] == {"action": "approved", "notes": "ok"}
+
+    @pytest.mark.asyncio
+    async def test_enqueue_none_returns_deterministic_deduped_job(self) -> None:
+        """``q.enqueue`` returning None means a job with the same key already
+        exists -- the caller must report ``deduped`` with the deterministic id."""
+        enqueue_mock = AsyncMock(return_value=None)
+        queue_cls = MagicMock()
+        queue_instance = queue_cls.return_value
+        queue_instance.enqueue = enqueue_mock
+        queue_instance.job_id.return_value = JOB_ID
+        redis_cls = MagicMock()
+
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            patch.object(dispatch, "RedisQueue", queue_cls),
+            patch.object(dispatch, "AsyncRedis", redis_cls),
+        ):
+            job_id, deduped = await dispatch._enqueue_saq(RUN_ID, ORG_ID, "runs", "execute_run", None)
+
+        assert job_id == JOB_ID
+        assert deduped is True
+        queue_instance.job_id.assert_called_once_with(f"run:{RUN_ID}")
+
+
+# ---------------------------------------------------------------------------
+# _open_session — shared app engine reuse (single tuned pool)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenSession:
+    def test_reuses_shared_app_engine(self) -> None:
+        """dispatch must route through the shared tuned engine -- never spawn a
+        divergent second pool (the pool-divergence connection churn bug)."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            patch("modulo.api.dependencies.get_or_create_engine") as get_engine,
+            patch.object(dispatch, "async_sessionmaker") as sm,
+        ):
+            session = dispatch._open_session()
+
+        get_engine.assert_called_once()
+        sm.assert_called_once_with(get_engine.return_value, expire_on_commit=False, autobegin=False)
+        assert session is sm.return_value.return_value
+
+
+# ---------------------------------------------------------------------------
+# _record_dispatched / _record_saq_job / _mark_dispatch_failed — SQL writers
+# ---------------------------------------------------------------------------
+
+
+class TestRecordDispatched:
+    @pytest.mark.asyncio
+    async def test_writes_dispatched_at(self) -> None:
+        """dispatched_at is written BEFORE enqueue (plan F3e) so a crashed
+        enqueue leaves a discoverable trace."""
+        session = AsyncMock()
+        run_id = uuid.UUID(RUN_ID)
+        await dispatch._record_dispatched(session, run_id)
+
+        session.execute.assert_awaited_once()
+        stmt, params = session.execute.await_args.args
+        assert "dispatched_at=now()" in str(stmt)
+        assert params["rid"] == run_id
+
+
+class TestRecordSaqJob:
+    @pytest.mark.asyncio
+    async def test_writes_dispatcher_job_and_claim_token(self) -> None:
+        session = AsyncMock()
+        run_id = uuid.UUID(RUN_ID)
+        await dispatch._record_saq_job(session, run_id, JOB_ID, "claim-abc")
+
+        session.execute.assert_awaited_once()
+        stmt, params = session.execute.await_args.args
+        assert "dispatcher='saq'" in str(stmt)
+        assert params["rid"] == run_id
+        assert params["jid"] == JOB_ID
+        assert params["tok"] == "claim-abc"
+
+    @pytest.mark.asyncio
+    async def test_preserves_worker_claim_token_when_already_claimed(self) -> None:
+        """Critical contract: once a worker claims the run it OWNS the claim
+        token. The dispatcher's write must not overwrite it -- a clobbered token
+        makes the worker's next heartbeat raise ClaimSupersededError and abort
+        the active executor."""
+        session = AsyncMock()
+        await dispatch._record_saq_job(session, uuid.UUID(RUN_ID), JOB_ID, "claim-abc")
+
+        rendered = str(session.execute.await_args.args[0])
+        assert "claim_token = CASE WHEN claim_token IS NULL THEN :tok ELSE claim_token END" in rendered
+
+
+class TestMarkDispatchFailed:
+    @pytest.mark.asyncio
+    async def test_marks_failed_with_dispatch_failed_code(self) -> None:
+        session = AsyncMock()
+        run_id = uuid.UUID(RUN_ID)
+        await dispatch._mark_dispatch_failed(session, run_id)
+
+        session.execute.assert_awaited_once()
+        stmt, params = session.execute.await_args.args
+        rendered = str(stmt)
+        assert "status='failed'" in rendered
+        assert "error_code='dispatch_failed'" in rendered
+        assert "completed_at=now()" in rendered
+        assert params["rid"] == run_id
+
+    @pytest.mark.asyncio
+    async def test_never_overwrites_terminal_runs(self) -> None:
+        """A run already complete/cancelled must never be flipped to failed."""
+        session = AsyncMock()
+        await dispatch._mark_dispatch_failed(session, uuid.UUID(RUN_ID))
+
+        rendered = str(session.execute.await_args.args[0])
+        assert "status NOT IN ('complete', 'cancelled')" in rendered
+
+
+# ---------------------------------------------------------------------------
+# _expire_webhook_dedup — retried webhook dedup-hash cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestExpireWebhookDedup:
+    @pytest.mark.asyncio
+    async def test_no_trigger_event_skips_delete(self) -> None:
+        """A run with no trigger event has no dedup hash to clear."""
+        session = AsyncMock()
+        ev_result = MagicMock()
+        ev_result.first.return_value = None
+        session.execute = AsyncMock(return_value=ev_result)
+
+        await dispatch._expire_webhook_dedup(session, uuid.UUID(RUN_ID))
+
+        session.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_deletes_matching_dedup_hash(self) -> None:
+        """The newest trigger event's (trigger_id, payload_hash) is the pair
+        used to expire the dedup hash so a retried webhook is not suppressed."""
+        session = AsyncMock()
+        ev_result = MagicMock()
+        ev_result.first.return_value = ("trigger-1", "hash-1")
+        delete_result = MagicMock()
+        session.execute = AsyncMock(side_effect=[ev_result, delete_result])
+
+        await dispatch._expire_webhook_dedup(session, uuid.UUID(RUN_ID))
+
+        assert session.execute.await_count == 2
+        select_stmt = session.execute.await_args_list[0].args[0]
+        delete_stmt = session.execute.await_args_list[1].args[0]
+        assert "trigger_events" in str(select_stmt)
+        delete_sql = str(delete_stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+        assert "DELETE FROM webhook_dedup_hashes" in delete_sql
+        assert "trigger_id" in delete_sql
+        assert "payload_hash" in delete_sql
 
 
 # ---------------------------------------------------------------------------

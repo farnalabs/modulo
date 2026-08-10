@@ -49,12 +49,17 @@ primary_region = 'lhr'
   # Demo mode seeds the default org with plan_id="team", so staging E2E can
   # exercise team-gated features (retention, cost-controls, etc.) — matches prod.
   MODULO_DEMO_MODE = "true"
+  # Staging-only dev-mode toggle (preview/in-development features via Admin > Feature Flags).
+  MODULO_DEV_MODE = "true"
   MODULO_MAX_LOCAL_CONCURRENCY = "4"
   SAQ_WORKER_CONCURRENCY = "20"
+  # Redis pool must exceed SAQ worker concurrency (blocking dequeue holds one
+  # pool connection per concurrent task). Must stay > SAQ_WORKER_CONCURRENCY.
+  SAQ_REDIS_POOL_SIZE = "30"
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-staging-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
-  CORS_ORIGINS = "https://modulo.run,https://staging.modulo.run"
+  CORS_ORIGINS = "https://modulo.run,https://staging.modulo.run,http://localhost:5173"
 
 # Worker process-group health check (ADR 021). Top-level [checks], not a service
 # check — it does not affect routing. The worker container exposes a liveness

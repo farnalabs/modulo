@@ -270,17 +270,28 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # A plain asyncio task in the WEB-process FastAPI lifespan (NOT an SAQ
     # cron — if the workers are down the cron path is down) reads SAQ worker
-    # liveness directly from Redis every tick and POSTs a Slack-compatible
-    # webhook when every worker is dead. Default-off: no alert is sent until
-    # the operator sets ALERT_WEBHOOK_URL.
+    # liveness directly from Redis every tick and fans an alert out to every
+    # configured channel (generic webhook / Teams webhook / email) when every
+    # worker is dead. Default-off: no alert is sent until the operator
+    # configures at least one of ALERT_WEBHOOK_URL, ALERT_TEAMS_WEBHOOK_URL,
+    # or ALERT_EMAIL_TO (+ SMTP_*).
     watchdog_enabled: bool = Field(default=True, alias="WATCHDOG_ENABLED")
     watchdog_tick_seconds: int = Field(default=30, alias="WATCHDOG_TICK_SECONDS", ge=5, le=600)
     watchdog_worker_stale_seconds: int = Field(default=180, alias="WATCHDOG_WORKER_STALE_SECONDS", ge=60, le=3600)
-    watchdog_alert_cooldown_seconds: int = Field(default=900, alias="WATCHDOG_ALERT_COOLDOWN_SECONDS", ge=60, le=86400)
+    watchdog_alert_state_ttl_seconds: int = Field(
+        default=7 * 24 * 3600, alias="WATCHDOG_ALERT_STATE_TTL_SECONDS", ge=3600, le=60 * 24 * 3600
+    )  # edge-triggered state: outlives any incident so no repeat alerts
     # Slack-compatible webhook URL for watchdog alerts. None (default) = the
     # watchdog ticks and logs but never POSTs — the operator must configure
     # this in production for alerts to fire.
     alert_webhook_url: str | None = Field(default=None, alias="ALERT_WEBHOOK_URL", repr=False)
+    # Microsoft Teams incoming webhook URL (MessageCard payload) for watchdog
+    # alerts. None (default) = the Teams channel is disabled.
+    alert_teams_webhook_url: str | None = Field(default=None, alias="ALERT_TEAMS_WEBHOOK_URL", repr=False)
+    # Comma-separated email recipients for watchdog alerts. Parsed on send
+    # (whitespace-trimmed, empties dropped). None or empty = the email channel
+    # is disabled — email also requires smtp_host to be set.
+    alert_email_to: str | None = Field(default=None, alias="ALERT_EMAIL_TO", repr=False)
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)

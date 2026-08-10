@@ -831,6 +831,10 @@ export default {
       "cost_includes_child_runs": "(+child)",
       "cost_includes_child_runs_count": "(+{count} child) | (+{count} children)",
       "no_runs_found": "No runs found",
+      "stop": "Stop",
+      "stop_confirm": "Confirm?",
+      "stopping": "Stopping...",
+      "cancel_failed": "Failed to cancel:",
     },
     "AnalyticsView": {
       "analytics": "Analytics",
@@ -1085,7 +1089,10 @@ export default {
       "total_clamped_to_column_capacity": "Total clamped to column capacity — true spend is higher. See per-run amounts.",
       "total_including_child_runs": "Total including child runs:",
       "total_including_child_runs_count": "Total including {count} child run: | Total including {count} child runs:",
-      "includes_child_run_cost": "includes {amount} child-run cost"
+      "includes_child_run_cost": "includes {amount} child-run cost",
+      "stop": "Stop Run",
+      "stopping": "Stopping...",
+      "cancel_failed": "Failed to cancel:",
     },
     "AdminRunRetentionView": {
       "run_retention": "Run Retention",
@@ -1623,7 +1630,19 @@ export default {
       "validate": "Validate",
       "validating": "Validating...",
       "validation_passed": "Validation passed — all values are valid.",
-      "validation_failed": "Validation failed:"
+      "validation_failed": "Validation failed:",
+      "remove_option": "Remove option",
+      "name_placeholder": "My Parameter Schema",
+      "desc_placeholder": "Optional description",
+      "param_name_placeholder": "param_name",
+      "param_label_placeholder": "Display label",
+      "param_desc_placeholder": "Parameter description",
+      "option_placeholder": "Option value",
+      "set_name_placeholder": "My parameter set",
+      "schema_created": "Schema created successfully.",
+      "schema_saved_new_version": "Schema saved as new version.",
+      "delete_referenced_error": "Cannot delete: schema is referenced by agents or parameter sets.",
+      "cloned_set_name": "{name} (clone)"
     },
   "pipeline": {
     "hide_ports": "Hide Ports"

@@ -57,6 +57,7 @@ def _make_run(
     *,
     status: str = "failed",
     outputs_json: dict[str, Any] | None = None,
+    node_telemetry_json: dict[str, Any] | None = None,
 ) -> MagicMock:
     run = MagicMock()
     run.id = _RUN_ID
@@ -65,6 +66,7 @@ def _make_run(
     run.langgraph_thread_id = f"{_ORG_ID}:{_RUN_ID}"
     run.status = status
     run.outputs_json = outputs_json
+    run.node_telemetry_json = node_telemetry_json
     return run
 
 
@@ -135,8 +137,10 @@ async def test_recover_node_with_valid_input():
     assert result.status == "running"
     assert result.outputs_json is not None
     assert _NODE_ID in result.outputs_json
-    assert result.outputs_json[_NODE_ID]["recovered"] is True
-    assert result.outputs_json[_NODE_ID]["input"] == {"review": "approved", "comments": "LGTM"}
+    assert result.outputs_json[_NODE_ID] == {"review": "approved", "comments": "LGTM"}
+    assert result.node_telemetry_json is not None
+    assert result.node_telemetry_json[_NODE_ID]["recovered"] is True
+    assert result.node_telemetry_json[_NODE_ID]["recovery_input"] == {"review": "approved", "comments": "LGTM"}
 
     mock_audit.assert_awaited_once()
     audit_kwargs = mock_audit.await_args.kwargs
@@ -181,9 +185,9 @@ async def test_skip_node_on_awaiting_human():
 
     assert result is not None
     assert result.status == "running"
-    assert _NODE_ID in result.outputs_json
-    assert result.outputs_json[_NODE_ID]["skipped"] is True
-    assert result.outputs_json[_NODE_ID]["output"] is None
+    assert _NODE_ID not in result.outputs_json
+    assert result.node_telemetry_json is not None
+    assert result.node_telemetry_json[_NODE_ID]["skipped"] is True
 
 
 @pytest.mark.asyncio
@@ -266,6 +270,38 @@ async def test_recover_nonexistent_node():
 async def test_recover_already_completed_node():
     """Recover on a node that already has output raises NodeAlreadyCompletedError."""
     run = _make_run(status="failed", outputs_json={_NODE_ID: {"output": "already done"}})
+    snap = _make_snapshot()
+    session = _mock_session()
+
+    with patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        snapshot_result = MagicMock()
+        snapshot_result.scalar_one_or_none.return_value = snap
+
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,
+                snapshot_result,
+            ]
+        )
+
+        with pytest.raises(NodeAlreadyCompletedError) as exc_info:
+            await recover_node(
+                session,
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                node_id=_NODE_ID,
+                input_data={"foo": "bar"},
+            )
+
+    assert "already completed" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_recover_skipped_node_not_recoverable():
+    """Recover on a node whose skip marker lives only in telemetry raises NodeAlreadyCompletedError."""
+    run = _make_run(status="failed", outputs_json={}, node_telemetry_json={_NODE_ID: {"skipped": True}})
     snap = _make_snapshot()
     session = _mock_session()
 

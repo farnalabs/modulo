@@ -14,7 +14,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.error_forwarder_config import _is_configured
+from modulo.api.routes.error_forwarder_config import _is_configured, validate_forwarder_config
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -172,6 +172,71 @@ def test_is_configured_rejects_unknown_forwarder_type() -> None:
 def test_is_configured_requires_known_forwarder_credentials() -> None:
     assert _is_configured("sentry", {"dsn": "https://key@sentry.io/1"}) is True
     assert _is_configured("sentry", {"dsn": ""}) is False
+
+
+# ── validate_forwarder_config ───────────────────────────────────────────────
+
+
+class TestValidateForwarderConfig:
+    """Tests for the per-forwarder-type config schema validation."""
+
+    def test_unknown_forwarder_type_has_no_schema(self) -> None:
+        assert validate_forwarder_config("unknown", {"anything": 1}) == []
+
+    def test_empty_config_reports_all_required_keys(self) -> None:
+        errors = validate_forwarder_config("sentry", None)
+        assert errors == ["missing or empty required config key 'dsn'"]
+
+    def test_valid_config_passes_for_each_type(self) -> None:
+        valid = {
+            "sentry": {"dsn": "https://key@sentry.io/1"},
+            "datadog": {"api_key": "abc123"},
+            "pagerduty": {"routing_key": "rk-123"},
+            "rollbar": {"access_token": "tok"},
+            "opsgenie": {"api_key": "genie-key"},
+            "loki": {"push_url": "https://loki.example.com/loki/api/v1/push"},
+        }
+        for ftype, config in valid.items():
+            assert validate_forwarder_config(ftype, config) == [], ftype
+
+    def test_missing_required_key_reported(self) -> None:
+        assert validate_forwarder_config("datadog", {}) == ["missing or empty required config key 'api_key'"]
+
+    def test_whitespace_only_required_key_rejected(self) -> None:
+        assert validate_forwarder_config("loki", {"push_url": "   "}) == [
+            "missing or empty required config key 'push_url'"
+        ]
+
+    def test_non_string_required_key_rejected(self) -> None:
+        errors = validate_forwarder_config("sentry", {"dsn": 123})
+        assert "missing or empty required config key 'dsn'" in errors
+
+    def test_wrong_type_optional_key_reported(self) -> None:
+        errors = validate_forwarder_config("loki", {"push_url": "https://loki.example.com", "labels": "app=modulo"})
+        assert errors == ["config key 'labels' must be a dict"]
+
+    def test_pagerduty_forward_levels_must_be_list(self) -> None:
+        errors = validate_forwarder_config("pagerduty", {"routing_key": "rk", "forward_levels": "critical"})
+        assert errors == ["config key 'forward_levels' must be a list"]
+
+    def test_opsgenie_priority_mapping_must_be_dict(self) -> None:
+        errors = validate_forwarder_config("opsgenie", {"api_key": "k", "priority_mapping": "P1"})
+        assert errors == ["config key 'priority_mapping' must be a dict"]
+
+    def test_optional_key_none_is_accepted(self) -> None:
+        errors = validate_forwarder_config("sentry", {"dsn": "https://key@sentry.io/1", "org_slug": None})
+        assert errors == []
+
+    def test_valid_typed_optional_keys_accepted(self) -> None:
+        errors = validate_forwarder_config(
+            "pagerduty",
+            {
+                "routing_key": "rk",
+                "severity_mapping": {"error": "critical"},
+                "forward_levels": ["critical", "error"],
+            },
+        )
+        assert errors == []
 
 
 # ── GET /api/v1/errors/forwarders ──────────────────────────────────────────
@@ -349,6 +414,80 @@ class TestConfigureForwarder:
         )
         assert resp.status_code == 404
         assert "unknown" in resp.json()["detail"].lower()
+
+    def test_configure_missing_required_field_returns_422(self, client: TestClient) -> None:
+        resp = client.put(
+            "/api/v1/errors/forwarders/sentry",
+            json={"config_json": {"org_slug": "acme"}},
+        )
+        assert resp.status_code == 422
+        assert "missing or empty required config key 'dsn'" in resp.json()["detail"]
+
+    def test_configure_empty_required_field_returns_422(self, client: TestClient) -> None:
+        resp = client.put(
+            "/api/v1/errors/forwarders/datadog",
+            json={"config_json": {"api_key": ""}},
+        )
+        assert resp.status_code == 422
+        assert "missing or empty required config key 'api_key'" in resp.json()["detail"]
+
+    def test_configure_wrong_type_optional_field_returns_422(self, client: TestClient) -> None:
+        resp = client.put(
+            "/api/v1/errors/forwarders/loki",
+            json={"config_json": {"push_url": "https://loki.example.com", "labels": "app=modulo"}},
+        )
+        assert resp.status_code == 422
+        assert "config key 'labels' must be a dict" in resp.json()["detail"]
+
+    def test_configure_multiple_errors_joined_in_detail(self, client: TestClient) -> None:
+        resp = client.put(
+            "/api/v1/errors/forwarders/sentry",
+            json={"config_json": {"dsn": "", "project_slug": 123}},
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "missing or empty required config key 'dsn'" in detail
+        assert "config key 'project_slug' must be a str" in detail
+
+    def test_configure_invalid_config_does_not_touch_db(self, client: TestClient) -> None:
+        mock_session = _make_mock_session()
+        mock_session.execute = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.put(
+                "/api/v1/errors/forwarders/sentry",
+                json={"config_json": {}},
+            )
+
+        assert resp.status_code == 422
+        # The only execute is the permission dependency's authz kill-switch read;
+        # the route itself never selects/inserts the forwarder config.
+        assert mock_session.execute.await_count == 1
+        mock_session.add.assert_not_called()
+
+    def test_configure_enabled_only_partial_update_skips_validation(self, client: TestClient) -> None:
+        existing = _make_mock_config("sentry", enabled=False, config_json={"dsn": "https://key@sentry.io/1"})
+        scalar_mock = MagicMock()
+        scalar_mock.scalar_one_or_none = MagicMock(return_value=existing)
+        mock_session = _make_mock_session()
+        mock_session.execute = AsyncMock(return_value=scalar_mock)
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        with patch("modulo.api.routes.error_forwarder_config.set_rls_org"):
+            client.app.dependency_overrides[get_db_session] = override_session
+            resp = client.put(
+                "/api/v1/errors/forwarders/sentry",
+                json={"enabled": True},
+            )
+
+        assert resp.status_code == 200
+        assert existing.enabled is True
 
     def test_configure_requires_admin(self, viewer_client: TestClient) -> None:
         resp = viewer_client.put(

@@ -288,6 +288,90 @@ async def test_query_scope_packages_missing_scope(connector):
         await connector.query(ConnectorQuery(resource="scope_packages"))
 
 
+# --- query: search pagination (next_cursor / cursor) ---
+
+
+@respx.mock
+async def test_query_search_next_cursor_when_more_results(connector):
+    objects = [{"package": {"name": f"pkg-{i}", "version": "1.0.0"}} for i in range(10)]
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "10"}).mock(
+        return_value=httpx.Response(200, json={"objects": objects, "total": 100}),
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
+    assert len(result.records) == 10
+    assert result.total == 100
+    assert result.next_cursor == "10"
+
+
+@respx.mock
+async def test_query_search_next_cursor_none_on_last_page(connector):
+    objects = [{"package": {"name": f"pkg-{i}", "version": "1.0.0"}} for i in range(3)]
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "100"}).mock(
+        return_value=httpx.Response(200, json={"objects": objects, "total": 3}),
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}))
+    assert len(result.records) == 3
+    assert result.total == 3
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_search_cursor_forwarded_to_from(connector):
+    objects = [{"package": {"name": f"pkg-{i}", "version": "1.0.0"}} for i in range(10)]
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "10", "from": "20"}).mock(
+        return_value=httpx.Response(200, json={"objects": objects, "total": 100}),
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10, cursor="20"))
+    assert len(result.records) == 10
+    assert result.next_cursor == "30"
+
+
+@respx.mock
+async def test_query_search_from_filter_forwarded(connector):
+    objects = [{"package": {"name": "pkg", "version": "1.0.0"}} for _ in range(2)]
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "100", "from": "20"}).mock(
+        return_value=httpx.Response(200, json={"objects": objects, "total": 100}),
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react", "from": "20"}))
+    assert result.next_cursor == "22"
+
+
+@respx.mock
+async def test_query_search_invalid_cursor_raises(connector):
+    with pytest.raises(ValueError, match="cursor must be a numeric offset"):
+        await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, cursor="not-a-number"))
+
+
+@respx.mock
+async def test_query_search_invalid_from_filter_raises(connector):
+    with pytest.raises(ValueError, match="filter 'from' must be a numeric offset"):
+        await connector.query(ConnectorQuery(resource="search", filters={"text": "react", "from": "abc"}))
+
+
+@respx.mock
+async def test_query_search_size_clamped_to_registry_max(connector):
+    objects = [{"package": {"name": f"pkg-{i}", "version": "1.0.0"}} for i in range(250)]
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "250"}).mock(
+        return_value=httpx.Response(200, json={"objects": objects, "total": 10000}),
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=500))
+    assert len(result.records) == 250
+    assert result.next_cursor == "250"
+
+
+@respx.mock
+async def test_query_scope_packages_cursor_pagination(connector):
+    objects = [{"package": {"name": f"@scope/pkg-{i}", "version": "1.0.0"}} for i in range(10)]
+    respx.get(f"{API_BASE}/-/v1/search", params={"scope": "@angular", "size": "10", "from": "10"}).mock(
+        return_value=httpx.Response(200, json={"objects": objects, "total": 25}),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="scope_packages", filters={"scope": "@angular"}, limit=10, cursor="10")
+    )
+    assert len(result.records) == 10
+    assert result.next_cursor == "20"
+
+
 # --- query: unsupported resource ---
 
 

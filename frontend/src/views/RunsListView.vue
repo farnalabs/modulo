@@ -53,14 +53,19 @@
             { key: 'completed_at', label: $t('views.RunsListView.end'), sortable: true },
             { key: 'duration', label: $t('views.RunsListView.duration') },
             { key: 'total_cost_usd', label: $t('views.RunsListView.cost'), numeric: true, sortable: true },
+            { key: 'actions', label: '', sortable: false },
           ]"
           :rows="runs"
-          @row-click="(row: any) => navigateToDetail(row.run_id)"
+          :row-clickable="false"
         >
-          <template #cell-pipeline_name="{ value }">
-            <span class="font-medium hover:underline">
-              {{ value || '(deleted pipeline)' }}
-            </span>
+          <template #cell-pipeline_name="{ row }">
+            <router-link
+              :to="`/runs/${row.run_id}`"
+              class="font-medium hover:underline"
+              :data-testid="`runs-list-view-${row.run_id}`"
+            >
+              {{ row.pipeline_name || '(deleted pipeline)' }}
+            </router-link>
           </template>
           <template #cell-status="{ value }">
             <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
@@ -91,6 +96,28 @@
               </template>
               <span v-else>{{ value != null ? formatMoney(Number(value), currencyCode, 4) : '—' }}</span>
             </span>
+          </template>
+          <template #cell-actions="{ row }">
+            <div class="text-right">
+              <button
+                v-if="isNonTerminalStatus(row.status as string)"
+                :disabled="cancellingIds.has(row.run_id as string)"
+                :data-testid="`runs-list-cancel-${row.run_id}`"
+                class="inline-flex items-center gap-1 rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+                @click.stop="cancelRun(row as RunListItem)"
+                @keydown.stop
+              >
+                <svg v-if="cancellingIds.has(row.run_id as string)" class="h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                {{ cancelLabel(row.run_id as string) }}
+              </button>
+              <span
+                v-if="cancelErrors[row.run_id as string]"
+                :data-testid="`runs-list-cancel-error-${row.run_id}`"
+                role="alert"
+                class="ml-2 text-xs text-destructive"
+              >{{ cancelErrors[row.run_id as string] }}</span>
+            </div>
           </template>
         </DataTable>
       </div>
@@ -127,8 +154,9 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { fetchRuns, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
+import { useRoute } from 'vue-router'
+import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
+import { useI18n } from 'vue-i18n'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -137,12 +165,17 @@ import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
 import { RUN_STATUS, TRIGGER_TYPE } from '../constants/filters'
+import { isNonTerminalStatus } from '../constants/runStatuses'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
-const router = useRouter()
 const route = useRoute()
 const { currencyCode, loadCurrency } = useOrgCurrency()
+const { t } = useI18n()
+
+const confirmingIds = ref(new Set<string>())
+const cancellingIds = ref(new Set<string>())
+const cancelErrors = ref<Record<string, string>>({})
 
 const pageSize = 20
 const page = ref(1)
@@ -239,8 +272,39 @@ function prevPage() {
   loadRuns()
 }
 
-function navigateToDetail(id: string) {
-  router.push(`/runs/${id}`)
+function cancelLabel(runId: string): string {
+  if (cancellingIds.value.has(runId)) return t('views.RunsListView.stopping')
+  if (confirmingIds.value.has(runId)) return t('views.RunsListView.stop_confirm')
+  return t('views.RunsListView.stop')
+}
+
+async function cancelRun(run: RunListItem) {
+  const runId = run.run_id
+  if (!isNonTerminalStatus(run.status)) return
+  if (cancellingIds.value.has(runId)) return
+  if (!confirmingIds.value.has(runId)) {
+    confirmingIds.value = new Set([...confirmingIds.value, runId])
+    return
+  }
+  confirmingIds.value = new Set([...confirmingIds.value].filter((id) => id !== runId))
+  cancellingIds.value = new Set([...cancellingIds.value, runId])
+  cancelErrors.value = { ...cancelErrors.value, [runId]: '' }
+  try {
+    const { error } = await requestRunCancellation(runId, t('views.RunsListView.cancel_failed'))
+    if (error) {
+      cancelErrors.value = { ...cancelErrors.value, [runId]: error }
+      return
+    }
+    if (runsData.value) {
+      runsData.value = {
+        ...runsData.value,
+        items: runsData.value.items.map((r) => (r.run_id === runId ? { ...r, status: 'cancelled' } : r)),
+      }
+    }
+    await loadRuns()
+  } finally {
+    cancellingIds.value = new Set([...cancellingIds.value].filter((id) => id !== runId))
+  }
 }
 
 loadCurrency()

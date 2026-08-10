@@ -226,7 +226,7 @@
                 <div class="space-y-3">
                   <div v-if="expandedEvent?.payload_json && Object.keys(expandedEvent.payload_json).length > 0">
                     <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.details') }}</h4>
-                    <pre class="overflow-x-auto rounded bg-background p-3 text-xs leading-relaxed">{{ JSON.stringify(expandedEvent?.payload_json, null, 2) }}</pre>
+                    <JsonViewer :data="expandedEvent?.payload_json ?? null" :show-toolbar="true" :max-height="'20rem'" />
                   </div>
                   <div v-if="expandedEvent?.previous_hash" class="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div>
@@ -291,6 +291,7 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'

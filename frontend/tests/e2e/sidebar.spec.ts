@@ -9,7 +9,10 @@ test.describe('Sidebar Navigation', () => {
     const sidebar = page.locator('nav[aria-label="Main navigation"]').first()
     await expect(sidebar).toBeVisible()
 
+    // Wait for a group header to render — sidebar groups mount asynchronously
+    // after the plan/tier data loads (SidebarNav gates items behind planStore).
     const groupHeaders = sidebar.locator('button.sidebar-group-header')
+    await expect(groupHeaders.first()).toBeVisible()
     const headerCount = await groupHeaders.count()
     expect(headerCount).toBeGreaterThanOrEqual(2)
   })

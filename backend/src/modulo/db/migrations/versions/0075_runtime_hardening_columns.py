@@ -1,6 +1,6 @@
 """Runtime cutover: hardening columns, claim-token backfill, status cleanup
 
-Revision ID: 0074_runtime_hardening_columns
+Revision ID: 0075_runtime_hardening_columns
 Revises: 0073_run_node_attempt_count
 Create Date: 2026-08-10
 
@@ -40,8 +40,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
-revision: str = "0074_runtime_hardening_columns"
-down_revision: str | None = "0073_run_node_attempt_count"
+revision: str = "0075_runtime_hardening_columns"
+down_revision: str | None = "0074_run_node_telemetry_json"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

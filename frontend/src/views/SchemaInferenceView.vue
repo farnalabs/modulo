@@ -137,7 +137,7 @@
             </svg>
             {{ showRawJson ? $t('common.hide') : $t('common.show') }} raw JSON
           </button>
-          <pre v-if="showRawJson" class="mt-2 overflow-x-auto rounded-lg bg-muted p-4 text-xs">{{ formattedJson }}</pre>
+          <JsonViewer v-if="showRawJson" :data="rawDefinitionJson ?? null" :show-toolbar="true" :max-height="'24rem'" />
         </div>
 
         <div class="flex items-center gap-2">
@@ -165,13 +165,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { Button } from '@/components/ui/button'
@@ -211,11 +212,6 @@ const publishError = ref<string | null>(null)
 const publishSuccess = ref<string | null>(null)
 
 const showRawJson = ref(false)
-
-const formattedJson = computed(() => {
-  if (!rawDefinitionJson.value) return ''
-  return JSON.stringify(rawDefinitionJson.value, null, 2)
-})
 
 async function loadConnectors() {
   loadingConnectors.value = true
