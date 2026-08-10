@@ -957,6 +957,7 @@ async def list_runs(
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "list_runs")
+        from modulo.db.crud.run import get_child_run_rollup
         from modulo.db.crud.run import list_runs as db_list_runs
 
         org_id = _ctx_org_id_val()
@@ -970,8 +971,16 @@ async def list_runs(
                 page_size=limit,
                 cursor=cursor,
             )
-        return {
-            "items": [
+            # Child-run cost+count rollup: ONE GROUP BY query for the whole
+            # page, joined in Python — never a per-row aggregate (avoids N+1).
+            run_ids = [r.id for r in result.items]
+            child_rollup = await get_child_run_rollup(s, run_ids) if run_ids else {}
+        items = []
+        for r in result.items:
+            child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
+            child_cost = _quantize_mcp_cost_rollup(child_cost)
+            own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+            items.append(
                 {
                     "id": str(r.id),
                     "pipeline_id": str(r.pipeline_id),
@@ -982,9 +991,14 @@ async def list_runs(
                     "started_at": r.started_at.isoformat() if r.started_at else None,
                     "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                     "error_code": r.error_code,
+                    "total_cost_usd": float(r.total_cost_usd) if r.total_cost_usd is not None else None,
+                    "child_runs_cost_usd": float(child_cost),
+                    "child_runs_count": child_count,
+                    "aggregate_cost_usd": float(_quantize_mcp_cost_rollup(own_cost + child_cost)),
                 }
-                for r in result.items
-            ],
+            )
+        return {
+            "items": items,
             "total": result.total,
             "next_cursor": result.next_cursor,
             "has_more": result.has_more,
