@@ -824,8 +824,8 @@ class TestLiveWriterEnrichment:
                     "sid": str(snapshot_id),
                     "hash": uuid.uuid4().hex,
                     "thread": f"thread-enrich-{run_id.hex[:8]}",
-                    "started": datetime(2026, 8, 7, 10, 0, tzinfo=UTC),
-                    "dispatched": datetime(2026, 8, 7, 10, 0, 15, tzinfo=UTC),
+                    "started": datetime(2026, 8, 7, 10, 0, 15, tzinfo=UTC),
+                    "dispatched": datetime(2026, 8, 7, 10, 0, tzinfo=UTC),
                     "completed": datetime(2026, 8, 7, 11, 0, 0, tzinfo=UTC),
                     "heartbeat": datetime(2026, 8, 7, 10, 59, 0, tzinfo=UTC),
                     "outjson": '{"node_a": {"result": "ok"}}',
@@ -855,7 +855,7 @@ class TestLiveWriterEnrichment:
         assert row is not None
         assert row[0] == "executor_stalled"
         assert row[1] == 7
-        assert row[2] == 15000, "queue_wait_ms = dispatched - started"
+        assert row[2] == 15000, "queue_wait_ms = started - dispatched"
         assert row[3] == 60000, "final_idle_ms = completed - heartbeat"
         assert row[4] is True
         assert row[5] == "saq"
