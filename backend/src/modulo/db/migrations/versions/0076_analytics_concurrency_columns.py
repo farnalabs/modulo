@@ -1,7 +1,7 @@
 """Add concurrency/slot-utilization columns to run_daily_facts (FAR-134).
 
-Revision ID: 0075_analytics_concurrency_columns
-Revises: 0074_run_node_telemetry_json
+Revision ID: 0076_analytics_concurrency_columns
+Revises: 0075_runtime_hardening_columns
 Create Date: 2026-08-10
 
 Adds the absolute run-lifecycle instants and the full queue wait to the facts
@@ -35,8 +35,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0075_analytics_concurrency_columns"
-down_revision: str | None = "0074_run_node_telemetry_json"
+revision: str = "0076_analytics_concurrency_columns"
+down_revision: str | None = "0075_runtime_hardening_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
