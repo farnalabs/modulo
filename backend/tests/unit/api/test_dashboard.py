@@ -635,7 +635,8 @@ class TestFactsWindowRunDate:
         assert "run_daily_facts" in sql
         assert "run_date" in sql
         assert "created_at" not in sql
-        assert "2026-01-01" in sql and "2026-01-08" in sql
+        assert "2026-01-01" in sql
+        assert "2026-01-08" in sql
 
     async def test_facts_status_counts_filters_on_run_date(self) -> None:
         start = date(2026, 1, 1)
@@ -648,7 +649,8 @@ class TestFactsWindowRunDate:
         sql = self._compiled_sql(session.statements[0])
         assert "run_date" in sql
         assert "created_at" not in sql
-        assert "2026-01-01" in sql and "2026-01-08" in sql
+        assert "2026-01-01" in sql
+        assert "2026-01-08" in sql
 
     async def test_compute_period_metrics_uses_day_boundaries(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Facts/status/spend windows get ``[today - days, today)`` day-bucket
