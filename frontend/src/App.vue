@@ -35,13 +35,20 @@ useWebVitals()
 // be detected — that is the trigger for the auto-login recovery path below.
 let wasAuthenticated = isAuthenticated.value
 let autoLoginRunning = false
+// True while a silent auto-login recovery is in flight. Guards the auth-change
+// handler so a concurrent 401 clearing the token again during recovery cannot
+// flash LoginView — the in-flight recovery owns the final auth state.
+let recovering = false
 
 // Silent auto-login using the configured credentials. Used both on first mount
 // (no stored session) and for recovery when an existing session clears while
 // auto-login is configured — without this, an expired stored token (401 →
 // refresh failure → clearAccessToken) leaves the user stranded on the login
 // screen until a manual reload. Returns whether a session was established.
-async function runAutoLogin(): Promise<boolean> {
+// `navigateHome` redirects to the app root on success — true for first-mount
+// auto-login, false for mid-session recovery (which must not yank the user off
+// a deep link such as /runs/123 back to the dashboard).
+async function runAutoLogin(navigateHome = false): Promise<boolean> {
   if (autoLoginRunning || !autoLogin) return false
   autoLoginRunning = true
   try {
@@ -67,7 +74,7 @@ async function runAutoLogin(): Promise<boolean> {
       console.warn('[App.vue] Login response has no user field — skipping error tracker setUser')
       // TODO: fetch /me after login to set user info on error tracker
     }
-    router.push('/')
+    if (navigateHome) router.push('/')
     return true
   } catch {
     // Silent — fall back to login screen
@@ -88,18 +95,25 @@ onAuthChange((token) => {
   // recovery is in flight so there is no visible login flash; drop to the
   // login screen only if the recovery login also fails.
   if (shouldReRunAutoLogin(wasAuthed, !!token, !!autoLogin)) {
+    recovering = true
     isAuthenticated.value = true
-    runAutoLogin().then((ok) => {
+    runAutoLogin(false).then((ok) => {
+      recovering = false
       if (!ok) isAuthenticated.value = false
     })
     return
   }
+
+  // A concurrent 401 during in-flight recovery clears the token again; that
+  // must not flip the app back to LoginView while recovery is still running.
+  // The recovery branch above owns the final state when it resolves.
+  if (recovering) return
 
   isAuthenticated.value = !!token
 })
 
 onMounted(() => {
   if (isAuthenticated.value) return
-  runAutoLogin()
+  runAutoLogin(true)
 })
 </script>
