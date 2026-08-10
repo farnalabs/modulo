@@ -18,14 +18,20 @@ Design:
 - "All workers dead" = no live worker on ANY configured queue (runs AND
   system), sustained for ``watchdog_worker_stale_seconds`` (default 180s =
   2x the 90s worker_info TTL).
+- Edge-triggered alerting: ONE alert email when worker-liveness
+  conditions first appear, ONE recovery ("all clear") email when conditions
+  FULLY clear, and nothing in between — no repeated alerts during a
+  sustained incident. Multi-machine safe: the alert edge is claimed
+  atomically with ``SET key NX`` and the recovery edge with ``GETDEL``, so
+  whichever app machine ticks first wins and the others stay silent. The
+  alert state lives in Redis (``_ALERT_STATE_KEY``) so it survives app
+  restarts.
 - On alert: fan out to EVERY configured channel — generic webhook
   (``alert_webhook_url``, Slack-compatible ``{"text": ...}``), Microsoft
   Teams webhook (``alert_teams_webhook_url``, MessageCard), and/or email
   (``alert_email_to`` + SMTP settings). Each channel is isolated: one
   channel's failure never blocks the others. Default-off — nothing is sent
-  until at least one channel is configured. Alerts are deduped by a Redis
-  cooldown key so they fire at most once per
-  ``watchdog_alert_cooldown_seconds``.
+  until at least one channel is configured.
 - Fail-open on Redis read errors: cannot confirm death => never alert, just
   log and continue. The watchdog never crashes the web process.
 """
@@ -40,6 +46,7 @@ import logging
 import os
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 import redis.asyncio as aioredis
@@ -49,11 +56,12 @@ from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger("modulo.watchdog")
 
-# Redis keys owned by this watchdog. The cooldown key doubles as the alert
-# dedup fence (at most one alert per cooldown window) and the heartbeat key
-# lets an operator verify the watchdog itself is alive (a dead watchdog is
+# Redis keys owned by this watchdog. The alert-state key stores the active
+# incident (JSON: conditions + started_at) so the watchdog is edge-triggered:
+# one alert when it first appears, one recovery when it clears. The heartbeat
+# key lets an operator verify the watchdog itself is alive (a dead watchdog is
 # detectable by comparing the stored timestamp to now).
-_ALERT_COOLDOWN_KEY = "watchdog:alert:worker_liveness"
+_ALERT_STATE_KEY = "watchdog:alert:state:worker_liveness"
 _WATCHDOG_HEARTBEAT_KEY = "watchdog:heartbeat:worker_liveness"
 
 # SAQ worker_info heartbeat TTL is 90s (saq_worker._TIMERS["worker_info"]=89
@@ -124,29 +132,57 @@ async def _write_watchdog_heartbeat(redis: aioredis.Redis) -> None:
     await redis.set(_WATCHDOG_HEARTBEAT_KEY, str(int(time.time())))
 
 
-async def _cooldown_active(redis: aioredis.Redis) -> bool:
-    """True when an alert fired within the cooldown window (dedup)."""
-    try:
-        return bool(await redis.exists(_ALERT_COOLDOWN_KEY))
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        _log.warning("watchdog.cooldown_read_failed: %s", exc)
-        return False
+async def _claim_alert(redis: aioredis.Redis, settings: Settings, conditions: list[str]) -> bool:
+    """Atomically claim the ALERT edge for this incident (SET key NX).
 
-
-async def _set_cooldown(redis: aioredis.Redis, settings: Settings) -> None:
-    """Set the alert dedup fence. Best-effort — a write failure never raises."""
+    Multiple app machines run the watchdog; without an atomic claim two of
+    them could both send the alert email. ``SET key <json> NX EX <ttl>``
+    returns True only for the machine that wins — every other machine sees
+    the state already present and stays silent. The stored JSON carries the
+    conditions and start time so the recovery email can report duration.
+    A Redis failure fails OPEN (True) — if the state cannot be written, an
+    alert is sent rather than lost.
+    """
+    payload = json.dumps({"conditions": conditions, "started_at": time.time()})
     try:
-        await redis.set(
-            _ALERT_COOLDOWN_KEY,
-            str(int(time.time())),
-            ex=settings.watchdog_alert_cooldown_seconds,
+        return bool(
+            await redis.set(
+                _ALERT_STATE_KEY,
+                payload,
+                nx=True,
+                ex=settings.watchdog_alert_state_ttl_seconds,
+            )
         )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        _log.warning("watchdog.cooldown_write_failed: %s", exc)
+        _log.warning("watchdog.alert_claim_failed: %s", exc)
+        return True
+
+
+async def _claim_recovery(redis: aioredis.Redis) -> dict[str, Any] | None:
+    """Atomically claim the RECOVERY edge (GETDEL).
+
+    Returns the stored incident state ONLY to the machine that cleared the
+    key — every other machine gets None and stays silent, so exactly one
+    recovery email is sent per incident. A Redis failure returns None (no
+    recovery claimed this tick; the next tick retries — no recovery is lost,
+    only delayed).
+    """
+    try:
+        raw = await redis.getdel(_ALERT_STATE_KEY)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("watchdog.recovery_claim_failed: %s", exc)
+        return None
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _channel_configured(settings: Settings) -> bool:
@@ -170,6 +206,21 @@ def _alert_text(conditions: list[str]) -> str:
         "\U0001f6a8 *Modulo watchdog: worker-liveness alert*\n"
         + "\n".join(f"\u2022 {condition}" for condition in conditions)
         + f"\nDetected at {datetime.now(UTC).isoformat()} on {_hostname()}"
+    )
+
+
+def _recovery_text(state: dict[str, Any]) -> str:
+    """Human-readable recovery text from the cleared incident state."""
+    prior_conditions = state.get("conditions") or []
+    started_at = state.get("started_at")
+    duration = f" for {(time.time() - float(started_at)):.0f}s" if started_at else ""
+    return (
+        "\u2705 *Modulo watchdog: worker-liveness recovered*\n"
+        + "The following conditions have cleared"
+        + duration
+        + ":\n"
+        + "\n".join(f"\u2022 {condition}" for condition in prior_conditions)
+        + f"\nResolved at {datetime.now(UTC).isoformat()} on {_hostname()}"
     )
 
 
@@ -238,8 +289,13 @@ def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
     return [address.strip() for address in alert_email_to.split(",") if address.strip()]
 
 
-async def _send_email_alert(settings: Settings, conditions: list[str]) -> None:
-    """Best-effort SMTP email alert. Never raises out of the task.
+async def _send_email_alert(
+    settings: Settings,
+    conditions: list[str],
+    *,
+    recovery_state: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort SMTP email alert (or recovery when ``recovery_state`` is given).
 
     ``send_email`` is synchronous (smtplib with retries) — it MUST run via
     ``asyncio.to_thread`` so it never blocks the watchdog's event loop.
@@ -252,17 +308,31 @@ async def _send_email_alert(settings: Settings, conditions: list[str]) -> None:
         _log.warning("watchdog.email_no_smtp_host")
         return
 
-    subject = "[Modulo Watchdog] Worker-liveness alert"
-    body_html = (
-        "<html><body>"
-        "<h2>Modulo watchdog: worker-liveness alert</h2>"
-        "<p>The in-process watchdog detected one or more worker-liveness conditions:</p>"
-        "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in conditions) + "</ul>"
-        f"<p>Detected at {html.escape(datetime.now(UTC).isoformat())} "
-        f"on {html.escape(_hostname())}</p>"
-        "</body></html>"
-    )
-    body_text = _alert_text(conditions)
+    if recovery_state is not None:
+        subject = "[Modulo Watchdog] Worker-liveness recovered"
+        prior = recovery_state.get("conditions") or []
+        body_html = (
+            "<html><body>"
+            "<h2>Modulo watchdog: worker-liveness recovered</h2>"
+            "<p>The following worker-liveness conditions have cleared:</p>"
+            "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in prior) + "</ul>"
+            f"<p>Resolved at {html.escape(datetime.now(UTC).isoformat())} "
+            f"on {html.escape(_hostname())}</p>"
+            "</body></html>"
+        )
+        body_text = _recovery_text(recovery_state)
+    else:
+        subject = "[Modulo Watchdog] Worker-liveness alert"
+        body_html = (
+            "<html><body>"
+            "<h2>Modulo watchdog: worker-liveness alert</h2>"
+            "<p>The in-process watchdog detected one or more worker-liveness conditions:</p>"
+            "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in conditions) + "</ul>"
+            f"<p>Detected at {html.escape(datetime.now(UTC).isoformat())} "
+            f"on {html.escape(_hostname())}</p>"
+            "</body></html>"
+        )
+        body_text = _alert_text(conditions)
     try:
         await asyncio.to_thread(
             send_email,
@@ -280,14 +350,19 @@ async def _send_email_alert(settings: Settings, conditions: list[str]) -> None:
         _log.warning("watchdog.email_unknown_failure: %s", exc)
 
 
-async def _send_alerts(settings: Settings, conditions: list[str]) -> None:
-    """Fan the alert out to every configured channel, isolated per channel.
+async def _send_alerts(
+    settings: Settings,
+    conditions: list[str],
+    *,
+    recovery_state: dict[str, Any] | None = None,
+) -> None:
+    """Fan the alert (or recovery) out to every configured channel.
 
     Each channel is wrapped in its own try/except so one channel's failure
     never prevents the others from delivering (mirrors the error-forwarder
     isolation lesson). Never raises out of the watchdog task.
     """
-    text = _alert_text(conditions)
+    text = _recovery_text(recovery_state) if recovery_state is not None else _alert_text(conditions)
     if settings.alert_webhook_url:
         try:
             await _post_generic_webhook(settings, text)
@@ -304,7 +379,7 @@ async def _send_alerts(settings: Settings, conditions: list[str]) -> None:
             _log.warning("watchdog.channel_teams_failed: %s", exc)
     if settings.alert_email_to and settings.smtp_host:
         try:
-            await _send_email_alert(settings, conditions)
+            await _send_email_alert(settings, conditions, recovery_state=recovery_state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -312,24 +387,38 @@ async def _send_alerts(settings: Settings, conditions: list[str]) -> None:
 
 
 async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: list[str]) -> None:
-    """Fire one deduped alert per cooldown window. Never raises."""
-    message = "; ".join(conditions)
+    """Edge-triggered alert/recovery state machine. Never raises.
+
+    - ``conditions`` non-empty: this is the ALERT edge. The incident state is
+      claimed atomically (SET NX) so exactly ONE machine sends the alert email
+      and later ticks during the same incident stay silent (state present).
+    - ``conditions`` empty: this is the RECOVERY edge. The incident state is
+      cleared atomically (GETDEL) so exactly ONE machine sends the recovery
+      ("all clear") email, and later healthy ticks stay silent (no state).
+    """
     if not _channel_configured(settings):
         # Default-off: the watchdog still ticks and logs, but never sends.
         _log.warning(
             "watchdog.alert_suppressed_no_channel conditions=%s "
             "(no generic webhook / Teams webhook / email configured)",
-            message,
+            "; ".join(conditions),
         )
         return
-    if await _cooldown_active(redis):
-        _log.warning("watchdog.alert_suppressed_cooldown conditions=%s", message)
-        return
-    await _set_cooldown(redis, settings)
-    # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
-    # event needs stdout visibility (repo lesson).
-    print(f"[watchdog] ALERT worker-liveness: {message}", flush=True)  # noqa: T201
-    await _send_alerts(settings, conditions)
+    if conditions:
+        if not await _claim_alert(redis, settings, conditions):
+            # Another machine already claimed this incident — stay silent.
+            _log.info("watchdog.alert_already_active conditions=%s", "; ".join(conditions))
+            return
+        # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
+        # event needs stdout visibility (repo lesson).
+        print(f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)}", flush=True)  # noqa: T201
+        await _send_alerts(settings, conditions)
+    else:
+        state = await _claim_recovery(redis)
+        if state is None:
+            return  # nothing was alerted — healthy state, stay silent
+        print("[watchdog] RECOVERY worker-liveness: conditions cleared", flush=True)  # noqa: T201
+        await _send_alerts(settings, [], recovery_state=state)
 
 
 async def _evaluate_once(
@@ -385,8 +474,7 @@ async def _evaluate_once(
     except Exception as exc:
         _log.warning("watchdog.cron_read_failed: %s", exc)
 
-    if conditions:
-        await _maybe_alert(settings, redis, conditions)
+    await _maybe_alert(settings, redis, conditions)
 
     return all_dead_since
 
