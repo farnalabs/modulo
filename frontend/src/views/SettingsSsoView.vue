@@ -153,10 +153,13 @@
                 >
                 <p class="font-medium">{{ testResult?.success ? $t('views.SettingsSsoView.connection_successful') : $t('views.SettingsSsoView.connection_failed') }}</p>
                 <p class="mt-1">{{ testResult?.message }}</p>
-                <pre
+                <JsonViewer
                   v-if="testResult?.provider_info"
-                  class="mt-2 overflow-auto rounded bg-background/50 p-2 text-xs"
-                >{{ JSON.stringify(testResult?.provider_info, null, 2) }}</pre>
+                  class="mt-2"
+                  :data="testResult?.provider_info ?? null"
+                  :show-toolbar="true"
+                  :max-height="'16rem'"
+                />
               </div>
             </div>
           </div>
@@ -175,6 +178,7 @@ import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import SsoProviderForm from '../components/SsoProviderForm.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'

@@ -202,13 +202,13 @@
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
                 {{ diffVarA || '-' }}
               </div>
-              <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentA }}</code></pre>
+              <JsonViewer :data="diffDataA" :show-toolbar="false" :max-height="'20rem'" />
             </div>
             <div class="overflow-auto rounded-lg border bg-card">
               <div class="border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
                 {{ diffVarB || '-' }}
               </div>
-              <pre class="overflow-x-auto p-3 text-xs leading-relaxed"><code>{{ diffContentB }}</code></pre>
+              <JsonViewer :data="diffDataB" :show-toolbar="false" :max-height="'20rem'" />
             </div>
           </div>
         </div>
@@ -238,6 +238,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import type { components } from '../lib/api/client'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { formatApiError } from '../lib/api/formatError'
@@ -403,16 +404,14 @@ function getNodeOutput(nodeName: string, variantName: string): unknown {
   return (entry.nodeOutputs as Record<string, unknown>)[nodeName] ?? null
 }
 
-const diffContentA = computed(() => {
-  if (!diffNode.value || !diffVarA.value) return ''
-  const output = getNodeOutput(diffNode.value, diffVarA.value)
-  return output ? JSON.stringify(output, null, 2) : ''
+const diffDataA = computed(() => {
+  if (!diffNode.value || !diffVarA.value) return null
+  return getNodeOutput(diffNode.value, diffVarA.value)
 })
 
-const diffContentB = computed(() => {
-  if (!diffNode.value || !diffVarB.value) return ''
-  const output = getNodeOutput(diffNode.value, diffVarB.value)
-  return output ? JSON.stringify(output, null, 2) : ''
+const diffDataB = computed(() => {
+  if (!diffNode.value || !diffVarB.value) return null
+  return getNodeOutput(diffNode.value, diffVarB.value)
 })
 
 watch(selectedGroupId, async (id) => {

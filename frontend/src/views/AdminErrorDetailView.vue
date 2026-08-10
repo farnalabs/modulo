@@ -1,4 +1,5 @@
 <template>
+  <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
   <BackLink to="/admin/errors" :label="$t('views.AdminErrorDetailView.back_to_error_dashboard')" />
   <div class="page-wide">
     <header class="flex items-center justify-between">
@@ -130,7 +131,7 @@
             </svg>
             {{ $t('views.AdminErrorDetailView.context_json') }}
           </button>
-          <pre v-if="showContext" class="mt-2 max-h-64 overflow-auto rounded-lg bg-muted p-3 text-xs"><code>{{ JSON.stringify(sampleEvent.context_json, null, 2) }}</code></pre>
+          <JsonViewer v-if="showContext" :data="sampleEvent.context_json ?? null" :show-toolbar="true" :max-height="'16rem'" />
         </div>
 
         <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
@@ -203,10 +204,12 @@
       </div>
     </template>
   </div>
+  </FeatureGate>
 </template>
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
+import JsonViewer from '../components/shared/JsonViewer.vue'
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -217,6 +220,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
+import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
