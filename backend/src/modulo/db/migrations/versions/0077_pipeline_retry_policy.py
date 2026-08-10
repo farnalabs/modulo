@@ -27,7 +27,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column(
         "pipelines",
-        sa.Column("retry_policy", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        sa.Column("retry_policy", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
     )
 
 

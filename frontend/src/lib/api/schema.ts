@@ -10779,7 +10779,10 @@ export interface components {
             rate_limit_config?: {
                 [key: string]: unknown;
             } | null;
-            /** Retry Policy */
+            /**
+             * Retry Policy
+             * @default {}
+             */
             retry_policy: {
                 [key: string]: unknown;
             };

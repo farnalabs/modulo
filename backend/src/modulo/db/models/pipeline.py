@@ -59,7 +59,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
         JSON,
         nullable=False,
         default=dict,
-        server_default=text("'{}'::json"),
+        server_default=text("'{}'"),
     )
     stale_run_timeout_minutes: Mapped[int] = mapped_column(
         Integer, nullable=False, default=30, server_default=text("'30'")

@@ -159,7 +159,7 @@ _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
 _RETRY_POLICY_MAX_RETRIES = 5
 
 
-def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any]:
+def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | None:
     """Validate a ``retry_policy`` payload, returning it unchanged.
 
     ``None`` is accepted (treated as "no retry policy"). Raises ValueError with
