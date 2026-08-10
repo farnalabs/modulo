@@ -32,7 +32,7 @@ def _make_settings(**overrides: Any) -> Settings:
         "redis_url": "redis://localhost:6379/0",
         "watchdog_tick_seconds": 30,
         "watchdog_worker_stale_seconds": 180,
-        "watchdog_alert_cooldown_seconds": 900,
+        "watchdog_alert_state_ttl_seconds": 7 * 24 * 3600,
         "SAQ_RUNS_QUEUE": "runs",
     }
     base.update(overrides)
@@ -82,13 +82,30 @@ class _FakeWatchdogRedis:
         self._raise_if_failing()
         return self._data.get(key)
 
-    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+    async def set(
+        self,
+        key: str,
+        value: str,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool | None:
         self._raise_if_failing()
+        if nx and key in self._data:
+            return None  # SET NX: key already exists -> not set
         self._data[key] = value
         self._set_opts[key] = {"ex": ex}
+        return True
 
     async def exists(self, key: str) -> bool:
         return key in self._data
+
+    async def getdel(self, key: str) -> str | None:
+        self._raise_if_failing()
+        return self._data.pop(key, None)
+
+    async def delete(self, key: str) -> int:
+        self._raise_if_failing()
+        return 1 if self._data.pop(key, None) is not None else 0
 
     async def aclose(self) -> None:
         return None
@@ -122,7 +139,7 @@ class TestWorkerLivenessWatchdog:
         assert wl._WATCHDOG_HEARTBEAT_KEY in fake._data
         assert float(fake._data[wl._WATCHDOG_HEARTBEAT_KEY]) <= time.time()
 
-    async def test_all_workers_dead_alerts_once_then_cooldown_suppresses(self) -> None:
+    async def test_all_workers_dead_alerts_once_then_silent_while_active(self) -> None:
         fake = _FakeWatchdogRedis()
         settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
         # Fleet has been dead for longer than the 180s stale threshold.
@@ -134,15 +151,20 @@ class TestWorkerLivenessWatchdog:
 
         assert state == dead_since  # still dead, timer keeps running
         post.assert_awaited_once()
-        assert wl._ALERT_COOLDOWN_KEY in fake._data
-        assert fake._set_opts[wl._ALERT_COOLDOWN_KEY]["ex"] == settings.watchdog_alert_cooldown_seconds
+        assert wl._ALERT_STATE_KEY in fake._data
+        # The stored state carries the conditions for the recovery email.
+        stored = json.loads(fake._data[wl._ALERT_STATE_KEY])
+        assert stored["conditions"]
+        assert "started_at" in stored
+        assert fake._set_opts[wl._ALERT_STATE_KEY]["ex"] == settings.watchdog_alert_state_ttl_seconds
 
-        # Next tick within the cooldown window: suppressed.
+        # Next tick while the incident is STILL active: no repeat alert.
         post2 = AsyncMock()
         with patch.object(wl, "_send_alerts", post2):
             state2 = await wl._evaluate_once(settings, fake, state)
         post2.assert_not_awaited()
         assert state2 == state
+        assert wl._ALERT_STATE_KEY in fake._data  # state persists until recovery
 
     async def test_redis_read_failure_fails_open_and_loop_continues(self) -> None:
         fake = _FakeWatchdogRedis()
@@ -208,7 +230,7 @@ class TestWorkerLivenessWatchdog:
 
         send_alerts.assert_not_awaited()
         assert state is not None  # still tracking the dead state
-        assert wl._ALERT_COOLDOWN_KEY not in fake._data
+        assert wl._ALERT_STATE_KEY not in fake._data
 
     async def test_channel_configured_via_teams_or_email_fires_alert(self) -> None:
         fake = _FakeWatchdogRedis()
@@ -221,10 +243,10 @@ class TestWorkerLivenessWatchdog:
             with patch.object(wl, "_send_alerts", send_alerts):
                 await wl._evaluate_once(settings, fake, time.time() - 200)
             send_alerts.assert_awaited_once()
-            assert wl._ALERT_COOLDOWN_KEY in fake._data
-            fake._data.pop(wl._ALERT_COOLDOWN_KEY, None)
+            assert wl._ALERT_STATE_KEY in fake._data
+            fake._data.pop(wl._ALERT_STATE_KEY, None)
 
-    async def test_recovery_resets_and_new_alert_can_fire_after_cooldown(self) -> None:
+    async def test_recovery_sends_all_clear_then_fresh_alert_can_fire(self) -> None:
         fake = _FakeWatchdogRedis()
         settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
 
@@ -233,33 +255,39 @@ class TestWorkerLivenessWatchdog:
         with patch.object(wl, "_send_alerts", post):
             dead_state = await wl._evaluate_once(settings, fake, time.time() - 200)
         post.assert_awaited_once()
-        assert wl._ALERT_COOLDOWN_KEY in fake._data
+        assert wl._ALERT_STATE_KEY in fake._data
 
-        # 2. Recovery: live workers return -> state resets, no alert.
+        # 2. Recovery: live workers return -> ONE recovery email, state cleared.
         fake.add_live_worker("runs")
         fake.add_live_worker("system")
         fake.set_cron_heartbeat()
         post2 = AsyncMock()
         with patch.object(wl, "_send_alerts", post2):
             recovered = await wl._evaluate_once(settings, fake, dead_state)
-        post2.assert_not_awaited()
         assert recovered is None
+        post2.assert_awaited_once()
+        # The recovery fan-out carried the prior incident state.
+        assert post2.await_args.kwargs["recovery_state"] is not None
+        assert post2.await_args.kwargs["recovery_state"]["conditions"]
+        assert wl._ALERT_STATE_KEY not in fake._data
 
-        # 3. Second death within the cooldown window is suppressed.
+        # 3. Still healthy on the next tick: no repeat recovery email.
+        post3 = AsyncMock()
+        with patch.object(wl, "_send_alerts", post3):
+            still_healthy = await wl._evaluate_once(settings, fake, None)
+        post3.assert_not_awaited()
+        assert still_healthy is None
+
+        # 4. A NEW incident (second death) fires a fresh alert again.
         fake.clear_workers("runs")
         fake.clear_workers("system")
         fake.set_cron_heartbeat(age_seconds=600)
-        post3 = AsyncMock()
-        with patch.object(wl, "_send_alerts", post3):
-            state2 = await wl._evaluate_once(settings, fake, time.time() - 200)
-        post3.assert_not_awaited()
-
-        # 4. Cooldown expires (TTL) -> a new alert can fire again.
-        fake._data.pop(wl._ALERT_COOLDOWN_KEY, None)
         post4 = AsyncMock()
         with patch.object(wl, "_send_alerts", post4):
-            await wl._evaluate_once(settings, fake, state2)
+            state2 = await wl._evaluate_once(settings, fake, time.time() - 200)
         post4.assert_awaited_once()
+        assert state2 is not None
+        assert wl._ALERT_STATE_KEY in fake._data
 
     async def test_cron_stale_alone_triggers_alert(self) -> None:
         fake = _FakeWatchdogRedis()
@@ -375,22 +403,57 @@ async def test_workers_dead_below_stale_threshold_does_not_alert() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_cooldown_read_failure_fails_open() -> None:
-    """A Redis error reading the cooldown fence must not suppress an alert."""
-    redis = AsyncMock()
-    redis.exists.side_effect = ConnectionError("redis down")
-    assert await wl._cooldown_active(redis) is False
-
-
-async def test_set_cooldown_write_failure_is_best_effort(caplog: pytest.LogCaptureFixture) -> None:
-    """A Redis write failure setting the cooldown fence must not raise."""
+async def test_claim_alert_write_failure_fails_open(caplog: pytest.LogCaptureFixture) -> None:
+    """A Redis write failure claiming the alert edge must NOT suppress the alert."""
     redis = AsyncMock()
     redis.set.side_effect = ConnectionError("redis down")
-    settings = _make_settings(WATCHDOG_ALERT_COOLDOWN_SECONDS=900)
+    settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
 
-    await wl._set_cooldown(redis, settings)  # must not raise
+    claimed = await wl._claim_alert(redis, settings, ["no live SAQ worker"])
 
-    assert "watchdog.cooldown_write_failed" in caplog.text
+    assert claimed is True  # fail-open: alert sent rather than lost
+    assert "watchdog.alert_claim_failed" in caplog.text
+
+
+async def test_claim_alert_nx_true_only_for_first_claimant() -> None:
+    """SET NX returns True only for the machine that writes the state."""
+    redis = AsyncMock()
+    redis.set.side_effect = [True, False]  # first machine wins, second loses
+    settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+    assert await wl._claim_alert(redis, settings, ["no live SAQ worker"]) is True
+    assert await wl._claim_alert(redis, settings, ["no live SAQ worker"]) is False
+    call = redis.set.await_args
+    assert call.kwargs.get("nx") is True
+    assert call.kwargs.get("ex") == settings.watchdog_alert_state_ttl_seconds
+    assert call.args[0] == wl._ALERT_STATE_KEY
+
+
+async def test_claim_recovery_getdel_returns_state_only_to_winner() -> None:
+    """GETDEL returns the incident state only to the machine that clears it."""
+    redis = AsyncMock()
+    redis.getdel.side_effect = [
+        json.dumps({"conditions": ["no live SAQ worker"], "started_at": time.time()}),
+        None,  # second machine sees no state
+    ]
+
+    first = await wl._claim_recovery(redis)
+    second = await wl._claim_recovery(redis)
+
+    assert first is not None and first["conditions"]
+    assert second is None
+    assert redis.getdel.await_count == 2
+
+
+async def test_claim_recovery_failure_returns_none_and_retries_next_tick(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A Redis error claiming recovery returns None (next tick retries)."""
+    redis = AsyncMock()
+    redis.getdel.side_effect = ConnectionError("redis down")
+
+    assert await wl._claim_recovery(redis) is None
+    assert "watchdog.recovery_claim_failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -549,3 +612,100 @@ class TestMultiChannelAlertFanout:
         with patch.object(wl, "send_email", send):
             await wl._send_email_alert(settings, ["no live SAQ worker"])
         send.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Edge-triggered alert/recovery (postmortem follow-up 2026-08-10)
+# ---------------------------------------------------------------------------
+
+
+class TestEdgeTriggeredAlertRecovery:
+    async def test_recovery_email_uses_recovered_subject(self) -> None:
+        """The recovery email subject says recovered, not alert."""
+        settings = _make_settings(
+            ALERT_EMAIL_TO="ops@example.com",
+            smtp_host="smtp.example.com",
+        )
+        send = MagicMock(return_value=True)
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+        ):
+            await wl._send_email_alert(
+                settings,
+                [],
+                recovery_state={"conditions": ["no live SAQ worker"], "started_at": time.time() - 60},
+            )
+
+        send.assert_called_once()
+        assert send.call_args.args[2] == "[Modulo Watchdog] Worker-liveness recovered"
+        assert "recovered" in send.call_args.args[4]
+        assert "no live SAQ worker" in send.call_args.args[3]
+
+    async def test_recovery_text_includes_duration_and_prior_conditions(self) -> None:
+        state = {"conditions": ["no live SAQ worker"], "started_at": time.time() - 120}
+        text = wl._recovery_text(state)
+        assert "worker-liveness recovered" in text
+        assert "no live SAQ worker" in text
+        assert "120s" in text
+
+    async def test_never_alerted_so_no_recovery_email(self) -> None:
+        """Healthy state with no active incident never sends a recovery email."""
+        fake = _FakeWatchdogRedis()
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat()
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+        post = AsyncMock()
+        with patch.object(wl, "_send_alerts", post):
+            state = await wl._evaluate_once(settings, fake, None)
+
+        post.assert_not_awaited()
+        assert state is None
+        assert wl._ALERT_STATE_KEY not in fake._data
+
+    async def test_multiple_machines_send_exactly_one_alert_and_one_recovery(self) -> None:
+        """Two app machines racing: SET NX + GETDEL guarantee single alert + single recovery."""
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+
+        # Two fake Redis instances sharing NO state (simulate the race at the
+        # Redis layer: the first SET NX wins; the second sees the key present).
+        shared = _FakeWatchdogRedis()
+        fake_a = shared
+        fake_b = _FakeWatchdogRedis()
+        fake_b._data = shared._data  # share the same backing dict for the state key
+        fake_b._set_opts = shared._set_opts
+        fake_b._zscores = shared._zscores
+
+        dead_since = time.time() - 200
+        post_a = AsyncMock()
+        post_b = AsyncMock()
+        with (
+            patch.object(wl, "_send_alerts", post_a),
+        ):
+            await wl._evaluate_once(settings, fake_a, dead_since)
+        with (
+            patch.object(wl, "_send_alerts", post_b),
+        ):
+            await wl._evaluate_once(settings, fake_b, dead_since)
+
+        # Exactly one alert email across both machines.
+        assert post_a.await_count + post_b.await_count == 1
+        assert wl._ALERT_STATE_KEY in shared._data
+
+        # Recovery: both machines see live workers; exactly one recovery email.
+        fake_a.add_live_worker("runs")
+        fake_a.add_live_worker("system")
+        fake_a.set_cron_heartbeat()
+        post_a2 = AsyncMock()
+        post_b2 = AsyncMock()
+        with patch.object(wl, "_send_alerts", post_a2):
+            await wl._evaluate_once(settings, fake_a, dead_since)
+        with patch.object(wl, "_send_alerts", post_b2):
+            await wl._evaluate_once(settings, fake_b, dead_since)
+
+        assert post_a2.await_count + post_b2.await_count == 1
+        assert wl._ALERT_STATE_KEY not in shared._data

@@ -273,7 +273,9 @@ class Settings(BaseSettings):
     watchdog_enabled: bool = Field(default=True, alias="WATCHDOG_ENABLED")
     watchdog_tick_seconds: int = Field(default=30, alias="WATCHDOG_TICK_SECONDS", ge=5, le=600)
     watchdog_worker_stale_seconds: int = Field(default=180, alias="WATCHDOG_WORKER_STALE_SECONDS", ge=60, le=3600)
-    watchdog_alert_cooldown_seconds: int = Field(default=900, alias="WATCHDOG_ALERT_COOLDOWN_SECONDS", ge=60, le=86400)
+    watchdog_alert_state_ttl_seconds: int = Field(
+        default=7 * 24 * 3600, alias="WATCHDOG_ALERT_STATE_TTL_SECONDS", ge=3600, le=60 * 24 * 3600
+    )  # edge-triggered state: outlives any incident so no repeat alerts
     # Slack-compatible webhook URL for watchdog alerts. None (default) = the
     # watchdog ticks and logs but never POSTs — the operator must configure
     # this in production for alerts to fire.
