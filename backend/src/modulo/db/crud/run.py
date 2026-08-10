@@ -44,7 +44,17 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 # constraint at commit time, or worse write an unknown status on backends
 # without the constraint).
 RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
-    {"pending", "running", "awaiting_human", "claimed", "complete", "failed", "cancelled", "eval_failed"}
+    {
+        "pending",
+        "running",
+        "awaiting_human",
+        "claimed",
+        "complete",
+        "failed",
+        "cancelled",
+        "eval_failed",
+        "stalled",
+    }
 )
 
 # Claimed-but-nodeless zombie repair code (shared). Another worker owns the
@@ -315,7 +325,7 @@ async def get_child_run_rollup(
 _COST_BREAKDOWN_SENTINEL: Any = object()
 
 
-def _json_bind(value: Any) -> str | None:
+def _json_bind(value: Any) -> str | bytes | None:
     """Serialize a JSON-typed fenced-write param for asyncpg binding.
 
     asyncpg's default ``json`` codec accepts only ``str``/``bytes`` — a raw

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # Single source of truth for terminal run statuses (ADR 020). Used by the
 # analytics facts writer, the maintenance backfill, and the run purge. Must be
 # a subset of the ``ck_runs_status`` CHECK-constraint values.
-TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
 
 
 class _GenRandomUuid(expression.FunctionElement[str]):
@@ -70,7 +70,7 @@ class Run(OrgScoped):
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', "
-            "'complete', 'failed', 'cancelled', 'eval_failed')",
+            "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
