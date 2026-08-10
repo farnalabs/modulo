@@ -10,10 +10,25 @@ _log = logging.getLogger(__name__)
 
 _MAX_RETRIES = 2
 _RETRY_DELAY = 1.0
+_REDACTED = "********"
 
 
 class EmailSendingError(Exception):
     pass
+
+
+def _redact_credentials(message: str, settings: Settings) -> str:
+    """Strip configured SMTP credentials from an error message.
+
+    SMTP servers sometimes echo the attempted username (or worse, the AUTH
+    command) inside their error responses. Since those strings flow straight
+    into ``EmailSendingError`` and callers' logs, redact any configured secret
+    before it leaves this module.
+    """
+    for secret in (settings.smtp_username, settings.smtp_password):
+        if secret:
+            message = message.replace(secret, _REDACTED)
+    return message
 
 
 def send_email(
@@ -43,7 +58,7 @@ def send_email(
 
     msg.add_alternative(body_html, subtype="html")
 
-    last_exc: smtplib.SMTPException | None = None
+    last_exc: smtplib.SMTPException | OSError | None = None
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -54,15 +69,27 @@ def send_email(
                 server.send_message(msg)
             _log.info("email.sent", extra={"to": to, "subject": subject})
             return True
-        except smtplib.SMTPException as exc:
+        except (smtplib.SMTPException, OSError) as exc:
             last_exc = exc
             if attempt < _MAX_RETRIES:
                 _log.warning(
                     "email.send_retry",
-                    extra={"to": to, "subject": subject, "attempt": attempt + 1, "error": str(exc)},
+                    extra={
+                        "to": to,
+                        "subject": subject,
+                        "attempt": attempt + 1,
+                        "error": _redact_credentials(str(exc), settings),
+                    },
                 )
                 time.sleep(_RETRY_DELAY)
                 continue
 
-    _log.error("email.send_failed", extra={"to": to, "subject": subject, "error": str(last_exc)})
-    raise EmailSendingError(str(last_exc)) from last_exc
+    _log.error(
+        "email.send_failed",
+        extra={
+            "to": to,
+            "subject": subject,
+            "error": _redact_credentials(str(last_exc), settings),
+        },
+    )
+    raise EmailSendingError(_redact_credentials(str(last_exc), settings)) from last_exc
