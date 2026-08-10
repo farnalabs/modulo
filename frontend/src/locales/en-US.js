@@ -792,7 +792,14 @@ export default {
       "operator": "Operator",
       "schema": "Schema",
       "selected_nodes": "Selected Nodes",
-      "name": "Name"
+      "name": "Name",
+      "retry_policy": "Retry policy",
+      "retry_policy_description": "Automatically re-dispatch a run that ends in a selected state (up to the retry budget).",
+      "max_retries": "Max retries:",
+      "retry_policy_stall": "Stall (executor_stalled)",
+      "retry_policy_timeout": "Timeout (node_timeout)",
+      "retry_policy_failure": "Failure",
+      "retry_policy_update_failed": "Failed to update retry policy: "
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",

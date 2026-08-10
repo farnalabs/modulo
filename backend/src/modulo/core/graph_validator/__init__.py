@@ -1678,7 +1678,7 @@ class GraphValidator:
             )
             return
         events = policy.get("on", [])
-        if not isinstance(events, list) or not all(isinstance(e, str) for e in events):
+        if not isinstance(events, list) or any(not isinstance(e, str) for e in events):
             result.error(
                 "RETRY_POLICY_MALFORMED",
                 "retry_policy 'on' must be a list of strings from ['stall','timeout','failure']",

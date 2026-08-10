@@ -123,18 +123,18 @@
               aria-haspopup="dialog"
               data-testid="pipeline-editor-retry-policy-toggle"
             >
-              Retry policy
+              {{ $t('views.PipelineEditorView.retry_policy') }}
             </button>
             <div
               v-if="retryPolicyOpen"
               class="absolute right-0 top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
               role="dialog"
-              aria-label="Retry policy"
+              :aria-label="$t('views.PipelineEditorView.retry_policy')"
               data-testid="pipeline-editor-retry-policy-panel"
             >
-              <div class="mb-1 text-xs font-medium text-foreground">Retry policy</div>
+              <div class="mb-1 text-xs font-medium text-foreground">{{ $t('views.PipelineEditorView.retry_policy') }}</div>
               <div class="mb-2 text-[10px] text-muted-foreground">
-                Automatically re-dispatch a run that ends in a selected state (up to the retry budget).
+                {{ $t('views.PipelineEditorView.retry_policy_description') }}
               </div>
               <div class="space-y-1">
                 <label
@@ -149,12 +149,12 @@
                     class="h-3.5 w-3.5"
                     :data-testid="`pipeline-editor-retry-event-${opt.value}`"
                   />
-                  {{ opt.label }}
+                  {{ $t(opt.labelKey) }}
                 </label>
               </div>
               <div class="mt-3 flex items-center gap-2">
                 <label for="retry-policy-max" class="text-[10px] text-muted-foreground whitespace-nowrap">
-                  Max retries:
+                  {{ $t('views.PipelineEditorView.max_retries') }}
                 </label>
                 <input
                   id="retry-policy-max"
@@ -174,14 +174,14 @@
                   class="rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
                   @click="retryPolicyOpen = false"
                 >
-                  Cancel
+                  {{ $t('views.PipelineEditorView.cancel') }}
                 </button>
                 <button
                   class="rounded border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90"
                   @click="saveRetryPolicy"
                   data-testid="pipeline-editor-retry-policy-save"
                 >
-                  Save
+                  {{ $t('views.PipelineEditorView.save') }}
                 </button>
               </div>
             </div>
@@ -1001,6 +1001,7 @@
 
 <script setup lang="ts">
 import { ref, computed, reactive, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -1025,6 +1026,7 @@ function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000
   return factory(ctrl.signal).finally(() => clearTimeout(timeout))
 }
 
+const { t } = useI18n()
 const planStore = usePlanStore()
 const route = useRoute()
 const router = useRouter()
@@ -1098,9 +1100,9 @@ const retryPolicyEvents = ref<string[]>([])
 const retryPolicyMaxRetries = ref(0)
 const retryPolicyError = ref<string | null>(null)
 const retryPolicyOptions = [
-  { value: 'stall', label: 'Stall (executor_stalled)' },
-  { value: 'timeout', label: 'Timeout (node_timeout)' },
-  { value: 'failure', label: 'Failure' },
+  { value: 'stall', labelKey: 'views.PipelineEditorView.retry_policy_stall' },
+  { value: 'timeout', labelKey: 'views.PipelineEditorView.retry_policy_timeout' },
+  { value: 'failure', labelKey: 'views.PipelineEditorView.retry_policy_failure' },
 ]
 
 function syncRetryPolicyFromPipeline() {
@@ -1134,7 +1136,7 @@ async function saveRetryPolicy() {
     retryPolicyOpen.value = false
     saveGraphError.value = null
   } catch (e) {
-    retryPolicyError.value = `Failed to update retry policy: ${formatApiError(e)}`
+    retryPolicyError.value = `${t('views.PipelineEditorView.retry_policy_update_failed')}${formatApiError(e)}`
   }
 }
 

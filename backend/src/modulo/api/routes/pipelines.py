@@ -172,7 +172,7 @@ def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | Non
             "retry_policy must be an object like {'on': ['stall','timeout','failure'], 'max_retries': 0-5}"
         )
     on = value.get("on", [])
-    if not isinstance(on, list) or not all(isinstance(e, str) for e in on):
+    if not isinstance(on, list) or any(not isinstance(e, str) for e in on):
         raise ValueError("retry_policy 'on' must be a list of strings from ['stall','timeout','failure']")
     unknown = set(on) - _RETRY_POLICY_EVENTS
     if unknown:
@@ -324,7 +324,7 @@ class PipelineResponse(BaseModel):
     max_duration_seconds: int | None = None
     stale_run_timeout_minutes: int = 30
     rate_limit_config: dict[str, Any] | None = None
-    retry_policy: dict[str, Any] = {}
+    retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     snapshot_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
