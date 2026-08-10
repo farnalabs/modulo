@@ -1174,7 +1174,7 @@ Before run start: all referenced connector instances are health-checked. Failed 
 | `run_concurrency_limit` | Per organisation | Max concurrently executing/claimed runs across ALL pipelines in the org (sandbox-agent and otherwise). Default: `null` (unlimited). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried in the background; after the capacity-timeout TTL they terminal-fail with `capacity_timeout`. Stored in `Organisation.settings_json`. Independent of `sandbox_concurrency_limit`; both org caps share the same `org_capacity_limited` marker on deferred runs. |
 | Write lock | Per connector instance + target resource | Advisory lock on (connector_instance_id, target_resource) for write operations. Prevents concurrent runs corrupting shared state (e.g. two runs pushing to the same git branch). |
 
-Write lock is advisory (application-layer, using Postgres `pg_try_advisory_lock`). If the lock cannot be acquired, the run enters a `waiting_for_lock` sub-state. The timeout is set per-pipeline via `lock_wait_timeout_seconds` (default: 300, min: 30, max: 3600) stored in the Pipeline entity. After the timeout elapses, the run transitions to `failed` with error code `lock_wait_timeout`. This transition is shown in the state machine: `waiting_for_lock → failed` (timeout). Cancel from `waiting_for_lock` immediately releases via `pg_advisory_unlock` and transitions to `cancelled` (same as §7.8 cancel spec).
+Write lock is advisory (application-layer, using Postgres `pg_try_advisory_lock`). The `waiting_for_lock` run sub-state was **excised** in the runtime hardening (migrations 0074/0075): it is NOT part of the final run status set, and any legacy rows were backfilled to `pending`. The `lock_wait_timeout_seconds` knob (default: 300, min: 30, max: 3600, stored on the Pipeline entity) remains reserved for the write-lock design. The final run status set is exactly: `pending`, `running`, `awaiting_human`, `claimed`, `complete`, `failed`, `cancelled`, `eval_failed`.
 
 ### 8.8 HITL (Human-in-the-Loop)
 
@@ -1189,11 +1189,11 @@ pending
           → claimed            (user has opened the review; atomic DB lock held)
           → running            (after approve — continues)
           → running            (after reject — routes to reject-target node)
-      → waiting_for_lock       (advisory write lock not available)
       → complete
       → failed
       → cancelled
 ```
+The `waiting_for_lock` sub-state was excised in migrations 0074/0075 (rows backfilled to `pending`); it does not appear in the final status set.
 
 #### Cancellation Mechanics
 `POST /api/v1/runs/{id}/cancel` (MCP: `cancel_run` tool). Calling cancel on a terminal-state run returns 409 `run_already_terminal`.
@@ -1204,9 +1204,7 @@ pending
 
 **Cancel from `awaiting_human`**: immediately transitions the run to `cancelled`. Any held HITL claim is released: `claimed_by` reset to NULL, `claim_token` invalidated (DB row deleted). No notification is dispatched for the cancelled gate — the run is terminal.
 
-**Cancel from `waiting_for_lock`**: immediately releases the advisory lock via `pg_advisory_unlock` and transitions to `cancelled`.
-
-**UI behaviour**: the run detail page shows a "Cancel" button for all non-terminal runs (`pending`, `running`, `awaiting_human`, `claimed`, `waiting_for_lock`). The runs list page shows a per-row Stop action (two-step inline confirm) for the same non-terminal statuses; terminal rows show no action. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
+**UI behaviour**: the run detail page shows a "Cancel" button for all non-terminal runs (`pending`, `running`, `awaiting_human`, `claimed`). The runs list page shows a per-row Stop action (two-step inline confirm) for the same non-terminal statuses; terminal rows show no action. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
 
 #### HITL Gate Definition
 Each gate carries:
@@ -1421,7 +1419,7 @@ Append-only at application layer. V2: cryptographic chaining for tamper evidence
 - UI warns if pipeline edited while a run is `awaiting_human`
 - Snapshot stored by reference (schemas by ID+version; deletion protection is the integrity guarantee)
 
-**Team ownership changes and active runs**: changing a pipeline's `owner_team_id` is blocked while any run is in a non-terminal state (`pending`, `running`, `awaiting_human`, `waiting_for_lock`). The ViewModel returns `pipeline_has_active_runs`. After all runs complete, ownership change is permitted. The UI then warns: "Existing snapshots reference connectors from the previous team. Re-save the pipeline to rebind connectors for the new team." Old snapshots remain valid for historical run records but should not be used to start new runs after rebinding.
+**Team ownership changes and active runs**: changing a pipeline's `owner_team_id` is blocked while any run is in a non-terminal state (`pending`, `running`, `awaiting_human`, `claimed`; the `waiting_for_lock` sub-state was excised in migrations 0074/0075). The ViewModel returns `pipeline_has_active_runs`. After all runs complete, ownership change is permitted. The UI then warns: "Existing snapshots reference connectors from the previous team. Re-save the pipeline to rebind connectors for the new team." Old snapshots remain valid for historical run records but should not be used to start new runs after rebinding.
 
 ### 8.14 Community Library
 
@@ -3457,7 +3455,7 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 - [ ] Graph validation: topology; schema compatibility; connector capability; model backend health; pre-run input schema check
 - [ ] Sequential pipeline execution via LangGraph StateGraph
 - [ ] Per-node retry policy
-- [ ] Run state machine (all states including `claimed`, `waiting_for_lock`)
+- [ ] Run state machine (all states including `claimed`; `waiting_for_lock` excised in migrations 0074/0075)
 - [ ] Run concurrency controls (`max_concurrent_runs` per pipeline)
 - [ ] Error recovery: retry-from-node, retry-from-start
 - [ ] Manual (Placeholder) Node: pause run for human-provided output; `output_schema_id` validation on human input before run continues; no `agent_id`, `connector_binding`, or `model_backend_id`; review UI identical to HITL claim flow

@@ -302,7 +302,7 @@ class TestDispatchRunRouting:
 # ---------------------------------------------------------------------------
 
 
-_COUNTABLE_ORG_STATUSES = {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
+_COUNTABLE_ORG_STATUSES = {"pending", "running", "awaiting_human", "claimed"}
 
 
 class TestCountActiveRunsForOrg:
@@ -333,7 +333,7 @@ class TestCountActiveRunsForOrg:
         session = _FakeAsyncSession()
         await count_active_runs_for_org(session, uuid.uuid4(), include_pending=False)
         statuses = self._in_clause_statuses(executed[0][1])
-        assert statuses == {"running", "awaiting_human", "claimed", "waiting_for_lock"}
+        assert statuses == {"running", "awaiting_human", "claimed"}
 
     async def test_include_pending_true_includes_pending(self) -> None:
         from modulo.db.crud.run import count_active_runs_for_org
@@ -502,7 +502,7 @@ class TestOrgCapacityDeferred:
             error_code=ERROR_CODE_ORG_CAPACITY_LIMITED,
         )
 
-    @pytest.mark.parametrize("current_status", ["running", "awaiting_human", "claimed", "waiting_for_lock"])
+    @pytest.mark.parametrize("current_status", ["running", "awaiting_human", "claimed"])
     @pytest.mark.asyncio
     async def test_defers_non_pending_without_demoting_status(self, current_status: str) -> None:
         """A resume/recovery run at the org cap is deferred WITHOUT demotion.

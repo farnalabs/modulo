@@ -196,7 +196,7 @@ def mock_db_components(mock_settings):
     engine = MagicMock()
 
     with (
-        patch("modulo.core.cron_helpers.create_async_engine", return_value=engine),
+        patch("modulo.core.cron_helpers.get_shared_engine", return_value=engine),
         patch("modulo.core.cron_helpers.async_sessionmaker", return_value=factory),
     ):
         yield session

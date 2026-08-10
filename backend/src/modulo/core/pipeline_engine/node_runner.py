@@ -125,6 +125,15 @@ _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk pub
 _SANDBOX_LOG_PATH = "/home/user/agent.log"
 _SANDBOX_TAIL_INTERVAL = 5.0  # seconds between sandbox log drain probes
 _SANDBOX_TAIL_READ_TIMEOUT = 10.0  # per-drain probe wait_for timeout
+# D3 drain-probe bound: the E2B files API has NO offset/range read (only
+# path/format/user/timeout), so every drain re-transfers the whole log — O(n)
+# per tick, O(n^2) total on a long agent run. Bounding the retained/processed
+# window to the last _MAX_DRAIN_WINDOW bytes keeps per-tick memory + slicing
+# constant (and matches the artifact cap, so nothing is lost that would have
+# survived the artifact truncation anyway). Absolute file offsets (from
+# get_info size) drive the new-bytes slice, so window truncation can neither
+# lose nor double-emit — the emitted chunk is always a suffix of the file.
+_MAX_DRAIN_WINDOW = _MAX_ARTIFACT_LOG
 
 # The raw_reported display clamp for the node-output surface: the RAW value
 # rides for audit, the SEPARATE clamped display field is what the UI/money
@@ -1331,9 +1340,10 @@ def make_sandbox_agent_fn(
                 # the node artifact.
                 _drained_chunks: list[str] = []
                 _drain_offset = 0
+                _drained_len = 0
 
                 async def _drain_sandbox_log() -> None:
-                    nonlocal _drain_offset
+                    nonlocal _drain_offset, _drained_len
                     # Probe failed (log file not created yet, sandbox connection
                     # unresponsive). Do NOT refresh liveness — the idle watchdog
                     # treats a prolonged probe failure as a genuine stall.
@@ -1368,12 +1378,34 @@ def make_sandbox_agent_fn(
                         )
                         return
                     text = content if isinstance(content, str) else bytes(content).decode("utf-8", "replace")
-                    new = text[_drain_offset:] if _drain_offset < len(text) else ""
+                    # D3 trailing-window bound: the E2B files API has no range
+                    # read, so the full log was transferred again above. Only the
+                    # last _MAX_DRAIN_WINDOW bytes are retained/processed —
+                    # bounded per-tick memory and slicing on a multi-MB log.
+                    # ``size`` (from get_info) is the authoritative absolute
+                    # file length; ``window_start`` is the absolute offset the
+                    # retained slice begins at, and the new-bytes slice is
+                    # computed against it, so truncation never loses or
+                    # double-emits (the emitted chunk is always a suffix).
+                    if len(text) > _MAX_DRAIN_WINDOW:
+                        text = text[-_MAX_DRAIN_WINDOW:]
+                    window_start = max(size - len(text), 0)
+                    emit_start = max(_drain_offset, window_start)
+                    new = text[emit_start - window_start :] if emit_start < size else ""
                     if new:
                         _drained_chunks.append(new)
+                        _drained_len += len(new)
                         _stream_chunk(new, "stdout")
                         _activity["last"] = time.monotonic()
-                    _drain_offset = max(_drain_offset, len(text))
+                        # Bound retained memory to the drain window: drop the
+                        # oldest chunks once the accumulated log exceeds it.
+                        while _drained_len > _MAX_DRAIN_WINDOW and len(_drained_chunks) > 1:
+                            dropped = _drained_chunks.pop(0)
+                            _drained_len -= len(dropped)
+                        if _drained_len > _MAX_DRAIN_WINDOW and _drained_chunks:
+                            _drained_chunks[0] = _drained_chunks[0][-_MAX_DRAIN_WINDOW:]
+                            _drained_len = len(_drained_chunks[0])
+                    _drain_offset = size
 
                 # Redirect the agent's stdout/stderr into a sandbox log file so
                 # the process writes to a regular file — never a pipe that can

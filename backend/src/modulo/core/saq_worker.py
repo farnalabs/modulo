@@ -46,18 +46,22 @@ and the web app in the same process, calling ``aiohttp.web.run_app(host=
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import os
 import sys
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from redis import asyncio as aioredis
 from saq import CronJob, Worker
 from saq.queue.redis import RedisQueue
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from modulo.db.session import get_shared_engine
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -78,7 +82,11 @@ _TIMERS: dict[str, float] = {"schedule": 5, "worker_info": 89, "sweep": 60, "abo
 _SYSTEM_WEB_HOST = "127.0.0.1"
 _SYSTEM_WEB_PORT = 8081
 
-# Engine for run execution (SAQ path) — per-worker DB pool (plan F4).
+# Engine for run execution (SAQ path) — the shared per-process engine (D4).
+# ``get_shared_engine`` builds ONE engine per process with the Fly/HAProxy
+# knobs (pool_pre_ping, statement_cache_size=0); the per-worker pool budget
+# (``saq_worker_db_pool_size``) is passed as the creation-time override. The
+# local cache mirrors the historical pattern so tests can reset it per test.
 _ASYNC_ENGINE: AsyncEngine | None = None
 
 
@@ -86,12 +94,13 @@ def _get_async_engine() -> AsyncEngine:
     global _ASYNC_ENGINE
     if _ASYNC_ENGINE is None:
         settings = get_settings()
-        kw: dict[str, Any] = {"url": settings.database_url}
         if settings.modulo_db.lower() == "postgres":
-            kw["connect_args"] = {"timeout": 10, "ssl": False}
-            kw["pool_size"] = settings.saq_worker_db_pool_size
-            kw["max_overflow"] = 0
-        _ASYNC_ENGINE = create_async_engine(**kw)
+            _ASYNC_ENGINE = get_shared_engine(
+                pool_size=settings.saq_worker_db_pool_size,
+                max_overflow=0,
+            )
+        else:
+            _ASYNC_ENGINE = get_shared_engine()
     return _ASYNC_ENGINE
 
 
@@ -176,36 +185,44 @@ def _check_redis_connection(redis_client: aioredis.Redis, max_retries: int = 3) 
     """Validate Redis connectivity on worker startup with exponential backoff.
 
     Synchronous — called from the settings factory before the event loop is
-    available. Uses the sync Redis ping under the hood (``aioredis`` wraps
-    ``redis-py``'s sync client). Logs a warning and retries up to
-    ``max_retries`` times with exponential backoff instead of immediately
-    crashing.
+    available. The async ``redis_client`` handed to SAQ is NOT pinged here:
+    ``redis.asyncio`` pools are loop-affine, so awaiting its ``ping()`` in a
+    throwaway probe loop would bind the pool to a discarded loop and break the
+    worker's own loop. Instead a separate SYNC client (``socket_connect_timeout``)
+    performs the probe, so the async client stays loop-neutral for SAQ. Logs a
+    warning and retries up to ``max_retries`` times with exponential backoff
+    instead of immediately crashing.
     """
     import redis as sync_redis
 
-    last_exc: Exception | None = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            redis_client.ping()
-            _log.info("Redis connection validated (attempt %d/%d)", attempt, max_retries)
-            return
-        except (sync_redis.ConnectionError, sync_redis.TimeoutError, OSError) as exc:
-            last_exc = exc
-            if attempt < max_retries:
-                delay = 2**attempt
-                _log.warning(
-                    "Redis ping failed (attempt %d/%d): %s — retrying in %ds",
-                    attempt,
-                    max_retries,
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-    _log.error(
-        "Redis unreachable after %d attempts: %s — worker proceeding anyway",
-        max_retries,
-        last_exc,
-    )
+    settings = get_settings()
+    sync_client = sync_redis.Redis.from_url(settings.redis_url, socket_connect_timeout=5)
+    try:
+        last_exc: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                sync_client.ping()
+                _log.info("Redis connection validated (attempt %d/%d)", attempt, max_retries)
+                return
+            except (sync_redis.ConnectionError, sync_redis.TimeoutError, OSError) as exc:
+                last_exc = exc
+                if attempt < max_retries:
+                    delay = 2**attempt
+                    _log.warning(
+                        "Redis ping failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt,
+                        max_retries,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+        _log.error(
+            "Redis unreachable after %d attempts: %s — worker proceeding anyway",
+            max_retries,
+            last_exc,
+        )
+    finally:
+        sync_client.close()
 
 
 def _probe_database() -> None:
@@ -213,12 +230,14 @@ def _probe_database() -> None:
 
     Uses a synchronous SQLAlchemy connection with a short timeout. Non-fatal —
     the DB may recover before the first real job arrives. Logs a warning on
-    failure.
+    failure. The sync URL maps to ``psycopg`` (v3, the installed driver) — NOT
+    ``psycopg2``, which is not in the dependency tree.
     """
     from sqlalchemy import create_engine, text
 
     settings = get_settings()
-    sync_url = str(settings.database_url).replace("+asyncpg", "+psycopg2").replace("+aiomysql", "+pymysql")
+    sync_url = str(settings.database_url).replace("+asyncpg", "+psycopg").replace("+aiomysql", "+pymysql")
+    engine = None
     try:
         engine = create_engine(sync_url, connect_args={"connect_timeout": 5}, pool_pre_ping=True)
         with engine.connect() as conn:
@@ -226,6 +245,9 @@ def _probe_database() -> None:
         _log.info("Database connection probe passed")
     except Exception as exc:
         _log.warning("Database probe failed (non-fatal): %s — DB may recover before first job", exc)
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -514,11 +536,46 @@ async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"deleted": total}
 
 
+# Cross-process stats key for the stale-run recovery sweep (D1). The sweep runs
+# in the SYSTEM WORKER process; /healthz/ready runs in the WEB process. Mirroring
+# the dispatcher_reconcile stats pattern, the cron job persists its outcome here
+# every tick and the health check reads this key to detect a silently dead sweep
+# (stale > 15 min) or a never-run sweep.
+STALE_RUN_RECOVERY_STATS_KEY = "saq:cron:stats:stale_run_recovery"
+# The sweep runs every 5 min; a last_run_at older than 15 min means at least two
+# ticks were missed -> report "stale" (advisory).
+STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
+
+
 async def stale_run_recovery(ctx: dict[str, Any]) -> dict[str, Any]:
-    """System cron — legacy stale-run sweep, scoped to non-SAQ rows (F1)."""
+    """System cron — legacy stale-run sweep, scoped to non-SAQ rows (F1).
+
+    The sweep itself (``pipeline_execution.stale_run_recovery_sweep``) returns a
+    plain integer count; this wrapper ALSO persists a stats dict to the shared
+    Redis key so /healthz/ready can warn when the sweep is stale or missing.
+    Best-effort: a persistence failure must never fail the sweep.
+    """
     from modulo.core.pipeline_execution import stale_run_recovery_sweep
 
-    return await stale_run_recovery_sweep(_get_async_engine())
+    recovered = await stale_run_recovery_sweep(_get_async_engine())
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "recovered": recovered,
+    }
+    try:
+        from redis.asyncio import Redis as AsyncRedis
+
+        redis_client = AsyncRedis.from_url(get_settings().redis_url, socket_connect_timeout=5)
+        try:
+            await redis_client.set(STALE_RUN_RECOVERY_STATS_KEY, json.dumps(stats))
+        finally:
+            with contextlib.suppress(Exception):
+                await redis_client.aclose()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("saq_worker.stale_run_recovery_stats_persist_failed")
+    return recovered
 
 
 async def cost_probe(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -619,7 +676,7 @@ async def _after_process_hook(ctx: dict[str, Any]) -> None:
 def _make_session_factory() -> Any:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=True)
+    return async_sessionmaker(_get_async_engine(), expire_on_commit=False, autobegin=False)
 
 
 def _runs_functions() -> list[tuple[str, Any]]:
