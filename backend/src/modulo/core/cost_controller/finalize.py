@@ -123,7 +123,8 @@ def _node_output_dict(merged_outputs: Any, node_id: str) -> dict[str, Any] | Non
     means "no telemetry column yet", which selects the legacy-row branch that
     mirrors the historical implementation exactly.
     """
-    return node_telemetry(None, merged_outputs, node_id)
+    value = node_telemetry(None, merged_outputs, node_id)
+    return value if isinstance(value, dict) else None
 
 
 def _pop_model_cost_fields(node_dict: dict[str, Any]) -> None:
