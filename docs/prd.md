@@ -262,9 +262,9 @@ class PlanContext(Protocol):
         ...
 ```
 
-**`CommunityTierPlanContext`** (default when no valid license key is present): returns `False` for all Team-tier features listed below, `None` for all limits (unbounded within the Community tier). This is the default for self-hosted instances without a license key.
+**`CommunityTier`** (default when no valid license key is present): returns `False` for all Team-tier features listed below, `None` for all limits (unbounded within the Community tier). This is the default for self-hosted instances without a license key.
 
-**`LicenseKeyPlanContext`** (self-hosted with `MODULO_LICENSE_KEY` set): on startup, the application verifies the signed JSON payload in `MODULO_LICENSE_KEY` using the embedded Ed25519 public key. If the signature is valid and the key has not expired, the enabled features listed in the payload's `features` array are activated; all others remain disabled. If the key is invalid, expired, or malformed, startup logs a warning and falls back to `CommunityTierPlanContext`.
+**`LicenseKeyTier`** (self-hosted with `MODULO_LICENSE_KEY` set): on startup, the application verifies the signed JSON payload in `MODULO_LICENSE_KEY` using the embedded Ed25519 public key. If the signature is valid and the key has not expired, the enabled features listed in the payload's `features` array are activated; all others remain disabled. If the key is invalid, expired, or malformed, startup logs a warning and falls back to `CommunityTier`.
 
 **License key format**: a base64-encoded signed JSON payload, e.g.:
 ```json
@@ -280,7 +280,7 @@ Signed offline by the Modulo private key. Verified on startup using the public k
 
 > **Resolved (2026-06-30)**: a read-only recent-events endpoint (`GET /api/v1/admin/audit`) with chain verification (`GET /api/v1/admin/audit/verify`) stays Community — max 50 events, no export. This gives regulated teams tamper-evidence proof during evaluation without requiring a Team license. Bulk export (CSV/JSONL) and batch-detail endpoints remain Team-gated.
 
-**`CloudPlanContext`** (V3 SaaS — not yet built): would be injected by the modulo-cloud gateway middleware per-org, enforcing SaaS plan-tier flags and rate limits. Core never knows the plan tier — it only calls the interface.
+**`CloudPlanContext`** (V3 SaaS — not yet implemented): would be injected by the modulo-cloud gateway middleware per-org, enforcing SaaS plan-tier flags and rate limits. Core never knows the plan tier — it only calls the interface.
 
 Named feature flags used by core (exhaustive list as of v0.24):
 

@@ -68,7 +68,7 @@ class YourConnector(ConnectorBase):
 ## Swappable binding
 
 Pipelines bind to connectors by type, not by instance. This means swapping
-`GitHubConnector` for `GitLabConnector` requires **zero pipeline changes** —
+`GitHubConnector` for `GitLabConnector` requires **zero pipeline changes** –
 just rebind to a different connector instance of the same `connector_type`.
 
 ## Testing

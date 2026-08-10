@@ -318,12 +318,15 @@ exercised by CI or used in production. Self-hosting is via Docker Compose
 
 ### Redis dependency
 
-Redis is optional for single-replica deployments. Required for:
+Redis is **required** for production: SAQ (the only dispatch path) uses Redis as
+its job broker. Redis is also required for:
 - Multi-replica coordination (cron triggers, polling, task queues)
 - Distributed rate limiting (Redis token bucket)
 - WebSocket event broker (Redis pub/sub)
 
-Without Redis: in-process asyncio scheduler, in-memory rate limiting, in-memory event broker.
+Without Redis: SAQ dispatch, cron firing, and the scheduler are unavailable.
+In-memory rate limiting and in-memory event broker are fallbacks for
+non-production use.
 
 ### Scaling
 
