@@ -1,5 +1,6 @@
-"""Unit tests for dispatcher_reconcile (plan F3c) — predicate matrix, partial
-eviction, Redis-error fail-safe, re-enqueue gate-on-return, discriminator.
+"""Unit tests for dispatcher_reconcile (plan F3c) — predicate matrix, no-SAQ-
+eviction re-dispatch, Redis-error fail-safe, re-enqueue gate-on-return,
+discriminator, durable-dispatch recovery (B3) and safe terminalizers (B4/B5).
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ class _MockBegin:
 class _MockSession:
     def __init__(self, results: list[Any]) -> None:
         self._results = list(results)
+        self.terminalizer_rows: dict[str, list[uuid.UUID]] = {}
         self.executed: list[tuple[Any, Any]] = []
         self.begin_cm = _MockBegin()
         bind = MagicMock()
@@ -58,8 +60,19 @@ class _MockSession:
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         self.executed.append((stmt, params))
-        if "set_config" in str(stmt):
+        s = str(stmt)
+        if "set_config" in s:
             return MagicMock()
+        if "UPDATE runs SET" in s:
+            # Dedicated org-scoped terminalizer UPDATEs (B4/B5) — zero rows
+            # matched by default; individual tests configure terminalizer_rows.
+            ids = self.terminalizer_rows.get("executor_superseded", [])
+            if "claim_cap_exhausted" in s:
+                ids = self.terminalizer_rows.get("claim_cap_exhausted", [])
+            r = MagicMock()
+            r.all.return_value = [(uid,) for uid in ids]
+            r.rowcount = len(ids)
+            return r
         if not self._results:
             return MagicMock()
         return self._results.pop(0)
@@ -85,6 +98,8 @@ def _run_row(
     stale: bool = True,
     nodeless: bool = False,
     error_code: str | None = None,
+    dispatcher: str | None = "saq",
+    enqueue_failed_at: Any = None,
 ) -> SimpleNamespace:
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     return SimpleNamespace(
@@ -99,6 +114,8 @@ def _run_row(
         outputs_json=None if nodeless else {},
         started_at=datetime.now(UTC) - timedelta(minutes=60) if nodeless else datetime.now(UTC) - timedelta(minutes=1),
         error_code=error_code,
+        dispatcher=dispatcher,
+        enqueue_failed_at=enqueue_failed_at,
     )
 
 
@@ -110,6 +127,7 @@ def _settings(**overrides: object) -> MagicMock:
         "saq_claimed_nodeless_minutes": 45,
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
+        "saq_run_claim_cap": 20,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -137,9 +155,12 @@ async def _run_reconcile(
     dispatch_result: tuple[str, str | None] = ("enqueued", "new-job-id"),
     capacity_free: bool = True,
     awaiting_committed: bool = True,
-) -> dict[str, Any]:
+    terminalizer_ids: dict[str, list[uuid.UUID]] | None = None,
+) -> tuple[dict[str, Any], Any, Any, Any, Any, _MockSession]:
     _patch_env(monkeypatch)
     session = _MockSession([_org_result([ORG]), _rows_result(rows)])
+    if terminalizer_ids:
+        session.terminalizer_rows = terminalizer_ids
     factory = MagicMock(return_value=session)
     redis_client = AsyncMock()
     q = _make_queue(redis_client, job_result=queue_job_result)
@@ -167,13 +188,13 @@ async def _run_reconcile(
             with patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0):
                 summary = await ch.dispatcher_reconcile()
 
-    return summary, reenqueue, ingest, redis_client, awaiting_guard
+    return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
 class TestReconcilePredicateMatrix:
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_free_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)]
         )
         assert summary["repaired"] == 1
@@ -183,7 +204,7 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_pending_undispatched_capacity_full_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _ingest, _, _ = await _run_reconcile(
+        summary, reenqueue, _ingest, _, _, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)], capacity_free=False
         )
         assert summary["repaired"] == 0
@@ -192,15 +213,18 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_pending_dispatched_stale_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _, _, _ = await _run_reconcile(
-            monkeypatch, [_run_row(RUN_PENDING_DISPATCHED, "pending", dispatched=True, stale=True)]
+        summary, reenqueue, _, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [_run_row(RUN_PENDING_DISPATCHED, "pending", dispatched=True, stale=True, dispatcher=None)],
         )
         assert summary["repaired"] == 1
         assert reenqueue.await_args.args[3] == "execute_run"
 
     @pytest.mark.asyncio
     async def test_running_stale_redispatch_execute(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, _, _, _ = await _run_reconcile(monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)])
+        summary, reenqueue, _, _, _, _ = await _run_reconcile(
+            monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)]
+        )
         assert summary["repaired"] == 1
         assert reenqueue.await_args.args[3] == "execute_run"
 
@@ -212,7 +236,7 @@ class TestReconcilePredicateMatrix:
         run with a stale heartbeat, NO SAQ job in Redis (a half-resumed run
         whose resume_run job was lost), and a committed HITL decision IS
         re-dispatched as resume_run."""
-        summary, reenqueue, ingest, _, awaiting_guard = await _run_reconcile(
+        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=True
         )
         assert summary["repaired"] == 1
@@ -230,7 +254,7 @@ class TestReconcilePredicateMatrix:
         whose finished job hash expired + heartbeat froze) must NOT be
         re-dispatched — resume_run with empty resume_data would inject
         {"_hitl_decision": {}} and auto-approve the gate."""
-        summary, reenqueue, ingest, _, awaiting_guard = await _run_reconcile(
+        summary, reenqueue, ingest, _, awaiting_guard, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_AWAITING, "awaiting_human", stale=True)], awaiting_committed=False
         )
         assert summary["repaired"] == 0
@@ -244,7 +268,7 @@ class TestReconcilePredicateMatrix:
         """F6a gated recovery: a claimed run with a stale heartbeat and NO SAQ
         job in Redis IS re-dispatched as resume_run (a claim was already made —
         the guard does not apply)."""
-        summary, reenqueue, _, _, awaiting_guard = await _run_reconcile(
+        summary, reenqueue, _, _, awaiting_guard, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_AWAITING, "claimed", stale=True)]
         )
         assert summary["repaired"] == 1
@@ -256,7 +280,7 @@ class TestReconcilePredicateMatrix:
     async def test_capacity_deferred_redispatched_in_saq_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Capacity-deferred runs (pending, dispatched_at NULL, dispatcher NULL)
         must be reachable and re-dispatched when capacity frees (F3c)."""
-        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)],
             capacity_free=True,
@@ -268,7 +292,7 @@ class TestReconcilePredicateMatrix:
 
     @pytest.mark.asyncio
     async def test_job_still_exists_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_WITH_JOB, "running", stale=True)],
             queue_job_result=SimpleNamespace(id="saq:job:runs:run:x"),
@@ -283,7 +307,7 @@ class TestReconcilePredicateMatrix:
         output after the nodeless window) is terminal-failed, never re-dispatched.
         The fresh heartbeat keeps it invisible to the stale branch — that is the
         primary hang mechanism this branch closes."""
-        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)],
         )
@@ -296,7 +320,7 @@ class TestReconcilePredicateMatrix:
     async def test_running_with_node_output_not_nodeless(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A run that finalised node output is NOT nodeless — a stale-heartbeat
         one still takes the worker-lost re-dispatch repair, never the fail."""
-        summary, reenqueue, _, _, _ = await _run_reconcile(
+        summary, reenqueue, _, _, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_RUNNING, "running", stale=True, nodeless=False)],
         )
@@ -320,7 +344,7 @@ class TestReconcilePredicateMatrix:
         branch matching, it is skipped (job exists) rather than failed."""
         row = _run_row(RUN_RUNNING, "running", stale=False, nodeless=True)
         row.started_at = datetime.now(UTC) - timedelta(minutes=10)
-        summary, reenqueue, _, _, _ = await _run_reconcile(
+        summary, reenqueue, _, _, _, _ = await _run_reconcile(
             monkeypatch,
             [row],
             queue_job_result=SimpleNamespace(id="saq:job:runs:run:x"),
@@ -361,10 +385,13 @@ class TestReconcileRedisFailSafe:
         redis_client.lrem.assert_not_called()
 
 
-class TestPartialEviction:
+class TestNoSaqEvictionRedispatch:
     @pytest.mark.asyncio
-    async def test_evicted_job_repaired_with_prefix_aware_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Worker stopped, job hash deleted -> reconcile DEL+ZREM+LREM+enqueue."""
+    async def test_evicted_job_redispatched_without_saq_eviction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Worker stopped, job hash deleted -> reconcile re-dispatches WITHOUT
+        touching SAQ internals (B2): no DEL/ZREM/LREM, no SAQ list reads. The
+        re-dispatch uses a FRESH key_suffix so SAQ key dedupe never suppresses
+        the recovery enqueue; the atomic claim UPDATE is the real dedupe."""
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_EVICTED, "running", stale=True)])])
         factory = MagicMock(return_value=session)
@@ -386,16 +413,17 @@ class TestPartialEviction:
             summary = await ch.dispatcher_reconcile()
 
         assert summary["repaired"] == 1
-        job_key = f"run:{RUN_EVICTED}"
-        job_id = f"saq:job:runs:run:{RUN_EVICTED}"
-        # All keys derived from the configured queue name (PREFIX-AWARE).
-        redis_client.delete.assert_awaited_with(f"saq:abort:{job_key}")
-        redis_client.zrem.assert_awaited_with("saq:runs:incomplete", job_id)
-        redis_client.lrem.assert_any_await("saq:runs:queued", 0, job_id)
-        redis_client.lrem.assert_any_await("saq:runs:active", 0, job_id)
+        # NO SAQ-internal eviction — the whole point of B2.
+        redis_client.delete.assert_not_called()
+        redis_client.zrem.assert_not_called()
+        redis_client.lrem.assert_not_called()
+        # The original deterministic key was re-checked before enqueue.
+        q.job.assert_awaited_with(f"run:{RUN_EVICTED}")
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[0] == "runs"
         assert reenqueue.await_args.args[1] == str(RUN_EVICTED)
+        # A fresh key_suffix is passed so SAQ dedupe can't suppress the re-enqueue.
+        assert reenqueue.await_args.kwargs["key_suffix"]
         ingest.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -423,6 +451,124 @@ class TestPartialEviction:
         assert summary["deduped"] == 1
         reenqueue.assert_awaited_once()  # gate-on-return: exactly one attempt
         ingest.assert_awaited_once()
+
+
+class TestEnqueueFailedRecovery:
+    """B3 durable dispatch: a run whose enqueue failed (pending + dispatched_at
+    set + dispatcher NULL + enqueue_failed_at set) is re-dispatched on the
+    bounded interval, terminal-failed ONLY past the TTL backstop when Redis is
+    reachable, and capped per tick."""
+
+    def _enqueue_failed_row(
+        self, run_id: uuid.UUID, *, marker_minutes_ago: int = 1, stale: bool = True
+    ) -> SimpleNamespace:
+        return _run_row(
+            run_id,
+            "pending",
+            dispatched=True,
+            stale=stale,
+            dispatcher=None,
+            enqueue_failed_at=datetime.now(UTC) - timedelta(minutes=marker_minutes_ago),
+        )
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failed_stale_heartbeat_redispatched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pending run with the enqueue-failure marker and a stale heartbeat
+        is re-dispatched as execute_run with a fresh key_suffix."""
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(monkeypatch, [self._enqueue_failed_row(RUN_EVICTED)])
+        assert summary["repaired"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+        assert reenqueue.await_args.kwargs["key_suffix"]
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failed_ttl_backstop_terminal_fails_when_redis_reachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """enqueue_failed_at older than the backstop -> terminal-failed
+        'dispatch_failed' ONLY when Redis is verifiably reachable."""
+        summary, reenqueue, ingest, redis_client, _, _ = await _run_reconcile(
+            monkeypatch, [self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)]
+        )
+        assert summary["dispatch_failed_terminalized"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+        redis_client.ping.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failed_ttl_backstop_keeps_pending_when_redis_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Redis down at the backstop check -> the run stays pending (no
+        terminal-fail), deferred to a later tick."""
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [_org_result([ORG]), _rows_result([self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)])]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_client.ping.side_effect = RuntimeError("redis down")
+        q = _make_queue(redis_client, job_result=None)
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis", redis_cls),
+            patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            summary = await ch.dispatcher_reconcile()
+
+        assert summary["dispatch_failed_terminalized"] == 0
+        assert summary["skipped"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failed_per_tick_cap_defer_remaining(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A Redis-outage window that hit many webhooks must not flood the queue
+        on recovery: re-dispatch is capped per tick and the overflow is deferred
+        (logged, counted, never alerted as an error)."""
+        monkeypatch.setattr(ch, "ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK", 2)
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [
+                self._enqueue_failed_row(uuid.uuid4()),
+                self._enqueue_failed_row(uuid.uuid4()),
+                self._enqueue_failed_row(uuid.uuid4()),
+            ],
+        )
+        assert summary["repaired"] == 2
+        assert summary["enqueue_failed_capped"] == 1
+        reenqueue.assert_awaited()
+        assert reenqueue.await_count == 2
+        ingest.assert_not_awaited()
+
+
+class TestMidGraphWedgeTerminalizer:
+    """B4: a running SAQ run wedged mid-graph past the age bound is
+    terminal-failed 'executor_superseded' via the dedicated org-scoped UPDATE —
+    independent of the reconcile predicates (a fresh heartbeat does NOT protect
+    it, which is exactly the wedge this closes)."""
+
+    @pytest.mark.asyncio
+    async def test_aged_running_run_terminalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        row = _run_row(RUN_RUNNING, "running", stale=False)  # FRESH heartbeat
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_ids={"executor_superseded": [row.id]},
+        )
+        assert summary["mid_graph_wedge_terminalized"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
 
 
 class TestCapacityMarkerExclusion:
@@ -509,7 +655,7 @@ class TestReconcileCapacityMarkedRedispatch:
         """A pending org-capacity-deferred run (dispatched_at NULL, marker set)
         with a stale heartbeat is re-dispatched as execute_run when the job is
         missing."""
-        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
             monkeypatch,
             [
                 _run_row(
@@ -530,7 +676,7 @@ class TestReconcileCapacityMarkedRedispatch:
         """A re-enqueue that dispatch_run defers (still capacity-blocked) is
         counted ``capacity_deferred`` and never raises the deduped error_event
         — it is expected backoff, not a lost job."""
-        summary, reenqueue, ingest, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_PENDING_UNDISPATCHED, "pending", dispatched=False)],
             dispatch_result=("deferred", None),
@@ -549,7 +695,7 @@ class TestReconcilePersistsSharedStats:
 
     @pytest.mark.asyncio
     async def test_reconcile_persists_stats_to_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        summary, _reenqueue, _ingest, redis_client, _ = await _run_reconcile(
+        summary, _reenqueue, _ingest, redis_client, _, _ = await _run_reconcile(
             monkeypatch, [_run_row(RUN_RUNNING, "running", stale=True)]
         )
         assert summary["repaired"] == 1
@@ -581,8 +727,9 @@ class TestReconcilePersistsSharedStats:
 
 class TestReconcilePrefixAware:
     @pytest.mark.asyncio
-    async def test_staging_queue_names_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Same reconcile against staging-runs must derive staging keys."""
+    async def test_staging_queue_redispatched_without_saq_list_touches(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Same reconcile against staging-runs: the re-dispatch targets the
+        staging queue and NEVER reads/writes SAQ-internal lists (B2)."""
         _patch_env(monkeypatch)
         session = _MockSession([_org_result([ORG]), _rows_result([_run_row(RUN_RUNNING, "running", stale=True)])])
         factory = MagicMock(return_value=session)
@@ -599,11 +746,86 @@ class TestReconcilePrefixAware:
             patch.object(ch, "get_settings", return_value=_settings(saq_runs_queue="staging-runs")),
             patch.object(ch, "AsyncRedis", redis_cls),
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
-            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "job")),
+            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "job")) as reenqueue,
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
         ):
             await ch.dispatcher_reconcile()
 
-        redis_client.zrem.assert_awaited_with("saq:staging-runs:incomplete", f"saq:job:staging-runs:run:{RUN_RUNNING}")
-        redis_client.lrem.assert_any_await("saq:staging-runs:queued", 0, f"saq:job:staging-runs:run:{RUN_RUNNING}")
-        redis_client.lrem.assert_any_await("saq:staging-runs:active", 0, f"saq:job:staging-runs:run:{RUN_RUNNING}")
+        # NO SAQ-internal list writes — the queue name is only used for the
+        # re-dispatch itself, never for eviction keys.
+        redis_client.zrem.assert_not_awaited()
+        redis_client.lrem.assert_not_awaited()
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[0] == "staging-runs"
+        assert reenqueue.await_args.kwargs["key_suffix"]
+
+
+class TestAwaitingHumanHasCommittedDecision:
+    """F6a auto-approve guard: the payload-requirement keys off the persisted
+    ``decision_payload``'s ``action`` member — the ``hitl_claims.decision``
+    column only ever holds approved/rejected/deliver_manual, so a column-keyed
+    check would be dead code and could never protect a manual-output decision
+    whose payload was lost."""
+
+    def _mock_session(self, row: tuple[Any, Any] | None) -> AsyncMock:
+        session = AsyncMock()
+        result = MagicMock()
+        result.first.return_value = row
+        session.execute = AsyncMock(return_value=result)
+        return session
+
+    @pytest.mark.asyncio
+    async def test_no_decision_row_returns_false(self) -> None:
+        session = self._mock_session(None)
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
+
+    @pytest.mark.asyncio
+    async def test_legacy_payload_less_approved_is_committed(self) -> None:
+        """A legacy/pre-migration approved row with a NULL payload degrades to
+        ``{"action": "approved"}`` — a plain approval needs no payload."""
+        session = self._mock_session(("approved", None))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_legacy_payload_less_rejected_is_committed(self) -> None:
+        session = self._mock_session(("rejected", None))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_plain_approve_with_payload_is_committed(self) -> None:
+        session = self._mock_session(("approved", {"action": "approved"}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_manual_output_with_output_is_committed(self) -> None:
+        session = self._mock_session(("approved", {"action": "manual_output", "output": {"answer": 42}}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_manual_output_without_output_is_not_committed(self) -> None:
+        """A manual-output decision whose payload lost its output is NOT
+        committed — a payload-less recovery would degrade to
+        ``{"action": "approved"}`` and pass that dict to the manual node as its
+        output instead of resuming with the human's data."""
+        session = self._mock_session(("approved", {"action": "manual_output"}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
+
+    @pytest.mark.asyncio
+    async def test_approved_with_modification_with_output_is_committed(self) -> None:
+        session = self._mock_session(
+            ("approved", {"action": "approved_with_modification", "modified_output": {"v": 1}})
+        )
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_approved_with_modification_without_output_is_not_committed(self) -> None:
+        """An approve-with-modification decision without its modified output is
+        NOT committed — a payload-less recovery would drop the human's
+        modification and resume as a plain approval."""
+        session = self._mock_session(("approved", {"action": "approved_with_modification"}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
+
+    @pytest.mark.asyncio
+    async def test_deliver_manual_with_payload_is_committed(self) -> None:
+        session = self._mock_session(("deliver_manual", {"action": "deliver_manual", "output": {"z": 3}}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True

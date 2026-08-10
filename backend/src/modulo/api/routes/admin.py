@@ -1871,6 +1871,8 @@ async def request_org_deletion(
 
 class ConfirmDeletionRequest(BaseModel):
     token: str
+    # B7 admin force — destructive. Proceeds despite live (non-terminal) runs.
+    force: bool = False
 
 
 class ConfirmDeletionResponse(BaseModel):
@@ -1898,6 +1900,7 @@ async def confirm_org_deletion(
                     org_id=current_user.organisation_id,
                     token=req.token,
                     immediate=False,
+                    force=req.force,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1921,7 +1924,10 @@ async def confirm_org_deletion(
         ) from None
 
     return ConfirmDeletionResponse(
-        message="Organisation has been permanently deleted.",
+        message=(
+            "Organisation has been permanently deleted."
+            + (" (FORCED — deleted despite live runs.)" if req.force else "")
+        ),
         deleted_organisation_id=result["deleted_organisation_id"],
         hard_deleted_runs=result["hard_deleted_runs"],
     )
@@ -2059,6 +2065,7 @@ async def delete_org_immediate(
                 org_id=current_user.organisation_id,
                 token=req["token"],
                 immediate=True,
+                force=True,
             )
     except IntegrityError:
         logger.exception("admin.delete_org_immediate")
@@ -2080,7 +2087,7 @@ async def delete_org_immediate(
         ) from None
 
     return ConfirmDeletionResponse(
-        message="Organisation has been permanently deleted.",
+        message="Organisation has been permanently deleted. (FORCED — deleted despite live runs.)",
         deleted_organisation_id=result["deleted_organisation_id"],
         hard_deleted_runs=result["hard_deleted_runs"],
     )

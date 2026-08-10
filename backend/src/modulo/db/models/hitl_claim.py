@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -28,4 +29,9 @@ class HitlClaim(OrgScoped):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     decision: Mapped[str | None] = mapped_column(String(20))
     decision_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Full resume payload persisted at decision time (B1) - the same dict the
+    # web routes pass to executor.resume. Survives SAQ job loss so a recovered
+    # resume injects the human's actual verdict, never an empty approval.
+    # jsonb in the parallel migration; generic JSON keeps SQLite/MariaDB parity.
+    decision_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True, default=None)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

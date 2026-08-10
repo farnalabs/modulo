@@ -26,6 +26,7 @@ alpha are still accepted for backwards compatibility.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
 import uuid
@@ -54,6 +55,7 @@ __all__: tuple[str, ...] = (
     "AlreadyClaimedError",
     "ClaimTokenExpiredError",
     "ClaimTokenInvalidError",
+    "DecisionPayloadError",
     "GateAlreadyDecidedError",
     "GateNotFoundError",
     "GateVanishedError",
@@ -118,6 +120,13 @@ class GateVanishedError(HITLError, RuntimeError):
         super().__init__(f"Gate {gate_id!r} on run {run_id} {operation} but row vanished")
 
 
+class DecisionPayloadError(HITLError, ValueError):
+    """The decision payload failed shape/size validation at write time."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -127,6 +136,9 @@ _DEFAULT_EXPIRY_MINUTES = 15
 _DECISION_APPROVED = "approved"
 _DECISION_REJECTED = "rejected"
 _DECISION_DELIVER_MANUAL = "deliver_manual"
+# Bounded decision payload at write (B1): refuse payloads over this size with a
+# clear 422 instead of silently truncating a human's manual output.
+_DECISION_PAYLOAD_MAX_BYTES = 256 * 1024
 
 
 class HITLManager:
@@ -326,6 +338,7 @@ class HITLManager:
         claim_token: str,
         modified_output: dict[str, Any],
         actor_id: uuid.UUID | None = None,
+        decision_payload: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Record approval with a modified output payload.
 
@@ -334,6 +347,8 @@ class HITLManager:
 
         Raises on missing token, expired token, or decided gate.
         """
+        if decision_payload is None:
+            decision_payload = {"action": "approved", "modified_output": modified_output}
         gate = await self._decide(
             session,
             run_id=run_id,
@@ -341,6 +356,7 @@ class HITLManager:
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_APPROVED,
+            decision_payload=decision_payload,
         )
 
         await self._log_audit_and_deliver(
@@ -365,13 +381,14 @@ class HITLManager:
         org_id: uuid.UUID,
         claim_token: str,
         actor_id: uuid.UUID | None = None,
+        decision_payload: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Record approval and log a ``hitl.output_delivered`` audit event.
 
         Raises on missing token, expired token, or decided gate.
-        Sets ``delivered_at`` on the claim after successful audit logging.
-        On audit failure the exception propagates and the transaction rolls back.
         """
+        if decision_payload is None:
+            decision_payload = {"action": "approved"}
         gate = await self._decide(
             session,
             run_id=run_id,
@@ -379,6 +396,7 @@ class HITLManager:
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_APPROVED,
+            decision_payload=decision_payload,
         )
 
         await self._log_audit_and_deliver(
@@ -401,11 +419,16 @@ class HITLManager:
         claim_token: str,
         actor_id: uuid.UUID | None = None,
         reason: str | None = None,
+        decision_payload: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Record rejection and log a ``hitl.output_rejected`` audit event.
 
         Raises on missing token, expired token, or decided gate.
         """
+        if decision_payload is None:
+            decision_payload = {"action": "rejected"}
+            if reason is not None:
+                decision_payload["reason"] = reason
         gate = await self._decide(
             session,
             run_id=run_id,
@@ -413,6 +436,7 @@ class HITLManager:
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_REJECTED,
+            decision_payload=decision_payload,
         )
 
         extra: dict[str, Any] = {}
@@ -438,6 +462,7 @@ class HITLManager:
         claim_token: str,
         output: dict[str, Any],
         actor_id: uuid.UUID | None = None,
+        decision_payload: dict[str, Any] | None = None,
     ) -> HitlClaim:
         """Record manual delivery and log a ``hitl.manual_delivery`` audit event.
 
@@ -450,6 +475,8 @@ class HITLManager:
         Sets ``delivered_at`` on the claim after successful audit logging.
         On audit failure the exception propagates and the transaction rolls back.
         """
+        if decision_payload is None:
+            decision_payload = {"action": "deliver_manual", "output": output}
         gate = await self._decide(
             session,
             run_id=run_id,
@@ -457,6 +484,7 @@ class HITLManager:
             org_id=org_id,
             claim_token=claim_token,
             decision=_DECISION_DELIVER_MANUAL,
+            decision_payload=decision_payload,
         )
 
         await self._log_audit_and_deliver(
@@ -611,8 +639,15 @@ class HITLManager:
         org_id: uuid.UUID,
         claim_token: str,
         decision: str,
+        decision_payload: dict[str, Any] | None = None,
     ) -> HitlClaim:
         now = datetime.now(UTC)
+
+        # Validate the resume payload shape at write (B1): it must be a dict
+        # and any output/modified_output members must be dicts. Oversized
+        # payloads are refused with a clear 422 so the human's verdict is never
+        # silently truncated or auto-approved as an empty dict on recovery.
+        self._validate_decision_payload(decision_payload)
 
         # Validate JWT signature and scope before attempting the SQL UPDATE.
         # Expiry is checked separately via the SQL WHERE clause (expires_at > now)
@@ -639,6 +674,7 @@ class HITLManager:
             .values(
                 decision=decision,
                 decision_at=now,
+                decision_payload=decision_payload,
                 account_id=None,
                 claim_token=None,
                 expires_at=now,
@@ -667,6 +703,34 @@ class HITLManager:
     def _looks_like_jwt(token: str) -> bool:
         """Rough heuristic: a JWT has exactly 2 dots (3 base64 segments)."""
         return token.count(".") == 2
+
+    @staticmethod
+    def _validate_decision_payload(payload: dict[str, Any] | None) -> None:
+        """Validate the resume payload shape at write (B1).
+
+        Rules:
+        - ``None`` is allowed (legacy/payload-less decisions).
+        - A non-dict payload is rejected (a gate must never be recovered with
+          a corrupted decision).
+        - ``output`` / ``modified_output`` members must be dicts.
+        - The serialised payload must not exceed ``_DECISION_PAYLOAD_MAX_BYTES``.
+
+        Raises ``DecisionPayloadError`` on any violation.
+        """
+        if payload is None:
+            return
+        if not isinstance(payload, dict):
+            raise DecisionPayloadError("decision_payload must be a JSON object")
+        for key in ("output", "modified_output"):
+            value = payload.get(key)
+            if value is not None and not isinstance(value, dict):
+                raise DecisionPayloadError(f"decision_payload.{key} must be a JSON object")
+        try:
+            size = len(json.dumps(payload, default=str).encode("utf-8"))
+        except (TypeError, ValueError) as err:
+            raise DecisionPayloadError("decision_payload must be JSON-serialisable") from err
+        if size > _DECISION_PAYLOAD_MAX_BYTES:
+            raise DecisionPayloadError(f"decision_payload exceeds the {_DECISION_PAYLOAD_MAX_BYTES} byte limit")
 
     @staticmethod
     def _base_audit_payload(gate: HitlClaim, **extra: Any) -> dict[str, Any]:

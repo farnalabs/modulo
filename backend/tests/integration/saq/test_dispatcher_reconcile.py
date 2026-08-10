@@ -1,11 +1,12 @@
 """Integration tests for dispatcher_reconcile (plan F3c) - real Redis + Postgres.
 
 Positive path: a staled dispatched run whose SAQ job hash was evicted is
-re-dispatched by reconcile (DEL abort key + ZREM incomplete + LREM queued +
-normal enqueue). F6a review: awaiting_human/claimed runs are NEVER
-auto-redispatched (re-dispatch would resume with an empty decision and
-auto-approve the HITL gate). F4: capacity-deferred runs (pending, dispatched_at
-NULL, dispatcher NULL) are re-dispatched when capacity frees.
+re-dispatched by reconcile WITHOUT SAQ-internal eviction (B2) — re-dispatch
+uses a fresh key suffix so SAQ key dedupe never suppresses the recovery enqueue.
+F6a review: awaiting_human/claimed runs are NEVER auto-redispatched
+(re-dispatch would resume with an empty decision and auto-approve the HITL
+gate). F4: capacity-deferred runs (pending, dispatched_at NULL, dispatcher
+NULL) are re-dispatched when capacity frees.
 """
 
 from __future__ import annotations
@@ -45,6 +46,12 @@ async def _seed_saq_run(
     eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
     try:
         async with eng.connect() as conn, conn.begin():
+            # enqueue_failed_at + hitl_claims.decision_payload ship in parallel
+            # runtime migrations (not yet on this branch) but
+            # dispatcher_reconcile/dispatch_run reference them — self-provision
+            # idempotently; no-ops once the migrations land.
+            await conn.execute(text("ALTER TABLE runs ADD COLUMN IF NOT EXISTS enqueue_failed_at timestamptz"))
+            await conn.execute(text("ALTER TABLE hitl_claims ADD COLUMN IF NOT EXISTS decision_payload jsonb"))
             await conn.execute(
                 text(
                     "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
@@ -95,11 +102,17 @@ async def _seed_saq_run(
 
 
 async def _job_exists(redis_url: str, job_key: str) -> bool:
+    """True when any SAQ job hash exists for *job_key*.
+
+    A reconcile re-dispatch uses a FRESH key suffix (``run:{id}:{suffix}``) so
+    SAQ key dedupe can never suppress the recovery enqueue — the existence check
+    therefore scans the deterministic key AND any fresh-suffixed key.
+    """
     from redis import asyncio as aioredis
 
     r = aioredis.from_url(redis_url)
     try:
-        return await r.exists(f"saq:job:runs:{job_key}") == 1
+        return len(await r.keys(f"saq:job:runs:{job_key}*")) > 0
     finally:
         await r.aclose()
 
@@ -161,6 +174,9 @@ async def test_awaiting_human_evicted_job_is_not_auto_redistpatched(
     finally:
         await redis_client.aclose()
 
+    # The seed provisions hitl_claims.decision_payload (parallel migration not
+    # yet on this branch), so the REAL F6a guard runs: no decision committed ->
+    # the waiting run is genuinely waiting and is NOT auto-redispatched.
     # Reconcile must NOT repair our run (awaiting_human is never auto-
     # redispatched). The summary's global "repaired" count may include other
     # orgs' staled runs from the same session, so assert on OUR run directly.

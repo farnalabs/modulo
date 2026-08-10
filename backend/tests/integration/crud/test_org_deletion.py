@@ -401,6 +401,87 @@ class TestConfirmOrgDeletion:
             with pytest.raises(ValueError, match="has expired"):
                 await confirm_org_deletion(session, org_id=org_id, token="expired-token-value")
 
+    async def test_refuses_when_non_terminal_run_exists(self, db_engine: AsyncEngine) -> None:
+        """B7 guard: confirm refuses the hard-delete while a live run exists."""
+        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+
+        org_id = await _create_org(db_engine, "live-run")
+        user_id = await _create_user(db_engine, org_id, "live-run@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Live Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+        await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id="thread-live-run",
+            status="running",
+        )
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            result = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
+
+        async with factory() as session:
+            with pytest.raises(ValueError, match="1 run\\(s\\) still in progress"):
+                await confirm_org_deletion(session, org_id=org_id, token=result["token"])
+
+        # Org still present — nothing was deleted.
+        async with db_engine.connect() as conn:
+            row = await conn.execute(
+                text("SELECT COUNT(*) FROM organisations WHERE id = :id"),
+                {"id": str(org_id)},
+            )
+            assert row.scalar_one() == 1
+
+    async def test_force_proceeds_with_non_terminal_run(self, db_engine: AsyncEngine) -> None:
+        """B7 guard: force=True proceeds (destructive) despite the live run."""
+        from modulo.db.crud.org_deletion import confirm_org_deletion, request_org_deletion
+
+        org_id = await _create_org(db_engine, "force-delete")
+        user_id = await _create_user(db_engine, org_id, "force@test.com")
+        pid = await _create_pipeline(db_engine, org_id, "Force Pipeline", user_id)
+        sid = await _create_snapshot(db_engine, org_id, pid)
+        await _insert_run(
+            db_engine,
+            org_id=org_id,
+            pipeline_id=pid,
+            snapshot_id=sid,
+            thread_id="thread-force",
+            status="awaiting_human",
+        )
+
+        factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        async with factory() as session:
+            await session.execute(
+                text("SELECT set_config('app.organisation_id', :oid, true)"),
+                {"oid": str(org_id)},
+            )
+            result = await request_org_deletion(session, org_id, user_id)
+            await session.commit()
+
+        async with factory() as session:
+            outcome = await confirm_org_deletion(
+                session,
+                org_id=org_id,
+                token=result["token"],
+                force=True,
+            )
+            await session.commit()
+        assert outcome["deleted_organisation_id"] == str(org_id)
+
+        async with db_engine.connect() as conn:
+            row = await conn.execute(
+                text("SELECT COUNT(*) FROM organisations WHERE id = :id"),
+                {"id": str(org_id)},
+            )
+            assert row.scalar_one() == 0
+
 
 # ── Tests: export_org_data ──────────────────────────────────────────
 
