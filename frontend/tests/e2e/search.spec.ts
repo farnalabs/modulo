@@ -18,6 +18,8 @@ test.describe('Search', { tag: "@regression" }, () => {
 
     await page.goto('/pipelines')
 
+    // The search input may not be present on every page variant — wait for it
+    // if it renders (auto-waiting), but don't fail if the page has no search.
     const searchInput = page.locator('input[type="text"][placeholder*="earch" i], input[placeholder*="ilter" i], input[placeholder*="ind" i]')
     if (await searchInput.count() > 0) {
       await expect(searchInput.first()).toBeVisible()
