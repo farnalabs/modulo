@@ -201,18 +201,21 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
         status="pending",
         dispatched=False,
         dispatcher=None,
-        # A real capacity-deferred run was never dispatched and never claimed,
-        # so its claim token is NULL — _record_saq_job only writes a fresh token
-        # when the token is NULL (it must never clobber a worker's claim token).
-        claim_token=None,
+        # Post-migration-0075 runs.claim_token is NOT NULL (gen_random_uuid()
+        # server_default), so a real capacity-deferred run always carries a
+        # token — a never-dispatched run can no longer have NULL. _record_saq_job
+        # writes a fresh token only when the token is NULL (it must never
+        # clobber a worker's claim token), so the re-dispatch preserves it.
+        claim_token="token-a",
     )
 
     # Re-dispatch happens (summary count is global across orgs, so assert on our
     # run's job + row state instead of the exact global "repaired" number).
     await ch.dispatcher_reconcile()
 
-    # A fresh dispatch records dispatcher='saq' + a fresh claim token, and the
-    # deterministic job key now exists.
+    # A fresh dispatch records dispatcher='saq' and the deterministic job key
+    # now exists; the existing claim token is preserved, not rotated (the
+    # _record_saq_job CASE-WHEN guard never clobbers a non-NULL token).
     assert await _job_exists(saq_settings_env, f"run:{run_id}")
 
     from sqlalchemy import NullPool
@@ -227,8 +230,7 @@ async def test_capacity_deferred_run_redispatched_when_capacity_frees(
     finally:
         await eng.dispose()
     assert row[0] == "saq"
-    assert row[1] is not None
-    assert row[1] != "token-a"
+    assert row[1] == "token-a"  # claim token preserved on re-dispatch (never clobbered)
 
 
 @pytest.mark.asyncio
