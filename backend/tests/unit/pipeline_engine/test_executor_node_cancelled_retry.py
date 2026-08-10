@@ -72,7 +72,7 @@ def _make_pipeline() -> MagicMock:
     return pipeline
 
 
-def _make_session(snapshot: MagicMock) -> AsyncMock:
+def _make_session(snapshot: MagicMock, statements: list[str] | None = None) -> AsyncMock:
     pipeline = _make_pipeline()
 
     pipeline_result = MagicMock()
@@ -91,7 +91,10 @@ def _make_session(snapshot: MagicMock) -> AsyncMock:
 
     execute_results = iter([pipeline_result, snapshot_result, eval_result, count_result])
 
+    recorded = statements if statements is not None else []
+
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
+        recorded.append(str(_args[0]) if _args else "")
         try:
             return next(execute_results)
         except StopIteration:
@@ -156,12 +159,14 @@ async def _bypass_capacity(mock_self, **kwargs):
 
 async def test_execute_resets_to_pending_and_reraises_node_cancellation():
     """A transient node cancellation under the retry cap resets the run to
-    pending, releases the E2B fence with the run's claim token, and re-raises
-    so the SAQ job retries — it must NOT terminal-fail via finalize_cost.
-    claim_count (10) exceeds the budget — only node_attempt_count gates."""
+    pending via a FENCED conditional UPDATE (claim_token + status='running') and
+    re-raises so the SAQ job retries — it must NOT terminal-fail via
+    finalize_cost. claim_count (10) exceeds the budget — only node_attempt_count
+    gates (dist/runtime-core A1/A3)."""
     run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
-    session = _make_session(snapshot)
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
@@ -170,7 +175,7 @@ async def test_execute_resets_to_pending_and_reraises_node_cancellation():
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
@@ -178,57 +183,94 @@ async def test_execute_resets_to_pending_and_reraises_node_cancellation():
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.core.pipeline_execution.e2b_idempotency_enabled", return_value=True),
-        patch("modulo.core.pipeline_execution.e2b_dispatch_release_fenced", new=AsyncMock()) as mock_release,
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(NodeCancelledError):
-            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
-    # Reset to pending so the retry claim (status='pending') succeeds.
-    update_call = mock_update.await_args
-    assert update_call is not None
-    assert update_call.args[2] == "pending"
-    assert update_call.kwargs.get("clear_error_code") is True
-    # E2B fence released with the run's CURRENT claim token.
-    mock_release.assert_awaited_once_with(str(run.id), "tok-claim-abc")
+    # Fenced pending-reset: a conditional UPDATE guarded by OUR claim token +
+    # status='running' so a superseded original cannot demote a successor's row.
+    reset_stmt = next(s for s in statements if "status='pending'" in s)
+    assert "claim_token=:tok" in reset_stmt
+    assert "status='running'" in reset_stmt
+    assert "cancellation_requested = false" in reset_stmt
     # No terminal finalize — the run is NOT failed.
     mock_finalize.assert_not_awaited()
     # Cleanup ran so the retry re-entry gets a fresh broker.
     registry.close.assert_called_once_with(run.id)
 
 
-async def test_execute_skips_fence_when_e2b_idempotency_disabled():
-    """When the E2B idempotency knob is off the retry path still resets to
-    pending and re-raises, but the fence release is skipped."""
-    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+async def test_execute_superseded_skips_pending_reset_and_reraises():
+    """A superseded executor (DB token rotated by a successor) must NOT reset the
+    run to pending and must NOT terminal-fail it — the successor owns the row.
+    It cleans up and re-raises so the SAQ job retries (its next claim loses)."""
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-successor-xyz")
     snapshot = _make_snapshot()
-    session = _make_session(snapshot)
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
-    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=False)
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
 
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()) as mock_update,
-        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
         patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.core.pipeline_execution.e2b_idempotency_enabled", return_value=False),
-        patch("modulo.core.pipeline_execution.e2b_dispatch_release_fenced", new=AsyncMock()) as mock_release,
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(NodeCancelledError):
-            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+            # Our executor holds token "tok-claim-abc" but the DB row shows the
+            # successor's "tok-successor-xyz" → superseded.
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
-    assert mock_update.await_args.args[2] == "pending"
-    mock_release.assert_not_awaited()
+    # NO pending reset (the successor owns the run).
+    assert not any("status='pending'" in s for s in statements)
+    # NO terminal finalize (never fail the run out from under the successor).
+    mock_finalize.assert_not_awaited()
+    registry.close.assert_called_once_with(run.id)
+
+
+async def test_execute_reraises_sandbox_node_failed_error():
+    """The retryable sandbox-infra failure class (SandboxNodeFailedError) goes
+    through the SAME retry path as NodeCancelledError — fenced reset to pending
+    + re-raise (dist/runtime-core A6)."""
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    run = _make_run(claim_count=10, node_attempt_count=1, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError("stalled"))
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(SandboxNodeFailedError):
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+
+    assert any("status='pending'" in s for s in statements)
+    mock_finalize.assert_not_awaited()
+    registry.close.assert_called_once_with(run.id)
 
 
 async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted():
@@ -245,7 +287,8 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
         claim_token="tok-claim-abc",
     )
     snapshot = _make_snapshot()
-    session = _make_session(snapshot)
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
@@ -255,7 +298,7 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
@@ -263,11 +306,11 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.core.pipeline_execution.e2b_idempotency_enabled", return_value=True),
-        patch("modulo.core.pipeline_execution.e2b_dispatch_release_fenced", new=AsyncMock()) as mock_release,
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
 
     assert result is final_run
     call = mock_finalize.await_args
@@ -284,9 +327,8 @@ async def test_execute_terminal_fails_node_cancellation_when_retries_exhausted()
     payload = publish_call.args[1]
     assert payload["error"] == "node_cancelled"
     assert payload["detail"].startswith("Sandbox node cancelled (transient) after retries exhausted")
-    # No reset, no fence release once retries are exhausted.
-    mock_update.assert_not_awaited()
-    mock_release.assert_not_awaited()
+    # No reset once retries are exhausted.
+    assert not any("status='pending'" in s for s in statements)
 
 
 async def test_execute_retry_budget_ignores_non_executing_claims():
@@ -297,7 +339,8 @@ async def test_execute_retry_budget_ignores_non_executing_claims():
     to pending and re-raise for the SAQ retry."""
     run = _make_run(claim_count=5, node_attempt_count=1, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
-    session = _make_session(snapshot)
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(NodeCancelledError("node-a"))
     registry = _mock_registry()
@@ -307,7 +350,7 @@ async def test_execute_retry_budget_ignores_non_executing_claims():
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
@@ -315,18 +358,15 @@ async def test_execute_retry_budget_ignores_non_executing_claims():
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.core.pipeline_execution.e2b_idempotency_enabled", return_value=True),
-        patch("modulo.core.pipeline_execution.e2b_dispatch_release_fenced", new=AsyncMock()) as mock_release,
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(NodeCancelledError):
-            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
-    # Retried, not terminal-failed: reset to pending, no finalize, no run_failed.
-    assert mock_update.await_args.args[2] == "pending"
+    # Retried, not terminal-failed: fenced reset to pending, no finalize, no run_failed.
+    assert any("status='pending'" in s for s in statements)
     mock_finalize.assert_not_awaited()
     broker.publish.assert_not_called()
-    mock_release.assert_awaited_once_with(str(run.id), "tok-claim-abc")
 
 
 async def test_execute_non_cancellation_exception_still_terminal_fails():
@@ -341,7 +381,8 @@ async def test_execute_non_cancellation_exception_still_terminal_fails():
         claim_token="tok-claim-abc",
     )
     snapshot = _make_snapshot()
-    session = _make_session(snapshot)
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements)
     factory = _make_session_factory(session)
     compiled = _mock_compiled_raising(RuntimeError("boom"))
     registry = _mock_registry()
@@ -350,7 +391,7 @@ async def test_execute_non_cancellation_exception_still_terminal_fails():
     with (
         patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
         patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
-        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()) as mock_update,
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.set_rls_org"),
         patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
@@ -358,16 +399,16 @@ async def test_execute_non_cancellation_exception_still_terminal_fails():
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.settings.get_settings", return_value=settings),
-        patch("modulo.core.pipeline_execution.e2b_idempotency_enabled", return_value=True),
-        patch("modulo.core.pipeline_execution.e2b_dispatch_release_fenced", new=AsyncMock()),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+        result = await executor.execute(
+            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
+        )
 
     assert result is final_run
     assert mock_finalize.await_args.kwargs.get("error_code") == "RuntimeError"
     assert mock_finalize.await_args.kwargs["status"] == "failed"
-    mock_update.assert_not_awaited()
+    assert not any("status='pending'" in s for s in statements)
 
 
 # ---------------------------------------------------------------------------

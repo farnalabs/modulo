@@ -1,184 +1,206 @@
-"""Unit tests for the E2B dispatch idempotency fence (plan F3a).
+"""Unit tests for the DB-atomic E2B dispatch marker (dist/runtime-core A4).
 
-Covers the SETNX-before-dispatch key lifecycle against a fake in-memory Redis
-client (no live infra): per-run keying, same-claim dedup (exactly one sandbox),
-superseded-claim refusal, fenced release on dispatch failure, terminal release
-via mark_complete, and the ~8h TTL bound.
+The retired Redis SETNX E2B fence is replaced by a DB-atomic dispatch marker
+on ``runs.sandbox_dispatch_state`` / ``runs.sandbox_id``:
+
+  * ``_acquire_dispatch_marker`` runs ONE ``UPDATE ... WHERE claim_token=:tok
+    AND status='running'`` IMMEDIATELY BEFORE ``AsyncSandbox.create`` — no
+    read-then-create TOCTOU. A rowcount of 0 (superseded claim / run not
+    running) raises :class:`SupersededNodeError` and NO sandbox is created.
+  * After a successful create the real sandbox id is stored on the run row.
+  * The marker is cleared in a finally, FENCED on the claim token (a superseded
+    original cannot clear a successor's marker).
+
+Fake-session based — no live Postgres required.
 """
 
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
+from contextlib import asynccontextmanager
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import modulo.core.pipeline_execution as pe
+from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError, make_sandbox_agent_fn
+
+_ORG_ID = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
+_AGENT_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
 
 
-class _FakeRedis:
-    """Minimal in-memory Redis double: set(nx=True), get, delete."""
+class _FakeResult:
+    def __init__(self, row: tuple[object, ...] | None) -> None:
+        self._row = row
 
-    def __init__(self) -> None:
-        self.data: dict[str, str] = {}
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self._row
 
-    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool | None:
-        if nx and key in self.data:
-            return None
-        self.data[key] = value
+
+class _MarkerSession:
+    """Fake session that records dispatch-marker UPDATEs in an event list."""
+
+    def __init__(self, events: list[str], *, marker_row: tuple[object, ...] | None = ("id",)) -> None:
+        self._events = events
+        self._marker_row = marker_row
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    def in_transaction(self) -> bool:
         return True
 
-    async def get(self, key: str) -> str | None:
-        return self.data.get(key)
+    def get_bind(self) -> Any:
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        return bind
 
-    async def delete(self, key: str) -> int:
-        return 1 if self.data.pop(key, None) is not None else 0
-
-    async def aclose(self) -> None:
-        return None
-
-
-def _fence() -> tuple[_FakeRedis, pe]:
-    fake = _FakeRedis()
-    patcher = patch.object(pe, "_e2b_client", AsyncMock(return_value=fake))
-    return fake, patcher
-
-
-@pytest.mark.asyncio
-async def test_acquire_uses_per_run_key_with_token_value() -> None:
-    fake, patcher = _fence()
-    with patcher:
-        await pe.e2b_dispatch_acquire("run-1", "tok-a")
-
-    assert fake.data == {"run:run-1:e2b": "tok-a"}
+    async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _FakeResult:
+        s = str(stmt)
+        if "sandbox_dispatch_state" in s:
+            if "sandbox_dispatch_state=NULL" in s:
+                self._events.append("marker_clear")
+            elif "sandbox_id=:sid" in s and params and params.get("sid") is None:
+                self._events.append("marker_set")
+            else:
+                self._events.append("marker_store_id")
+            return _FakeResult(self._marker_row)
+        return _FakeResult(None)
 
 
-@pytest.mark.asyncio
-async def test_acquire_sets_8h_ttl() -> None:
-    _, patcher = _fence()
-    with patcher, patch.object(pe, "_e2b_client") as mock_getter:
-        redis = MagicMock()
-        redis.set = AsyncMock(return_value=True)
-        redis.aclose = AsyncMock()
-        mock_getter.return_value = redis
-        await pe.e2b_dispatch_acquire("run-1", "tok-a")
+def _make_factory(session: _MarkerSession):
+    @asynccontextmanager
+    async def _ctx():
+        yield session
 
-    redis.set.assert_awaited_once_with("run:run-1:e2b", "tok-a", nx=True, ex=pe.E2B_IDEMPOTENCY_TTL_SECONDS)
-    redis.aclose.assert_awaited_once()
-    assert pe.E2B_IDEMPOTENCY_TTL_SECONDS == 8 * 3600
+    return _ctx
 
 
-@pytest.mark.asyncio
-async def test_acquire_refuses_superseded_claim() -> None:
-    """Key already exists with a DIFFERENT token -> a superseded claim aborts."""
-    fake, patcher = _fence()
-    with patcher:
-        await pe.e2b_dispatch_acquire("run-1", "tok-a")  # original wins
-        with pytest.raises(pe.E2BIdempotencyDeniedError):
-            await pe.e2b_dispatch_acquire("run-1", "tok-b")  # successor refused
-
-    assert fake.data == {"run:run-1:e2b": "tok-a"}
+def _base_node_def(**overrides: object) -> dict:
+    node_def = {
+        "id": "n1",
+        "agent_prompt": "Do the thing",
+        "agent_command": _AGENT_COMMAND,
+    }
+    node_def.update(overrides)
+    return node_def
 
 
-@pytest.mark.asyncio
-async def test_acquire_dedups_transient_retry_within_same_claim() -> None:
-    """Same token on a live dispatch -> exactly one sandbox, the retry aborts."""
-    fake, patcher = _fence()
-    with patcher:
-        await pe.e2b_dispatch_acquire("run-1", "tok-a")
-        with pytest.raises(pe.E2BIdempotencyDeniedError, match="same-claim"):
-            await pe.e2b_dispatch_acquire("run-1", "tok-a")
-
-    assert fake.data == {"run:run-1:e2b": "tok-a"}
+def _run_state() -> dict:
+    return {
+        "run_context": {"input": {"task": "x"}},
+        "_run_id": "run-1",
+        "_pipeline_id": "pipe-1",
+        "_org_id": _ORG_ID,
+        "_claim_lease": "tok-executor-abc",
+    }
 
 
-@pytest.mark.asyncio
-async def test_dispatch_failure_fenced_release_allows_redispatch() -> None:
-    """A failing dispatch fenced-releases; the successor's claim can re-dispatch."""
-    fake, patcher = _fence()
-    with patcher:
-        await pe.e2b_dispatch_acquire("run-1", "tok-a")
-        await pe.e2b_dispatch_release_fenced("run-1", "tok-a")
-        assert fake.data == {}
-
-        # A retry (same or successor claim) can now re-dispatch.
-        await pe.e2b_dispatch_acquire("run-1", "tok-b")
-        assert fake.data == {"run:run-1:e2b": "tok-b"}
-
-
-@pytest.mark.asyncio
-async def test_fenced_release_never_deletes_successors_key() -> None:
-    """A superseded original must not DEL the successor's live dispatch."""
-    fake, patcher = _fence()
-    with patcher:
-        await pe.e2b_dispatch_acquire("run-1", "tok-b")  # successor owns the key
-        await pe.e2b_dispatch_release_fenced("run-1", "tok-a")  # original tries to release
-        assert fake.data == {"run:run-1:e2b": "tok-b"}
+def _sandbox_mock() -> MagicMock:
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = "agent stdout"
+    cmd_result.stderr = ""
+    handle = MagicMock()
+    handle.wait = AsyncMock(return_value=cmd_result)
+    sandbox = MagicMock()
+    sandbox.sandbox_id = "sbx-123"
+    sandbox.files.write = AsyncMock()
+    sandbox.files.read = AsyncMock(return_value='{"summary": "done"}')
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=0))
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    return sandbox
 
 
-@pytest.mark.asyncio
-async def test_terminal_release_deletes_key() -> None:
-    fake, patcher = _fence()
-    with patcher:
-        await pe.e2b_dispatch_acquire("run-1", "tok-a")
-        await pe.e2b_dispatch_release_terminal("run-1")
-        assert fake.data == {}
+async def test_dispatch_marker_set_before_sandbox_create():
+    """The DB-atomic marker UPDATE runs BEFORE AsyncSandbox.create (no TOCTOU)."""
+    events: list[str] = []
+    session = _MarkerSession(events)
+    fn = make_sandbox_agent_fn(_base_node_def(), session_factory=_make_factory(session))
+    sandbox = _sandbox_mock()
+
+    def _record_create(*_a, **_kw):
+        events.append("sandbox_create")
+        return sandbox
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=_record_create)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert events.index("marker_set") < events.index("sandbox_create")
+    assert events.index("marker_store_id") > events.index("sandbox_create")
+    # The marker is cleared in the finally.
+    assert events[-1] == "marker_clear"
 
 
-@pytest.mark.asyncio
-async def test_mark_complete_releases_terminal_key() -> None:
-    """The run-level key is DEL'd when the run is marked complete (plan F3a).
+async def test_superseded_marker_deny_raises_before_create():
+    """A marker UPDATE matching zero rows (superseded/not running) raises
+    SupersededNodeError BEFORE any sandbox is created."""
+    events: list[str] = []
+    session = _MarkerSession(events, marker_row=None)
+    fn = make_sandbox_agent_fn(_base_node_def(), session_factory=_make_factory(session))
+    created: list[str] = []
 
-    A matching claim token (the executor owns the current claim) both completes
-    the run AND releases the E2B idempotency key.
-    """
-    run = SimpleNamespace(status="running", completed_at=None, claim_token="tok-a")
-    session = MagicMock()
-    session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
-    session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
-    factory = MagicMock()
-    factory.return_value.__aenter__ = AsyncMock(return_value=session)
-    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    def _record_create(*_a, **_kw):
+        created.append("created")
+        return _sandbox_mock()
 
     with (
-        patch.object(pe, "get_run", AsyncMock(return_value=run)),
-        patch.object(pe, "async_sessionmaker", return_value=factory),
-        patch.object(pe, "set_rls_org", AsyncMock()),
-        patch.object(pe, "e2b_idempotency_enabled", return_value=True),
-        patch.object(pe, "e2b_dispatch_release_terminal", AsyncMock()) as release,
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=_record_create)),
+        pytest.raises(SupersededNodeError, match="marker denied"),
     ):
-        await pe.mark_complete(  # type: ignore[arg-type]
-            MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()), claim_token="tok-a"
-        )
+        await fn(_run_state())
 
-    assert run.status == "complete"
-    release.assert_awaited_once()
+    assert created == []
+    assert "sandbox_create" not in events
 
 
-@pytest.mark.asyncio
-async def test_mark_complete_superseded_skips_write_and_does_not_del_key() -> None:
-    """A superseded original (claim token rotated by a successor) must skip the
-    completion write AND must not DEL the successor's live E2B dispatch key."""
-    run = SimpleNamespace(status="running", completed_at=None, claim_token="tok-b")
-    session = MagicMock()
-    session.begin.return_value.__aenter__ = AsyncMock(return_value=session)
-    session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
-    factory = MagicMock()
-    factory.return_value.__aenter__ = AsyncMock(return_value=session)
-    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+async def test_marker_cleared_even_when_sandbox_create_fails():
+    """A dispatch failure (create raises) still clears the marker in the finally."""
+    events: list[str] = []
+    session = _MarkerSession(events)
+    fn = make_sandbox_agent_fn(_base_node_def(), session_factory=_make_factory(session))
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(side_effect=RuntimeError("sandbox provisioning failed"))):
+        result = await fn(_run_state())
+
+    # A create failure is a generic exception path — surfaces as a failed node
+    # output (not a retryable/superseded class), and the marker is cleared.
+    assert result["output"]["status"] == "failed"
+    assert events[-1] == "marker_clear"
+
+
+async def test_marker_skip_fail_open_without_session_factory():
+    """No session factory -> the marker is skipped fail-open (no DB write, node
+    proceeds) — matches the heartbeat claim fence as the primary guard."""
+    fn = make_sandbox_agent_fn(_base_node_def(), session_factory=None)
+    sandbox = _sandbox_mock()
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+    assert result["output"]["status"] == "completed"
+
+
+async def test_retryable_infra_failure_raises_sandbox_node_failed():
+    """A command timeout is a retryable sandbox-infra failure — it RAISES
+    SandboxNodeFailedError instead of returning a silent failed/wrong-success
+    node output."""
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=None)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.commands.run = AsyncMock(side_effect=TimeoutError("command timed out"))
+    sandbox.files.read = AsyncMock(side_effect=TimeoutError("no output.json"))
+    sandbox.kill = AsyncMock()
 
     with (
-        patch.object(pe, "get_run", AsyncMock(return_value=run)),
-        patch.object(pe, "async_sessionmaker", return_value=factory),
-        patch.object(pe, "set_rls_org", AsyncMock()),
-        patch.object(pe, "e2b_idempotency_enabled", return_value=True),
-        patch.object(pe, "e2b_dispatch_release_terminal", AsyncMock()) as release,
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError, match="no output"),
     ):
-        await pe.mark_complete(  # type: ignore[arg-type]
-            MagicMock(), str(uuid.uuid4()), str(uuid.uuid4()), claim_token="tok-a"
-        )
-
-    assert run.status == "running"  # completion write fenced out
-    assert run.completed_at is None
-    release.assert_not_awaited()
+        await fn(_run_state())
+    sandbox.kill.assert_awaited()

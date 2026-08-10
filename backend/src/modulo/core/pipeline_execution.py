@@ -29,7 +29,6 @@ import contextlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
@@ -86,15 +85,16 @@ _STRANDED_REDISPATCH_TTL_MINUTES = 12
 #   - ``executor_stalled``: the execute_run zombie watchdog found the executor
 #     still running with zero node progress after SAQ_SETUP_GRACE_SECONDS and
 #     cancelled it.
+#   - ``executor_failed``: the executor task raised a generic exception in
+#     ``run_executor_with_watchdog`` — the run is terminal-failed (token-guarded)
+#     instead of silently completing.
+#   - ``executor_heartbeat_lost``: the heartbeat loop failed fail-closed (3
+#     consecutive DB/network failures) — the run is cancelled, the sandbox is
+#     killed by id, and the run terminal-failed (token-guarded).
 EXECUTOR_SETUP_FAILED_ERROR_CODE = "executor_setup_failed"
 EXECUTOR_STALLED_ERROR_CODE = "executor_stalled"
-
-
-# E2B idempotency fence (plan F3a): the run-level dispatch lock is kept until
-# the run is terminal, bounded by an ~8h upper TTL (>= execute_run timeout 7200s
-# * retries 5 + margin). A successor claim can only re-dispatch after a fenced
-# release (dispatch failure / teardown) or terminal DEL.
-E2B_IDEMPOTENCY_TTL_SECONDS = 8 * 3600
+EXECUTOR_FAILED_ERROR_CODE = "executor_failed"
+EXECUTOR_HEARTBEAT_LOST_ERROR_CODE = "executor_heartbeat_lost"
 
 
 class ClaimSupersededError(Exception):
@@ -103,14 +103,6 @@ class ClaimSupersededError(Exception):
     Signals a superseded executor (a successor re-claimed the run after an
     event-loop stall) so it aborts before overwriting the successor's state.
     """
-
-
-class E2BIdempotencyError(Exception):
-    """Base error for the E2B dispatch idempotency fence."""
-
-
-class E2BIdempotencyDeniedError(E2BIdempotencyError):
-    """The E2B dispatch fence was already won — do not create a second sandbox."""
 
 
 def get_settings() -> Any:
@@ -279,6 +271,14 @@ async def claim_run_async(
     claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
+            # LIVE-BUG FIX (C3): the claim UPDATE runs on a raw connection — the
+            # RLS policy ``organisation_id = current_setting('app.organisation_id')``
+            # matches ZERO rows unless the org context is set on this connection
+            # first. Under a NOBYPASSRLS role the claim silently returned None.
+            await c.execute(
+                text("SELECT set_config('app.organisation_id', :val, true)"),
+                {"val": org_id},
+            )
             result = await c.execute(
                 build_claim_update(stale_seconds=window, claim_cap=cap, claim_token=claim_token),
                 _claim_params(run_id, org_id, window, cap, claim_token),
@@ -352,29 +352,37 @@ async def heartbeat_once(
     ``job.update()`` refreshes ``touched`` in the SAQ job hash so the sweeper
     does not re-queue a live run (saq.queue.base.update sets touched=now()).
 
-    When *claim_token* is provided the write is fenced (plan F3a): the run's
-    current ``claim_token`` must still match this executor's token, otherwise a
-    superseded original could overwrite the successor's fresh heartbeat. A
-    mismatch raises :class:`ClaimSupersededError` BEFORE any DB write.
+    When *claim_token* is provided the write is ATOMICALLY fenced: a single
+    ``UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND claim_token=:tok``
+    (no read-then-compare window). Rowcount 0 means the run was superseded
+    (token rotated by a successor) or the row is gone — raises
+    :class:`ClaimSupersededError` so the caller aborts. ``job.update()`` is
+    only called when the write actually landed (rowcount > 0), so a superseded
+    original never touches the successor's job hash.
     """
-    if claim_token is not None:
-        current = await _read_current_claim_token(aeng, run_id, org_id)
-        if current is not None and current != claim_token:
-            raise ClaimSupersededError(
-                f"claim token superseded for run {run_id} (had {claim_token}, current {current})"
-            )
+    updated = False
     async with aeng.connect() as c:
         await c.execute(
             text("SELECT set_config('app.organisation_id', :val, true)"),
             {"val": org_id},
         )
-        await c.execute(
-            text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid"),
-            {"rid": run_id},
-        )
+        if claim_token is not None:
+            result = await c.execute(
+                text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid AND claim_token=:tok RETURNING id"),
+                {"rid": run_id, "tok": claim_token},
+            )
+            updated = result.fetchone() is not None
+        else:
+            await c.execute(
+                text("UPDATE runs SET heartbeat_at=now() WHERE id=:rid"),
+                {"rid": run_id},
+            )
+            updated = True
         await c.commit()
-    if job is not None:
+    if updated and job is not None:
         await job.update()
+    if claim_token is not None and not updated:
+        raise ClaimSupersededError(f"claim token superseded for run {run_id}")
 
 
 async def heartbeat_loop(
@@ -385,29 +393,51 @@ async def heartbeat_loop(
     interval_seconds: int | None = None,
     job: Any = None,
     claim_token: str | None = None,
+    superseded: asyncio.Event | None = None,
+    health_failed: asyncio.Event | None = None,
 ) -> None:
     """Periodic heartbeat every ``RUN_HEARTBEAT_SECONDS`` to keep the run alive.
 
     The executor's claim token is captured at loop start (the claim just wrote
-    it) and used to fence every heartbeat: once a successor re-claims the run
-    and rotates the token, the superseded original aborts its heartbeat instead
-    of overwriting the successor's fresh heartbeat.
+    it) and used to fence every heartbeat (plan F3a). When the run is
+    superseded the heartbeat UPDATE matches zero rows and raises
+    :class:`ClaimSupersededError`: the loop sets *superseded* (if provided) and
+    breaks so ``run_executor_with_watchdog`` aborts the executor.
+
+    Fail-closed health: consecutive DB/network failures (exceptions) are
+    counted; after 3 in a row *health_failed* is set (if provided) and the loop
+    breaks so the wrapper can kill the sandbox and terminal-fail the run with
+    ``executor_heartbeat_lost``.
     """
     if interval_seconds is None:
         interval_seconds = get_settings().run_heartbeat_seconds
     if claim_token is None:
         claim_token = await _read_current_claim_token(aeng, run_id, org_id)
+    consecutive_failures = 0
     while True:
         try:
             await asyncio.sleep(interval_seconds)
             await heartbeat_once(aeng, run_id, org_id, job=job, claim_token=claim_token)
+            consecutive_failures = 0
         except ClaimSupersededError:
             _log.warning("Heartbeat superseded for run %s — aborting heartbeat", run_id)
+            if superseded is not None:
+                superseded.set()
             break
         except asyncio.CancelledError:
             break
         except Exception:
-            _log.warning("Heartbeat failed for run %s", run_id)
+            consecutive_failures += 1
+            _log.warning("Heartbeat failed for run %s (%d consecutive)", run_id, consecutive_failures)
+            if consecutive_failures >= 3:
+                _log.error(
+                    "Heartbeat lost for run %s after %d consecutive failures — failing closed",
+                    run_id,
+                    consecutive_failures,
+                )
+                if health_failed is not None:
+                    health_failed.set()
+                break
 
 
 async def mark_complete(
@@ -419,31 +449,33 @@ async def mark_complete(
 ) -> None:
     """Mark a still-running run complete using the DB enum value ('complete').
 
-    Idempotent: only transitions a run that is currently ``running`` and never
-    overwrites a failure/cancellation/awaiting_human state.
-
-    When *claim_token* is provided, completion is fenced (plan F3a): a superseded
-    original (claim token rotated by a successor) cannot complete the run out
-    from under the successor. On completion the E2B idempotency key is released
-    (plan F3a — terminal DEL).
+    Idempotent and ATOMICALLY fenced: a single conditional
+    ``UPDATE ... SET status='complete', completed_at=now() WHERE status='running'
+    AND cancellation_requested=false AND (:tok IS NULL OR claim_token=:tok)``
+    (no read-then-write window). Rowcount 0 means the run was superseded (a
+    successor rotated the token), cancelled, or already terminal — the write is
+    skipped with a warning and the caller proceeds as a no-op.
     """
-    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
-    async with factory() as session, session.begin():
-        await set_rls_org(session, uuid.UUID(org_id))
-        cur = await get_run(session, uuid.UUID(run_id))
-        if cur is not None and cur.status == "running":
-            if claim_token is not None and getattr(cur, "claim_token", None) != claim_token:
-                _log.warning("mark_complete skipped for run %s (claim superseded)", run_id)
-                return
-            cur.status = RUN_COMPLETE_STATUS
-            cur.completed_at = datetime.now(UTC)
-    try:
-        if e2b_idempotency_enabled():
-            await e2b_dispatch_release_terminal(run_id)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _log.warning("mark_complete: E2B idempotency key release failed for run %s", run_id)
+    async with aeng.connect() as c, c.begin():
+        await c.execute(
+            text("SELECT set_config('app.organisation_id', :val, true)"),
+            {"val": org_id},
+        )
+        result = await c.execute(
+            text(
+                "UPDATE runs SET status='complete', completed_at=now() "
+                "WHERE id=:rid AND status='running' AND cancellation_requested = false "
+                "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
+                "RETURNING id"
+            ),
+            {"rid": run_id, "tok": claim_token},
+        )
+        completed = result.fetchone() is not None
+    if not completed:
+        _log.warning(
+            "mark_complete skipped for run %s (claim superseded, cancelled, or not running)",
+            run_id,
+        )
 
 
 async def fail_run_terminal(
@@ -453,32 +485,44 @@ async def fail_run_terminal(
     *,
     error_code: str,
     error_detail: str,
+    claim_token: str | None = None,
 ) -> bool:
     """Terminal-fail a claimed-but-stuck run (zombie protection).
 
-    Only transitions a run that is currently ``running`` (a run already
-    terminal, or capacity-deferred back to ``pending``, is left untouched —
-    the capacity machinery owns pending runs). Idempotent and safe against a
-    concurrent claimer: the ``running`` guard plus the row write inside the
-    transaction means a second claimer that already reset the run to
-    ``running`` simply overwrites with the same failure.
+    ATOMICALLY fenced: only transitions a run that is currently ``running`` and
+    whose claim token still matches this executor's (when *claim_token* is
+    given), with ``cancellation_requested = false`` (CANCEL-WINS). Returns
+    ``False`` when the guards reject the write (already terminal, superseded,
+    capacity-deferred back to ``pending``, or cancelled) — a superseded
+    original cannot fail the run out from under a successor.
     """
-    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
-    async with factory() as session, session.begin():
-        await set_rls_org(session, uuid.UUID(org_id))
-        cur = await get_run(session, uuid.UUID(run_id))
-        if cur is None or cur.status != "running":
-            return False
-        cur.status = "failed"
-        cur.error_code = error_code
-        cur.error_detail = error_detail[:5000]
-        cur.completed_at = datetime.now(UTC)
-    _log.warning(
-        "run.terminal_failed run=%s error_code=%s",
-        run_id,
-        error_code,
-    )
-    return True
+    async with aeng.connect() as c, c.begin():
+        await c.execute(
+            text("SELECT set_config('app.organisation_id', :val, true)"),
+            {"val": org_id},
+        )
+        result = await c.execute(
+            text(
+                "UPDATE runs SET status='failed', error_code=:code, error_detail=:detail, completed_at=now() "
+                "WHERE id=:rid AND status='running' AND cancellation_requested = false "
+                "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
+                "RETURNING id"
+            ),
+            {
+                "rid": run_id,
+                "code": error_code,
+                "detail": error_detail[:5000],
+                "tok": claim_token,
+            },
+        )
+        ok = result.fetchone() is not None
+    if ok:
+        _log.warning(
+            "run.terminal_failed run=%s error_code=%s",
+            run_id,
+            error_code,
+        )
+    return ok
 
 
 async def zombie_watchdog(
@@ -542,6 +586,50 @@ async def zombie_watchdog(
     )
 
 
+async def _wait_event(evt: asyncio.Event) -> None:
+    await evt.wait()
+
+
+async def _read_run_status(aeng: AsyncEngine, run_id: str, org_id: str) -> str | None:
+    """Read the run's current status (RLS-scoped)."""
+    async with aeng.connect() as c:
+        await c.execute(
+            text("SELECT set_config('app.organisation_id', :val, true)"),
+            {"val": org_id},
+        )
+        result = await c.execute(text("SELECT status FROM runs WHERE id=:rid"), {"rid": run_id})
+        row = result.first()
+        return str(row[0]) if row and row[0] else None
+
+
+async def _kill_sandbox_best_effort(aeng: AsyncEngine, run_id: str, org_id: str) -> None:
+    """Best-effort kill of the run's recorded E2B sandbox (by id).
+
+    Reads ``runs.sandbox_id`` via a session and calls the E2B SDK kill on that
+    sandbox. Never raises — a failed kill is logged and the caller proceeds.
+    """
+    try:
+        sandbox_id: str | None = None
+        async with aeng.connect() as c:
+            await c.execute(
+                text("SELECT set_config('app.organisation_id', :val, true)"),
+                {"val": org_id},
+            )
+            result = await c.execute(text("SELECT sandbox_id FROM runs WHERE id=:rid"), {"rid": run_id})
+            row = result.first()
+            sandbox_id = str(row[0]) if row and row[0] else None
+        if not sandbox_id:
+            return
+        from e2b import AsyncSandbox  # type: ignore[import-untyped]
+
+        sandbox = await asyncio.wait_for(AsyncSandbox.connect(sandbox_id), timeout=10.0)
+        await asyncio.wait_for(sandbox.kill(request_timeout=10.0), timeout=10.0)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline_execution.sandbox_kill_failed run=%s", run_id, exc_info=True)
+
+
 async def run_executor_with_watchdog(
     aeng: AsyncEngine,
     *,
@@ -551,6 +639,7 @@ async def run_executor_with_watchdog(
     job: Any,
     execute_fn: Callable[[], Awaitable[Any]],
     claim_token: str | None = None,
+    superseded: asyncio.Event | None = None,
 ) -> dict[str, Any]:
     """Run ``execute_fn`` under the DB heartbeat loop + zombie watchdog.
 
@@ -562,27 +651,40 @@ async def run_executor_with_watchdog(
       helper wires it to an :class:`asyncio.Event` that the zombie watchdog
       waits on. The executor calls it when the first node dispatches.
     * The heartbeat loop starts concurrently (as today) and keeps the run alive
-      during legitimate node execution.
+      during legitimate node execution. It is fenced by *claim_token*; when a
+      successor re-claims the run the loop sets *superseded* and the executor is
+      aborted. When 3 consecutive heartbeat writes fail it sets a
+      fail-closed event: the sandbox is killed by id and the run is
+      terminal-failed with ``executor_heartbeat_lost``.
     * If no progress is signalled within ``SAQ_SETUP_GRACE_SECONDS`` the
-      watchdog cancels the executor and fails the run (``executor_stalled``) —
-      this is the fix for the 30h+ zombies seen on app.modulo.run.
+      watchdog cancels the executor and fails the run (``executor_stalled``).
     * An ``asyncio.CancelledError`` raised by the executor task is swallowed
-      ONLY when the watchdog caused it (the run is already terminal); a worker
-      shutdown cancellation re-raises. Because the watchdog is still inside its
-      ``fail_run_terminal`` DB write when this handler runs, it is awaited to
-      completion here before the ``finally`` block cancels it — cancelling the
-      watchdog mid-write would abort the terminal-fail transaction and leave
-      the run ``running`` forever.
+      ONLY when the watchdog (``stall_requested``), a supersession
+      (``superseded``), or heartbeat loss caused it; a genuine worker shutdown
+      cancellation re-raises. All three await the watchdog to completion first
+      so a pending ``fail_run_terminal`` transaction commits.
 
-    Returns ``{"status": "complete"}`` — the caller still runs
-    ``mark_complete`` (a no-op once the run is terminal).
+    Honest outcomes: returns ``{"status": "complete"}`` only when the run row
+    actually reached ``complete``; a generic executor exception is
+    terminal-failed with ``executor_failed`` (token-guarded) and returns
+    ``{"status": "failed"}``; an ``awaiting_human`` pause returns
+    ``{"status": "awaiting_human"}``. The caller only runs ``mark_complete`` on
+    a genuine ``complete``.
     """
     rid = uuid.UUID(run_id)
 
     first_progress = asyncio.Event()
     stall_requested = asyncio.Event()
+    health_failed = asyncio.Event()
+    if superseded is None:
+        superseded = asyncio.Event()
     if executor is not None:
         executor.on_first_progress = first_progress.set
+        # Wire the cancellation-intent signals into the executor so its
+        # NodeCancelledError retry handler can distinguish a watchdog stall
+        # from a supersession and skip the pending-reset when either fired.
+        executor._stall_requested = stall_requested
+        executor._superseded = superseded
 
     async def _execute() -> Any:
         return await execute_fn()
@@ -600,35 +702,84 @@ async def run_executor_with_watchdog(
         name=f"saq-zombie-watchdog-{rid}",
     )
     heartbeat_task = asyncio.create_task(  # nosemgrep: create-task-without-guard
-        heartbeat_loop(aeng, run_id, org_id, job=job, claim_token=claim_token),
+        heartbeat_loop(
+            aeng,
+            run_id,
+            org_id,
+            job=job,
+            claim_token=claim_token,
+            superseded=superseded,
+            health_failed=health_failed,
+        ),
         name=f"saq-heartbeat-{rid}",
     )
+
+    async def _abort_watcher() -> None:
+        waiters = [asyncio.create_task(superseded.wait()), asyncio.create_task(health_failed.wait())]
+        try:
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waiters:
+                w.cancel()
+        if exec_task is not None and not exec_task.done():
+            exec_task.cancel()
+        if watchdog_task is not None and not watchdog_task.done():
+            watchdog_task.cancel()
+
+    abort_watch_task = asyncio.create_task(_abort_watcher(), name=f"saq-abort-watch-{rid}")
+
+    exec_exc: Exception | None = None
+    exec_result: Any = None
     try:
-        await exec_task
+        exec_result = await exec_task
     except asyncio.CancelledError:
-        # Distinguish watchdog-initiated cancellation from worker shutdown:
-        # the watchdog cancels ONLY the executor task and signals
-        # ``stall_requested`` as it starts failing the run. Await it to
-        # completion so its ``fail_run_terminal`` transaction commits before
-        # the ``finally`` below cancels the watchdog — otherwise the terminal
-        # write is aborted, the run stays ``running``, and a stray
-        # ``CancelledError`` leaks into the SAQ worker. A genuine
-        # ``fail_run_terminal`` error propagates so the reconcile net remains
-        # the backstop instead of ``mark_complete`` wrongly succeeding the run.
+        # Distinguish watchdog-initiated cancellation, supersession, and
+        # heartbeat-loss from worker shutdown. Await the watchdog to completion
+        # first so its ``fail_run_terminal`` transaction commits before the
+        # ``finally`` below cancels it — cancelling the watchdog mid-write
+        # would abort the terminal-fail transaction and leave the run
+        # ``running`` forever.
+        if watchdog_task is not None and not watchdog_task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog_task
         if stall_requested.is_set():
-            if watchdog_task is not None and not watchdog_task.done():
-                with contextlib.suppress(asyncio.CancelledError):
-                    await watchdog_task
             _log.warning("run_executor_with_watchdog: execution cancelled by zombie watchdog for run %s", rid)
+        elif health_failed.is_set():
+            _log.error(
+                "run_executor_with_watchdog: heartbeat lost for run %s — killing sandbox and failing run",
+                rid,
+            )
+            await _kill_sandbox_best_effort(aeng, run_id, org_id)
+            await fail_run_terminal(
+                aeng,
+                run_id,
+                org_id,
+                error_code=EXECUTOR_HEARTBEAT_LOST_ERROR_CODE,
+                error_detail=(
+                    "Heartbeat loop failed fail-closed after 3 consecutive DB/network failures "
+                    "(executor_heartbeat_lost)"
+                ),
+                claim_token=claim_token,
+            )
+        elif superseded.is_set():
+            _log.warning(
+                "run_executor_with_watchdog: execution aborted for run %s (superseded by a newer claim)",
+                rid,
+            )
         else:
             raise
     except NodeCancelledError:
         # Transient node cancellation — execute() already reset the run to
-        # pending and released the E2B fence; re-raise so SAQ retries the job.
+        # pending; re-raise so SAQ retries the job.
         raise
-    except Exception:
+    except Exception as exc:
+        exec_exc = exc
         _log.exception("run_executor_with_watchdog: execute failed for run %s", rid)
     finally:
+        if abort_watch_task is not None:
+            abort_watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await abort_watch_task
         if watchdog_task is not None:
             watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -642,7 +793,36 @@ async def run_executor_with_watchdog(
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
-    return {"status": "complete"}
+    if exec_exc is not None:
+        # Honest outcome: a generic executor failure is terminal-failed
+        # (token-guarded) BEFORE returning — never a silent wrong-success.
+        await fail_run_terminal(
+            aeng,
+            run_id,
+            org_id,
+            error_code=EXECUTOR_FAILED_ERROR_CODE,
+            error_detail=f"{type(exec_exc).__name__}: {exec_exc}"[:2000],
+            claim_token=claim_token,
+        )
+        return {"status": "failed"}
+
+    # Derive the outcome from the executor task result (the returned Run row)
+    # and the run row status. A watchdog/supersession/heartbeat cancellation
+    # leaves exec_result None — fall back to the run row.
+    result_status = getattr(exec_result, "status", None)
+    if result_status in (None, "pending"):
+        try:
+            result_status = await _read_run_status(aeng, run_id, org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("run_executor_with_watchdog: could not read run status for %s", rid)
+            result_status = None
+    if result_status == "complete":
+        return {"status": "complete"}
+    if result_status == "awaiting_human":
+        return {"status": "awaiting_human"}
+    return {"status": "failed"}
 
 
 async def _re_dispatch_capacity_blocked(run_id: str, org_id: str) -> str:
@@ -746,13 +926,14 @@ async def stale_run_recovery_sweep(
                         "UPDATE runs "
                         "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
                         "WHERE status = 'pending' "
+                        "AND organisation_id = :oid "
                         "AND created_at < now() - (:nd_window * interval '1 second') "
                         "AND dispatched_at IS NULL "
                         "AND cancellation_requested = false "
                         "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
                         "AND (dispatcher IS NULL OR dispatcher != 'saq')"
                     ),
-                    {"nd_window": nd_window},
+                    {"oid": str(org_id), "nd_window": nd_window},
                 )
                 never_count += never_result.rowcount or 0
 
@@ -761,6 +942,7 @@ async def stale_run_recovery_sweep(
                         "UPDATE runs "
                         "SET heartbeat_at = now() "
                         "WHERE status = 'pending' "
+                        "AND organisation_id = :oid "
                         "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
                         "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:redispatch_ttl * interval '1 minute')) "
                         "AND created_at >= now() - (:fail_ttl * interval '1 minute') "
@@ -768,6 +950,7 @@ async def stale_run_recovery_sweep(
                         "RETURNING id, organisation_id"
                     ),
                     {
+                        "oid": str(org_id),
                         "redispatch_ttl": _STRANDED_REDISPATCH_TTL_MINUTES,
                         "fail_ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
                     },
@@ -781,11 +964,12 @@ async def stale_run_recovery_sweep(
                         "UPDATE runs "
                         "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
                         "WHERE status = 'pending' "
+                        "AND organisation_id = :oid "
                         "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
                         "AND created_at < now() - (:ttl * interval '1 minute') "
                         "AND cancellation_requested = false"
                     ),
-                    {"ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
+                    {"oid": str(org_id), "ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
                 )
                 capacity_timeout_count += capacity_timeout_result.rowcount or 0
 
@@ -794,11 +978,12 @@ async def stale_run_recovery_sweep(
                         "UPDATE runs "
                         "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
                         "WHERE status = 'running' "
+                        "AND organisation_id = :oid "
                         "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
                         "AND claim_count >= 5 "
                         "AND (dispatcher IS NULL OR dispatcher != 'saq')"
                     ),
-                    {"wl_window": wl_window},
+                    {"oid": str(org_id), "wl_window": wl_window},
                 )
                 lost_count += lost_result.rowcount or 0
 
@@ -938,6 +1123,13 @@ async def claim_resume_run_async(
     claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
+            # LIVE-BUG FIX (C3): same RLS org-context requirement as
+            # ``claim_run_async`` — without it the resume claim UPDATE matches
+            # ZERO rows under a NOBYPASSRLS role and the claim returns None.
+            await c.execute(
+                text("SELECT set_config('app.organisation_id', :val, true)"),
+                {"val": org_id},
+            )
             result = await c.execute(
                 build_resume_claim_update(stale_seconds=stale_seconds, claim_cap=cap, claim_token=claim_token),
                 _resume_claim_params(run_id, org_id, stale_seconds, cap, claim_token),
@@ -984,6 +1176,18 @@ async def resume_run(
         _log.warning("resume_run: run %s not claimed (wrong state or claim cap)", rid)
         return {"status": "not_claimed"}
 
+    # Stamp the claim token into the job hash so the after_process task_failure
+    # hook can fence its terminal write (dist/runtime-core A1).
+    if job is not None:
+        try:
+            job_kwargs = getattr(job, "kwargs", None)
+            merged_kwargs = {**(job_kwargs if isinstance(job_kwargs, dict) else {}), "claim_token": claim_token}
+            await job.update(kwargs=merged_kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("resume_run: job kwargs stamp failed for run %s", rid)
+
     try:
         run, executor = await load_and_setup(async_engine, rid, oid)
     except asyncio.CancelledError:
@@ -1001,117 +1205,20 @@ async def resume_run(
     if run is None:
         return {"status": "missing"}
 
-    await run_executor_with_watchdog(
+    outcome = await run_executor_with_watchdog(
         async_engine,
         run_id=str(rid),
         org_id=str(oid),
         executor=executor,
         job=job,
         claim_token=claim_token,
-        execute_fn=lambda: executor.resume(run_id=rid, org_id=oid, resume_data=resume_data or {}),
+        execute_fn=lambda: executor.resume(
+            run_id=rid,
+            org_id=oid,
+            resume_data=resume_data or {},
+            claim_token=claim_token,
+        ),
     )
-
-    await mark_complete(async_engine, str(rid), str(oid), claim_token=claim_token)
-    return {"status": "complete"}
-
-
-# ---------------------------------------------------------------------------
-# E2B dispatch idempotency fence (plan F3a)
-#
-# The at-most-once mitigation for event-loop stalls (>= RUN_CLAIM_STALE_SECONDS):
-# a superseded executor must never create a second sandbox for the same run.
-#
-# Mechanism — a RUN-LEVEL Redis key ``run:{run_id}:e2b`` storing the claim token:
-#
-#   * ``e2b_dispatch_acquire`` SETNX-before-dispatch (atomic): exactly one
-#     executor wins. If the key already exists, the dispatch is ABORTED whether
-#     the value is our token (a live dispatch within the same claim — a transient
-#     retry must not create a second sandbox) or a different token (superseded).
-#   * On dispatch FAILURE: ``e2b_dispatch_release_fenced`` DELs ONLY if the value
-#     still equals our own token, so a superseded original cannot delete the
-#     successor's key.
-#   * On success the key is kept until the run is terminal: ``mark_complete``
-#     calls ``e2b_dispatch_release_terminal`` (DEL) and the sandbox teardown in
-#     the node runner releases it too. Upper TTL bound ~8h
-#     (``E2B_IDEMPOTENCY_TTL_SECONDS``, >= timeout*retries + margin).
-# ---------------------------------------------------------------------------
-
-
-def e2b_idempotency_enabled() -> bool:
-    """Return whether the SAQ E2B idempotency fence is enabled (settings knob)."""
-    return bool(get_settings().saq_e2b_idempotency)
-
-
-async def _e2b_client() -> Any:
-    """Create a short-lived, BOUNDED Redis client for one fence operation.
-
-    Per-call client (opened and closed within the operation) matches the
-    codebase pattern (dispatch.py / cron_helpers.py) and avoids leaking a
-    process-lifetime connection pool into tests and worker teardown. The
-    max_connections cap bounds a concurrent fence-op burst so the aggregate
-    connection count cannot exhaust Upstash's limit (2026-08-09:
-    uncapped per-call clients accumulated to 12-25 connections against a
-    5-connection pool and stalled the SAQ runs worker).
-    """
-    from redis.asyncio import Redis as _AsyncRedis
-
-    settings = get_settings()
-    return _AsyncRedis.from_url(
-        settings.redis_url,
-        socket_connect_timeout=10,
-        socket_keepalive=True,
-        max_connections=min(int(settings.saq_redis_pool_size), 5),
-    )
-
-
-def _e2b_key(run_id: str) -> str:
-    return f"run:{run_id}:e2b"
-
-
-def _coerce_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    return value.decode() if isinstance(value, bytes) else str(value)
-
-
-async def e2b_dispatch_acquire(run_id: str, claim_token: str) -> None:
-    """SETNX-before-dispatch for an E2B sandbox (plan F3a).
-
-    Exactly one executor wins the run-level dispatch lock. Raises
-    :class:`E2BIdempotencyDeniedError` (and does NOT create a sandbox) when the key
-    already exists — whether held by a live dispatch from the same claim
-    (transient retry) or by a superseded/different claim.
-    """
-    redis = await _e2b_client()
-    try:
-        key = _e2b_key(run_id)
-        won = await redis.set(key, claim_token, nx=True, ex=E2B_IDEMPOTENCY_TTL_SECONDS)
-        if won:
-            return
-        current = _coerce_str(await redis.get(key))
-        if current == claim_token:
-            raise E2BIdempotencyDeniedError(f"run {run_id}: same-claim E2B dispatch already live")
-        raise E2BIdempotencyDeniedError(f"run {run_id}: E2B dispatch superseded by a different claim")
-    finally:
-        await redis.aclose()
-
-
-async def e2b_dispatch_release_fenced(run_id: str, claim_token: str) -> None:
-    """Fenced release on dispatch FAILURE — DEL only if the value is our token."""
-    redis = await _e2b_client()
-    try:
-        key = _e2b_key(run_id)
-        current = _coerce_str(await redis.get(key))
-        if current == claim_token:
-            await redis.delete(key)
-    finally:
-        await redis.aclose()
-
-
-async def e2b_dispatch_release_terminal(run_id: str) -> None:
-    """Terminal DEL — the run finished, the dispatch lock is released."""
-    redis = await _e2b_client()
-    try:
-        await redis.delete(_e2b_key(run_id))
-    finally:
-        await redis.aclose()
+    if outcome.get("status") == "complete":
+        await mark_complete(async_engine, str(rid), str(oid), claim_token=claim_token)
+    return outcome
