@@ -29,6 +29,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
+from modulo.core.node_output_split import node_return
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -731,8 +732,18 @@ def _build_fixture_map(
     inp = input_payload or {}
     out = outputs_json or {}
 
-    if isinstance(out, dict) and any(isinstance(v, dict) and "input" in v and "output" in v for v in out.values()):
-        for node_io in out.values():
+    # Resolve every per-node value through node_return (the legacy-safe pure
+    # return accessor). For legacy rows it returns each value verbatim, so the
+    # fixture_map is byte-identical to today; once P1 writes pure returns the
+    # fixture logic keeps reading the same accessor.
+    resolved_out: Any = out
+    if isinstance(out, dict):
+        resolved_out = {node_id: node_return(out, None, node_id) for node_id in out}
+
+    if isinstance(resolved_out, dict) and any(
+        isinstance(v, dict) and "input" in v and "output" in v for v in resolved_out.values()
+    ):
+        for node_io in resolved_out.values():
             if isinstance(node_io, dict):
                 node_input = node_io.get("input", json.dumps(inp, sort_keys=True))
                 node_output = node_io.get("output", "")
@@ -740,7 +751,7 @@ def _build_fixture_map(
                 fixture[key] = str(node_output)
     else:
         key = " ".join(str(inp).split())
-        fixture[key] = str(out)
+        fixture[key] = str(resolved_out)
 
     return fixture
 
@@ -1085,7 +1096,7 @@ async def get_run_node_output(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
     outputs = run.outputs_json or {}
-    node_output = outputs.get(node_id)
+    node_output = node_return(outputs, None, node_id)
     if node_output is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1513,9 +1524,10 @@ def _build_messages_from_agent_and_state(
 
     # Build conversation history from previous node outputs.
     if outputs_json:
-        for prev_node_id, output in outputs_json.items():
+        for prev_node_id in outputs_json:
             if prev_node_id == node_id:
                 continue
+            output = node_return(outputs_json, None, prev_node_id)
             if isinstance(output, str):
                 messages.append({"role": "assistant", "content": output})
             elif isinstance(output, dict):
@@ -1764,8 +1776,8 @@ async def diff_node_output(
     outputs_a = run_a.outputs_json or {}
     outputs_b = run_b.outputs_json or {}
 
-    node_output_a = outputs_a.get(req.node_id_a)
-    node_output_b = outputs_b.get(req.node_id_b)
+    node_output_a = node_return(outputs_a, None, req.node_id_a)
+    node_output_b = node_return(outputs_b, None, req.node_id_b)
 
     if node_output_a is None:
         raise HTTPException(

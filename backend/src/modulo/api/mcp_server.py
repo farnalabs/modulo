@@ -1576,6 +1576,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "get_run_output")
         from modulo.api.routes.runs import _mask_output_value
+        from modulo.core.node_output_split import node_return
 
         org_id = _ctx_org_id_val()
         try:
@@ -1587,7 +1588,7 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
         outputs = run.outputs_json or {}
-        node_output = outputs.get(node_id)
+        node_output = node_return(outputs, None, node_id)
         if node_output is None:
             return {"error": "node_output_not_found", "run_id": run_id, "node_id": node_id}
         masked = _mask_output_value(node_output)
