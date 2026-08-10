@@ -65,6 +65,16 @@ jobs:
         run: ../.github/scripts/coverage-thresholds.sh
         env:
           DATABASE_URL: "postgresql+asyncpg://unused:unused@localhost/unused"
+      - name: Run architecture tests
+        # The architecture suite scans all of src/modulo for structural
+        # violations (raw SQL f-strings, sensitive data logging, module-level
+        # side effects, bare session.rollback, login-field drift, Dockerfile
+        # Python version drift). It previously only ran via pre-commit for a
+        # single file, which let a raw f-string SQL regression (probe.py) slip
+        # through on main (PR #690). Wire the whole package into CI so the
+        # enforcement actually gates merges.
+        shell: bash
+        run: uv run --no-sync pytest tests/architecture/ -q --tb=short --timeout=120 -p no:warnings
       - uses: actions/upload-artifact@v4
         if: always()
         with:
