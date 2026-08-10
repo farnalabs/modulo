@@ -45,19 +45,65 @@ _FORWARDER_DISPLAY_NAMES: dict[str, str] = {
 
 _FORWARDER_TYPES = list(_FORWARDER_DISPLAY_NAMES)
 
+# Per-type config schemas: required keys (non-empty strings) plus optional keys
+# with their expected types. Mirrors the config each forwarder consumes.
+_FORWARDER_CONFIG_SCHEMAS: dict[str, dict[str, Any]] = {
+    "sentry": {
+        "required": ["dsn"],
+        "optional": {"org_slug": str, "project_slug": str},
+    },
+    "datadog": {
+        "required": ["api_key"],
+        "optional": {"site": str},
+    },
+    "pagerduty": {
+        "required": ["routing_key"],
+        "optional": {"severity_mapping": dict, "forward_levels": list},
+    },
+    "rollbar": {
+        "required": ["access_token"],
+        "optional": {"environment": str},
+    },
+    "opsgenie": {
+        "required": ["api_key"],
+        "optional": {"team": str, "priority_mapping": dict},
+    },
+    "loki": {
+        "required": ["push_url"],
+        "optional": {"tenant_id": str, "labels": dict},
+    },
+}
+
+
+def validate_forwarder_config(forwarder_type: str, config: dict[str, Any] | None) -> list[str]:
+    """Validate a forwarder config against its per-type schema.
+
+    Returns a list of human-readable error messages; an empty list means the
+    config is valid. Unknown forwarder types have no schema and are considered
+    valid (the routes reject unknown types with 404 before this is reached).
+    """
+    schema = _FORWARDER_CONFIG_SCHEMAS.get(forwarder_type)
+    if schema is None:
+        return []
+    config = config or {}
+    errors: list[str] = []
+    for key in schema["required"]:
+        if not isinstance(config.get(key), str) or not config[key].strip():
+            errors.append(f"missing or empty required config key '{key}'")
+    for key, expected_type in schema["optional"].items():
+        if key in config and config[key] is not None and not isinstance(config[key], expected_type):
+            expected_name = getattr(expected_type, "__name__", str(expected_type))
+            errors.append(f"config key '{key}' must be a {expected_name}")
+    return errors
+
 
 def _is_configured(forwarder_type: str, config_json: dict[str, Any] | None) -> bool:
     if not config_json:
         return False
-    required_keys: dict[str, list[str]] = {
-        "sentry": ["dsn"],
-        "datadog": ["api_key"],
-        "pagerduty": ["routing_key"],
-        "rollbar": ["access_token"],
-        "opsgenie": ["api_key"],
-        "loki": ["push_url"],
-    }
-    keys = required_keys.get(forwarder_type, [])
+    schema = _FORWARDER_CONFIG_SCHEMAS.get(forwarder_type)
+    if schema is None:
+        return False
+    keys = schema["required"]
     if not keys:
         return False
     return all(config_json.get(k) for k in keys)
@@ -140,6 +186,14 @@ async def configure_forwarder(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown forwarder type: {forwarder_type}",
         )
+
+    if req.config_json is not None:
+        config_errors = validate_forwarder_config(forwarder_type, req.config_json)
+        if config_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="; ".join(config_errors),
+            )
 
     try:
         async with session.begin():
