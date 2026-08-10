@@ -1923,7 +1923,20 @@ export default {
       "deprecate": "Deprecate",
       "cancel": "Cancel",
       "schemas": "Schemas",
-      "empty_hint": "Schemas are created through inference or direct creation."
+      "empty_hint": "Schemas are created through inference or direct creation.",
+      "folders": "Folders",
+      "new_folder": "New Folder",
+      "all_schemas": "All Schemas",
+      "rename_folder": "Rename Folder",
+      "delete_folder": "Delete Folder",
+      "folder_name": "Folder name",
+      "view_edit": "View / Edit",
+      "schema_actions": "Schema actions",
+      "deprecation_title": "Deprecate \"{name}\"?",
+      "deprecation_description": "This schema will be marked as deprecated. Agents using it will still function, but it will no longer appear as active. This action can be reversed by a future reactivation.",
+      "uncategorised": "Uncategorised",
+      "no_folder": "No folder",
+      "move_to_folder": "Move to Folder"
     },
     "SettingsTriggersView": {
       "title": "Triggers",

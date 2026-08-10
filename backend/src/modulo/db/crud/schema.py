@@ -72,11 +72,16 @@ async def list_schemas(
     *,
     cursor: str | None = None,
     limit: int = 20,
+    folder_id: uuid.UUID | None = None,
 ) -> PageResult[Schema]:
     q = select(Schema)
+    count_q = select(func.count()).select_from(Schema)
+    if folder_id is not None:
+        q = q.where(Schema.folder_id == folder_id)
+        count_q = count_q.where(Schema.folder_id == folder_id)
 
     try:
-        total = (await session.execute(select(func.count()).select_from(Schema))).scalar_one()
+        total = (await session.execute(count_q)).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=1, page_size=limit)
 
