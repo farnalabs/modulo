@@ -29,7 +29,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
-from modulo.core.node_output_split import node_return
+from modulo.core.node_output_split import node_return, node_telemetry
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -47,7 +47,6 @@ from modulo.db.crud.run import (
     get_child_run_rollup,
     get_run,
     get_run_heatmap,
-    get_run_io,
     get_run_stats,
     request_cancellation,
 )
@@ -711,6 +710,7 @@ class RunIOResponse(BaseModel):
     status: str
     input_payload: dict[str, Any] | None = None
     outputs_json: dict[str, Any] | None = None
+    node_telemetry: dict[str, Any] | None = None
     fixture_map: dict[str, str] | None = None
 
     def build_fixture_map(self) -> dict[str, str]:
@@ -774,11 +774,21 @@ async def get_run_io_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("run.output"),
 ) -> RunIOResponse:
-    """Return per-node IO for a completed run, plus generated fixture_map."""
+    """Return per-node IO for a completed run, plus generated fixture_map.
+
+    The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
+    holds each node's pure return and ``node_telemetry`` holds its exhaustive
+    telemetry. Both are resolved through the legacy-safe accessors
+    (``node_return`` / ``node_telemetry``), so legacy runs (no telemetry
+    column) are byte-identical to today's envelope shape, and P1+ runs expose
+    the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
+    markers without an ``outputs_json`` entry) still appear under
+    ``node_telemetry``. Both surfaces are masked for secrets.
+    """
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await get_run_io(session, run_id)
+            run = await get_run(session, run_id)
     except IntegrityError:
         _log.exception("runs.get_run_io_endpoint")
         raise HTTPException(
@@ -807,13 +817,34 @@ async def get_run_io_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
         ) from None
-    if result is None:
+    if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-    if result.get("outputs_json"):
-        result["outputs_json"] = _mask_output_value(result["outputs_json"])
+    outputs_json = run.outputs_json
+    telemetry_json = run.node_telemetry_json
 
-    resp = RunIOResponse(**result)
+    # One shape for the frontend: node_return resolves the pure return (new
+    # rows) or the envelope verbatim (legacy rows); node_telemetry resolves
+    # the stored telemetry (new rows) or the inner output envelope (legacy).
+    normalized_outputs = (
+        {nid: node_return(outputs_json, telemetry_json, nid) for nid in outputs_json} if outputs_json else outputs_json
+    )
+    node_ids = set(outputs_json or {}) | set(telemetry_json or {})
+    normalized_telemetry = (
+        {nid: node_telemetry(telemetry_json, outputs_json, nid) for nid in node_ids} if node_ids else telemetry_json
+    )
+
+    masked_outputs = _mask_output_value(normalized_outputs)
+    masked_telemetry = _mask_output_value(normalized_telemetry)
+
+    resp = RunIOResponse(
+        run_id=run.id,
+        run_number=run.run_number,
+        status=run.status,
+        input_payload=run.input_payload,
+        outputs_json=masked_outputs,
+        node_telemetry=masked_telemetry,
+    )
     resp.fixture_map = resp.build_fixture_map()
     return resp
 
@@ -1059,6 +1090,12 @@ async def get_run_node_output(
     Sensitive fields (keys matching *token*, *secret*, *api_key*,
     *password*, *key*, *credential*) in the output are masked with
     bullet characters.
+
+    For P1+ (split) rows this returns the node's PURE return. When a node
+    has no return (skipped / recovered / failed-no-return) but exists in
+    ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
+    returned instead of a 404 — never the raw telemetry (no stdout / log
+    tail on this surface).
     """
     try:
         async with session.begin():
@@ -1096,8 +1133,14 @@ async def get_run_node_output(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
     outputs = run.outputs_json or {}
-    node_output = node_return(outputs, None, node_id)
+    telemetry = run.node_telemetry_json or {}
+    node_output = node_return(outputs, telemetry, node_id)
     if node_output is None:
+        node_meta = node_telemetry(telemetry, outputs, node_id)
+        if isinstance(node_meta, dict):
+            derived = {key: node_meta[key] for key in ("status", "summary") if key in node_meta}
+            masked = _mask_output_value(derived)
+            return NodeOutputResponse(run_id=run_id, node_id=node_id, output=masked)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Node {node_id} not found in run outputs",
