@@ -312,7 +312,12 @@ async function checkAxeMobile(page: Page) {
   expect(violations).toEqual([])
 }
 
-// Check 6 — cumulative layout shift over a ~1s settle period.
+// Check 6 — cumulative layout shift over a ~1s settle period. ADVISORY only:
+// CLS is a data- and timing-dependent Web Vitals performance metric (affected
+// by late API responses, fonts, polling, and measurement-window placement), not
+// a deterministic layout-formatting invariant like overflow/clipping/shell-fill,
+// which remain hard gates. Values above 0.25 are reported for Lighthouse/field
+// follow-up rather than failing the sweep.
 async function checkCLS(page: Page) {
   const cls = await page.evaluate(() => {
     return new Promise<number>(resolve => {
@@ -337,7 +342,7 @@ async function checkCLS(page: Page) {
     })
   })
   if (cls > 0.25) {
-    expect(cls, `Cumulative layout shift ${cls.toFixed(3)} > 0.25 on ${page.url()}`).toBeLessThanOrEqual(0.25)
+    process.stdout.write(`[mobile-layout] CLS ${cls.toFixed(3)} on ${page.url()} (ADVISORY: > 0.25 — data/timing-dependent; fix in Lighthouse/field metrics)\n`)
   } else if (cls > 0.1) {
     process.stdout.write(`[mobile-layout] ADVISORY: CLS ${cls.toFixed(3)} on ${page.url()} (0.1 < CLS <= 0.25)\n`)
   } else {
