@@ -1,20 +1,31 @@
 """Unit tests for modulo.core.saq_worker (plan F1/F2/F5).
 
 Covers: functions lists wired (runs + system), fail-closed auth, explicit cron
-knobs, worker metadata hostname, and the SAQ execute/resume wrappers.
+knobs, worker metadata hostname, the SAQ execute/resume wrappers, startup
+health checks (engine, Redis probe, DB probe), fire wrappers, system job
+delegates, and claim expiry.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import aiohttp.web
 import pytest
+import redis.exceptions
 
 import modulo.core.saq_worker as sw
+
+_UUID_1 = "11111111-1111-4111-8111-111111111111"
+_UUID_2 = "22222222-2222-4222-8222-222222222222"
+_UUID_3 = "33333333-3333-4333-8333-333333333333"
+_UUID_4 = "44444444-4444-4444-8444-444444444444"
+_UUID_ORG = "8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
 
 
 def _settings(**overrides: object) -> MagicMock:
@@ -587,3 +598,562 @@ class TestRetentionCleanup:
         runs_delete.assert_awaited_once()
         ckpt_delete.assert_awaited_once()
         assert runs_delete.await_args.args[0] is session
+
+
+class TestGetAsyncEngine:
+    """``_get_async_engine`` builds a per-worker engine with Postgres-specific
+    pool knobs and caches it for the process lifetime (plan F4)."""
+
+    def test_creates_postgres_engine_with_pool_knobs(self) -> None:
+        with (
+            patch.object(
+                sw,
+                "get_settings",
+                return_value=_settings(database_url="postgresql+asyncpg://localhost/test", saq_worker_db_pool_size=3),
+            ),
+            patch.object(sw, "_ASYNC_ENGINE", None),
+            patch("modulo.core.saq_worker.create_async_engine") as create,
+        ):
+            engine = sw._get_async_engine()
+
+        assert engine is create.return_value
+        create.assert_called_once_with(
+            url="postgresql+asyncpg://localhost/test",
+            connect_args={"timeout": 10, "ssl": False},
+            pool_size=3,
+            max_overflow=0,
+        )
+
+    def test_uses_plain_url_for_non_postgres_backend(self) -> None:
+        with (
+            patch.object(
+                sw,
+                "get_settings",
+                return_value=_settings(database_url="sqlite+aiosqlite:///./test.db", modulo_db="sqlite"),
+            ),
+            patch.object(sw, "_ASYNC_ENGINE", None),
+            patch("modulo.core.saq_worker.create_async_engine") as create,
+        ):
+            sw._get_async_engine()
+
+        create.assert_called_once_with(url="sqlite+aiosqlite:///./test.db")
+
+    def test_caches_engine_across_calls(self) -> None:
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_ASYNC_ENGINE", None),
+            patch("modulo.core.saq_worker.create_async_engine") as create,
+        ):
+            first = sw._get_async_engine()
+            second = sw._get_async_engine()
+
+        assert first is second
+        create.assert_called_once()
+
+
+class TestRedisConnectionCheck:
+    """``_check_redis_connection`` pings Redis with exponential backoff and
+    FAILS OPEN after ``max_retries`` — the worker boots even if Redis is down
+    (recovery is possible before the first job)."""
+
+    def test_ping_success_returns_immediately(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = MagicMock()
+
+        with (
+            patch("modulo.core.saq_worker.time.sleep", return_value=None) as mock_sleep,
+            caplog.at_level(logging.INFO, logger="modulo.core.saq_worker"),
+        ):
+            sw._check_redis_connection(client)
+
+        client.ping.assert_called_once()
+        mock_sleep.assert_not_called()
+        assert "Redis connection validated" in caplog.text
+
+    def test_retries_with_exponential_backoff_then_succeeds(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = MagicMock()
+        client.ping.side_effect = [redis.exceptions.ConnectionError("down"), redis.exceptions.TimeoutError("t"), True]
+
+        with (
+            patch("modulo.core.saq_worker.time.sleep", return_value=None) as mock_sleep,
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            sw._check_redis_connection(client)
+
+        assert client.ping.call_count == 3
+        assert mock_sleep.call_count == 2
+        assert mock_sleep.call_args_list[0].args == (2,)
+        assert mock_sleep.call_args_list[1].args == (4,)
+        assert "retrying in 2s" in caplog.text
+
+    def test_gives_up_after_max_retries_fail_open(self, caplog: pytest.LogCaptureFixture) -> None:
+        client = MagicMock()
+        client.ping.side_effect = OSError("connection refused")
+
+        with (
+            patch("modulo.core.saq_worker.time.sleep", return_value=None) as mock_sleep,
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            sw._check_redis_connection(client)
+
+        assert client.ping.call_count == 3
+        assert mock_sleep.call_count == 2
+        assert "Redis unreachable after 3 attempts" in caplog.text
+
+
+class TestProbeDatabase:
+    """``_probe_database`` runs a non-fatal ``SELECT 1`` on worker startup."""
+
+    def test_success_runs_select_one(self, caplog: pytest.LogCaptureFixture) -> None:
+        engine = MagicMock()
+        conn = MagicMock()
+        connect_cm = engine.connect.return_value
+        connect_cm.__enter__.return_value = conn
+        connect_cm.__exit__.return_value = False
+
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("sqlalchemy.create_engine", return_value=engine) as create,
+            caplog.at_level(logging.INFO, logger="modulo.core.saq_worker"),
+        ):
+            sw._probe_database()
+
+        assert create.call_args.args[0] == "postgresql+psycopg2://localhost/test"
+        assert create.call_args.kwargs["pool_pre_ping"] is True
+        conn.execute.assert_called_once()
+        assert "Database connection probe passed" in caplog.text
+
+    def test_failure_is_non_fatal_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("sqlalchemy.create_engine", side_effect=RuntimeError("conn refused")),
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            sw._probe_database()
+
+        assert "Database probe failed (non-fatal)" in caplog.text
+
+
+class TestBaseWorkerSettings:
+    def test_timers_dict_is_copied_not_shared(self) -> None:
+        """Mutating a returned settings' timers must not leak into the module globals."""
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_build_queue", return_value=MagicMock()),
+        ):
+            settings = sw._base_worker_settings("runs", [])
+
+        settings["timers"]["schedule"] = 999
+        assert sw._TIMERS["schedule"] == 5
+
+    @pytest.mark.asyncio
+    async def test_after_process_hook_delegates(self) -> None:
+        ctx = {"job": MagicMock()}
+
+        with patch("modulo.core.error_tracking.saq_hooks.after_process", new_callable=AsyncMock) as hook:
+            await sw._after_process_hook(ctx)
+
+        hook.assert_awaited_once_with(ctx)
+
+
+class TestFireWrappersExtended:
+    @pytest.mark.asyncio
+    async def test_fire_cron_trigger_dispatch_failure_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A dispatch failure must not lose the fired run — the fire result is
+        returned as-is and the error is logged."""
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_cron_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "fired", "run_id": "run-9"},
+            ),
+            patch(
+                "modulo.core.dispatch.dispatch_run",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("queue down"),
+            ),
+            patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="runs")),
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.fire_cron_trigger(
+                {},
+                trigger_id=_UUID_1,
+                org_id=_UUID_ORG,
+                pipeline_id=_UUID_2,
+                cron_expression="* * * * *",
+            )
+
+        assert result["status"] == "fired"
+        assert "dispatch" not in result
+        assert "fire_cron_trigger: dispatch failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_fire_polling_trigger_dispatches_created_run(self) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_polling_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "fired", "run_id": "run-5"},
+            ) as ch,
+            patch(
+                "modulo.core.dispatch.dispatch_run",
+                new_callable=AsyncMock,
+                return_value=("enqueued", "job-2"),
+            ) as dispatch,
+            patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="runs")),
+        ):
+            result = await sw.fire_polling_trigger(
+                {},
+                trigger_id=_UUID_1,
+                org_id=_UUID_ORG,
+                pipeline_id=_UUID_2,
+                connector_instance_id=_UUID_3,
+                poll_query="is:open",
+            )
+
+        assert result["status"] == "fired"
+        assert result["dispatch"] == "enqueued"
+        assert result["job_id"] == "job-2"
+        dispatch.assert_awaited_once_with("run-5", _UUID_ORG, queue="runs")
+        ch.assert_awaited_once()
+        assert ch.await_args.kwargs["poll_query"] == "is:open"
+
+    @pytest.mark.asyncio
+    async def test_fire_polling_trigger_not_fired_no_dispatch(self) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_polling_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "skipped"},
+            ),
+            patch("modulo.core.dispatch.dispatch_run", new_callable=AsyncMock) as dispatch,
+        ):
+            result = await sw.fire_polling_trigger(
+                {},
+                trigger_id=_UUID_1,
+                org_id=_UUID_ORG,
+                pipeline_id=_UUID_2,
+                connector_instance_id=_UUID_3,
+                poll_query="is:open",
+            )
+
+        assert result["status"] == "skipped"
+        dispatch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fire_polling_trigger_dispatch_failure_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_polling_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "fired", "run_id": "run-5"},
+            ),
+            patch(
+                "modulo.core.dispatch.dispatch_run",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("queue down"),
+            ),
+            patch.object(sw, "get_settings", return_value=_settings(saq_runs_queue="runs")),
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.fire_polling_trigger(
+                {},
+                trigger_id=_UUID_1,
+                org_id=_UUID_ORG,
+                pipeline_id=_UUID_2,
+                connector_instance_id=_UUID_3,
+                poll_query="is:open",
+            )
+
+        assert result["status"] == "fired"
+        assert "dispatch" not in result
+        assert "fire_polling_trigger: dispatch failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_fire_report_trigger_delegates(self) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_report_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "delivered", "report_id": "report-1"},
+            ) as ch,
+        ):
+            result = await sw.fire_report_trigger({}, report_id=_UUID_1, org_id=_UUID_ORG)
+
+        assert result == {"status": "delivered", "report_id": "report-1"}
+        ch.assert_awaited_once()
+        assert ch.await_args.kwargs["report_id"] == UUID(_UUID_1)
+        assert ch.await_args.kwargs["org_id"] == UUID(_UUID_ORG)
+
+
+class TestSystemJobDelegates:
+    """Every remaining system-worker job is a thin delegate — these pin the
+    delegation target so a refactor cannot silently drop the wiring."""
+
+    @pytest.mark.asyncio
+    async def test_fire_due_triggers_delegates(self) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_due_triggers",
+                new_callable=AsyncMock,
+                return_value={"fired": 2, "enqueued": 2},
+            ) as ch,
+        ):
+            result = await sw.fire_due_triggers({})
+
+        assert result == {"fired": 2, "enqueued": 2}
+        ch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatcher_reconcile_delegates(self) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.dispatcher_reconcile",
+                new_callable=AsyncMock,
+                return_value={"redispatched": 1},
+            ) as ch,
+        ):
+            result = await sw.dispatcher_reconcile({})
+
+        assert result == {"redispatched": 1}
+        ch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stale_run_recovery_delegates(self) -> None:
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.pipeline_execution.stale_run_recovery_sweep",
+                new_callable=AsyncMock,
+                return_value=3,
+            ) as sweep,
+        ):
+            result = await sw.stale_run_recovery({})
+
+        assert result == 3
+        sweep.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cost_probe_delegates(self) -> None:
+        factory = MagicMock()
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch(
+                "modulo.core.cost_controller.probe.run_probe",
+                new_callable=AsyncMock,
+                return_value={"status": "ok", "orgs": 1},
+            ) as probe,
+        ):
+            result = await sw.cost_probe({})
+
+        assert result == {"status": "ok", "orgs": 1}
+        probe.assert_awaited_once_with(factory)
+
+    @pytest.mark.asyncio
+    async def test_analytics_facts_maintenance_delegates(self) -> None:
+        factory = MagicMock()
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch(
+                "modulo.core.analytics.maintenance.run_maintenance",
+                new_callable=AsyncMock,
+                return_value={"maintained": 4},
+            ) as maint,
+        ):
+            result = await sw.analytics_facts_maintenance({})
+
+        assert result == {"maintained": 4}
+        maint.assert_awaited_once_with(factory)
+
+    @pytest.mark.asyncio
+    async def test_check_missed_fire_alerts_cron_delegates_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.error_tracking.check_missed_fire_alerts",
+                new_callable=AsyncMock,
+                return_value=2,
+            ) as check,
+            caplog.at_level(logging.INFO, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.check_missed_fire_alerts_cron({})
+
+        assert result == {"emitted": 2}
+        check.assert_awaited_once()
+        assert "check_missed_fire_alerts.emitted" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_check_missed_fire_alerts_cron_no_emission_no_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.error_tracking.check_missed_fire_alerts",
+                new_callable=AsyncMock,
+                return_value=0,
+            ) as check,
+            caplog.at_level(logging.INFO, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.check_missed_fire_alerts_cron({})
+
+        assert result == {"emitted": 0}
+        check.assert_awaited_once()
+        assert "check_missed_fire_alerts.emitted" not in caplog.text
+
+
+class TestClaimExpiry:
+    @staticmethod
+    def _make_factory() -> MagicMock:
+        session = AsyncMock()
+        factory = MagicMock()
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=session)
+        context.__aexit__ = AsyncMock(return_value=False)
+        factory.return_value = context
+        return factory
+
+    @pytest.mark.asyncio
+    async def test_expires_claims_with_notifier(self) -> None:
+        factory = self._make_factory()
+        engine = MagicMock()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=engine),
+            patch("modulo.core.notifier.Notifier") as notifier_cls,
+            patch(
+                "modulo.core.hitl_manager.expiry_job.expire_stale_claims",
+                new_callable=AsyncMock,
+                return_value=["claim-1", "claim-2"],
+            ) as expire,
+        ):
+            result = await sw.claim_expiry({})
+
+        assert result == {"expired": 2}
+        expire.assert_awaited_once()
+        assert expire.await_args.kwargs["notifier"] is notifier_cls.return_value
+        notifier_cls.assert_called_once_with(engine, _settings().fernet_key)
+
+    @pytest.mark.asyncio
+    async def test_notifier_init_failure_does_not_block_expiry(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A Notifier init failure must be swallowed — DB expiry still runs with
+        ``notifier=None`` (claim_expiry is the SOLE writer, expiry must not
+        depend on the alerting side)."""
+        factory = self._make_factory()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.notifier.Notifier", side_effect=RuntimeError("fernet boom")),
+            patch(
+                "modulo.core.hitl_manager.expiry_job.expire_stale_claims",
+                new_callable=AsyncMock,
+                return_value=["claim-1"],
+            ) as expire,
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.claim_expiry({})
+
+        assert result == {"expired": 1}
+        expire.assert_awaited_once()
+        assert expire.await_args.kwargs["notifier"] is None
+        assert "claim_expiry: notifier init failed" in caplog.text
+
+
+class TestCancellationPropagation:
+    """Cancellation must always propagate (never swallowed) so SAQ can abort a
+    stuck job cleanly — assert each wrapper re-raises ``CancelledError``."""
+
+    @pytest.mark.asyncio
+    async def test_execute_run_cancellation_propagates(self) -> None:
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=True),
+            patch(
+                "modulo.core.pipeline_execution.load_and_setup",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            patch("modulo.core.pipeline_execution.fail_run_terminal", new_callable=AsyncMock) as fail,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.execute_run({}, run_id=_UUID_1, org_id=_UUID_ORG)
+
+        fail.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fire_cron_trigger_cancellation_propagates(self) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_cron_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "fired", "run_id": "run-9"},
+            ),
+            patch(
+                "modulo.core.dispatch.dispatch_run",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.fire_cron_trigger(
+                {},
+                trigger_id=_UUID_1,
+                org_id=_UUID_ORG,
+                pipeline_id=_UUID_2,
+                cron_expression="* * * * *",
+            )
+
+    @pytest.mark.asyncio
+    async def test_fire_polling_trigger_cancellation_propagates(self) -> None:
+        with (
+            patch(
+                "modulo.core.cron_helpers.fire_polling_trigger",
+                new_callable=AsyncMock,
+                return_value={"status": "fired", "run_id": "run-5"},
+            ),
+            patch(
+                "modulo.core.dispatch.dispatch_run",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.fire_polling_trigger(
+                {},
+                trigger_id=_UUID_1,
+                org_id=_UUID_ORG,
+                pipeline_id=_UUID_2,
+                connector_instance_id=_UUID_3,
+                poll_query="is:open",
+            )
+
+
+class TestExecuteRunMissingRun:
+    @pytest.mark.asyncio
+    async def test_execute_run_missing_run_returns_early(self) -> None:
+        """A claimed run whose ``load_and_setup`` yields no run row must return
+        ``missing`` without touching the watchdog or completion path."""
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=True),
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock, return_value=(None, None)),
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+            patch("modulo.core.pipeline_execution.run_executor_with_watchdog", new_callable=AsyncMock) as watchdog,
+        ):
+            result = await sw.execute_run({}, run_id=_UUID_1, org_id=_UUID_ORG)
+
+        assert result == {"status": "missing"}
+        complete.assert_not_awaited()
+        watchdog.assert_not_awaited()
+
+
+class TestMakeSessionFactory:
+    def test_returns_configured_sessionmaker(self) -> None:
+        engine = MagicMock()
+        with (
+            patch.object(sw, "_get_async_engine", return_value=engine),
+            patch("sqlalchemy.ext.asyncio.async_sessionmaker") as sessionmaker,
+        ):
+            result = sw._make_session_factory()
+
+        assert result is sessionmaker.return_value
+        sessionmaker.assert_called_once_with(engine, expire_on_commit=False, autobegin=True)
