@@ -70,10 +70,14 @@ def upgrade() -> None:
         op.add_column("run_daily_facts", sa.Column(name, type_, nullable=True, comment=comment))
     # Correct the stale comment shipped in 0071 (pre-FAR-133 sign fix). The
     # shipped migration is untouched — this is the safe additive correction.
-    op.execute(
-        "COMMENT ON COLUMN run_daily_facts.queue_wait_ms IS "
-        "'Run.started_at - Run.dispatched_at when both present, else NULL'"
-    )
+    # COMMENT ON COLUMN is Postgres DDL; guard so non-Postgres dev backends
+    # (SQLite / MariaDB) still migrate cleanly (column comments are ignored
+    # there, matching the docstring below).
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            "COMMENT ON COLUMN run_daily_facts.queue_wait_ms IS "
+            "'Run.started_at - Run.dispatched_at when both present, else NULL'"
+        )
 
 
 def downgrade() -> None:
