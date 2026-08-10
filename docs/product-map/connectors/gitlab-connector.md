@@ -123,8 +123,8 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [x] API error detail includes GitLab's `X-Request-Id` header when present (via `_error_detail`)
 - [x] Health check failure details include GitLab's `X-Request-Id` header when present (via `_id_suffix`)
 - [x] Path traversal blocked locally — absolute paths and `..` segments raise ValueError on `query("file")`, `write("file")`, `write("file_delete")` before any request is sent
-- [ ] Missing token during construction is not validated until first API call
-- [ ] Project path encoding fails gracefully on malformed project IDs (e.g. None, numbers)
+- [x] Missing token is rejected at construction — `GitLabConnector(token=None/"")` raises a descriptive `ValueError` ("requires a non-empty token") immediately instead of failing at the first API call
+- [x] Malformed project IDs fail gracefully — `_project_path` accepts numeric IDs (coerced to strings, e.g. `project: 123` → `/projects/123/...`) and raises descriptive `ValueError`s for `None`, booleans, empty/whitespace-only strings, and other non-scalar project filters instead of crashing in `quote()`
 
 ### Resilience & Integration Robustness
 
@@ -148,6 +148,15 @@ Async GitLab REST API v4 connector implementing `ConnectorBase`. Provides read/w
 - [ ] **Self-hosted discovery**: `base_url` is configurable per connector instance, but there is no instance-discovery/onboarding flow for self-hosted GitLab
 
 ## QA History
+
+### 2026-08-10 — improve-architecture: construction-time token validation + malformed project ID handling RESOLVED
+
+**RESOLVED 2 known gaps** in `connectors/gitlab/__init__.py`:
+
+1. **Missing token validated at construction** — `GitLabConnector.__init__` now rejects a `None`, empty, or whitespace-only token with a descriptive `ValueError` ("GitLabConnector requires a non-empty token") before any API call, instead of silently sending `Authorization: Bearer ` and failing at the first request. The ConnectorHub `initialise()` resilience path (`except ValueError` → skip + WARNING log) already handles this new failure mode.
+2. **Malformed project IDs fail gracefully** — `_project_path()` now accepts numeric project IDs (coerced to strings — `project: 123` routes to `/projects/123/...`, which GitLab resolves) and raises descriptive `ValueError`s for `None`, booleans, empty/whitespace-only strings, and other non-scalar project filters instead of crashing with a raw `TypeError` from `quote()`. The guard runs before any request is sent and applies to every query/write resource that URL-encodes a project.
+
+**Tests:** 11 new unit tests in `test_gitlab.py` — constructor rejects missing/empty/whitespace token; numeric project ID coerced and routed correctly; `None`/empty/whitespace/bool project filters raise descriptive `ValueError`s on both `query("file")` and `write("file")`. **95/95 `test_gitlab.py` + 180/180 across the 3 gitlab unit test files pass (169 + 11 new), ruff check + format clean, mypy --strict clean.** Status: partial (pre-run ConnectorHub scope blocking + self-hosted discovery remain).
 
 ### 2026-08-09 — improve-architecture: per-operation scope verification RESOLVED
 

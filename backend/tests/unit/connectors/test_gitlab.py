@@ -1119,3 +1119,65 @@ async def test_health_check_warms_write_scope_cache(connector):
     )
     assert write_route.called
     assert len(token_info_route.calls) == 1
+
+
+def test_constructor_rejects_missing_token():
+    """Construction with a None token fails fast instead of at first API call."""
+    with pytest.raises(ValueError, match="non-empty token"):
+        GitLabConnector(token=None)  # type: ignore[arg-type]
+
+
+def test_constructor_rejects_empty_token():
+    with pytest.raises(ValueError, match="non-empty token"):
+        GitLabConnector(token="")
+
+
+def test_constructor_rejects_whitespace_token():
+    with pytest.raises(ValueError, match="non-empty token"):
+        GitLabConnector(token="   ")
+
+
+@respx.mock
+async def test_query_file_numeric_project_id_coerced(connector):
+    """A numeric project ID is coerced to a string and routed correctly."""
+    route = respx.get(f"{_API}/projects/123/repository/files/README.md").mock(
+        return_value=httpx.Response(200, json={"file_name": "README.md", "content": "SGVsbG8="})
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="file", filters={"project": 123, "path": "README.md", "ref": "main"})
+    )
+    assert result.records[0]["content"] == "Hello"
+    assert route.called
+
+
+@respx.mock
+async def test_query_file_none_project_raises_descriptive_error(connector):
+    """A None project filter fails gracefully instead of crashing in quote()."""
+    with pytest.raises(ValueError, match="project ID or path"):
+        await connector.query(ConnectorQuery(resource="file", filters={"project": None, "path": "README.md"}))
+
+
+@respx.mock
+async def test_query_file_empty_project_raises_descriptive_error(connector):
+    with pytest.raises(ValueError, match="non-empty project"):
+        await connector.query(ConnectorQuery(resource="file", filters={"project": "", "path": "README.md"}))
+
+
+@respx.mock
+async def test_query_file_whitespace_project_raises_descriptive_error(connector):
+    with pytest.raises(ValueError, match="non-empty project"):
+        await connector.query(ConnectorQuery(resource="file", filters={"project": "  ", "path": "README.md"}))
+
+
+@respx.mock
+async def test_query_file_bool_project_raises_descriptive_error(connector):
+    with pytest.raises(ValueError, match="project ID or path"):
+        await connector.query(ConnectorQuery(resource="file", filters={"project": True, "path": "README.md"}))
+
+
+@respx.mock
+async def test_write_file_none_project_raises_descriptive_error(connector):
+    with pytest.raises(ValueError, match="project ID or path"):
+        await connector.write(
+            ConnectorPayload(resource="file", data={"project": None, "path": "src/main.py", "content": "x"})
+        )
