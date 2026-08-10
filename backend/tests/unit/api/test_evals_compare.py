@@ -1,6 +1,7 @@
 """Unit tests for POST /api/v1/evals/compare, GET /api/v1/evals/coverage,
 POST /api/v1/evals/from-run."""
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
@@ -366,7 +367,89 @@ class TestEvalFromRun:
         data = resp.json()
         assert data["name"] == "My Regex Eval"
         assert data["eval_type"] == "regex"
+        assert data["sample_output"] == {"result": "hello world"}
         assert "sample_output" in data
+
+    def test_from_run_samples_pure_return_for_new_shape(self, admin_client: TestClient) -> None:
+        mock_session = _make_mock_session()
+
+        run = _make_row(
+            id=_RUN_A,
+            pipeline_id=_PIPELINE_ID,
+            outputs_json={str(_NODE_1): {"summary": "agent summary"}},
+            node_telemetry_json={
+                str(_NODE_1): {
+                    "status": "completed",
+                    "agent_stdout": "console output",
+                    "error_message": "boom",
+                }
+            },
+        )
+
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=run),
+        ]
+        mock_session.add = MagicMock()
+        mock_session.flush = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id": str(_RUN_A),
+                "node_id": str(_NODE_1),
+                "eval_type": "regex",
+                "name": "Pure Return Eval",
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["sample_output"] == {"summary": "agent summary"}
+        assert "agent_stdout" not in json.dumps(data)
+        assert "error_message" not in json.dumps(data)
+
+    def test_from_run_no_return_node_yields_empty_sample(self, admin_client: TestClient) -> None:
+        mock_session = _make_mock_session()
+
+        run = _make_row(
+            id=_RUN_A,
+            pipeline_id=_PIPELINE_ID,
+            outputs_json={},
+            node_telemetry_json={str(_NODE_1): {"status": "failed", "summary": "no return"}},
+        )
+
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_one_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=run),
+        ]
+        mock_session.add = MagicMock()
+        mock_session.flush = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = admin_client.post(
+            self.URL,
+            json={
+                "run_id": str(_RUN_A),
+                "node_id": str(_NODE_1),
+                "eval_type": "regex",
+                "name": "Empty Eval",
+            },
+        )
+        assert resp.status_code == 201
+        assert resp.json()["sample_output"] == {}
 
     def test_from_run_admin_required(self, runner_client: TestClient) -> None:
         mock_session = _make_mock_session()

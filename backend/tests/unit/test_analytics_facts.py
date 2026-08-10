@@ -208,6 +208,7 @@ class TestRecordRunFacts:
                 "snapshot_id",
                 "run_number",
                 "output_bytes",
+                "telemetry_bytes",
                 "rate_limited",
             )
 

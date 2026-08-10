@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
@@ -909,3 +910,133 @@ def test_diff_node_output_node_not_found(client: TestClient) -> None:
 
     assert resp.status_code == 404
     assert "coder" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/runs/{run_id}/io — normalized split surfaces (FAR-126 P2a)
+# ---------------------------------------------------------------------------
+
+
+def _make_io_run(
+    *,
+    status: str = "complete",
+    run_number: int = 7,
+    input_payload: dict[str, Any] | None = None,
+    outputs_json: dict[str, Any] | None = None,
+    node_telemetry_json: dict[str, Any] | None = None,
+) -> MagicMock:
+    r = MagicMock()
+    r.id = _RUN_ID
+    r.run_number = run_number
+    r.status = status
+    r.input_payload = input_payload
+    r.outputs_json = outputs_json
+    r.node_telemetry_json = node_telemetry_json
+    return r
+
+
+_LEGACY_SANDBOX_ENVELOPE: dict[str, Any] = {
+    "artifacts": [
+        {
+            "node_id": "planner",
+            "status": "completed",
+            "output": {
+                "status": "completed",
+                "summary": "planned the work",
+                "output_json": {"plan": "Step 1: analyse", "confidence": 0.9},
+                "agent_stdout": "thinking out loud",
+                "wall_clock_time_ms": 1200,
+            },
+        }
+    ],
+    "output": {"status": "completed", "summary": "planned the work"},
+}
+
+
+class TestGetRunIO:
+    """GET /api/v1/runs/{run_id}/io"""
+
+    def test_io_legacy_run_serves_envelope_verbatim(self, client: TestClient) -> None:
+        run = _make_io_run(
+            input_payload={"prompt": "Hello"},
+            outputs_json={"planner": _LEGACY_SANDBOX_ENVELOPE},
+            node_telemetry_json=None,
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        # Legacy rows keep the mixed envelope byte-identical in outputs_json.
+        assert body["outputs_json"]["planner"] == _LEGACY_SANDBOX_ENVELOPE
+        # node_telemetry surfaces the inner output envelope (legacy-safe).
+        assert body["node_telemetry"]["planner"] == {
+            "status": "completed",
+            "summary": "planned the work",
+        }
+        assert isinstance(body["fixture_map"], dict)
+
+    def test_io_new_shape_run_returns_pure_returns_and_telemetry(self, client: TestClient) -> None:
+        pure_outputs = {
+            "planner": {"plan": "Step 1: analyse", "confidence": 0.9},
+            "coder": {"code": "print('hello')"},
+        }
+        telemetry = {
+            "planner": {
+                "status": "completed",
+                "summary": "planned",
+                "agent_stdout": "hello",
+                "wall_clock_time_ms": 1200,
+            },
+            "coder": {"status": "completed", "summary": "coded", "agent_stdout": "log line"},
+        }
+        run = _make_io_run(
+            input_payload={"prompt": "Hello"},
+            outputs_json=pure_outputs,
+            node_telemetry_json=telemetry,
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["outputs_json"]["planner"] == pure_outputs["planner"]
+        assert body["outputs_json"]["coder"] == pure_outputs["coder"]
+        assert body["node_telemetry"]["planner"] == telemetry["planner"]
+        assert body["node_telemetry"]["coder"] == telemetry["coder"]
+
+    def test_io_masks_both_surfaces(self, client: TestClient) -> None:
+        run = _make_io_run(
+            input_payload={"prompt": "Hello"},
+            outputs_json={"planner": {"api_key": "sk-out-secret", "result": "ok"}},
+            node_telemetry_json={
+                "planner": {
+                    "status": "completed",
+                    "summary": "planned",
+                    "secrets": {"api_key": "sk-telemetry-secret"},
+                    "agent_stdout": "plain log",
+                }
+            },
+        )
+
+        with (
+            patch("modulo.api.routes.runs.get_run", return_value=run),
+            patch("modulo.api.routes.runs.set_rls_org"),
+        ):
+            resp = client.get(f"/api/v1/runs/{_RUN_ID}/io")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["outputs_json"]["planner"]["api_key"] == SENSITIVE_VALUE_MASK
+        assert body["outputs_json"]["planner"]["result"] == "ok"
+        telemetry = body["node_telemetry"]["planner"]
+        assert telemetry["secrets"]["api_key"] == SENSITIVE_VALUE_MASK
+        assert telemetry["agent_stdout"] == "plain log"

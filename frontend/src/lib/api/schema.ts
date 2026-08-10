@@ -3174,6 +3174,15 @@ export interface paths {
         /**
          * Get Run Io Endpoint
          * @description Return per-node IO for a completed run, plus generated fixture_map.
+         *
+         *     The response exposes a single NORMALIZED view (FAR-126): ``outputs_json``
+         *     holds each node's pure return and ``node_telemetry`` holds its exhaustive
+         *     telemetry. Both are resolved through the legacy-safe accessors
+         *     (``node_return`` / ``node_telemetry``), so legacy runs (no telemetry
+         *     column) are byte-identical to today's envelope shape, and P1+ runs expose
+         *     the split surfaces. Telemetry-only nodes (e.g. ``skipped`` recovery
+         *     markers without an ``outputs_json`` entry) still appear under
+         *     ``node_telemetry``. Both surfaces are masked for secrets.
          */
         get: operations["get_run_io_endpoint_api_v1_runs__run_id__io_get"];
         put?: never;
@@ -3262,6 +3271,12 @@ export interface paths {
          *     Sensitive fields (keys matching *token*, *secret*, *api_key*,
          *     *password*, *key*, *credential*) in the output are masked with
          *     bullet characters.
+         *
+         *     For P1+ (split) rows this returns the node's PURE return. When a node
+         *     has no return (skipped / recovered / failed-no-return) but exists in
+         *     ``node_telemetry_json``, a DERIVED ``{status, summary}`` object is
+         *     returned instead of a 404 — never the raw telemetry (no stdout / log
+         *     tail on this surface).
          */
         get: operations["get_run_node_output_api_v1_runs__run_id__nodes__node_id__output_get"];
         put?: never;
@@ -11605,6 +11620,10 @@ export interface components {
             } | null;
             /** Outputs Json */
             outputs_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Node Telemetry */
+            node_telemetry?: {
                 [key: string]: unknown;
             } | null;
             /** Fixture Map */
