@@ -41,7 +41,7 @@ router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
 
 # The canonical terminal-status set (spec §4.2) — reconciled so an eval_failed
 # run is detected as terminal at WS connect time instead of subscribing forever.
-_TERMINAL_STATUSES = {"complete", "failed", "cancelled", "eval_failed"}
+_TERMINAL_STATUSES = {"complete", "failed", "cancelled", "eval_failed", "stalled"}
 
 
 @router.websocket("/{run_id}/ws")

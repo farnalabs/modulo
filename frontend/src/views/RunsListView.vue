@@ -14,6 +14,7 @@
           { value: RUN_STATUS.FAILED, label: 'Failed' },
           { value: RUN_STATUS.CANCELLED, label: 'Cancelled' },
           { value: RUN_STATUS.EVAL_FAILED, label: 'Eval Failed' },
+          { value: RUN_STATUS.STALLED, label: 'Stalled' },
         ]},
         { key: 'trigger_type', label: 'Trigger Type', options: [
           { value: TRIGGER_TYPE.MANUAL, label: 'Manual' },
@@ -85,7 +86,18 @@
             <span class="whitespace-nowrap text-muted-foreground">{{ formatRunDate(value as string) || '—' }}</span>
           </template>
           <template #cell-duration="{ row }">
-            <span class="whitespace-nowrap tabular-nums text-muted-foreground">{{ formatDuration(row.started_at as string, row.completed_at as string) }}</span>
+            <span
+              class="whitespace-nowrap tabular-nums text-muted-foreground"
+              :data-testid="`runs-list-duration-${row.run_id}`"
+            >
+              <span
+                v-if="isNonTerminalStatus(row.status as string) && row.started_at"
+                role="status"
+                aria-live="polite"
+                class="tabular-nums"
+              >{{ formatElapsed(row.started_at as string) }}</span>
+              <span v-else>{{ formatDuration(row.started_at as string, row.completed_at as string) }}</span>
+            </span>
           </template>
           <template #cell-total_cost_usd="{ value, row }">
             <span class="tabular-nums">
@@ -153,7 +165,7 @@
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { fetchRuns, requestRunCancellation, type RunListItem, type FetchRunsParams } from '../lib/api/runs'
 import { useI18n } from 'vue-i18n'
@@ -206,6 +218,32 @@ const { data: runsData, loading, error, load: loadRuns } = useDataFetch<{ items:
 
 const runs = computed(() => runsData.value?.items ?? [])
 const total = computed(() => runsData.value?.total ?? 0)
+
+// Live elapsed runtime for executing runs: a 1-second tick re-renders the
+// duration cell only while non-terminal runs with a started_at are visible.
+const now = ref(Date.now())
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
+
+const hasElapsedRuns = computed(() =>
+  runs.value.some((r) => isNonTerminalStatus(r.status) && !!r.started_at),
+)
+
+watch(hasElapsedRuns, (active) => {
+  if (active && !elapsedTimer) {
+    now.value = Date.now()
+    elapsedTimer = setInterval(() => { now.value = Date.now() }, 1000)
+  } else if (!active && elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}, { immediate: true })
+
+onUnmounted(() => {
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+})
 
 function aggregateCostValue(run: RunListItem): number | null {
   if (run.aggregate_cost_usd == null || run.aggregate_cost_usd === '') return null
@@ -322,6 +360,10 @@ function formatDuration(startIso: string | null | undefined, endIso: string | nu
   if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`
   if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`
   return `${seconds}s`
+}
+
+function formatElapsed(startIso: string): string {
+  return `${formatDuration(startIso, new Date(now.value).toISOString())} ${t('views.RunsListView.elapsed')}`
 }
 
 </script>

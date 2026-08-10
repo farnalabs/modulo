@@ -7375,7 +7375,7 @@ export interface components {
          * AnalyticsStatus
          * @enum {string}
          */
-        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "waiting_for_lock" | "complete" | "failed" | "cancelled" | "eval_failed";
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "waiting_for_lock" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled";
         /**
          * AnalyticsTriggerType
          * @enum {string}
@@ -11838,6 +11838,12 @@ export interface components {
              * @default 0.000000
              */
             aggregate_cost_usd: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /** RunSummary */
         RunSummary: {

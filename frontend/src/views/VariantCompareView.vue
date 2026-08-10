@@ -247,6 +247,7 @@ import EmptyState from '../components/shared/EmptyState.vue'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { formatMoney } from '../lib/money'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
+import { TERMINAL_STATUSES } from '../constants/runStatuses'
 
 const { t } = useI18n()
 const { currencyCode, loadCurrency } = useOrgCurrency()
@@ -300,7 +301,7 @@ const diffNode = ref<string | null>(null)
 const diffVarA = ref<string | null>(null)
 const diffVarB = ref<string | null>(null)
 
-const terminalStatuses = new Set(['complete', 'failed', 'cancelled', 'eval_failed'])
+const terminalStatuses: Set<string> = new Set(TERMINAL_STATUSES)
 
 const variants = computed<VariantDefinition[]>(() =>
   (selectedGroup.value?.variants ?? []).filter(

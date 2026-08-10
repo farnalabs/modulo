@@ -319,6 +319,28 @@ async def test_finalize_cost_pre_component_read_writes_zero_total() -> None:
     assert kwargs["total_tokens"] == 0
 
 
+async def test_finalize_cost_stalled_persists_stalled_status() -> None:
+    """A stalled run finalizes through update_run_status with status='stalled'
+    (not 'complete'). Coupled with the persistence-layer test that drives the
+    real update_run_status, this covers the full stalled write path."""
+    run = _make_run(started_at=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=run)))
+    with patch("modulo.core.cost_controller.finalize.update_run_status") as mock_urs:
+        await finalize_cost(
+            session,
+            run_id=run.id,
+            org_id=_ORG_ID,
+            status="stalled",
+            segment_node_token_usage=None,
+            segment_completed_node_outputs=None,
+            node_type_map={},
+            is_terminal=True,
+        )
+    mock_urs.assert_awaited_once()
+    assert mock_urs.await_args.args[2] == "stalled"
+
+
 async def test_finalize_cost_fallback_de_trusts_cost_estimate_usd() -> None:
     """A cost-path exception degrades to the legacy fallback — wall-clock only.
 
