@@ -2,6 +2,7 @@ export function runStatusBadgeClass(status: string): string {
   const map: Record<string, string> = {
     complete: 'bg-success/10 text-success',
     failed: 'bg-destructive/10 text-destructive',
+    stalled: 'bg-destructive/10 text-destructive',
     running: 'bg-primary/10 text-primary',
     pending: 'bg-muted text-muted-foreground',
     awaiting_human: 'bg-warning/10 text-warning',
