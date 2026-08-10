@@ -40,8 +40,11 @@ def assert_result_shape(result: Any) -> None:
 
     assert isinstance(result, ConnectorResult), f"Expected ConnectorResult, got {type(result).__name__}"
     assert isinstance(result.records, list), f"ConnectorResult.records must be a list, got {type(result.records)}"
+    assert all(isinstance(r, dict) for r in result.records), "ConnectorResult.records must contain only dicts"
     assert result.next_cursor is None or isinstance(result.next_cursor, str)
     assert result.total is None or isinstance(result.total, int)
+    if result.total is not None:
+        assert result.total >= 0, f"ConnectorResult.total must be non-negative, got {result.total}"
 
 
 def assert_health_shape(result: Any) -> None:
@@ -50,3 +53,5 @@ def assert_health_shape(result: Any) -> None:
     assert isinstance(result, HealthResult), f"Expected HealthResult, got {type(result).__name__}"
     assert isinstance(result.ok, bool)
     assert isinstance(result.detail, str)
+    if not result.ok:
+        assert result.detail, "HealthResult with ok=False must provide a non-empty detail"
