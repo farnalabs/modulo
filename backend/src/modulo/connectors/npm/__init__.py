@@ -15,6 +15,8 @@ from modulo.connectors.base import (
 )
 
 _API_BASE = "https://registry.npmjs.org"
+_NPM_SEARCH_ENDPOINT = "/-/v1/search"
+_NPM_MAX_SEARCH_SIZE = 250
 
 
 class NpmConnector(ConnectorBase):
@@ -94,22 +96,55 @@ class NpmConnector(ConnectorBase):
         return ConnectorResult(records=[body], total=1)
 
     async def _search_packages(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        text = q.filters.get("text")
-        if not text:
-            raise ValueError("npm search query requires 'text' in filters")
-        params: dict[str, Any] = {"text": text, "size": str(q.limit)}
-        if q.filters.get("from"):
-            params["from"] = str(q.filters["from"])
+        return await self._search_registry(c, q, required_filter="text")
+
+    async def _search_registry(
+        self,
+        c: httpx.AsyncClient,
+        q: ConnectorQuery,
+        *,
+        required_filter: str,
+    ) -> ConnectorResult:
+        filter_value = q.filters.get(required_filter)
+        if not filter_value:
+            raise ValueError(f"npm {q.resource} query requires '{required_filter}' in filters")
+
+        size = max(1, min(q.limit or 20, _NPM_MAX_SEARCH_SIZE))
+        params: dict[str, Any] = {required_filter: filter_value, "size": str(size)}
+
+        offset = 0
+        if q.filters.get("from") is not None:
+            try:
+                offset = int(q.filters["from"])
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"npm {q.resource} filter 'from' must be a numeric offset, got {q.filters['from']!r}"
+                ) from None
         if q.cursor:
-            params["from"] = q.cursor
-        resp = await c.get("/-/v1/search", params=params)
+            try:
+                offset = int(q.cursor)
+            except (TypeError, ValueError):
+                raise ValueError(f"npm {q.resource} cursor must be a numeric offset, got {q.cursor!r}") from None
+        if offset:
+            params["from"] = str(offset)
+
+        resp = await c.get(_NPM_SEARCH_ENDPOINT, params=params)
         resp.raise_for_status()
         body = resp.json()
         objects = body.get("objects", [])
         records = [o.get("package", o) for o in objects]
+
+        total = body.get("total", len(records))
+        next_cursor = None
+        if records:
+            has_more = offset + len(records) < total if isinstance(total, int) else len(records) >= size
+            if has_more:
+                next_cursor = str(offset + len(records))
+
         return ConnectorResult(
             records=records,
-            total=body.get("total", len(records)),
+            total=total,
+            next_cursor=next_cursor,
         )
 
     async def _get_package_files(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -126,16 +161,4 @@ class NpmConnector(ConnectorBase):
         return ConnectorResult(records=files, total=len(files))
 
     async def _scope_packages(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
-        scope = q.filters.get("scope")
-        if not scope:
-            raise ValueError("npm scope_packages query requires 'scope' in filters")
-        params: dict[str, Any] = {"scope": scope, "size": str(q.limit)}
-        resp = await c.get("/-/v1/search", params=params)
-        resp.raise_for_status()
-        body = resp.json()
-        objects = body.get("objects", [])
-        records = [o.get("package", o) for o in objects]
-        return ConnectorResult(
-            records=records,
-            total=body.get("total", len(records)),
-        )
+        return await self._search_registry(c, q, required_filter="scope")
