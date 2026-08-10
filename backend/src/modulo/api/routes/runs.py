@@ -1390,9 +1390,14 @@ async def recover_run_node(
         ) from exc
 
     # 'resumed' (shadow inline) and 'enqueued'/'deduped' (SAQ accepted) both
-    # leave the run resuming. 'deferred' means the resume was NOT actually
-    # dispatched — surface it instead of silently dropping the recovery.
-    if outcome == "deferred":
+    # leave the run resuming. 'deferred' (capacity-blocked) and
+    # 'enqueue_failed' (final enqueue failure after retries) mean the resume
+    # was NOT actually dispatched — surface them instead of silently dropping
+    # the recovery: the run is left pending and would later be re-dispatched by
+    # dispatcher_reconcile as execute_run with resume_data=None, losing the
+    # user's replay/skip recovery and any supplied input_data (the run would
+    # re-execute from scratch instead of resuming at the recovered node).
+    if outcome in ("deferred", "enqueue_failed"):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to enqueue pipeline resume after node recovery",

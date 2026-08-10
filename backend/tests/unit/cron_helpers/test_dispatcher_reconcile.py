@@ -758,3 +758,74 @@ class TestReconcilePrefixAware:
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[0] == "staging-runs"
         assert reenqueue.await_args.kwargs["key_suffix"]
+
+
+class TestAwaitingHumanHasCommittedDecision:
+    """F6a auto-approve guard: the payload-requirement keys off the persisted
+    ``decision_payload``'s ``action`` member — the ``hitl_claims.decision``
+    column only ever holds approved/rejected/deliver_manual, so a column-keyed
+    check would be dead code and could never protect a manual-output decision
+    whose payload was lost."""
+
+    def _mock_session(self, row: tuple[Any, Any] | None) -> AsyncMock:
+        session = AsyncMock()
+        result = MagicMock()
+        result.first.return_value = row
+        session.execute = AsyncMock(return_value=result)
+        return session
+
+    @pytest.mark.asyncio
+    async def test_no_decision_row_returns_false(self) -> None:
+        session = self._mock_session(None)
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
+
+    @pytest.mark.asyncio
+    async def test_legacy_payload_less_approved_is_committed(self) -> None:
+        """A legacy/pre-migration approved row with a NULL payload degrades to
+        ``{"action": "approved"}`` — a plain approval needs no payload."""
+        session = self._mock_session(("approved", None))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_legacy_payload_less_rejected_is_committed(self) -> None:
+        session = self._mock_session(("rejected", None))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_plain_approve_with_payload_is_committed(self) -> None:
+        session = self._mock_session(("approved", {"action": "approved"}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_manual_output_with_output_is_committed(self) -> None:
+        session = self._mock_session(("approved", {"action": "manual_output", "output": {"answer": 42}}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_manual_output_without_output_is_not_committed(self) -> None:
+        """A manual-output decision whose payload lost its output is NOT
+        committed — a payload-less recovery would degrade to
+        ``{"action": "approved"}`` and pass that dict to the manual node as its
+        output instead of resuming with the human's data."""
+        session = self._mock_session(("approved", {"action": "manual_output"}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
+
+    @pytest.mark.asyncio
+    async def test_approved_with_modification_with_output_is_committed(self) -> None:
+        session = self._mock_session(
+            ("approved", {"action": "approved_with_modification", "modified_output": {"v": 1}})
+        )
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True
+
+    @pytest.mark.asyncio
+    async def test_approved_with_modification_without_output_is_not_committed(self) -> None:
+        """An approve-with-modification decision without its modified output is
+        NOT committed — a payload-less recovery would drop the human's
+        modification and resume as a plain approval."""
+        session = self._mock_session(("approved", {"action": "approved_with_modification"}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
+
+    @pytest.mark.asyncio
+    async def test_deliver_manual_with_payload_is_committed(self) -> None:
+        session = self._mock_session(("deliver_manual", {"action": "deliver_manual", "output": {"z": 3}}))
+        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is True

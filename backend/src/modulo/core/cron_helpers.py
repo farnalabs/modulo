@@ -2063,8 +2063,11 @@ def _reconcile_job_type(status: str) -> str:
 
 
 # HITL decisions whose faithful resume REQUIRES a payload beyond the action name.
-# ``approved``/``rejected`` only need the action; ``approved_with_modification``
-# and ``manual_output`` carry modification/output data that must be persisted.
+# ``approved``/``rejected``/``deliver_manual`` only need the action;
+# ``approved_with_modification`` and ``manual_output`` carry modification/output
+# data that must be persisted. These actions are carried by the persisted
+# ``decision_payload``'s ``action`` member — the ``hitl_claims.decision`` column
+# only ever holds ``approved``/``rejected``/``deliver_manual``.
 _PAYLOAD_REQUIRING_ACTIONS = frozenset({"approved_with_modification", "manual_output"})
 
 
@@ -2089,9 +2092,20 @@ async def _awaiting_human_has_committed_decision(
     Stricter than the old ``decision IS NOT NULL`` guard (B1-reconcile): a
     decision is only ``committed`` when the decision is present AND — for
     payload-carrying actions (``approved_with_modification``/``manual_output``)
-    — the persisted ``decision_payload`` is present too. A decision without its
-    payload cannot be faithfully resumed. ``decision_payload`` is read via raw
-    SQL (the jsonb column ships in a parallel migration).
+    — the persisted ``decision_payload`` is present and actually carries the
+    required data. A payload-carrying decision without its payload cannot be
+    faithfully resumed. ``decision_payload`` is read via raw SQL (the jsonb
+    column ships in a parallel migration).
+
+    The payload-requirement is keyed off the persisted ``decision_payload``'s
+    ``action`` member, NOT the ``decision`` column — the column only ever holds
+    ``approved``/``rejected``/``deliver_manual``, so a column-keyed check would
+    be dead code and could never protect a manual-output decision whose payload
+    was lost: a payload-less recovery degrades to ``{"action": "approved"}``,
+    auto-approving the gate (a manual-output decision would pass
+    ``{"action": "approved"}`` to the manual node as its output). A payload-less
+    row (legacy/pre-migration) is treated as a plain approval/rejection that
+    needs no payload to resume faithfully.
     """
     result = await session.execute(
         text(
@@ -2104,8 +2118,22 @@ async def _awaiting_human_has_committed_decision(
     row = result.first()
     if row is None or row[0] is None:
         return False
-    decision, payload = row[0], row[1]
-    return not (decision in _PAYLOAD_REQUIRING_ACTIONS and payload is None)
+    payload = row[1]
+    if isinstance(payload, dict):
+        action = payload.get("action")
+        if action == "manual_output":
+            # A manual-output decision MUST carry its output — otherwise the
+            # manual node resumes with ``{"action": "approved"}`` as its output.
+            return "output" in payload
+        if action == "approved_with_modification":
+            # An approve-with-modification MUST carry the modified output —
+            # otherwise the gate resumes as a plain approval, dropping the
+            # human's modification.
+            return "modified_output" in payload
+    # A payload-less row (legacy/pre-migration) degrades to
+    # ``{"action": <decision>}`` — a plain approval/rejection/deliver_manual
+    # needs no payload to be faithfully resumed.
+    return True
 
 
 async def _committed_decision_resume_data(
