@@ -366,3 +366,57 @@ fly ssh console --app modulo-app-db --machine <id> --user postgres --command "ps
 Reliable restart indicators: `pg_postmaster_start_time()` (new value after a
 restart) and the machine's UPDATED timestamp in `fly status`. Do NOT treat a
 5432-socket psql failure as "postgres is down".
+
+### Ops / Fly: secrets override fly.toml [env] — a stale secret silently wedged the SAQ workers (2026-08-10)
+
+Fly secrets take precedence over fly.toml [env] on every machine. A stale secret
+from the SAQ cutover (SAQ_WORKER_CONCURRENCY=2) silently overrode fly.toml's 20,
+capping the fleet at 2 concurrent runs while fly.toml and the machine config.env
+both said 20. When the concurrency was raised via secret, the workers WEDGED
+instead: SAQ's blocking dequeue() (blmove, _DEQUEUE_TIMEOUT) holds ONE pool
+connection per concurrent _process task and is NOT gated by max_concurrent_ops;
+with concurrency 20 and a Redis pool of 5 (another stale secret), all 20
+connections were held by blocked dequeues, the Upkeep task (worker_info
+heartbeats, crons) died with `ConnectionError: Too many connections`, and the
+worker stayed alive but silent — no heartbeats, no cron schedule, runs stuck in
+`running`. At concurrency 2 it was stable (2 conns held, 3 spare).
+
+Fixes (all verified):
+1. Runtime guard: saq_worker._effective_redis_pool_size() enforces
+   pool >= concurrency + 5 in _build_queue (PR #972).
+2. Secrets now pin SAQ_WORKER_CONCURRENCY=20 and SAQ_REDIS_POOL_SIZE=50; both
+   values were then moved into fly.toml [env] and the shadowing secrets unset
+   (PR #984) so committed config is the single source.
+3. Drift detector: Repos/devtools/harness/tools/check-config-drift.ps1 lists
+   secrets that shadow the config file's [env]; exits 1 on drift.
+
+Rules:
+- NEVER rely on a Fly secret for a non-secret config value that also exists in
+  fly.toml [env] — the secret silently wins and can diverge (a stale value from
+  a past deploy lingers forever).
+- When changing a worker-scaling knob, always check BOTH the secret set AND
+  fly.toml [env] (and run check-config-drift.ps1).
+- SAQ worker concurrency and Redis pool are NOT decoupled: blocking dequeue
+  holds one pool connection per concurrent task, so the pool MUST stay strictly
+  larger than concurrency (the code guard enforces concurrency + 5).
+
+### Ops / SAQ: a worker process that is alive but not heartbeating is WEDGED
+
+Diagnosing a SAQ wedge (2026-08-10): the worker process was `S (sleeping)` in
+epoll with low CPU and no crash-loop (same PID for 20+ min) — yet worker_info
+entries vanished from `saq:runs:stats`/`saq:system:stats`, the fire_due_triggers
+cron heartbeat went stale, and dispatcher_reconcile stopped. Do not trust
+process aliveness: check Redis.
+
+Signals of a wedge (check from the machine via exec):
+- `zrange saq:runs:stats 0 -1 withscores` / `zrange saq:system:stats 0 -1
+  withscores` — empty or all scores older than ~2x the worker_info timer (89s).
+- `get saq:cron:heartbeat:fire_due_triggers:<machine>` — stale beyond 60-120s.
+- `hgetall saq:cron:stats:dispatcher_reconcile` — missing/stale.
+- `fly logs` shows `ERROR:saq:Upkeep task failed unexpectedly` +
+  `redis.exceptions.ConnectionError: Too many connections`.
+
+The root cause is almost always Redis pool starvation (see the dequeue lesson).
+Check `connected_clients` (info clients) to rule out the Upstash server limit —
+the local pool error "Too many connections" comes from redis-py's
+get_available_connection, NOT the server.
