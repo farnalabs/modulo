@@ -47,8 +47,8 @@ def test_lock_keys_differ_per_key() -> None:
 
 def test_lock_keys_produce_signed_int4_pair() -> None:
     key1, key2 = _lock_keys("duplicate_terminal_events")
-    assert -2**31 <= key1 < 2**31
-    assert -2**31 <= key2 < 2**31
+    assert -(2**31) <= key1 < 2**31
+    assert -(2**31) <= key2 < 2**31
 
 
 # ---------------------------------------------------------------------------
