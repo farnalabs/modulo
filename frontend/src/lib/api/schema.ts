@@ -1047,50 +1047,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/changelog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Changelog
-         * @description Return all changelog entries sorted by date descending.
-         */
-        get: operations["list_changelog_api_v1_changelog_get"];
-        put?: never;
-        /**
-         * Create Changelog Entry
-         * @description Add a new changelog entry (in-memory for alpha; persists across restarts via DB in v1).
-         */
-        post: operations["create_changelog_entry_api_v1_changelog_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/changelog/latest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Latest Changelog
-         * @description Return the most recent changelog entry.
-         */
-        get: operations["latest_changelog_api_v1_changelog_latest_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/auth/sso/providers": {
         parameters: {
             query?: never;
@@ -7527,21 +7483,6 @@ export interface components {
             /** Role */
             role: string;
         };
-        /** ChangelogEntry */
-        ChangelogEntry: {
-            /** Version */
-            version: string;
-            /** Date */
-            date: string;
-            /** Summary */
-            summary: string;
-            /** Changes */
-            changes: string[];
-            /** Deprecations */
-            deprecations?: string[] | null;
-            /** Migration Url */
-            migration_url?: string | null;
-        };
         /** CheckResult */
         CheckResult: {
             /**
@@ -8212,21 +8153,6 @@ export interface components {
             /** Components */
             components?: components["schemas"]["CostReportComponent"][];
             annotations?: components["schemas"]["CostReportAnnotations"];
-        };
-        /** CreateChangelogEntryRequest */
-        CreateChangelogEntryRequest: {
-            /** Version */
-            version: string;
-            /** Date */
-            date: string;
-            /** Summary */
-            summary: string;
-            /** Changes */
-            changes: string[];
-            /** Deprecations */
-            deprecations?: string[] | null;
-            /** Migration Url */
-            migration_url?: string | null;
         };
         /** CreateEvalFromRunRequest */
         CreateEvalFromRunRequest: {
@@ -16761,79 +16687,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_changelog_api_v1_changelog_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChangelogEntry"][];
-                };
-            };
-        };
-    };
-    create_changelog_entry_api_v1_changelog_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateChangelogEntryRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChangelogEntry"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    latest_changelog_api_v1_changelog_latest_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChangelogEntry"];
                 };
             };
         };

@@ -10,29 +10,6 @@ export default {
       "approving": "Approving...",
       "approved_redirecting": "Approved — redirecting to the application...",
     },
-    "TeamComparisonView": {
-      "failed_to_load_data": "Failed to load data:",
-      "failed_to_load_teams": "Failed to load teams:",
-      "sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams": "Side-by-side eval pass rates and pipeline metrics across teams",
-      "total_runs": "Total Runs",
-      "team_comparison": "Team Comparison",
-      "active_pipelines": "Active Pipelines",
-      "run_status": "Run Status",
-      "failed_to_load_dashboard": "Failed to load dashboard:",
-      "teams": "Teams",
-      "team": "Team",
-      "members": "Members",
-      "running": "Running",
-      "awaiting": "Awaiting",
-      "failed": "Failed",
-      "idle": "Idle",
-      "pipeline_eval_breakdown": "{name} — Pipeline Eval Breakdown",
-      "pipeline_count": "{count} pipeline | {count} pipelines",
-      "no_eval_data_available": "No eval data available for this team's pipelines.",
-      "no_teams_found": "No teams found. Create teams in Settings to see comparison data.",
-      "eval_count": "{count} eval | {count} evals",
-      "passed_count": "{count} passed"
-    },
     "LibraryView": {
       "title": "Library",
       "all_types": "All types",
@@ -1415,14 +1392,6 @@ export default {
       "export_ready": "Export ready",
       "this_action_cannot_be_undone": "This action cannot be undone."
     },
-    "ApiChangelogView": {
-      "no_api_version_history_is_available_yet": "No API version history is available yet.",
-      "api_changelog": "API Changelog",
-      "version_history_and_deprecation_notices_for_the_modulo_api": "Version history and deprecation notices for the Modulo API",
-      "no_changelog_entries": "No changelog entries",
-      "load_error": "Unable to load the changelog right now. Please try again later.",
-      "load_error_with_detail": "Unable to load the changelog right now. Please try again later. ({detail})"
-    },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",
       "run_inference": "Run Inference",
@@ -2452,8 +2421,6 @@ export default {
       "item_saved_views": "Saved Views",
       "item_error_dashboard": "Error Dashboard",
       "item_notification_log": "Notification Log",
-      "item_api_changelog": "API Changelog",
-      "item_team_comparison": "Team Comparison",
       "item_plugins": "Plugins",
       "item_feedback_inbox": "Feedback Inbox",
       "item_organisations": "Organisations",

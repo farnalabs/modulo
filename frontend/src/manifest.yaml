@@ -203,7 +203,6 @@ routes:
         sidebar_order: 2
         type: list_page
         <<: *community
-        visibility: private_preview
         deprecated: false
 
     /variants/compare:
@@ -215,7 +214,6 @@ routes:
         sidebar_order: 3
         type: page
         <<: *community
-        visibility: private_preview
         deprecated: false
 
     /variants/ab-test:
@@ -227,7 +225,6 @@ routes:
         sidebar_order: 4
         type: page
         <<: *community
-        visibility: private_preview
         deprecated: false
 
     /schemas:
@@ -644,28 +641,6 @@ routes:
         sidebar_group: monitor
         sidebar_order: 3
         type: list_page
-        <<: *team
-        deprecated: false
-
-    /admin/api-changelog:
-        name: api-changelog
-        breadcrumb: API Changelog
-        parent: /
-        product_map:
-        sidebar_group: monitor
-        sidebar_order: 4
-        type: list_page
-        <<: *team
-        deprecated: false
-
-    /admin/teams/comparison:
-        name: team-comparison
-        breadcrumb: Team Comparison
-        parent: /
-        product_map:
-        sidebar_group: monitor
-        sidebar_order: 5
-        type: page
         <<: *team
         deprecated: false
 

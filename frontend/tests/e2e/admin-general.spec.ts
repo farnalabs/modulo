@@ -1,14 +1,5 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Admin API Changelog', { tag: "@regression" }, () => {
-  test('renders the API Changelog page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
-    await page.goto('/admin/api-changelog')
-    await expect(page.locator('h1')).toContainText('API Changelog')
-    await expect(page.getByTestId('changelog-title')).toBeVisible()
-  })
-})
-
 test.describe('Admin Audit Log', { tag: "@regression" }, () => {
   test('renders the Audit Log page', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
