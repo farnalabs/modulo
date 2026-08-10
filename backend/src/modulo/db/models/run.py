@@ -16,9 +16,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
-    text,
 )
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import expression
 
 from modulo.db.models.base import OrgScoped
 
@@ -33,6 +34,30 @@ if TYPE_CHECKING:
 # analytics facts writer, the maintenance backfill, and the run purge. Must be
 # a subset of the ``ck_runs_status`` CHECK-constraint values.
 TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+
+
+class _GenRandomUuid(expression.FunctionElement):
+    """Dialect-portable server_default for ``runs.claim_token``.
+
+    Migration 0074 makes ``claim_token`` NOT NULL with a
+    ``gen_random_uuid()::text`` server_default on Postgres. The ORM model
+    mirrors that so ORM-created schemas (unit tests on in-memory SQLite, dev
+    mode) stay valid: Postgres renders the native function, SQLite falls back
+    to ``hex(randomblob(16))`` (a valid 32-char hex UUID).
+    """
+
+    type = String(128)
+    inherit_cache = True
+
+
+@compiles(_GenRandomUuid)
+def _compile_postgres_default(element, compiler, **kw):
+    return "gen_random_uuid()::text"
+
+
+@compiles(_GenRandomUuid, "sqlite")
+def _compile_sqlite_default(element, compiler, **kw):
+    return "lower(hex(randomblob(16)))"
 
 
 class Run(OrgScoped):
@@ -113,9 +138,7 @@ class Run(OrgScoped):
     # token identical to it could never be superseded). F3a claim-token fence.
     # NOT NULL since migration 0074 (NULLs backfilled to gen_random_uuid()::text;
     # server_default keeps old-app INSERTs legal during bluegreen cutover).
-    claim_token: Mapped[str] = mapped_column(
-        String(128), nullable=False, server_default=text("gen_random_uuid()::text")
-    )
+    claim_token: Mapped[str] = mapped_column(String(128), nullable=False, server_default=_GenRandomUuid())
     # Enqueue-failure audit timestamp (migration 0074) — set when a SAQ
     # dispatch enqueue fails so dispatcher_reconcile can fail the run.
     enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
