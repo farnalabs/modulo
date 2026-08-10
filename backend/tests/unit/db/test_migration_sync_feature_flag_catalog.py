@@ -24,7 +24,7 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-_HEAD_MIGRATION_NAME = "0076_analytics_concurrency_columns"
+_HEAD_MIGRATION_NAME = "0077_schema_folders"
 # The migration this branch introduces — the current head of the chain.
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
