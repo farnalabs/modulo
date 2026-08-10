@@ -269,3 +269,83 @@ class TestTestEmail:
             json={"to": "admin@example.com"},
         )
         assert resp.status_code == 403
+
+    async def test_email_test_success(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(return_value=True)
+        try:
+            resp = await client_admin.post(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+                json={"to": "admin@example.com"},
+            )
+            assert resp.status_code == 200
+            assert resp.json() == {"ok": True, "message": "Test email sent successfully"}
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
+
+    async def test_email_test_smtp_failure_returns_descriptive_message(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.core.email_service import EmailSendingError
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(side_effect=EmailSendingError("Connection refused"))
+        try:
+            resp = await client_admin.post(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+                json={"to": "admin@example.com"},
+            )
+            assert resp.status_code == 200
+            assert resp.json() == {"ok": False, "message": "Connection refused"}
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
+
+    async def test_email_test_unexpected_exception_does_not_leak_internals(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587}},
+        )
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(side_effect=RuntimeError("secret internal detail: db host 10.0.0.1"))
+        try:
+            resp = await client_admin.post(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+                json={"to": "admin@example.com"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ok"] is False
+            assert "10.0.0.1" not in data["message"]
+            assert "secret internal" not in data["message"]
+            assert data["message"] == "Unexpected error while sending the test email"
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
