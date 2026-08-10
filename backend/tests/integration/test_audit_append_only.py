@@ -223,3 +223,13 @@ class TestAuditReadOperations:
             },
         )
         await db_session.commit()
+
+        # Verify the insert actually persisted rather than only checking it did
+        # not raise — an append-only guard that silently swallows writes would
+        # otherwise keep this test green. Scope by this run's fresh org id so
+        # leftover rows from earlier runs cannot inflate the count.
+        result = await db_session.execute(
+            text("SELECT COUNT(*) FROM audit_events WHERE event_type = 'test.insert' AND organisation_id = :org_id"),
+            {"org_id": str(org_id)},
+        )
+        assert result.scalar() == 1

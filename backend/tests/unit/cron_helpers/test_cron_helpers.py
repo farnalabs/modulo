@@ -2075,4 +2075,4 @@ class TestDispatcherReconcileSharedStats:
             async def set(self, _key: str, _value: str) -> None:
                 raise RuntimeError("redis down")
 
-        await ch.write_dispatcher_reconcile_stats(_BrokenRedis(), {"scanned": 0})
+        assert (await ch.write_dispatcher_reconcile_stats(_BrokenRedis(), {"scanned": 0})) is None
