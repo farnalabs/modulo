@@ -19,32 +19,76 @@ failed assertion cannot leave other integration tests on a downgraded schema.
 import asyncio
 import os
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+pytestmark = pytest.mark.integration
 
 BACKEND_ROOT = Path(__file__).parents[2]
 
 _REVISION_BEFORE = "0073_run_node_attempt_count"
 _REVISION_AFTER = "0074_runtime_hardening_columns"
 
-pytestmark = pytest.mark.integration
-
 
 def _make_alembic_config() -> Config:
-    from modulo.db.migrations.env import _to_sync_url
-
-    url = os.getenv("DATABASE_URL", "")
     config = Config(BACKEND_ROOT / "alembic.ini")
-    config.set_main_option("sqlalchemy.url", _to_sync_url(url))
     config.set_main_option("script_location", str(BACKEND_ROOT / "src" / "modulo" / "db" / "migrations"))
     config.config_file_name = None
     return config
+
+
+def _sync_url() -> str:
+    from modulo.db.migrations.env import _to_sync_url
+
+    return _to_sync_url(os.environ["DATABASE_URL"])
+
+
+def _run_migration(config: Config, sync_url: str, revision: str, *, downgrade: bool) -> None:
+    """Run upgrade/downgrade through alembic's EnvironmentContext directly.
+
+    env.py's ``run_migrations_online`` fast-paths out via ``_db_is_at_head``
+    when the DB version equals the script head — which is ALWAYS true just
+    before a downgrade, silently turning ``alembic downgrade`` into a no-op
+    (pre-existing bug, reported separately). Running the migration through the
+    EnvironmentContext API applies the real revision callables against the
+    given connection and honours the target revision, so the round-trip is
+    genuinely exercised.
+    """
+    from alembic.runtime.environment import EnvironmentContext
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import NullPool
+
+    script = ScriptDirectory.from_config(config)
+    migrate_fn: Callable[..., object] = script._downgrade_revs if downgrade else script._upgrade_revs
+    engine = create_engine(sync_url, poolclass=NullPool)
+    try:
+        with (
+            engine.begin() as connection,
+            EnvironmentContext(
+                config,
+                script,
+                fn=lambda rev, ctx: migrate_fn(revision, rev),
+                as_sql=False,
+                starting_rev=None,
+                destination_rev=revision,
+                tag=None,
+            ) as env_ctx,
+        ):
+            env_ctx.configure(
+                connection=connection,
+                target_metadata=None,
+                dialect_opts={"paramstyle": "named"},
+            )
+            env_ctx.run_migrations()
+    finally:
+        engine.dispose()
 
 
 async def _seed_run(
@@ -93,7 +137,8 @@ async def test_0074_migration_round_trip(
     test_snapshot: uuid.UUID,
 ) -> None:
     config = _make_alembic_config()
-    await asyncio.to_thread(command.downgrade, config, _REVISION_BEFORE)
+    sync_url = _sync_url()
+    await asyncio.to_thread(_run_migration, config, sync_url, _REVISION_BEFORE, downgrade=True)
 
     seeded_run_ids: list[uuid.UUID] = []
     try:
@@ -120,7 +165,7 @@ async def test_0074_migration_round_trip(
         seeded_run_ids.append(waiting_run)
 
         # Apply 0074.
-        await asyncio.to_thread(command.upgrade, config, "heads")
+        await asyncio.to_thread(_run_migration, config, sync_url, "heads", downgrade=False)
 
         async with db_engine.connect() as conn:
             # claim_token NOT NULL + server_default + backfilled NULL.
@@ -223,4 +268,4 @@ async def test_0074_migration_round_trip(
         # Always restore heads — a failed assertion must not leave the shared
         # session-scoped DB downgraded for the tests that follow.
         if await _current_revision(db_engine) != _REVISION_AFTER:
-            await asyncio.to_thread(command.upgrade, config, "heads")
+            await asyncio.to_thread(_run_migration, config, sync_url, "heads", downgrade=False)

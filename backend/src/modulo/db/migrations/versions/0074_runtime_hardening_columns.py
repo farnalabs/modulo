@@ -38,6 +38,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "0074_runtime_hardening_columns"
 down_revision: str | None = "0073_run_node_attempt_count"
@@ -89,7 +90,7 @@ def upgrade() -> None:
     op.add_column("runs", sa.Column("sandbox_id", sa.Text(), nullable=True))
 
     # 5. HITL decision audit payload.
-    op.add_column("hitl_claims", sa.Column("decision_payload", sa.JSONB(), nullable=True))
+    op.add_column("hitl_claims", sa.Column("decision_payload", JSONB(), nullable=True))
 
     # 6. Recreate ck_runs_status WITHOUT the never-entered 'waiting_for_lock'
     #    sub-state. Backfill any stray rows first (the drop must come before the
