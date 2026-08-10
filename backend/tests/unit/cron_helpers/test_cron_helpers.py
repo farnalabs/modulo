@@ -120,7 +120,13 @@ def _rows_result(rows: list[Any]) -> MagicMock:
 
 
 def _cron_row(
-    trigger_id: uuid.UUID, *, snapshot_id: str | None = "default", cron_timezone: str | None = None
+    trigger_id: uuid.UUID,
+    *,
+    snapshot_id: str | None = "default",
+    cron_timezone: str | None = None,
+    cron_expression: str = "*/30 * * * * *",
+    next_fire_at: datetime | None = None,
+    last_fired_at: datetime | None = None,
 ) -> SimpleNamespace:
     if snapshot_id == "default":
         snapshot_id = str(uuid.uuid4())
@@ -128,8 +134,10 @@ def _cron_row(
         id=trigger_id,
         pipeline_id=uuid.uuid4(),
         config_json={"snapshot_id": snapshot_id} if snapshot_id else {},
-        cron_expression="*/30 * * * * *",
+        cron_expression=cron_expression,
         cron_timezone=cron_timezone,
+        next_fire_at=next_fire_at,
+        last_fired_at=last_fired_at,
     )
 
 
@@ -505,6 +513,296 @@ class TestFireDueTriggers:
         assert summary["cron_due"] == 0
         assert summary["polling_due"] == 0
         assert summary["report_due"] == 0
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failure_rolls_back_advance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2026-08-10 incident (A): when the enqueue fails AFTER the atomic
+        advance, the advance is rolled back to the trigger's previous
+        ``next_fire_at`` (guarded) so the next tick re-selects the epoch."""
+        _patch_env(monkeypatch)
+        old = datetime.now(UTC) - timedelta(hours=1)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([_cron_row(TRIGGER_A, next_fire_at=old)]),
+                _rows_result([]),
+                _rows_result([]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, side_effect=RuntimeError("redis down")),
+            patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_enqueued"] == 0
+        assert summary["enqueue_failures"] == 1
+        ingest.assert_awaited_once()
+        rollback = [(s, p) for s, p in session.executed if "UPDATE triggers" in str(s)]
+        assert rollback, "compensating rollback UPDATE must run on enqueue failure"
+        stmt, params = rollback[0]
+        # Guarded: restores ONLY when the row still holds this machine's advance.
+        assert "next_fire_at = :advanced" in str(stmt)
+        assert params["old"] == old
+        assert params["tid"] == str(TRIGGER_A)
+        assert params["advanced"] > old
+
+    @pytest.mark.asyncio
+    async def test_rollback_advance_is_guarded_and_noops_without_previous(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-08-10 incident (E): the compensating rollback is a guarded
+        UPDATE — it can never clobber a concurrent machine's newer advance,
+        and with no previous value it is a no-op."""
+        _patch_env(monkeypatch)
+        old = datetime.now(UTC) - timedelta(days=1)
+        session = _MockSession([])
+        await ch._rollback_cron_advance(
+            session,
+            TRIGGER_A,
+            "*/30 * * * * *",
+            None,
+            previous_next_fire=old,
+            now=datetime.now(UTC),
+        )
+        updates = [(s, p) for s, p in session.executed if "UPDATE triggers" in str(s)]
+        assert updates, "guarded rollback UPDATE must run"
+        stmt, params = updates[0]
+        assert "SET next_fire_at = :old" in str(stmt)
+        assert "next_fire_at = :advanced" in str(stmt)  # the guard clause
+        assert params["old"] == old
+        assert params["tid"] == str(TRIGGER_A)
+        assert params["advanced"] > old
+
+        noop_session = _MockSession([])
+        await ch._rollback_cron_advance(
+            noop_session,
+            TRIGGER_A,
+            "*/30 * * * * *",
+            None,
+            previous_next_fire=None,
+            now=datetime.now(UTC),
+        )
+        assert not any("UPDATE triggers" in str(s) for s, _ in noop_session.executed)
+
+    def test_cron_cadence_seconds_reuses_error_tracking_helper(self) -> None:
+        """The catch-up cadence is computed by the SAME helper the hourly
+        missed-fire alert probe uses, so both agree on 'behind schedule'."""
+        now = datetime.now(UTC)
+        assert ch._cron_cadence_seconds("0 4 * * *", None, now) == 86400
+        assert ch._cron_cadence_seconds("*/5 * * * *", None, now) == 300
+        assert ch._cron_cadence_seconds("0 4 * * *", "invalid", now) is None
+
+    @pytest.mark.asyncio
+    async def test_catchup_refires_consumed_epoch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2026-08-10 incident (B): a cron trigger whose ``next_fire_at`` is
+        already in the FUTURE (epoch consumed) but whose ``last_fired_at`` is
+        older than cadence + grace is re-fired exactly once, and its
+        ``next_fire_at`` advances."""
+        _patch_env(monkeypatch)
+        now_val = datetime.now(UTC)
+        old = now_val - timedelta(hours=25)  # missed ~1 daily cadence
+        future = now_val + timedelta(hours=24)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result(
+                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
+                ),
+                _mock_result(fetchone=("advanced-id",)),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_client.set.return_value = True  # atomic claim wins — no marker yet
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_catchup_enqueued"] == 1
+        assert summary["enqueue_failures"] == 0
+        enqueue.assert_awaited_once()
+        cron_key = enqueue.await_args.args[2]
+        assert cron_key.startswith(f"fire:{TRIGGER_A}:")
+        assert enqueue.await_args.kwargs["cron_expression"] == "0 4 * * *"
+        # The marker is written so the same missed epoch is not re-fired while
+        # the fire job is pending.
+        redis_client.set.assert_awaited()
+        # The catch-up advance used the exact-observed-value guard.
+        advance = [(s, p) for s, p in session.executed if "next_fire_at = :expected" in str(s)]
+        assert advance, "catch-up advance must use the observed-value guard"
+        assert advance[0][1]["tid"] == str(TRIGGER_A)
+        assert advance[0][1]["expected"] == future
+        assert advance[0][1]["nf"] > now_val
+
+    @pytest.mark.asyncio
+    async def test_catchup_skips_fresh_last_fire(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2026-08-10 incident (C): a trigger whose last fire is fresh (normal
+        state) is NEVER caught up — no double-fire of a healthy trigger."""
+        _patch_env(monkeypatch)
+        now_val = datetime.now(UTC)
+        fresh = now_val - timedelta(minutes=5)
+        future = now_val + timedelta(hours=24)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result(
+                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=fresh)]
+                ),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_catchup_enqueued"] == 0
+        enqueue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_catchup_skips_ancient_stale_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2026-08-10 incident (D): an ancient stale trigger (disabled for
+        months, then re-enabled) is NOT caught up — the bounded window caps it."""
+        _patch_env(monkeypatch)
+        now_val = datetime.now(UTC)
+        ancient = now_val - timedelta(days=60)
+        future = now_val + timedelta(hours=24)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result(
+                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=ancient)]
+                ),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_catchup_enqueued"] == 0
+        enqueue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_catchup_skips_epoch_already_fired_this_tick(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The catch-up scan must NOT re-fire an epoch the normal due-loop
+        already advanced AND enqueued in the same tick (double-fire guard)."""
+        _patch_env(monkeypatch)
+        now_val = datetime.now(UTC)
+        old = now_val - timedelta(hours=25)
+        past = now_val - timedelta(minutes=1)
+        future = now_val + timedelta(hours=24)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([_cron_row(TRIGGER_A, next_fire_at=past)]),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result(
+                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
+                ),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_enqueued"] == 1
+        assert summary["cron_catchup_enqueued"] == 0
+        enqueue.assert_awaited_once()  # ONLY the normal fire, never the catch-up
+
+    @pytest.mark.asyncio
+    async def test_catchup_skips_marked_epoch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A missed epoch already caught up (Redis marker present — fire job
+        still pending) is NOT re-fired on a later tick."""
+        _patch_env(monkeypatch)
+        now_val = datetime.now(UTC)
+        old = now_val - timedelta(hours=25)
+        future = now_val + timedelta(hours=24)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result(
+                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
+                ),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_client.set.return_value = None  # SET NX returns None — marker present, claim lost
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_catchup_enqueued"] == 0
+        enqueue.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2076,3 +2374,191 @@ class TestDispatcherReconcileSharedStats:
                 raise RuntimeError("redis down")
 
         assert (await ch.write_dispatcher_reconcile_stats(_BrokenRedis(), {"scanned": 0})) is None
+
+
+# ---------------------------------------------------------------------------
+# Review PR #982 findings 1-3: catch-up marker dedup, skip-attempt recording,
+# atomic claim, TTL coverage.
+# ---------------------------------------------------------------------------
+
+
+class TestCatchupReviewFindings:
+    """Regression tests for the PR #982 review findings on the missed-fire
+    catch-up design."""
+
+    @pytest.mark.asyncio
+    async def test_normal_enqueue_writes_catchup_marker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 1: a NORMAL-path successful enqueue writes the catch-up
+        marker for the consumed epoch, so the catch-up scan on the NEXT tick
+        does not re-fire a legitimately-enqueued fire."""
+        _patch_env(monkeypatch)
+        now_val = datetime.now(UTC)
+        due = now_val - timedelta(seconds=1)  # normal loop fires this due epoch
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=due, last_fired_at=None)]),
+                _mock_result(fetchone=("advanced-id",)),
+                _rows_result([]),
+                _rows_result([]),
+                _rows_result([]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+        redis_client.set.return_value = True
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1"),
+        ):
+            redis_cls.from_url.return_value = redis_client
+            summary = await ch.fire_due_triggers()
+
+        assert summary["cron_enqueued"] == 1
+        # The normal path wrote a catch-up marker keyed by the consumed epoch.
+        marker_calls = [c for c in redis_client.set.await_args_list if "catchup" in str(c.args)]
+        assert marker_calls, "normal enqueue must write the catch-up marker"
+        marker_key = str(marker_calls[0].args[0])
+        assert f"{ch._CATCHUP_MARKER_PREFIX}:{TRIGGER_A}:" in marker_key
+        # The marker epoch equals the consumed epoch (pre-advance next_fire_at).
+        assert marker_key.endswith(str(int(due.timestamp())))
+
+    @pytest.mark.asyncio
+    async def test_marker_ttl_covers_worst_case_inflight(self) -> None:
+        """Finding 3: the marker TTL covers the worst-case fire-job in-flight
+        window (timeout x (retries+1)) so a pending job cannot outlive its
+        marker and get re-fired."""
+        assert ch._CATCHUP_MARKER_TTL >= ch.FIRE_JOB_TIMEOUT * (ch.FIRE_JOB_RETRIES + 1)
+
+    @pytest.mark.asyncio
+    async def test_claim_is_atomic_set_nx(self) -> None:
+        """Finding 3: the catch-up marker is claimed with a single atomic
+        SET NX EX - the first caller wins, concurrent callers lose."""
+        redis_client = AsyncMock()
+        redis_client.set.return_value = True  # first claim wins
+        won = await ch._claim_catchup_marker(redis_client, TRIGGER_A, 1234)
+        assert won is True
+        call = redis_client.set.await_args
+        assert call.kwargs.get("nx") is True, "claim must use SET NX (atomic)"
+        assert call.kwargs.get("ex") == ch._CATCHUP_MARKER_TTL
+        # second concurrent claim loses
+        redis_client.set.return_value = None  # SET NX returns None when key exists
+        lost = await ch._claim_catchup_marker(redis_client, TRIGGER_A, 1234)
+        assert lost is False
+
+    @pytest.mark.asyncio
+    async def test_claim_fails_open_on_redis_error(self) -> None:
+        """Finding 3: a Redis failure during the claim fails OPEN (the fire is
+        allowed) - the enqueue itself fails loudly if Redis is really down."""
+        redis_client = AsyncMock()
+        redis_client.set.side_effect = ConnectionError("redis down")
+        won = await ch._claim_catchup_marker(redis_client, TRIGGER_A, 1234)
+        assert won is True
+
+    @pytest.mark.asyncio
+    async def test_concurrency_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 2: a concurrency-limited fire records the attempt
+        (last_fired_at) so the catch-up scan never re-fires it forever."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(max_concurrent_runs=2)
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=2),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "concurrency_limit"
+        updates = [p for s, p in session.executed if "UPDATE triggers" in str(s) and "last_fired_at" in str(s)]
+        assert updates, "concurrency skip must record last_fired_at (attempted state)"
+
+    @pytest.mark.asyncio
+    async def test_spend_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 2: a spend-limited fire records the attempt so the catch-up
+        scan never re-fires it forever."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(daily_spend_limit=10.0)
+        # Execution order inside fire_cron_trigger: advisory lock -> trigger
+        # select -> daily-cost SUM. The cost result must be the LAST slot so the
+        # lock and trigger reads consume their own results first.
+        fake_result = MagicMock()
+        fake_result.scalar_one.return_value = 50.0
+        session = _MockSession([_lock_result(True), _trigger_result(trigger), fake_result])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+            patch(
+                "modulo.core.cost_controller.created_at_day_start",
+                return_value=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            patch(
+                "modulo.db.crud.run.Run",
+                MagicMock(),
+            ),
+            patch.object(ch, "select"),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "spend_limit"
+        updates = [p for s, p in session.executed if "UPDATE triggers" in str(s) and "last_fired_at" in str(s)]
+        assert updates, "spend skip must record last_fired_at (attempted state)"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_missing_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 2: a pipeline-missing fire records the attempt so the
+        catch-up scan never re-fires it forever."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock),
+            patch(
+                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "pipeline_not_found"
+        updates = [p for s, p in session.executed if "UPDATE triggers" in str(s) and "last_fired_at" in str(s)]
+        assert updates, "pipeline-missing skip must record last_fired_at (attempted state)"
