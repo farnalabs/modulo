@@ -11,8 +11,11 @@ Rules:
   params) — NO string interpolation anywhere;
 - day/hour-level ``GROUP BY`` (``run_date`` / ``date_trunc('hour', created_at)``);
   ``ORDER BY run_date, run_id``;
-- NO ``LIMIT`` before bucketing — limit/order are applied post-bucketing in
-  Python (``bucket_rows``);
+- NO ``LIMIT`` before bucketing for the bucketed query — limit/order are applied
+  post-bucketing in Python (``bucket_rows``). The concurrency query is the one
+  exception: it applies a fixed raw-row cap (``CONCURRENCY_MAX_RAW_ROWS + 1``)
+  so the DB never streams an unbounded fact scan into the app process — overflow
+  is detected and rejected as a validation error, never silently truncated;
 - week bucketing + zero-fill happen in Python from an explicit day-grid
   (ISO Monday week boundary); hour zero-fill happens from an explicit hour-grid.
 """
@@ -31,6 +34,7 @@ import sqlalchemy as sa
 from modulo.db.models.run_daily_facts import RunDailyFact
 
 __all__ = [
+    "CONCURRENCY_MAX_RAW_ROWS",
     "HOUR_GROUPBY_MAX_RANGE_DAYS",
     "STALL_ERROR_CODES",
     "AnalyticsDimension",
@@ -66,6 +70,16 @@ STALL_ERROR_CODES: frozenset[str] = frozenset({"executor_stalled", "node_timeout
 # truncation (hour-grid amplification). ``auto_granularity`` never selects hour
 # for spans over 3 days, so this only constrains an explicit hour choice.
 HOUR_GROUPBY_MAX_RANGE_DAYS = 14
+
+# Raw-row cap for the concurrency query (FAR-134 follow-up): the overlap math
+# runs in Python over the raw fact instants, so an unbounded 365-day scan could
+# pull hundreds of thousands to millions of rows into the app process. 100k rows
+# bounds a full-year scan for all but the busiest orgs (which should narrow the
+# range or add pipeline/status filters) while keeping the Python overlap sweep
+# inside the statement-timeout budget. The cap degrades to a CLEAR validation
+# error — never silent truncation — so max_active / avg_active can never be
+# computed from a partial scan.
+CONCURRENCY_MAX_RAW_ROWS = 100_000
 
 
 class AnalyticsGroupBy(StrEnum):
@@ -235,6 +249,9 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
 # therefore selects the RAW instants over the range + filters (org predicate
 # intact — the ONLY isolation control) and the overlap math happens in Python
 # (``bucket_concurrency_rows``), exactly like ``bucket_rows`` does zero-fill.
+# The raw scan is bounded by ``CONCURRENCY_MAX_RAW_ROWS + 1`` (cap + detection
+# sentinel): the service rejects the query when the scan exceeds the cap rather
+# than silently truncating, so bucket maxima/averages stay exact.
 
 
 def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, Any]]:
@@ -243,6 +260,9 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
     Returns ``(stmt, params)`` — fully parameterised, carrying the org
     predicate and the same allowlisted bound filters as ``build_facts_query``,
     but with NO ``GROUP BY``: the overlap counting is done per-bucket in Python.
+    The statement is bounded by ``CONCURRENCY_MAX_RAW_ROWS + 1`` rows (cap +
+    detection sentinel) so the DB never streams an unbounded scan into Python;
+    the caller rejects overflow as a validation error instead of truncating.
     """
     select_cols: list[Any] = [
         RunDailyFact.run_date,
@@ -279,6 +299,10 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
         stmt = stmt.where(RunDailyFact.folder_id == sa.bindparam("folder_id", type_=sa.Uuid))
 
     stmt = stmt.order_by(RunDailyFact.run_date)
+    # Bounded raw-row cap: the DB returns at most cap+1 rows (cap + detection
+    # sentinel). The service rejects the query when the scan exceeds the cap —
+    # NEVER truncates — so the Python overlap sweep stays exact and bounded.
+    stmt = stmt.limit(CONCURRENCY_MAX_RAW_ROWS + 1)
     return stmt, params
 
 
@@ -439,7 +463,10 @@ def bucket_concurrency_rows(
     """Bucket raw concurrency rows into the slot-utilization series (FAR-134).
 
     The SQL side only selects raw instants; the overlap math lives HERE, like
-    ``bucket_rows`` owns zero-fill. Per bucket the timeline is line-swept over
+    ``bucket_rows`` owns zero-fill. The input is bounded by
+    ``CONCURRENCY_MAX_RAW_ROWS`` (the statement carries a cap+1 sentinel limit);
+    the service rejects overflow before this function runs, so the sweep never
+    processes a truncated scan. Per bucket the timeline is line-swept over
     interval start/end events, giving EXACT peak and time-weighted-mean counts:
 
     - ``max_active`` / ``avg_active``: concurrent runs whose ``[started_at,

@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy.dialects import postgresql, sqlite
 
 from modulo.core.analytics.builder import (
+    CONCURRENCY_MAX_RAW_ROWS,
     HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
     AnalyticsGroupBy,
@@ -794,11 +795,23 @@ class TestConcurrencyCompiledSql:
             assert "organisation_id" in sql, "the org predicate is the ONLY isolation control"
             assert str(_ORG) not in sql, "the org uuid must be bound, never interpolated"
 
-    def test_no_group_by_no_limit(self) -> None:
+    def test_no_group_by_only_raw_row_cap_limit(self) -> None:
         stmt, _ = build_concurrency_query(_query(limit=5))
-        sql = str(stmt.compile(dialect=postgresql.dialect())).upper()
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled).upper()
         assert "GROUP BY" not in sql, "overlap counting happens in Python, never SQL GROUP BY"
-        assert "LIMIT" not in sql, "limit must be applied post-bucketing, never in SQL"
+        assert "LIMIT" in sql, "the raw-row cap must bound the SQL scan"
+        assert CONCURRENCY_MAX_RAW_ROWS + 1 in compiled.params.values(), (
+            "the only SQL LIMIT must be the raw-row cap sentinel (cap+1), never the user limit"
+        )
+
+    def test_raw_row_cap_binds_cap_plus_one_sentinel(self) -> None:
+        # Regression guard: the scan is capped at CONCURRENCY_MAX_RAW_ROWS + 1
+        # rows so the service can detect overflow (len(rows) > cap) and reject —
+        # never silently truncate into wrong max/avg counts.
+        stmt, _ = build_concurrency_query(_query())
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        assert CONCURRENCY_MAX_RAW_ROWS + 1 in compiled.params.values()
 
     def test_selects_raw_instants(self) -> None:
         stmt, _ = build_concurrency_query(_query())

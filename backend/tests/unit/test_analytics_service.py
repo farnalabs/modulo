@@ -247,3 +247,59 @@ class TestResolvePoolReference:
             value = await self._call(factory, pipeline_ids=(uuid.uuid4(),))
         assert value is None, "a pipeline-query failure must degrade to None, never raise"
         mock_org.assert_not_awaited()
+
+
+class TestConcurrencyRawRowCap:
+    """The concurrency raw-row cap degrades to a typed error, never truncation.
+
+    ``build_concurrency_query`` caps the scan at cap+1 rows; the service detects
+    ``len(rows) > CONCURRENCY_MAX_RAW_ROWS`` and raises ``AnalyticsValidationError``
+    (REST → 422, MCP → invalid_params). Exactly-cap rows proceed normally.
+    """
+
+    def _params(self):
+        return svc.AnalyticsParams()
+
+    async def test_over_cap_raises_validation_error(self) -> None:
+        rows = [object() for _ in range(svc.CONCURRENCY_MAX_RAW_ROWS + 1)]
+        with (
+            patch.object(svc, "_execute_with_guards", new=AsyncMock(return_value=rows)) as mock_exec,
+            patch.object(svc, "_resolve_pool_reference", new=AsyncMock(return_value=None)) as mock_pool,
+            pytest.raises(AnalyticsValidationError, match="raw cap"),
+        ):
+            await svc.run_concurrency_query(
+                org_id=uuid.uuid4(),
+                params=self._params(),
+                factory=MagicMock(),
+                settings=MagicMock(),
+            )
+        mock_exec.assert_awaited_once()
+        mock_pool.assert_not_awaited(), "overflow must reject before the pool reference resolves"
+
+    async def test_at_cap_proceeds_without_raising(self) -> None:
+        rows = [object() for _ in range(svc.CONCURRENCY_MAX_RAW_ROWS)]
+        buckets = [
+            {
+                "date": "2026-08-06",
+                "max_active": 0,
+                "avg_active": 0.0,
+                "max_queued": 0,
+                "avg_queued": 0.0,
+            }
+        ]
+        with (
+            patch.object(svc, "_execute_with_guards", new=AsyncMock(return_value=rows)),
+            patch.object(svc, "bucket_concurrency_rows", return_value=buckets) as mock_bucket,
+            patch.object(svc, "_resolve_pool_reference", new=AsyncMock(return_value=20)) as mock_pool,
+        ):
+            result = await svc.run_concurrency_query(
+                org_id=uuid.uuid4(),
+                params=self._params(),
+                factory=MagicMock(),
+                settings=MagicMock(),
+            )
+        mock_bucket.assert_called_once()
+        mock_pool.assert_awaited_once()
+        assert result["pool_reference"] == 20
+        assert result["buckets"][0]["key"] is None
+        assert result["buckets"][0]["pool_reference"] == 20, "each bucket mirrors the top-level reference"
