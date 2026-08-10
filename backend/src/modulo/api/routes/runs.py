@@ -903,8 +903,18 @@ async def export_run_fixture(
         ) from None
     graph_json = snapshot.graph_json if snapshot else {}
 
+    # Normalize to the pure return before masking (FAR-126): node_return
+    # resolves each node's pure return for new-shape rows (telemetry present)
+    # and returns the legacy envelope verbatim otherwise, so the exported
+    # outputs_json mirrors GET /runs/{id}/io and legacy runs stay byte-identical.
+    outputs_json = run.outputs_json
+    telemetry_json = run.node_telemetry_json
+    normalized_outputs = (
+        {nid: node_return(outputs_json, telemetry_json, nid) for nid in outputs_json} if outputs_json else outputs_json
+    )
+
     masked_input = _mask_output_value(run.input_payload) if run.input_payload else None
-    masked_outputs = _mask_output_value(run.outputs_json) if run.outputs_json else None
+    masked_outputs = _mask_output_value(normalized_outputs) if normalized_outputs else None
     fixture_map = _build_fixture_map(masked_input, masked_outputs)
     short_id = str(run.id)[:8]
 
