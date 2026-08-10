@@ -266,6 +266,22 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
+  it('does not navigate when the stop button is activated via keyboard', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const stopBtn = wrapper.find('[data-testid="runs-list-cancel-run1"]')
+    await stopBtn.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    await stopBtn.trigger('keydown', { key: ' ' })
+    await nextTick()
+
+    expect(routerMocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('calls the cancel endpoint after a two-step confirm and updates the row status', async () => {
     mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'pending' }])
     ;(api.POST as any).mockImplementation(async (url: string) => {

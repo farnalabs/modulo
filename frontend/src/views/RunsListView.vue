@@ -101,6 +101,7 @@
                 :data-testid="`runs-list-cancel-${row.run_id}`"
                 class="inline-flex items-center gap-1 rounded-lg border border-destructive/50 bg-destructive/10 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
                 @click.stop="cancelRun(row as RunListItem)"
+                @keydown.stop
               >
                 <svg v-if="cancellingIds.has(row.run_id as string)" class="h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                 <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
@@ -109,6 +110,7 @@
               <span
                 v-if="cancelErrors[row.run_id as string]"
                 :data-testid="`runs-list-cancel-error-${row.run_id}`"
+                role="alert"
                 class="ml-2 text-xs text-destructive"
               >{{ cancelErrors[row.run_id as string] }}</span>
             </div>
