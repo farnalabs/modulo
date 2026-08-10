@@ -45,6 +45,7 @@ class _FakeWatchdogRedis:
         self._data: dict[str, str] = {}
         self._zscores: dict[str, dict[str, float]] = {}
         self._fail_reads = False
+        self._set_opts: dict[str, dict[str, Any]] = {}
 
     def set_fail_reads(self, fail: bool) -> None:
         self._fail_reads = fail
@@ -83,6 +84,7 @@ class _FakeWatchdogRedis:
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
         self._raise_if_failing()
         self._data[key] = value
+        self._set_opts[key] = {"ex": ex}
 
     async def exists(self, key: str) -> bool:
         return key in self._data
@@ -132,6 +134,7 @@ class TestWorkerLivenessWatchdog:
         assert state == dead_since  # still dead, timer keeps running
         post.assert_awaited_once()
         assert wl._ALERT_COOLDOWN_KEY in fake._data
+        assert fake._set_opts[wl._ALERT_COOLDOWN_KEY]["ex"] == settings.watchdog_alert_cooldown_seconds
 
         # Next tick within the cooldown window: suppressed.
         post2 = AsyncMock()
@@ -260,3 +263,139 @@ class TestWorkerLivenessWatchdog:
     async def test_configured_queues_are_prefix_aware(self) -> None:
         settings = _make_settings(SAQ_RUNS_QUEUE="staging-runs")
         assert wl._configured_queues(settings) == ["staging-runs", "staging-system"]
+
+
+# ---------------------------------------------------------------------------
+# _cron_heartbeat_fresh
+# ---------------------------------------------------------------------------
+
+
+async def test_cron_heartbeat_fresh_true_when_any_key_fresh() -> None:
+    """A single fresh heartbeat among stale keys must read as fresh (fleet-wide)."""
+    fake = _FakeWatchdogRedis()
+    fake._data["saq:cron:heartbeat:fire_due_triggers:m1"] = str(int(time.time() - 600))
+    fake._data["saq:cron:heartbeat:fire_due_triggers:m2"] = str(int(time.time() - 5))
+    assert await wl._cron_heartbeat_fresh(fake) is True
+
+
+async def test_cron_heartbeat_fresh_false_when_all_stale() -> None:
+    fake = _FakeWatchdogRedis()
+    fake._data["saq:cron:heartbeat:fire_due_triggers:m1"] = str(int(time.time() - 600))
+    fake._data["saq:cron:heartbeat:fire_due_triggers:m2"] = str(int(time.time() - 300))
+    assert await wl._cron_heartbeat_fresh(fake) is False
+
+
+async def test_cron_heartbeat_fresh_false_when_no_heartbeats() -> None:
+    assert await wl._cron_heartbeat_fresh(_FakeWatchdogRedis()) is False
+
+
+async def test_cron_heartbeat_fresh_skips_missing_and_corrupt_values() -> None:
+    """Missing and non-numeric heartbeat values are skipped, not fatal."""
+    redis = AsyncMock()
+
+    async def _get(key: str) -> str | None:
+        if key == "k1":
+            return None
+        if key == "k2":
+            return "not-a-number"
+        return str(int(time.time() - 5))  # k3: fresh
+
+    redis.keys.return_value = ["k1", "k2", "k3"]
+    redis.get.side_effect = _get
+    assert await wl._cron_heartbeat_fresh(redis) is True
+
+
+async def test_cron_heartbeat_fresh_false_when_no_value_is_fresh() -> None:
+    redis = AsyncMock()
+
+    async def _get(key: str) -> str | None:
+        if key == "k1":
+            return None
+        return str(int(time.time() - 600))  # k2: stale
+
+    redis.keys.return_value = ["k1", "k2"]
+    redis.get.side_effect = _get
+    assert await wl._cron_heartbeat_fresh(redis) is False
+
+
+# ---------------------------------------------------------------------------
+# _evaluate_once — fail-open and pre-threshold paths
+# ---------------------------------------------------------------------------
+
+
+async def test_cron_read_failure_fails_open_without_alert() -> None:
+    """A Redis error reading cron heartbeats must not alert (fail-open)."""
+    fake = _FakeWatchdogRedis()
+    fake.add_live_worker("runs")
+    settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+    post = AsyncMock()
+
+    with (
+        patch.object(fake, "keys", side_effect=RuntimeError("redis down")),
+        patch.object(wl, "_post_webhook", post),
+    ):
+        state = await wl._evaluate_once(settings, fake, None)
+
+    assert state is None  # workers were live the whole time
+    post.assert_not_awaited()
+
+
+async def test_workers_dead_below_stale_threshold_does_not_alert() -> None:
+    """Death must be sustained past the stale threshold before alerting."""
+    fake = _FakeWatchdogRedis()
+    fake.set_cron_heartbeat(age_seconds=5)  # cron fresh -> no cron condition
+    settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+    post = AsyncMock()
+    dead_since = time.time() - 10  # far below the 180s stale threshold
+
+    with patch.object(wl, "_post_webhook", post):
+        state = await wl._evaluate_once(settings, fake, dead_since)
+
+    assert state == dead_since  # still tracking the dead window
+    post.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Cooldown fence failure paths
+# ---------------------------------------------------------------------------
+
+
+async def test_cooldown_read_failure_fails_open() -> None:
+    """A Redis error reading the cooldown fence must not suppress an alert."""
+    redis = AsyncMock()
+    redis.exists.side_effect = ConnectionError("redis down")
+    assert await wl._cooldown_active(redis) is False
+
+
+async def test_set_cooldown_write_failure_is_best_effort(caplog: pytest.LogCaptureFixture) -> None:
+    """A Redis write failure setting the cooldown fence must not raise."""
+    redis = AsyncMock()
+    redis.set.side_effect = ConnectionError("redis down")
+    settings = _make_settings(WATCHDOG_ALERT_COOLDOWN_SECONDS=900)
+
+    await wl._set_cooldown(redis, settings)  # must not raise
+
+    assert "watchdog.cooldown_write_failed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _hostname
+# ---------------------------------------------------------------------------
+
+
+def test_hostname_prefers_fly_machine_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLY_MACHINE_ID", "fly-abc")
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    assert wl._hostname() == "fly-abc"
+
+
+def test_hostname_falls_back_to_hostname_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLY_MACHINE_ID", raising=False)
+    monkeypatch.setenv("HOSTNAME", "box-1")
+    assert wl._hostname() == "box-1"
+
+
+def test_hostname_defaults_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLY_MACHINE_ID", raising=False)
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    assert wl._hostname() == "unknown"
