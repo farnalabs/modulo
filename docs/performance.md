@@ -2,7 +2,7 @@
 
 ## Overview
 
-Load tests are written for [k6](https://k6.io) — a developer-centric, open-source
+Load tests are written for [k6](https://k6.io) – a developer-centric, open-source
 load testing tool. Scripts live in `tests/performance/` and target the Modulo API
 (`http://localhost:8000/api/v1`).
 
@@ -119,8 +119,8 @@ k6 outputs a summary like this after each run:
        { expected_response:true }........... avg=145ms   min=12ms   med=98ms   max=2.3s
      ✓ pipeline_create_duration............. avg=210ms   min=45ms   med=180ms  p(95)=420ms
      ✓ pipeline_list_duration............... avg=85ms    min=10ms   med=60ms   p(95)=220ms
-     ✗ errors............................... 0.23% — ✓ 977 ✗ 3
-     ✓ checks............................... 100.00% — ✓ 4890 ✗ 0
+     ✗ errors............................... 0.23% – ✓ 977 ✗ 3
+     ✓ checks............................... 100.00% – ✓ 4890 ✗ 0
 ```
 
 ### Key Metrics
@@ -129,7 +129,7 @@ k6 outputs a summary like this after each run:
 |---|---|
 | `http_req_duration` | Overall API response time |
 | Custom trends (e.g. `pipeline_create_duration`) | Per-operation timing |
-| `checks` | Assertion pass/fail ratio — **should be 100%** |
+| `checks` | Assertion pass/fail ratio – **should be 100%** |
 | `errors` | Rate of failed operations that don't meet response shape expectations |
 | `http_req_failed` | Network/HTTP-level failures (5xx, connection refused, timeouts) |
 
@@ -189,9 +189,9 @@ Fail the pipeline if any threshold is crossed.
 
 Each script follows the k6 best-practice pattern:
 
-1. **`setup()`** — one-time pre-test: login, create seed data, return shared state
-2. **`default()`** — per-VU iteration: the actual load test operations
-3. **`teardown()`** — cleanup: delete seed data, close connections
+1. **`setup()`** – one-time pre-test: login, create seed data, return shared state
+2. **`default()`** – per-VU iteration: the actual load test operations
+3. **`teardown()`** – cleanup: delete seed data, close connections
 
 Custom Trend metrics track per-operation timing separately from the global
 `http_req_duration`. Thresholds enforce the baseline targets defined above.
