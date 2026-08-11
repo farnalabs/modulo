@@ -25,8 +25,9 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-_HEAD_MIGRATION_NAME = "0077_add_stalled_status"
 # The migration this branch introduces — the current head of the chain.
+# The migration this branch introduces - the current head of the chain.
+_HEAD_MIGRATION_NAME = "0078_run_daily_facts_telemetry_bytes"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"

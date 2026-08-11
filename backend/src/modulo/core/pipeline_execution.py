@@ -313,7 +313,7 @@ async def load_and_setup(aeng: AsyncEngine, rid: uuid.UUID, oid: uuid.UUID) -> t
     """
     from modulo.core.pipeline_engine.executor import PipelineExecutor
 
-    factory = async_sessionmaker(aeng, expire_on_commit=False)
+    factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, oid)
         cur = await get_run(session, rid)
