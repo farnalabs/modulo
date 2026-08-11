@@ -27,6 +27,7 @@ from modulo.api.dependencies import deny_break_glass_mint, get_db_session, requi
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
+from modulo.core.exceptions import OrgDeletedError
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.trigger import Trigger
@@ -950,6 +951,17 @@ async def test_trigger(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again later.",
+        ) from None
+    except OrgDeletedError as exc:
+        _log.exception("triggers.test_trigger")
+        if exc.deleted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
     except HTTPException:
         raise
