@@ -214,6 +214,28 @@ describe('SchemaListView', () => {
     expect(document.body.textContent).not.toContain('Move to Folder')
   })
 
+  it('keeps the mobile folder select reachable when the selected folder is empty', async () => {
+    const { api } = await import('../lib/api/client')
+    const getMock = api.GET as ReturnType<typeof vi.fn>
+    const originalImpl = getMock.getMockImplementation()
+    getMock.mockImplementation(() => Promise.resolve({
+      data: { items: [], total: 0, page: 1, page_size: 100 },
+      error: undefined,
+    }))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('No schemas found')
+
+    // Mobile folder select + breadcrumb are hoisted out of the empty-state
+    // branch, so a mobile user is never stranded in an empty folder.
+    expect(wrapper.find('[data-testid="schema-list-mobile-folder-select"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('All Schemas')
+
+    getMock.mockImplementation(originalImpl as ReturnType<typeof vi.fn>)
+  })
+
   it('moves a schema back to no folder via the actions menu', async () => {
     const wrapper = mountView()
     await flushPromises()

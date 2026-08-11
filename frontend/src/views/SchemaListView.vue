@@ -57,6 +57,31 @@
         <ErrorAlert v-else-if="error" :message="error" />
 
         <template v-else>
+          <!-- Mobile folder filter — the FolderTree is hidden below md -->
+          <div v-if="foldersList.length > 0" class="md:hidden mb-4">
+            <Select v-model="mobileFolderSelectValue" :aria-label="$t('views.SchemaListView.folders')">
+              <SelectTrigger class="w-full" :aria-label="$t('views.SchemaListView.folders')" data-testid="schema-list-mobile-folder-select">
+                <SelectValue :placeholder="$t('views.SchemaListView.all_schemas')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{{ $t('views.SchemaListView.all_schemas') }}</SelectItem>
+                <SelectItem v-for="f in foldersList" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <!-- Breadcrumb navigation -->
+          <div class="mb-4 flex items-center gap-2 text-sm">
+            <template v-if="selectedFolderId && selectedFolderName">
+              <button class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
+                {{ $t('views.SchemaListView.all_schemas') }}
+              </button>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
+              <span class="font-medium text-foreground">{{ selectedFolderName }}</span>
+            </template>
+            <h2 v-else class="text-base font-semibold text-foreground">{{ $t('views.SchemaListView.all_schemas') }}</h2>
+          </div>
+
           <div v-if="schemas.length === 0" class="card p-8 text-center">
             <p class="text-lg font-medium">{{ $t('views.SchemaListView.no_schemas_found') }}</p>
             <p class="mt-1 text-sm text-muted-foreground">
@@ -65,31 +90,6 @@
           </div>
 
           <template v-else>
-            <!-- Mobile folder filter — the FolderTree is hidden below md -->
-            <div v-if="foldersList.length > 0" class="md:hidden mb-4">
-              <Select v-model="mobileFolderSelectValue" :aria-label="$t('views.SchemaListView.folders')">
-                <SelectTrigger class="w-full" :aria-label="$t('views.SchemaListView.folders')" data-testid="schema-list-mobile-folder-select">
-                  <SelectValue :placeholder="$t('views.SchemaListView.all_schemas')" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">{{ $t('views.SchemaListView.all_schemas') }}</SelectItem>
-                  <SelectItem v-for="f in foldersList" :key="f.id" :value="f.id">{{ f.name }}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <!-- Breadcrumb navigation -->
-            <div class="mb-4 flex items-center gap-2 text-sm">
-              <template v-if="selectedFolderId && selectedFolderName">
-                <button class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
-                  {{ $t('views.SchemaListView.all_schemas') }}
-                </button>
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
-                <span class="font-medium text-foreground">{{ selectedFolderName }}</span>
-              </template>
-              <h2 v-else class="text-base font-semibold text-foreground">{{ $t('views.SchemaListView.all_schemas') }}</h2>
-            </div>
-
             <div class="overflow-x-auto rounded-lg border">
               <table class="w-full text-left text-sm">
                 <thead class="bg-muted/50">
