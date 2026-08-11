@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from modulo.core.model_backend_hub import (
     _ERROR_DETAIL_MAX_LENGTH,
@@ -1201,3 +1201,94 @@ async def test_build_backend_openai_compatible_forwards_default_params():
         backend = _build_backend("openai", "gpt-4o", {"api_key": "x"}, {"temperature": 0.5})
     assert isinstance(backend, OpenAICompatibleBackend)
     assert mock_chat.call_args.kwargs["temperature"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# provider='custom' — stub backend registration
+# ---------------------------------------------------------------------------
+
+
+async def test_build_backend_custom_returns_stub_backend():
+    """provider='custom' builds a hub-compatible backend wrapping a StubModelBackend
+    wired with the fixture map; async invoke returns the canned response."""
+    from modulo.core.model_backend_hub import _build_backend
+    from modulo.model_backends.base import ModelBackendBase
+    from modulo.model_backends.stub.backend import StubModelBackend
+
+    backend = _build_backend(
+        "custom",
+        "demo-model",
+        {"api_key": "demo", "fixture_map": {"hello there": "hi"}},
+        {},
+    )
+    assert isinstance(backend, ModelBackendBase)
+    assert isinstance(backend._stub, StubModelBackend)
+    result = await backend.invoke([HumanMessage(content="hello  there")])
+    assert result.content == "hi"
+
+
+async def test_build_backend_custom_reads_fixture_map_from_default_params():
+    """default_params fixture_map is preferred over creds for provider='custom'."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    backend = _build_backend(
+        "custom",
+        "demo-model",
+        {"api_key": "demo", "fixture_map": {"from creds": "no"}},
+        {"fixture_map": {"from params": "yes"}},
+    )
+    result = await backend.invoke([HumanMessage(content="from params")])
+    assert result.content == "yes"
+
+
+async def test_build_backend_custom_no_fixture_raises_unexpected_input():
+    """A custom stub with no fixture map raises UnexpectedInputError on input."""
+    from modulo.core.model_backend_hub import _build_backend
+    from modulo.model_backends.stub.backend import UnexpectedInputError
+
+    backend = _build_backend("custom", "demo-model", {"api_key": "demo"}, {})
+    with pytest.raises(UnexpectedInputError):
+        await backend.invoke([HumanMessage(content="hello")])
+
+
+async def test_initialise_custom_provider_registers_and_invokes():
+    """A custom-provider row with a valid Fernet ciphertext registers in the hub
+    and the retrieved backend returns the canned fixture response."""
+    key = Fernet.generate_key().decode()
+    ciphertext = Fernet(key.encode()).encrypt(b"demo")
+    mb = _FakeMB(
+        id=uuid.uuid4(),
+        provider="custom",
+        model_id="demo-model",
+        credentials_ciphertext=ciphertext,
+        default_params={"fixture_map": {"hello": "hi"}},
+    )
+    secrets_backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+    settings = MagicMock()
+    settings.fernet_key = key
+    with (
+        patch.object(secrets_backend, "get_secret", side_effect=KeyError(str(mb.id))),
+        patch("modulo.settings.get_settings", return_value=settings),
+    ):
+        hub = ModelBackendHub()
+        await hub.initialise([mb], secrets_backend=secrets_backend)
+    assert mb.id in hub.backend_ids
+    backend = await hub.get(mb.id)
+    result = await backend.invoke([HumanMessage(content="hello")])
+    assert result.content == "hi"
+
+
+async def test_initialise_custom_provider_with_invalid_ciphertext_skips_backend():
+    """A custom row whose ciphertext is not a valid Fernet token is skipped,
+    mirroring the pre-fix demo seed behaviour (row must not register)."""
+    mb = _FakeMB(
+        id=uuid.uuid4(),
+        provider="custom",
+        model_id="demo-model",
+        credentials_ciphertext=b"demo-encrypted",
+    )
+    secrets_backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(secrets_backend, "get_secret", side_effect=KeyError(str(mb.id))):
+        hub = ModelBackendHub()
+        await hub.initialise([mb], secrets_backend=secrets_backend)
+    assert mb.id not in hub.backend_ids

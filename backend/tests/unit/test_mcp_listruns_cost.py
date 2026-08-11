@@ -24,6 +24,7 @@ def _make_run(
     run_id: uuid.UUID | None = None,
     total_cost_usd: Decimal | None = None,
     error_code: str | None = None,
+    error_detail: str | None = None,
     status: str = "complete",
 ) -> MagicMock:
     r = MagicMock()
@@ -36,6 +37,7 @@ def _make_run(
     r.started_at = datetime(2026, 8, 1, 10, 0, 1, tzinfo=UTC)
     r.completed_at = datetime(2026, 8, 1, 10, 5, tzinfo=UTC)
     r.error_code = error_code
+    r.error_detail = error_detail
     r.total_cost_usd = total_cost_usd
     return r
 
@@ -209,6 +211,55 @@ class TestListRunsCost(_AuthContext):
         assert item_b["child_runs_count"] == 0
         assert item_b["aggregate_cost_usd"] == 0.0
         mock_child_rollup.assert_awaited_once()
+
+
+class TestListRunsErrorDetail(_AuthContext):
+    """REST parity for ``error_detail`` (the Daily Watcher's hang-death signal)."""
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.list_runs")
+    async def test_returns_error_detail_alongside_error_code(
+        self,
+        mock_db_list_runs: AsyncMock,
+        mock_child_rollup: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_run(error_code="node_cancelled", error_detail="run likely hung")
+        mock_db_list_runs.return_value = _make_list_result([run], total=1, next_cursor=None, has_more=False)
+        mock_child_rollup.return_value = {}
+        mock_session.return_value = _make_session_context(AsyncMock())
+
+        result = await list_runs(limit=20)
+
+        assert "error" not in result
+        item = result["items"][0]
+        assert item["error_code"] == "node_cancelled"
+        assert item["error_detail"] == "run likely hung"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.list_runs")
+    async def test_error_detail_nullable_when_no_error(
+        self,
+        mock_db_list_runs: AsyncMock,
+        mock_child_rollup: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_run(error_code=None, error_detail=None, status="complete")
+        mock_db_list_runs.return_value = _make_list_result([run], total=1, next_cursor=None, has_more=False)
+        mock_child_rollup.return_value = {}
+        mock_session.return_value = _make_session_context(AsyncMock())
+
+        result = await list_runs(limit=20)
+
+        item = result["items"][0]
+        assert item["error_code"] is None
+        assert item["error_detail"] is None
 
 
 class TestListRunsCostErrors(_AuthContext):

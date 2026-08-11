@@ -42,6 +42,7 @@ Eval-before-interrupt ((Section 8.17):
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import math
@@ -139,6 +140,32 @@ _MAX_DRAIN_WINDOW = _MAX_ARTIFACT_LOG
 # rides for audit, the SEPARATE clamped display field is what the UI/money
 # formatter renders.
 _NODE_OUTPUT_DISPLAY_CLAMP = 1e6
+
+
+def _dispatch_marker_json(attempt_key: str) -> str:
+    """Structured ``runs.sandbox_dispatch_state`` value (dist/cleanup-idempotency D5).
+
+    The marker is extended from a bare ``'dispatching'`` literal to
+    ``{"state": "dispatching", "attempt_key": "<run:run_id:node:node_id:claim_count>"}``
+    so the per-node, per-claim-attempt idempotency key rides on the SAME DB-atomic
+    dispatch marker that already fences superseded executors. ``runs.sandbox_id``
+    stays in its own column (heartbeat-lost kill path reads it by id).
+    """
+    return json.dumps({"state": "dispatching", "attempt_key": attempt_key})
+
+
+def _claim_token_attempt_suffix(claim_lease: str | None) -> str:
+    """Fallback attempt-key discriminator when no DB claim_count is available.
+
+    The DB-atomic dispatch path derives the attempt key from ``runs.claim_count``;
+    the fail-open path (no session factory / no claim lease) has no run row to
+    read, so it derives the discriminator from the claim token instead. The token
+    is a fence credential, so only a truncated SHA-256 is surfaced — never the
+    token itself — and it still rotates per claim, so attempts are distinguishable.
+    """
+    if not claim_lease:
+        return "claim-unknown"
+    return hashlib.sha256(claim_lease.encode("utf-8")).hexdigest()[:16]
 
 
 def _effective_self_reported_cap() -> float:
@@ -1103,48 +1130,85 @@ def make_sandbox_agent_fn(
         # sandbox for a run a successor owns.
         claim_lease: str | None = state.get("_claim_lease")
         dispatch_marker_set = False
+        # Per-node, per-claim-attempt idempotency key (dist/cleanup-idempotency D5):
+        # ``run:{run_id}:node:{node_id}:{claim_count}``. Derived from the run row's
+        # claim_count inside the fenced acquire, carried by the dispatch marker, and
+        # surfaced on the node output/telemetry so a re-run of the same node under a
+        # DIFFERENT claim is distinguishable (a successor resumes from the previous
+        # claim's checkpoint and re-executes the wedged node with a new attempt key).
+        attempt_key: str | None = None
 
         _stdout_len = 0
         _stderr_len = 0
         _sandbox_id: str | None = None
         _sandbox_log_tail: str = ""
 
-        async def _acquire_dispatch_marker() -> bool:
-            """DB-atomic dispatch marker (dist/runtime-core A4): one UPDATE claims
-            the dispatch slot immediately BEFORE ``AsyncSandbox.create``.
+        async def _acquire_dispatch_marker() -> str | None:
+            """DB-atomic dispatch marker (dist/runtime-core A4): one transaction
+            reads ``runs.claim_count`` (fenced on the claim token + status), then
+            claims the dispatch slot IMMEDIATELY BEFORE ``AsyncSandbox.create``.
 
-            ``UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid
+            ``UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid
             WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND
-            status='running'`` — atomic, no read-then-create TOCTOU. Rowcount 0
-            means the claim is superseded or the run is not running; the caller
-            raises :class:`SupersededNodeError` and MUST NOT create a sandbox.
-            Fail-open (returns True without writing) when no session factory or
-            no claim lease is available.
+            status='running'`` — the marker is a structured JSON carrying the
+            attempt key. The UPDATE is atomic, no read-then-create TOCTOU;
+            rowcount 0 means the claim is superseded or the run is not running,
+            the caller raises :class:`SupersededNodeError` and MUST NOT create a
+            sandbox. The SELECT and UPDATE share one transaction, and the UPDATE
+            re-checks the same fenced WHERE, so a concurrent claim rotation
+            between them makes the UPDATE match zero rows and the attempt key is
+            never persisted for a superseded claim.
+
+            Returns the attempt key on success, ``None`` when denied. Fail-open
+            (returns a claim-token-derived attempt key WITHOUT writing) when no
+            session factory or no claim lease is available.
             """
             if session_factory is None or not claim_lease:
-                return True
+                # Fail-open: no DB fence — derive a per-claim attempt key from the
+                # (rotating) claim token so node output still distinguishes attempts.
+                return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
             org_id_raw = state.get("_org_id")
             try:
                 org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
             except (TypeError, ValueError):
                 org_uuid = None
             if org_uuid is None:
-                return True
+                return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
             from sqlalchemy import text as _sql_text
 
             from modulo.db.rls import set_rls_org
 
             async with session_factory() as session, session.begin():
                 await set_rls_org(session, org_uuid)
+                row = (
+                    await session.execute(
+                        _sql_text(
+                            "SELECT claim_count FROM runs WHERE id=:rid AND organisation_id=:oid "
+                            "AND claim_token=:tok AND status='running'"
+                        ),
+                        {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+                    )
+                ).fetchone()
+                if row is None:
+                    return None
+                key = f"run:{run_id}:node:{node_id}:{int(row[0])}"
                 result = await session.execute(
                     _sql_text(
-                        "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid "
+                        "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
                         "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' "
                         "RETURNING id"
                     ),
-                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease, "sid": None},
+                    {
+                        "rid": run_id,
+                        "oid": str(org_uuid),
+                        "tok": claim_lease,
+                        "sid": None,
+                        "marker": _dispatch_marker_json(key),
+                    },
                 )
-                return result.fetchone() is not None
+                if result.fetchone() is None:
+                    return None
+                return key
 
         async def _store_dispatch_marker_sandbox(sandbox_id_value: str | None) -> None:
             """Persist the real sandbox id onto the runs row after a successful create."""
@@ -1165,10 +1229,16 @@ def make_sandbox_agent_fn(
                 await set_rls_org(session, org_uuid)
                 await session.execute(
                     _sql_text(
-                        "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid "
+                        "UPDATE runs SET sandbox_dispatch_state=:marker, sandbox_id=:sid "
                         "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
                     ),
-                    {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease, "sid": sandbox_id_value},
+                    {
+                        "rid": run_id,
+                        "oid": str(org_uuid),
+                        "tok": claim_lease,
+                        "sid": sandbox_id_value,
+                        "marker": _dispatch_marker_json(attempt_key or ""),
+                    },
                 )
 
         async def _clear_dispatch_marker() -> None:
@@ -1207,7 +1277,7 @@ def make_sandbox_agent_fn(
             # BEFORE any sandbox is created. Fail-open when no session factory
             # or no claim lease is available (the heartbeat claim fence remains
             # the primary guard).
-            if not await _acquire_dispatch_marker():
+            if (attempt_key := await _acquire_dispatch_marker()) is None:
                 _log.warning(
                     "sandbox_agent.dispatch_marker_denied",
                     extra={"node_id": node_id, "run_id": run_id},
@@ -1583,6 +1653,7 @@ def make_sandbox_agent_fn(
                         "stderr": agent_stderr[:_MAX_OTEL_LOG_ATTR],
                         "stdout_length": _stdout_len,
                         "stderr_length": _stderr_len,
+                        "attempt_key": attempt_key or "",
                     },
                 )
 
@@ -1613,6 +1684,7 @@ def make_sandbox_agent_fn(
                                     "agent_stderr": agent_stderr,
                                     "stdout_length": _stdout_len,
                                     "stderr_length": _stderr_len,
+                                    "attempt_key": attempt_key,
                                 },
                             }
                         ],
@@ -1626,6 +1698,7 @@ def make_sandbox_agent_fn(
                             "agent_stderr": agent_stderr,
                             "stdout_length": _stdout_len,
                             "stderr_length": _stderr_len,
+                            "attempt_key": attempt_key,
                         },
                     }
 
@@ -1677,6 +1750,7 @@ def make_sandbox_agent_fn(
                             "stderr_length": _stderr_len,
                             **_stall_reason_field,
                             **_sandbox_failure_fields,
+                            "attempt_key": attempt_key,
                         },
                     }
                 ],
@@ -1692,6 +1766,7 @@ def make_sandbox_agent_fn(
                     "stderr_length": _stderr_len,
                     **_stall_reason_field,
                     **_sandbox_failure_fields,
+                    "attempt_key": attempt_key,
                 },
             }
 
@@ -1728,6 +1803,7 @@ def make_sandbox_agent_fn(
                         "stderr": locals().get("agent_stderr", "")[:_MAX_OTEL_LOG_ATTR],
                         "stdout_length": _stdout_len,
                         "stderr_length": _stderr_len,
+                        "attempt_key": locals().get("attempt_key") or "",
                     },
                 )
             _exc_stdout = locals().get("agent_stdout", "")
@@ -1757,6 +1833,7 @@ def make_sandbox_agent_fn(
                             "stderr_length": _stderr_len,
                             "sandbox_id": _sandbox_id,
                             "sandbox_log_tail": _exc_log_tail,
+                            "attempt_key": locals().get("attempt_key"),
                         },
                     }
                 ],
@@ -1772,6 +1849,7 @@ def make_sandbox_agent_fn(
                     "stderr_length": _stderr_len,
                     "sandbox_id": _sandbox_id,
                     "sandbox_log_tail": _exc_log_tail,
+                    "attempt_key": locals().get("attempt_key"),
                 },
             }
         finally:

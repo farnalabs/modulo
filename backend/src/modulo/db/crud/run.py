@@ -19,6 +19,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from modulo.core.exceptions import OrgDeletedError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
@@ -57,11 +58,6 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
     }
 )
 
-# Claimed-but-nodeless zombie repair code (shared). Another worker owns the
-# consumer (cron_helpers) that uses this; this module is the single definition
-# so the constant cannot drift between the define site and the consume site.
-NODELESS_ZOMBIE_ERROR_CODE = "nodeless_zombie"
-
 # Trigger types exempt from the org-wide pause. A new trigger type defaults to
 # PAUSED (fail-closed) unless explicitly added here AND it passes trigger_id to
 # create_run (types that create runs without a Trigger row, like scheduled
@@ -75,23 +71,6 @@ _SANDBOX_CONCURRENCY_MAX = 100
 _RUN_CONCURRENCY_KEY = "run_concurrency_limit"
 _RUN_CONCURRENCY_MIN = 1
 _RUN_CONCURRENCY_MAX = 100
-
-
-class OrgDeletedError(RuntimeError):
-    """Raised by ``create_run`` when the target organisation is soft-deleted or missing.
-
-    The soft-deleted-org guard refuses to create a run in an org whose deletion
-    flow has set status='deleted' (or in a hard-deleted org — no row). A domain
-    exception (not ``ValueError``) so API routes and cron/trigger callers can map
-    it to a structured 4xx (409 for a deleted org, 404 for a missing org) instead
-    of a generic 500. Defined here (not in ``modulo.core.exceptions``) because
-    the ``db-does-not-import-core`` contract does not exempt this module.
-    """
-
-    def __init__(self, *, org_id: uuid.UUID | None = None, deleted: bool = True) -> None:
-        self.org_id = org_id
-        self.deleted = deleted
-        super().__init__(f"cannot create run: organisation {org_id} is " + ("deleted" if deleted else "missing"))
 
 
 def _input_hash(payload: dict[str, Any]) -> str:

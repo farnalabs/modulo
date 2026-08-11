@@ -89,7 +89,7 @@ The UI is now live at `http://localhost:5173`. Log in with `admin:admin`.
 
 ## 5. Run the demo pipeline
 
-With `MODULO_DEMO_MODE=true` (set in your `.env`), a pre-built `prd-to-requirements` pipeline is available:
+With `MODULO_SEED_DEMO_DATA=true` (set in your `.env`; legacy name `MODULO_DEMO_MODE` also works), a pre-built `prd-to-requirements` pipeline is available:
 
 1. Open the dashboard at `http://localhost:5173`
 2. Click the **Demo pipeline** card

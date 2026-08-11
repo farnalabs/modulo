@@ -535,18 +535,17 @@ def to_utc_aware(value: date | datetime, *, end_of_day: bool = False) -> datetim
     Naive datetimes are treated as UTC (``tzinfo=UTC``); aware datetimes with a
     NON-UTC offset are CONVERTED to UTC via ``.astimezone(UTC)`` — never
     re-labelled, so ``2026-08-06T14:00:00+05:00`` buckets/labels from the
-    UTC-converted instant (09:00Z). ``end_of_day`` expands the DATE part of the
-    input to 23:59:59 UTC (bare dates AND datetimes alike) so an hour grid
-    covers the whole day; without it both expand to 00:00 UTC. This matches the
-    grid builders (``_hour_grid``/``bucket_rows``), which key off the date part
-    of ``date_to`` regardless of its time component — a bare-date request
-    ``date_from=X&date_to=X`` must therefore cover the full day on every
-    surface, including the concurrency grid.
+    UTC-converted instant (09:00Z). Bare dates expand to 00:00 UTC (or 23:59:59
+    with ``end_of_day``) so an hour grid covers the whole day. A datetime at
+    exactly midnight (the shape FastAPI produces for a date-only query param
+    like ``?date_to=2026-08-11``) is treated the same as a bare date with
+    ``end_of_day`` — otherwise a single-day hour query collapses to zero
+    buckets. Datetimes carrying a real time-of-day are never expanded.
     """
     if isinstance(value, datetime):
         aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-        if end_of_day:
-            return datetime.combine(aware.date(), time(23, 59, 59), tzinfo=UTC)
+        if end_of_day and aware.hour == 0 and aware.minute == 0 and aware.second == 0 and aware.microsecond == 0:
+            return aware.replace(hour=23, minute=59, second=59, microsecond=0)
         return aware
     return datetime.combine(value, time(23, 59, 59) if end_of_day else time.min, tzinfo=UTC)
 

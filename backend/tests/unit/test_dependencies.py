@@ -7,12 +7,21 @@ from sqlalchemy.exc import ProgrammingError
 
 
 class TestGetOrCreateEngine:
-    """Test engine creation with pool config."""
+    """Test engine creation with pool config.
+
+    Since dist/cleanup-engine-unify, ``get_or_create_engine`` delegates to
+    ``modulo.db.session.get_shared_engine`` — the assertions below exercise the
+    REAL unified path (get_or_create_engine -> get_shared_engine ->
+    _build_engine -> create_async_engine) instead of a separate API-local
+    factory.
+    """
 
     def setup_method(self):
         import modulo.api.dependencies as deps
+        import modulo.db.session as session_mod
 
         deps._engine = None
+        session_mod._shared_engine = None
 
     def test_engine_with_postgres_pool_config(self):
         """Postgres backends get pool_pre_ping, pool_size, max_overflow, pool_recycle, pool_timeout."""
@@ -22,7 +31,10 @@ class TestGetOrCreateEngine:
         settings.modulo_db = "postgres"
         settings.database_url = "postgresql+asyncpg://u:p@localhost/db"
 
-        with patch("modulo.api.dependencies.create_async_engine") as mock_create:
+        with (
+            patch("modulo.db.session.get_settings", return_value=settings),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+        ):
             get_or_create_engine(settings)
             mock_create.assert_called_once()
             kw = mock_create.call_args[1]
@@ -41,7 +53,10 @@ class TestGetOrCreateEngine:
         settings.modulo_db = "sqlite"
         settings.database_url = "sqlite+aiosqlite:///./test.db"
 
-        with patch("modulo.api.dependencies.create_async_engine") as mock_create:
+        with (
+            patch("modulo.db.session.get_settings", return_value=settings),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+        ):
             get_or_create_engine(settings)
             kw = mock_create.call_args[1]
             assert "pool_size" not in kw
@@ -58,7 +73,10 @@ class TestGetOrCreateEngine:
         settings.modulo_db = "sqlite"
         settings.database_url = "sqlite+aiosqlite:///./test.db"
 
-        with patch("modulo.api.dependencies.create_async_engine") as mock_create:
+        with (
+            patch("modulo.db.session.get_settings", return_value=settings),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+        ):
             get_or_create_engine(settings)
             kw = mock_create.call_args[1]
             assert kw["connect_args"]["timeout"] == 10
@@ -74,7 +92,10 @@ class TestGetOrCreateEngine:
         settings.modulo_db = "postgres"
         settings.database_url = "postgresql+asyncpg://u:p@localhost/db"
 
-        with patch("modulo.api.dependencies.create_async_engine") as mock_create:
+        with (
+            patch("modulo.db.session.get_settings", return_value=settings),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+        ):
             engine1 = get_or_create_engine(settings)
             engine2 = get_or_create_engine(settings)
             mock_create.assert_called_once()
