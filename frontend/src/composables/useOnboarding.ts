@@ -27,7 +27,7 @@ export const useOnboardingStore = defineStore('onboarding', () => {
   const incompleteActions = computed(() => actions.value.filter(a => !a.completed && !a.skipped))
   const completedCount = computed(() => actions.value.filter(a => a.completed).length)
   const totalActions = computed(() => actions.value.length)
-  const isActive = computed(() => ready.value && isFirstRun.value && !dismissed.value)
+  const isActive = computed(() => ready.value && isFirstRun.value && !dismissed.value && progressPct.value < 100)
   const currentAction = computed(() => incompleteActions.value.sort((a, b) => a.order - b.order)[0] ?? null)
 
   async function fetchStatus() {

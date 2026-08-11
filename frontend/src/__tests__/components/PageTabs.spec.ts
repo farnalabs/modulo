@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import enUS from '../../locales/en-US.js'
 
 const i18n = createI18n({
@@ -191,4 +193,38 @@ describe('PageTabs', () => {
     const nav = wrapper.find('nav')
     expect(nav.attributes('aria-label')).toBeTruthy()
   })
+
+  it('enforces a minimum 24px-tall tab target at the mobile breakpoint', () => {
+    // jsdom does not evaluate @media queries or apply SFC scoped styles
+    // (vitest css:false stubs them), so assert the class-level CSS that
+    // enforces the WCAG 2.5.8 target size at the mobile breakpoint.
+    const mobile = mobileStyleBlock()
+    expect(mobile).toMatch(/min-height:\s*(2rem|32px)/)
+  })
+
+  it('spaces adjacent mobile tabs at least 0.5rem apart', () => {
+    const mobile = mobileStyleBlock()
+    expect(mobile).toMatch(/gap:\s*0\.5rem/)
+  })
 })
+
+function mobileStyleBlock(): string {
+  // vitest runs with cwd = the frontend/ vite root; resolve against it so the
+  // assertion works regardless of import.meta.url's scheme under transform.
+  const source = readFileSync(join(process.cwd(), 'src/components/PageTabs.vue'), 'utf-8')
+  const style = source.match(/<style[^>]*>([\s\S]*?)<\/style>/)
+  if (!style) throw new Error('PageTabs.vue has no <style> block')
+  const s = style[1]
+  const startMatch = s.match(/@media\s*\(max-width:\s*640px\)\s*\{/)
+  if (!startMatch) throw new Error('PageTabs.vue has no max-width: 640px media block')
+  const start = (startMatch.index ?? 0) + startMatch[0].length
+  let depth = 1
+  let i = start
+  while (i < s.length && depth > 0) {
+    if (s[i] === '{') depth++
+    else if (s[i] === '}') depth--
+    i++
+  }
+  if (depth !== 0) throw new Error('unbalanced braces in PageTabs.vue style')
+  return s.slice(start, i - 1)
+}

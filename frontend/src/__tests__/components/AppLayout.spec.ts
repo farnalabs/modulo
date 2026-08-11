@@ -37,6 +37,7 @@ afterEach(() => {
 
 import AppLayout from '../../components/AppLayout.vue'
 import { usePlanStore } from '../../stores/planStore'
+import { useOnboardingStore } from '../../composables/useOnboarding'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -106,5 +107,53 @@ describe('AppLayout', () => {
       expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
     })
+  })
+
+  it('keeps the onboarding banner wrapper in normal flow (not an absolute overlay)', async () => {
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [createPinia(), router],
+        stubs: { LogoMark: true },
+      },
+    })
+    await nextTick()
+    const bannerWrapper = wrapper.find('main > div.relative.z-10')
+    expect(bannerWrapper.exists()).toBe(true)
+    expect(bannerWrapper.classes()).toContain('relative')
+    expect(bannerWrapper.classes()).not.toContain('absolute')
+  })
+
+  it('does not render onboarding banner content when the store is inactive', async () => {
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [createPinia(), router],
+        stubs: { LogoMark: true },
+      },
+    })
+    const store = useOnboardingStore()
+    store.dismissed = true
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('.onboarding-banner').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="onboarding-banner-trigger"]').exists()).toBe(false)
+  })
+
+  it('renders onboarding banner in normal flow when the store is active', async () => {
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [createPinia(), router],
+        stubs: { LogoMark: true },
+      },
+    })
+    const store = useOnboardingStore()
+    store.ready = true
+    store.isFirstRun = true
+    store.dismissed = false
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="onboarding-banner-trigger"]').exists()).toBe(true)
+    const bannerWrapper = wrapper.find('main > div.relative.z-10')
+    expect(bannerWrapper.classes()).toContain('relative')
+    expect(bannerWrapper.classes()).not.toContain('absolute')
   })
 })
