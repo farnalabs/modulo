@@ -22,7 +22,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.db.crud.schema_folder import _MAX_FOLDER_DEPTH, update_folder
+from modulo.db.crud.schema_folder import _MAX_FOLDER_DEPTH, create_folder, update_folder
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -93,8 +93,21 @@ def _make_mock_session() -> AsyncMock:
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
-    mock_session = _make_mock_session()
+    _install_dependency_overrides(_make_mock_session())
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
+
+@pytest.fixture
+def client_and_session() -> Generator[tuple[TestClient, AsyncMock], None, None]:
+    """Like ``client`` but also yields the mock session for execute() stubbing."""
+    mock_session = _make_mock_session()
+    _install_dependency_overrides(mock_session)
+    yield TestClient(app), mock_session
+    app.dependency_overrides.clear()
+
+
+def _install_dependency_overrides(mock_session: AsyncMock) -> None:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
 
@@ -110,8 +123,6 @@ def client() -> Generator[TestClient, None, None]:
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
-    yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -246,9 +257,10 @@ def test_update_folder_rejects_self_parent() -> None:
 def test_update_folder_rejects_descendant_parent() -> None:
     folder = _make_folder()
     descendant_id = uuid.uuid4()
-    # get_folder -> folder; _folder_is_ancestor walks up from the descendant
-    # and finds the folder being updated in its parent chain.
-    session = _session_returning(folder, _FOLDER_ID)
+    # get_folder -> folder; parent-exists check -> descendant exists in org;
+    # _folder_is_ancestor walks up from the descendant and finds the folder
+    # being updated in its parent chain.
+    session = _session_returning(folder, descendant_id, _FOLDER_ID)
     with pytest.raises(ValueError, match="descendants"):
         asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": descendant_id}))
 
@@ -256,9 +268,10 @@ def test_update_folder_rejects_descendant_parent() -> None:
 def test_update_folder_accepts_valid_parent() -> None:
     folder = _make_folder()
     new_parent_id = uuid.uuid4()
-    # get_folder -> folder; ancestor walk terminates (parent is root);
-    # depth walk terminates (parent is root) -> depth 1, within limit.
-    session = _session_returning(folder, None, None)
+    # get_folder -> folder; parent-exists check -> new_parent_id;
+    # ancestor walk terminates (parent is root); depth walk terminates
+    # (parent is root) -> depth 1, within limit.
+    session = _session_returning(folder, new_parent_id, None, None)
     updated = asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": new_parent_id}))
     assert updated is folder
     assert folder.parent_id == new_parent_id
@@ -266,7 +279,8 @@ def test_update_folder_accepts_valid_parent() -> None:
 
 def test_update_folder_enforces_depth_limit() -> None:
     folder = _make_folder()
-    session = _session_returning(folder)
+    # get_folder -> folder; parent-exists check -> the parent id (exists)
+    session = _session_returning(folder, uuid.uuid4())
     with (
         patch("modulo.db.crud.schema_folder._folder_is_ancestor", new=AsyncMock(return_value=False)),
         patch(
@@ -287,3 +301,98 @@ def test_update_folder_invalid_parent_returns_422(client: TestClient) -> None:
     mock_update.assert_called_once()
     assert resp.status_code == 422
     assert resp.json()["detail"] == "A folder cannot be its own parent"
+
+
+# ---------------------------------------------------------------------------
+# Cross-org parent_id integrity (PR #1019 follow-up 1a)
+# ---------------------------------------------------------------------------
+
+
+async def _create_folder(session: AsyncMock, parent_id: uuid.UUID | None) -> Any:
+    return await create_folder(
+        session,
+        org_id=_ORG_ID,
+        name="Child",
+        account_id=uuid.uuid4(),
+        parent_id=parent_id,
+    )
+
+
+def test_create_folder_rejects_foreign_parent() -> None:
+    # Parent exists in another org: the org-scoped existence check sees nothing.
+    session = _session_returning(None)
+    with pytest.raises(ValueError, match="Parent folder not found"):
+        asyncio.run(_create_folder(session, uuid.uuid4()))
+
+
+def test_create_folder_accepts_valid_parent() -> None:
+    parent_id = uuid.uuid4()
+    # parent-exists check -> parent_id; depth walk -> None (parent is root)
+    session = _session_returning(parent_id, None)
+    folder = asyncio.run(_create_folder(session, parent_id))
+    assert folder.parent_id == parent_id
+
+
+def test_update_folder_rejects_foreign_parent() -> None:
+    folder = _make_folder()
+    foreign_parent_id = uuid.uuid4()
+    # get_folder -> folder; parent-exists check -> None (not in this org)
+    session = _session_returning(folder, None)
+    with pytest.raises(ValueError, match="Parent folder not found"):
+        asyncio.run(update_folder(session, _FOLDER_ID, {"parent_id": foreign_parent_id}))
+
+
+def test_schema_folder_create_foreign_parent_returns_422(client: TestClient) -> None:
+    with patch(
+        f"{_SF_PATCH_PREFIX}create_folder",
+        side_effect=ValueError("Parent folder not found"),
+    ) as mock_create:
+        resp = client.post(
+            "/api/v1/schema-folders",
+            json={"name": "Child", "parent_id": str(uuid.uuid4())},
+        )
+    mock_create.assert_called_once()
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Parent folder not found"
+
+
+# ---------------------------------------------------------------------------
+# Empty-body PATCH rejection (PR #1019 follow-up 1e)
+# ---------------------------------------------------------------------------
+
+
+def test_schema_folder_update_empty_body_returns_422(client: TestClient) -> None:
+    resp = client.patch(f"/api/v1/schema-folders/{_FOLDER_ID}", json={})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "No fields to update"
+
+
+# ---------------------------------------------------------------------------
+# Server-side schema counts endpoint (PR #1019 follow-up 1d)
+# ---------------------------------------------------------------------------
+
+
+def _execute_returning_rows(rows: list[Any]) -> MagicMock:
+    result = MagicMock()
+    result.all.return_value = rows
+    return result
+
+
+def test_schema_counts_empty_org_round_trip(client_and_session: tuple[TestClient, AsyncMock]) -> None:
+    client, session = client_and_session
+    session.execute.return_value = _execute_returning_rows([])
+    resp = client.get("/api/v1/schemas/counts")
+    assert resp.status_code == 200
+    assert resp.json() == {"total": 0, "by_folder": {}}
+
+
+def test_schema_counts_across_folders_round_trip(client_and_session: tuple[TestClient, AsyncMock]) -> None:
+    client, session = client_and_session
+    folder_a = uuid.uuid4()
+    folder_b = uuid.uuid4()
+    session.execute.return_value = _execute_returning_rows([(None, 2), (folder_a, 3), (folder_b, 1)])
+    resp = client.get("/api/v1/schemas/counts")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 6
+    assert body["by_folder"] == {str(folder_a): 3, str(folder_b): 1}

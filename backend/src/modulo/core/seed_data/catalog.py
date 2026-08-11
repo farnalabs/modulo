@@ -281,4 +281,10 @@ FLAGS: list[dict[str, str | None]] = [
         "tier_id": "community",
         "depends_on": None,
     },
+    {
+        "name": "mobile_sidebar_rail",
+        "description": "Mobile icon-rail sidebar (experimental)",
+        "tier_id": "community",
+        "depends_on": None,
+    },
 ]

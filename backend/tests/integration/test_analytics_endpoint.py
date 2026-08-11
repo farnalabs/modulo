@@ -306,6 +306,25 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
     return await _seed_user(db_engine, org_b, "analytics-b@test.local")
 
 
+@pytest_asyncio.fixture(scope="module")
+async def concurrency_org(db_engine: AsyncEngine) -> uuid.UUID:
+    """Dedicated org for the concurrency test.
+
+    ``org_a`` is module-scoped and shared with every other test in this file,
+    many of which insert ``run_date=today`` facts for it (started_at NULL →
+    queued through every hour bucket). The concurrency test asserts EXACT
+    per-bucket counts, so running against ``org_a`` makes it order-dependent:
+    earlier ``today`` facts inflate ``max_queued``/``max_active``. A fresh org
+    keeps the test hermetic regardless of sibling-test pollution or date.
+    """
+    return await _seed_org(db_engine, "AnalyticsEndpoint-Concurrency")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def concurrency_user(db_engine: AsyncEngine, concurrency_org: uuid.UUID) -> uuid.UUID:
+    return await _seed_user(db_engine, concurrency_org, "analytics-concurrency@test.local")
+
+
 class TestTwoOrgIsolation:
     async def test_org_b_never_sees_org_a(
         self,
@@ -1189,16 +1208,19 @@ class TestConcurrencyEndpoint:
         self,
         integration_client: AsyncClient,
         db_engine: AsyncEngine,
-        org_a: uuid.UUID,
+        concurrency_org: uuid.UUID,
+        concurrency_user: uuid.UUID,
         org_b: uuid.UUID,
-        user_a: uuid.UUID,
     ) -> None:
         today = datetime.now(UTC).date()
-        # Org A: one run spanning 09:30..10:30 (overlaps the 09:00 and 10:00
+        # A dedicated org (concurrency_org) so the exact-count assertions are
+        # hermetic — the module-scoped org_a accumulates run_date=today facts
+        # from earlier tests in this file.
+        # Org C: one run spanning 09:30..10:30 (overlaps the 09:00 and 10:00
         # hour buckets) + one queued-only run (created 23:00, never started).
         await _insert_fact(
             db_engine,
-            org_id=org_a,
+            org_id=concurrency_org,
             run_id=uuid.uuid4(),
             run_date=today,
             created_at=datetime(today.year, today.month, today.day, 9, 20, tzinfo=UTC),
@@ -1208,14 +1230,14 @@ class TestConcurrencyEndpoint:
         )
         await _insert_fact(
             db_engine,
-            org_id=org_a,
+            org_id=concurrency_org,
             run_id=uuid.uuid4(),
             run_date=today,
             created_at=datetime(today.year, today.month, today.day, 23, 0, tzinfo=UTC),
             started_at=None,
             completed_at=None,
         )
-        # Org B: a run that must NOT leak into org A's buckets.
+        # Org B: a run that must NOT leak into the concurrency org's buckets.
         await _insert_fact(
             db_engine,
             org_id=org_b,
@@ -1226,7 +1248,7 @@ class TestConcurrencyEndpoint:
             completed_at=datetime(today.year, today.month, today.day, 9, 40, tzinfo=UTC),
         )
 
-        token = _token(org_a, user_a, "admin")
+        token = _token(concurrency_org, concurrency_user, "admin")
         resp = await integration_client.get(
             f"/api/v1/analytics/concurrency?group_by=hour&date_from={today.isoformat()}&date_to={today.isoformat()}",
             headers={"Authorization": f"Bearer {token}"},
@@ -1247,4 +1269,4 @@ class TestConcurrencyEndpoint:
         )
         assert buckets[f"{today.isoformat()}T23:00:00"]["max_active"] == 0
         total_active = sum(b["max_active"] for b in payload["buckets"])
-        assert total_active == 2, f"org B's run leaked into org A — total active {total_active}"
+        assert total_active == 2, f"org B's run leaked into the concurrency org — total active {total_active}"

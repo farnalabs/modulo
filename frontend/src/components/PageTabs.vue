@@ -171,6 +171,8 @@ function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
     padding: 0;
     mask-image: none;
     -webkit-mask-image: none;
+    /* WCAG 2.5.8 target-offset: more spacing between adjacent tab targets on mobile */
+    gap: 0.5rem;
   }
 
   .page-tab {
@@ -178,6 +180,8 @@ function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
     border: none;
     border-radius: 0;
     border-bottom: 2px solid transparent;
+    /* WCAG 2.5.8 target size: never below 24px tall on mobile */
+    min-height: 2rem;
   }
 
   .page-tab:hover {

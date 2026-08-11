@@ -20,7 +20,7 @@ Feature: Team Gate Enforcement
 
   Scenario: Audit viewer blocked without Team license
     Given I do not have a Team license
-    When I GET /api/v1/admin/audit
+    When I GET /api/v1/admin/audit/export
     Then the response status is 402
     And the error detail mentions "audit_viewer"
 
@@ -60,5 +60,11 @@ Feature: Team Gate Enforcement
     Then the response status is 402
     And the error detail mentions "admin_spend_limits"
     When I GET /api/v1/admin/costs
+    Then the response status is 200
+    And the response does not contain 402 error
+
+  Scenario: Anomalies accessible with cost breakdown but no spend limits
+    Given I have a license with cost breakdown but no spend limits
+    When I GET /api/v1/admin/costs/anomalies
     Then the response status is 200
     And the response does not contain 402 error

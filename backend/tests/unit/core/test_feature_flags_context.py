@@ -519,7 +519,7 @@ class TestFeatureFlagRegistryDb:
         assert registry.get_flag("saved_views") is not None
         assert registry.get_flag("sso") is not None
 
-    async def test_load_from_db_filters_inactive_flags(self) -> None:
+    async def test_load_from_db_lists_inactive_flags(self) -> None:
         registry = FeatureFlagRegistry()
         session = AsyncMock()
         db_flags = [
@@ -532,7 +532,9 @@ class TestFeatureFlagRegistryDb:
         ):
             await registry.load_from_db(session)
         assert registry.get_flag("db_on") is not None
-        assert registry.get_flag("db_off") is None
+        off = registry.get_flag("db_off")
+        assert off is not None
+        assert off.currently_active is False
 
     async def test_load_from_db_applies_custom_tier_rank(self) -> None:
         registry = FeatureFlagRegistry()

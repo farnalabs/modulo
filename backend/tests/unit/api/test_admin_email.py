@@ -142,6 +142,45 @@ class TestGetEmailSettings:
             assert data["smtp_host"] == ""
             assert data["smtp_port"] == 587
             assert data["email_from"] == ""
+            assert data["smtp_timeout"] == 30
+        finally:
+            admin_email.get_organisation = original
+
+    async def test_get_settings_includes_stored_timeout(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_timeout": 10}},
+        )
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        try:
+            resp = await client_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
+            assert resp.status_code == 200
+            assert resp.json()["smtp_timeout"] == 10
+        finally:
+            admin_email.get_organisation = original
+
+    async def test_get_settings_non_numeric_timeout_falls_back_to_default(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_timeout": "not-a-number"}},
+        )
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        try:
+            resp = await client_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
+            assert resp.status_code == 200
+            assert resp.json()["smtp_timeout"] == 30
         finally:
             admin_email.get_organisation = original
 
@@ -231,6 +270,97 @@ class TestPutEmailSettings:
         )
         assert resp.status_code == 403
 
+    async def test_put_settings_timeout_persisted(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={})
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_update = admin_email.update_organisation
+        admin_email.update_organisation = AsyncMock(return_value=org)
+        try:
+            resp = await client_admin.put(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings",
+                json={
+                    "smtp_host": "smtp.new.com",
+                    "smtp_port": 587,
+                    "smtp_username": "",
+                    "smtp_password": "",
+                    "email_from": "",
+                    "smtp_timeout": 10,
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["smtp_timeout"] == 10
+            call_updates = admin_email.update_organisation.call_args[0][2]
+            assert call_updates["settings_json"]["email"]["smtp_timeout"] == 10
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.update_organisation = original_update
+
+    async def test_put_settings_timeout_too_low_422(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=None)
+        try:
+            resp = await client_admin.put(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings",
+                json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 587,
+                    "smtp_username": "",
+                    "smtp_password": "",
+                    "email_from": "",
+                    "smtp_timeout": 0,
+                },
+            )
+            assert resp.status_code == 422
+        finally:
+            admin_email.get_organisation = original
+
+    async def test_put_settings_timeout_too_high_422(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=None)
+        try:
+            resp = await client_admin.put(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings",
+                json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 587,
+                    "smtp_username": "",
+                    "smtp_password": "",
+                    "email_from": "",
+                    "smtp_timeout": 121,
+                },
+            )
+            assert resp.status_code == 422
+        finally:
+            admin_email.get_organisation = original
+
+    async def test_put_settings_password_too_long_422(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=None)
+        try:
+            resp = await client_admin.put(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings",
+                json={
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 587,
+                    "smtp_username": "",
+                    "smtp_password": "x" * 300,
+                    "email_from": "",
+                },
+            )
+            assert resp.status_code == 422
+        finally:
+            admin_email.get_organisation = original
+
 
 class TestTestEmail:
     async def test_email_test_no_config(self, client_admin, mock_session):
@@ -291,6 +421,32 @@ class TestTestEmail:
             )
             assert resp.status_code == 200
             assert resp.json() == {"ok": True, "message": "Test email sent successfully"}
+        finally:
+            admin_email.get_organisation = original_get
+            admin_email.send_email = original_send
+
+    async def test_email_test_passes_configured_timeout(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_port": 587, "smtp_timeout": 8}},
+        )
+        original_get = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        original_send = admin_email.send_email
+        admin_email.send_email = MagicMock(return_value=True)
+        try:
+            resp = await client_admin.post(
+                f"/api/v1/admin/org/{ORG_ID}/email-settings/test",
+                json={"to": "admin@example.com"},
+            )
+            assert resp.status_code == 200
+            temp_settings = admin_email.send_email.call_args[0][0]
+            assert temp_settings.smtp_timeout == 8
         finally:
             admin_email.get_organisation = original_get
             admin_email.send_email = original_send

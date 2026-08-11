@@ -9,8 +9,11 @@ Fly/HAProxy compat knobs. ``get_shared_engine`` is the ONE factory: it bakes in
 ``pool_pre_ping``, ``statement_cache_size=0`` (the asyncpg prepared-statement
 cache is incompatible with HAProxy), and pool sizing from settings, and accepts
 pool overrides (the SAQ worker keeps its per-worker budget via
-``saq_worker_db_pool_size``). Whichever consumer creates it first fixes the
-pool size for the process; later callers share the same engine.
+``saq_worker_db_pool_size``). The web process's
+``api.dependencies.get_or_create_engine`` delegates here (dist/cleanup-engine-unify),
+so dispatch, crons, workers and the API all share ONE engine per process.
+Whichever consumer creates it first fixes the pool size for the process; later
+callers share the same engine.
 """
 
 import logging
@@ -73,15 +76,22 @@ def _build_engine(
     settings = get_settings()
     db_type = settings.modulo_db.lower()
 
-    kw: dict[str, Any] = {"url": settings.database_url, "pool_pre_ping": True}
+    # connect_args.timeout applies to every backend (the historical API-engine
+    # default, preserved so the API path's behaviour is unchanged). Postgres
+    # additionally disables SSL (asyncpg defaults to "prefer", which causes
+    # ConnectionResetError on Fly private networks with no TLS listener) and
+    # the asyncpg prepared-statement cache (HAProxy does not reliably support
+    # extended-protocol reuse) — the Fly/HAProxy compat knobs.
+    connect_args: dict[str, Any] = {"timeout": 10}
     if db_type == "postgres":
-        kw["connect_args"] = {
-            "timeout": 10,
-            "ssl": False,
-            # HAProxy compat: disable the asyncpg prepared-statement cache —
-            # the proxy does not reliably support extended-protocol reuse.
-            "statement_cache_size": 0,
-        }
+        connect_args["ssl"] = False
+        connect_args["statement_cache_size"] = 0
+
+    kw: dict[str, Any] = {
+        "url": settings.database_url,
+        "pool_pre_ping": True,
+        "connect_args": connect_args,
+    }
 
     if db_type != "sqlite":
         kw["pool_size"] = pool_size if pool_size is not None else 20
@@ -116,10 +126,10 @@ def get_shared_engine(*, pool_size: int | None = None, max_overflow: int | None 
     """Return the process-global shared async engine, creating it on first use.
 
     Single engine per process shared by the SAQ worker (runs + system), the
-    system worker's crons (cron_helpers), and the per-item fire jobs. The web
-    process keeps ``api.dependencies.get_or_create_engine``; both factories
-    build via :func:`_build_engine` so the Fly/HAProxy knobs are identical.
-    The first caller fixes the pool size for the process (a later caller's
+    system worker's crons (cron_helpers), the per-item fire jobs, and — since
+    dist/cleanup-engine-unify — the web process via
+    ``api.dependencies.get_or_create_engine``, which delegates here. The
+    first caller fixes the pool size for the process (a later caller's
     override is ignored — the engine is already built).
     """
     global _shared_engine

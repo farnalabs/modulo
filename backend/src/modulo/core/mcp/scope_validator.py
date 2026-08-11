@@ -64,6 +64,7 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "get_trigger": "trigger.list",
     "update_trigger": "trigger.update",
     "delete_trigger": "trigger.delete",
+    "set_org_triggers_paused": "org.triggers.pause.manage",
     "list_housekeeping": "housekeeping.list",
     "perform_housekeeping": "housekeeping.perform",
     "create_connector": "connector.create",

@@ -250,6 +250,16 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Run analytics dashboard (rolling-window run/cost/quality series)",
         tier="community",
     ),
+    # ── Community tier — mobile icon-rail experiment (default OFF) ──────────
+    # Seeded with ``is_active=false`` so it is listed-but-inactive on every tier
+    # (community-tier flags otherwise activate everywhere via the tier-rank
+    # comparison). Org admins can enable it per-org through the Feature Flags UI
+    # (sets an org ``feature_overrides`` entry, which wins in ``_refresh``).
+    FeatureFlag(
+        name="mobile_sidebar_rail",
+        description="Mobile icon-rail sidebar (experimental)",
+        tier="community",
+    ),
 ]
 
 
@@ -466,6 +476,11 @@ class FeatureFlagRegistry:
 
         db_flags = await list_feature_flags(session)
         if db_flags:
+            # Keep ALL catalog rows, including ``is_active=false`` ones, so the
+            # admin UI can list and toggle them. Rows seeded inactive (e.g. the
+            # ``mobile_sidebar_rail`` experiment) are tracked in
+            # ``_inactive_flags`` and stay ``currently_active=False`` in
+            # ``_refresh`` unless an override exists.
             self._flags = [
                 FeatureFlag(
                     name=f["name"],
@@ -474,8 +489,8 @@ class FeatureFlagRegistry:
                     depends_on=f["depends_on"],
                 )
                 for f in db_flags
-                if f["is_active"]
             ]
+            self._inactive_flags = {f["name"] for f in db_flags if not f["is_active"]}
 
     async def load_from_db(self, session: Any) -> None:
         """Replace hardcoded flag data with DB-backed data from tier_catalog / feature_flag_catalog.
@@ -520,10 +535,20 @@ class FeatureFlagRegistry:
     def _refresh(self) -> None:
         tier_rank: dict[str, int] = getattr(self, "_tier_rank", TIER_RANK)
         current_rank = tier_rank.get(self._current_tier, 0)
+        # Flags seeded ``is_active=false`` in the DB catalog (experiments that
+        # must ship default-OFF everywhere). ``__init__`` runs ``_refresh()``
+        # before ``_load_catalog``, so guard with getattr. ``mobile_sidebar_rail``
+        # is always in the inactive set — it is default-OFF by definition, so it
+        # must not come active via the tier-rank fallback when the DB catalog is
+        # empty; only an explicit ``_overrides`` entry can turn it on.
+        inactive: set[str] = getattr(self, "_inactive_flags", set()) | {"mobile_sidebar_rail"}
 
         for flag in self._flags:
-            flag_tier_rank = tier_rank.get(flag.tier, 0)
-            flag.currently_active = flag_tier_rank <= current_rank
+            if flag.name in inactive:
+                flag.currently_active = False
+            else:
+                flag_tier_rank = tier_rank.get(flag.tier, 0)
+                flag.currently_active = flag_tier_rank <= current_rank
 
             override = self._overrides.get(flag.name)
             if override is not None:

@@ -1,9 +1,13 @@
 """Unit tests for OpenAIBackend adapter."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from langchain_core.messages import HumanMessage
+from openai import InternalServerError
 
+from modulo.model_backends.module import ProviderUnavailableError
 from modulo.model_backends.openai import OpenAIBackend
 
 
@@ -45,3 +49,30 @@ def test_chat_openai_uses_default_params():
         temperature=0.7,
         max_tokens=100,
     )
+
+
+async def test_invoke_http_5xx_classified_as_provider_unavailable():
+    """The hub builds the plain OpenAICompatibleBackend for the opencode
+    provider; a gateway 5xx must surface as ProviderUnavailableError there
+    too (upstream outage), not as a raw openai error."""
+    with patch("modulo.model_backends.module.ChatOpenAI"):
+        backend = OpenAIBackend(
+            api_key="sk-test",
+            model_id="opencode-go/deepseek-v4-flash",
+            base_url="https://opencode.ai/zen/go/v1",
+            provider="opencode",
+        )
+    request = httpx.Request("POST", "https://opencode.ai/zen/go/v1/chat/completions")
+    backend._model.ainvoke = AsyncMock(
+        side_effect=InternalServerError(
+            message="boom",
+            response=httpx.Response(500, request=request),
+            body={"error": {"message": "boom"}},
+        )
+    )
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        await backend.invoke([HumanMessage(content="hi")])
+    message = str(exc_info.value)
+    assert "opencode/opencode-go/deepseek-v4-flash provider gateway" in message
+    assert "HTTP 500" in message
+    assert "upstream" in message

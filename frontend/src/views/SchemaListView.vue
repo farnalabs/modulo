@@ -23,7 +23,7 @@
 
       <div class="flex-1 min-w-0">
         <div v-if="folderError" class="mb-4 px-4 py-2 text-xs text-destructive">
-          {{ $t('views.SchemaListView.failed_to_load_schemas') }} {{ folderError }}
+          {{ $t('views.SchemaListView.failed_to_load_folders') }} {{ folderError }}
         </div>
 
         <div v-if="moveError" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="schema-list-move-error">
@@ -295,35 +295,13 @@ const schemas = computed(() => schemasResp.value?.items ?? [])
 const foldersList = ref<FolderItem[]>([])
 const folderError = ref<string | null>(null)
 
-const folderSchemaCounts = computed(() => {
-  const counts: Record<string, number> = {}
-  for (const s of allSchemasForCounts.value) {
-    if (s.folder_id) {
-      counts[s.folder_id] = (counts[s.folder_id] || 0) + 1
-    }
-  }
-  counts.__all__ = allSchemasForCounts.value.length
-  return counts
-})
+const folderSchemaCounts = ref<Record<string, number>>({})
 
-const allSchemasForCounts = ref<SchemaItem[]>([])
-
-async function loadAllSchemasForCounts() {
+async function loadSchemaCounts() {
   try {
-    const items: SchemaItem[] = []
-    let page = 1
-    let total = 0
-    do {
-      const { data } = await api.GET('/api/v1/schemas', {
-        params: { query: { page, page_size: 100 } },
-      })
-      if (!data) break
-      total = data.total
-      items.push(...data.items)
-      if (data.items.length === 0) break
-      page += 1
-    } while ((page - 1) * 100 < total)
-    allSchemasForCounts.value = items
+    const { data } = await api.GET('/api/v1/schemas/counts')
+    if (!data) return
+    folderSchemaCounts.value = { ...(data.by_folder ?? {}), __all__: data.total }
   } catch (e: unknown) {
     console.warn('Failed to load schema counts', e)
   }
@@ -364,7 +342,7 @@ function onSelectFolder(folderId: string | null) {
 function onFoldersChanged() {
   loadSchemas()
   loadFolders()
-  loadAllSchemasForCounts()
+  loadSchemaCounts()
 }
 
 function onSchemaDragStart(schema: SchemaItem, event: DragEvent) {
@@ -387,7 +365,7 @@ async function moveSchema(schemaId: string, folderId: string | null) {
       folder_id: folderId,
     })
     await loadSchemas()
-    await loadAllSchemasForCounts()
+    await loadSchemaCounts()
   } catch (e: unknown) {
     moveError.value = formatApiError(e)
   } finally {
@@ -470,6 +448,6 @@ async function deprecateSchema() {
 
 onMounted(() => {
   loadFolders()
-  loadAllSchemasForCounts()
+  loadSchemaCounts()
 })
 </script>

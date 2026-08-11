@@ -8,7 +8,6 @@ export const RUN_STATUS = {
   RUNNING: 'running',
   AWAITING_HUMAN: 'awaiting_human' as const,
   CLAIMED: 'claimed',
-  WAITING_FOR_LOCK: 'waiting_for_lock',
   COMPLETE: 'complete',
   FAILED: 'failed' as const,
   CANCELLED: 'cancelled',

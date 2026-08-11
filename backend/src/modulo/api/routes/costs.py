@@ -171,8 +171,6 @@ class SetSpendLimitRequest(BaseModel):
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_breakdown"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostReportResponse:
@@ -432,8 +430,7 @@ class UpdateCostControlsRequest(BaseModel):
 @handle_db_errors("costs.get_cost_controls")
 @router.get("/controls", response_model=CostControlsResponse)
 async def get_cost_controls(
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_controls"),
+    _: object = require_feature("admin_cost_controls"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
@@ -486,8 +483,7 @@ async def get_cost_controls(
 @router.put("/controls", response_model=CostControlsResponse)
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_controls"),
+    _: object = require_feature("admin_cost_controls"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostControlsResponse:
@@ -572,8 +568,7 @@ async def export_costs(
     period: str = Query("this_month", pattern=r"^(this_month|last_month|7d|30d|90d)$"),
     group_by: str = Query("team", pattern=r"^(team|pipeline|model)$"),
     format: str = Query("csv", pattern=r"^(csv)$"),
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_breakdown"),
+    _: object = require_feature("admin_cost_breakdown"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
@@ -675,8 +670,7 @@ def _report_response(report: ScheduledReport) -> ReportResponse:
 @router.post("/reports", response_model=ReportResponse, status_code=201)
 async def create_report(
     req: CreateReportRequest,
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_controls"),
+    _: object = require_feature("admin_cost_controls"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> ReportResponse:
@@ -723,8 +717,7 @@ async def create_report(
 @handle_db_errors("costs.list_reports")
 @router.get("/reports", response_model=list[ReportResponse])
 async def list_reports(
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_controls"),
+    _: object = require_feature("admin_cost_controls"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[ReportResponse]:
@@ -766,8 +759,7 @@ async def list_reports(
 @router.delete("/reports/{report_id}", status_code=204)
 async def delete_report(
     report_id: uuid.UUID,
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_controls"),
+    _: object = require_feature("admin_cost_controls"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
@@ -823,8 +815,7 @@ class AnomalyResponse(BaseModel):
 @handle_db_errors("costs.get_anomalies")
 @router.get("/anomalies", response_model=list[AnomalyResponse])
 async def get_anomalies(
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_breakdown"),
+    _: object = require_feature("admin_cost_breakdown"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[AnomalyResponse]:
@@ -936,8 +927,7 @@ async def get_anomalies(
 @router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_breakdown"),
+    _: object = require_feature("admin_cost_breakdown"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:

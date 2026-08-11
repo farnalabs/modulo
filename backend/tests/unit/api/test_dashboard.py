@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +25,24 @@ from tests.unit.api.mock_session import configure_mock_session
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+@pytest.fixture(autouse=True)
+def _disable_dashboard_redis_cache() -> Generator[None, None, None]:
+    """Neutralise the dashboard summary Redis cache for the whole module.
+
+    ``_get_cached_dashboard`` / ``_set_cached_dashboard`` read ``get_settings()``
+    directly (not the overridden dependency), so when a live Redis is reachable
+    at the configured ``REDIS_URL`` a cached summary from an earlier test
+    (TTL 60s) is returned to later tests — poisoning any test that supplies
+    custom mock window kwargs with the default values cached first. Disabling
+    the cache makes every test deterministic regardless of the environment.
+    """
+    with (
+        patch("modulo.api.routes.dashboard._get_cached_dashboard", new=AsyncMock(return_value=None)),
+        patch("modulo.api.routes.dashboard._set_cached_dashboard", new=AsyncMock()),
+    ):
+        yield
 
 
 def _make_settings() -> Settings:

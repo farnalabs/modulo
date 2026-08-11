@@ -1043,7 +1043,6 @@ export default {
       "run_input": "Run Input",
       "hide": "Hide",
       "show": "Show",
-      "prompt_hidden_click_to_reveal": "[Prompt hidden — click to reveal]",
       "prompt_dialog_description": "Rendered prompt sent to the LLM for this node.",
       "copied": "Copied!",
       "prompt_reveal_error": "Failed to reveal prompt.",
@@ -1743,6 +1742,8 @@ export default {
       "smtp_password_placeholder": "your-smtp-password",
       "email_from": "From Address",
       "email_from_placeholder": "noreply at example.com",
+      "smtp_timeout": "SMTP Timeout (seconds)",
+      "smtp_timeout_placeholder": "30",
       "save": "Save",
       "saving": "Saving...",
       "test_email": "Send Test Email",
@@ -1891,7 +1892,7 @@ export default {
     },
     "SchemaListView": {
       "deprecate_schema": "Deprecate schema",
-      "failed_to_load_schemas": "Failed to load schemas:",
+      "failed_to_load_folders": "Failed to load folders:",
       "deprecating": "Deprecating...",
       "manage_schemas_and_deprecate_outdated_definitions": "Manage schemas and deprecate outdated definitions",
       "no_schemas_found": "No schemas found",
@@ -2237,15 +2238,18 @@ export default {
       "modulo_logo": "Modulo logo"
     },
     "AppLayout": {
-      "close_navigation": "Close navigation",
-      "open_navigation": "Open navigation",
       "all_features": "All Features",
-      "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
       "remy_performing_actions": "Remy is performing actions on this page",
       "remy_stop": "Stop",
       "modulo": "Modulo",
       "search_pages": "Search pages",
-      "toggle_theme": "Toggle theme"
+      "toggle_theme": "Toggle theme",
+      "close_navigation": "Close navigation",
+      "open_navigation": "Open navigation",
+      "collapse_sidebar": "Collapse sidebar",
+      "expand_sidebar": "Expand sidebar",
+      "user_profile": "User profile",
+      "main_navigation": "Main navigation"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",

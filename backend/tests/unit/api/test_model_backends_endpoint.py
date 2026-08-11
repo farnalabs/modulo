@@ -242,6 +242,117 @@ def test_update_model_backend_returns_200(client: TestClient) -> None:
     assert resp.json()["name"] == "Updated"
 
 
+def _make_txn_tracking_session(in_txn: dict[str, bool]) -> AsyncMock:
+    """Build a mock session whose begin() context tracks transaction state.
+
+    Mirrors the DI session's ``autobegin=False`` semantics: between begin
+    blocks there is no active transaction, so code that must run inside a
+    transaction can be detected by asserting it ran while ``in_txn`` was True.
+    """
+    session = AsyncMock()
+    configure_mock_session(session)
+    begin_cm = AsyncMock()
+
+    def _enter() -> None:
+        in_txn["active"] = True
+
+    def _exit(*args: object) -> bool:
+        in_txn["active"] = False
+        return False
+
+    begin_cm.__aenter__ = AsyncMock(side_effect=_enter)
+    begin_cm.__aexit__ = AsyncMock(side_effect=_exit)
+    session.begin = MagicMock(return_value=begin_cm)
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=mock_result)
+    return session
+
+
+class _TrackingSecretsBackend:
+    """Records whether set_secret was called while a transaction was active."""
+
+    def __init__(self, in_txn: dict[str, bool], calls: list[bool]) -> None:
+        self._in_txn = in_txn
+        self._calls = calls
+
+    async def set_secret(self, key: str, value: str) -> None:
+        self._calls.append(self._in_txn["active"])
+
+    async def get_secret(self, key: str) -> str:
+        raise KeyError(key)
+
+    async def delete_secret(self, key: str) -> None:
+        pass
+
+
+def test_create_model_backend_writes_secret_inside_transaction(client: TestClient) -> None:
+    """Regression: set_secret must run INSIDE the session transaction.
+
+    The DI session is created with ``autobegin=False``. When set_secret ran
+    after the ``session.begin()`` block committed, ``begin_nested()`` raised
+    ``InvalidRequestError`` and the POST 500'd after the row was already
+    committed. This test fails if set_secret is observed running outside an
+    active transaction.
+    """
+    in_txn: dict[str, bool] = {"active": False}
+    calls: list[bool] = []
+    session = _make_txn_tracking_session(in_txn)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+
+    with (
+        patch(
+            "modulo.core.secrets_backend.create_secrets_backend",
+            return_value=_TrackingSecretsBackend(in_txn, calls),
+        ),
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=_make_backend()),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json=_CREATE_BODY)
+
+    assert resp.status_code == 201, resp.text
+    assert calls, "set_secret was never called"
+    assert all(calls), (
+        "set_secret ran OUTSIDE the transaction; FernetSecretsBackend.set_secret "
+        "requires an active transaction (autobegin=False session)"
+    )
+
+
+def test_update_model_backend_writes_secret_inside_transaction(client: TestClient) -> None:
+    """Regression: PATCH with an api_key must persist the secret inside the transaction."""
+    in_txn: dict[str, bool] = {"active": False}
+    calls: list[bool] = []
+    session = _make_txn_tracking_session(in_txn)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+
+    with (
+        patch(
+            "modulo.core.secrets_backend.create_secrets_backend",
+            return_value=_TrackingSecretsBackend(in_txn, calls),
+        ),
+        patch("modulo.api.routes.model_backends.update_model_backend", return_value=_make_backend()),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.patch(f"/api/v1/model-backends/{_BACKEND_ID}", json={"api_key": "sk-new"})
+
+    assert resp.status_code == 200, resp.text
+    assert calls, "set_secret was never called"
+    assert all(calls), (
+        "set_secret ran OUTSIDE the transaction; FernetSecretsBackend.set_secret "
+        "requires an active transaction (autobegin=False session)"
+    )
+
+
 def test_update_model_backend_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.model_backends.update_model_backend", return_value=None),
@@ -437,6 +548,32 @@ def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> No
     assert resp.status_code == 201
     body = resp.json()
     assert body["provider"] == "azure_openai"
+    assert "credentials_ciphertext" not in body
+    assert "api_key" not in body
+    assert body["has_credentials"] is True
+
+
+def test_create_custom_model_backend_round_trips(client: TestClient) -> None:
+    """A custom (demo stub) provider is accepted by the endpoint and round-trips.
+
+    The hub registration path for custom rows is covered directly in
+    tests/unit/model_backend_hub/test_hub.py (test_initialise_custom_provider_registers_and_invokes).
+    """
+    custom_body = {**_CREATE_BODY, "provider": "custom", "model_id": "demo-model"}
+    backend = _make_backend(credentials_ciphertext=b"encrypted_bytes")
+    backend.provider = "custom"
+    backend.model_id = "demo-model"
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json=custom_body)
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["provider"] == "custom"
+    assert body["model_id"] == "demo-model"
     assert "credentials_ciphertext" not in body
     assert "api_key" not in body
     assert body["has_credentials"] is True

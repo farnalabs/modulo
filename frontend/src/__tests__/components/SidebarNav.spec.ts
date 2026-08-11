@@ -146,4 +146,15 @@ describe('SidebarNav', () => {
     expect(wrapper.find('.sidebar-group-header').attributes('aria-expanded')).toBe('false')
     expect(localStorage.getItem('sidebar-group-prefs')).toContain('core')
   })
+
+  it('renders a flat collapsed list with no group headers when collapsed', async () => {
+    const { wrapper } = mountSidebar({ collapsed: true })
+    await flushPromises()
+    expect(wrapper.findAll('.sidebar-group-header').length).toBe(0)
+    const links = wrapper.findAll('.sidebar-link')
+    // visible items across visible groups: dashboard and runs for a viewer
+    expect(links.length).toBe(2)
+    expect(links.map((l) => l.attributes('href'))).toEqual(expect.arrayContaining(['/', '/runs']))
+    expect(links.every((l) => l.attributes('title'))).toBe(true)
+  })
 })

@@ -86,7 +86,7 @@ from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org
 from modulo.otel_bridge import LangGraphOtelBridge
 
@@ -95,12 +95,15 @@ _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
 # Statuses a run may still be admitted from when a retry's backoff elapses.
 # Any terminal status (complete/failed/cancelled/eval_failed) means the run
 # was already finalised while the retry loop slept — it must never be
-# resurrected back to ``running``.
-_ADMISSIBLE_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
+# resurrected back to ``running``. Single-sourced from
+# ``db.models.run.ACTIVE_RUN_STATUSES`` (the never-entered ``waiting_for_lock``
+# sub-state was excised in migration 0074/0075).
+_ADMISSIBLE_STATUSES = ACTIVE_RUN_STATUSES
 
 # Terminal statuses. A run in one of these is already finalised; it must never
-# be resurrected AND must never spawn (or hold) a retry task.
-_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
+# be resurrected AND must never spawn (or hold) a retry task. Single-sourced
+# from ``db.models.run.TERMINAL_STATUSES`` (includes ``stalled`` since #1011).
+_TERMINAL_STATUSES = TERMINAL_STATUSES
 
 _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512

@@ -41,7 +41,7 @@ from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.models.connector_instance import ConnectorInstance
-from modulo.db.models.run import Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.models.webhook import WebhookDedupHash, WebhookPayload
@@ -120,7 +120,10 @@ class TriggerBusyError(RuntimeError):
 
 _DEDUP_TTL_SECONDS = 300  # 5 minutes
 _REPLAY_WINDOW_SECONDS = 300  # ±300s for X-Modulo-Timestamp
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
+# Active (non-terminal) run statuses — single-sourced from the canonical set
+# in db.models.run (the never-entered ``waiting_for_lock`` sub-state was
+# excised in migration 0074/0075).
+_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 # ---------------------------------------------------------------------------

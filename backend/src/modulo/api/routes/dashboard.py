@@ -66,6 +66,11 @@ def _safe_float(value: object, default: float = 0.0) -> float:
 
 _TRACKED_STATUSES = ("running", "awaiting_human", "failed", "idle")
 
+# Statuses that hold a slot without actively executing — surfaced as ``idle``.
+# ``waiting_for_lock`` was excised in migration 0074/0075 (rows backfilled to
+# ``pending``), so it must not appear here.
+_IDLE_STATUSES = ("pending", "claimed")
+
 # Allowed rolling-window sizes for the period-scoped summary (FAR-92) — any
 # 1..90 (matching /trends ge=1, le=90); enforced by the Query params and the
 # handler guard below.
@@ -360,8 +365,7 @@ async def dashboard_summary(
             for tracked_status in _TRACKED_STATUSES:
                 status_counts.setdefault(tracked_status, 0)
 
-            idle_statuses = ("pending", "claimed", "waiting_for_lock")
-            idle_count = sum(status_counts.get(s, 0) for s in idle_statuses)
+            idle_count = sum(status_counts.get(s, 0) for s in _IDLE_STATUSES)
             status_counts["idle"] = idle_count
 
             teams_result = await session.execute(
@@ -415,7 +419,7 @@ async def dashboard_summary(
                 run_data = team_run_data.get(tid, {})
                 team_total = sum(run_data.get(s, 0) for s in _TRACKED_STATUSES)
                 team_statuses = {s: run_data.get(s, 0) for s in _TRACKED_STATUSES}
-                team_idle_from_db = sum(run_data.get(s, 0) for s in ("pending", "claimed", "waiting_for_lock"))
+                team_idle_from_db = sum(run_data.get(s, 0) for s in _IDLE_STATUSES)
                 team_statuses["idle"] = team_idle_from_db
 
                 team_metrics.append(

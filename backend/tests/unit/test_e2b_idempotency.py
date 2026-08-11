@@ -43,6 +43,9 @@ class _MarkerSession:
     def __init__(self, events: list[str], *, marker_row: tuple[object, ...] | None = ("id",)) -> None:
         self._events = events
         self._marker_row = marker_row
+        # The structured marker values written by the acquire / store UPDATEs
+        # (dist/cleanup-idempotency D5) — asserted by the attempt-key tests.
+        self._marker_values: list[str] = []
 
     async def __aenter__(self) -> Self:
         return self
@@ -63,13 +66,21 @@ class _MarkerSession:
 
     async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _FakeResult:
         s = str(stmt)
+        if "claim_count FROM runs" in s:
+            # D5 attempt-key read — a superseded/not-running row (marker_row is
+            # None) yields no claim_count, so the acquire is denied.
+            return _FakeResult((0,) if self._marker_row is not None else None)
         if "sandbox_dispatch_state" in s:
             if "sandbox_dispatch_state=NULL" in s:
                 self._events.append("marker_clear")
             elif "sandbox_id=:sid" in s and params and params.get("sid") is None:
                 self._events.append("marker_set")
+                if params.get("marker"):
+                    self._marker_values.append(str(params["marker"]))
             else:
                 self._events.append("marker_store_id")
+                if params.get("marker"):
+                    self._marker_values.append(str(params["marker"]))
             return _FakeResult(self._marker_row)
         return _FakeResult(None)
 
@@ -204,3 +215,83 @@ async def test_retryable_infra_failure_raises_sandbox_node_failed():
     ):
         await fn(_run_state())
     sandbox.kill.assert_awaited()
+
+
+async def test_marker_carries_attempt_key():
+    """The structured dispatch marker (D5) carries the per-node, per-claim-attempt
+    idempotency key ``run:{run_id}:node:{node_id}:{claim_count}``, and the same
+    key is exposed on the node output/artifacts for evals/audit."""
+    events: list[str] = []
+    session = _MarkerSession(events)
+    fn = make_sandbox_agent_fn(_base_node_def(), session_factory=_make_factory(session))
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_sandbox_mock())):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    assert result["output"]["attempt_key"] == "run:run-1:node:n1:0"
+    assert result["artifacts"][0]["output"]["attempt_key"] == "run:run-1:node:n1:0"
+    # Both the acquire and the store-id marker UPDATEs carry the attempt key.
+    assert session._marker_values
+    assert all('"attempt_key": "run:run-1:node:n1:0"' in m for m in session._marker_values)
+
+
+async def test_reclaimed_run_produces_different_attempt_key():
+    """A run re-claimed (claim_count rotates) re-runs node N with a DIFFERENT
+    attempt key — the successor's re-run is distinguishable from the superseded
+    original's attempt (the D5 at-most-once observability gap)."""
+    keys: list[str] = []
+    for claim_count in (1, 2):
+        events: list[str] = []
+        session = _MarkerSession(events, marker_row=("id",))
+        fn = make_sandbox_agent_fn(_base_node_def(), session_factory=_make_factory(session))
+
+        async def _select_count(stmt: object = None, params: dict | None = None, _cc: int = claim_count):
+            return _FakeResult((_cc,))
+
+        session.execute = _select_count  # type: ignore[method-assign]
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_sandbox_mock())):
+            result = await fn(_run_state())
+        keys.append(result["output"]["attempt_key"])
+
+    assert keys[0] == "run:run-1:node:n1:1"
+    assert keys[1] == "run:run-1:node:n1:2"
+    assert keys[0] != keys[1]
+
+
+async def test_same_claim_attempt_key_stable_across_invocations():
+    """Within one claim (same claim_count) the attempt key is STABLE — two
+    dispatches of the same node under the same claim share one attempt key."""
+    keys: list[str] = []
+    for _ in range(2):
+        events: list[str] = []
+        session = _MarkerSession(events)
+        fn = make_sandbox_agent_fn(_base_node_def(), session_factory=_make_factory(session))
+        with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=_sandbox_mock())):
+            result = await fn(_run_state())
+        keys.append(result["output"]["attempt_key"])
+
+    assert keys[0] == keys[1] == "run:run-1:node:n1:0"
+
+
+async def test_fail_open_attempt_key_derives_from_claim_token():
+    """Without a session factory the marker fails open, but the node output still
+    carries a per-claim attempt key derived from the (rotating) claim token —
+    stable within a claim, different across claims."""
+    first = make_sandbox_agent_fn(_base_node_def(), session_factory=None)
+    second = make_sandbox_agent_fn(_base_node_def(), session_factory=None)
+    sandbox = _sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        r1a = await first(_run_state())
+        r1b = await first(_run_state())
+        state2 = _run_state()
+        state2["_claim_lease"] = "tok-executor-xyz"
+        r2 = await second(state2)
+
+    key1a = r1a["output"]["attempt_key"]
+    key1b = r1b["output"]["attempt_key"]
+    key2 = r2["output"]["attempt_key"]
+    assert key1a == key1b
+    assert key1a != key2
+    assert key1a.startswith("run:run-1:node:n1:")

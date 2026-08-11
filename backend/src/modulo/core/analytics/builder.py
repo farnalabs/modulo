@@ -112,7 +112,6 @@ class AnalyticsStatus(StrEnum):
     RUNNING = "running"
     AWAITING_HUMAN = "awaiting_human"
     CLAIMED = "claimed"
-    WAITING_FOR_LOCK = "waiting_for_lock"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -536,10 +535,17 @@ def to_utc_aware(value: date | datetime, *, end_of_day: bool = False) -> datetim
     NON-UTC offset are CONVERTED to UTC via ``.astimezone(UTC)`` — never
     re-labelled, so ``2026-08-06T14:00:00+05:00`` buckets/labels from the
     UTC-converted instant (09:00Z). Bare dates expand to 00:00 UTC (or 23:59:59
-    with ``end_of_day``) so an hour grid covers the whole day.
+    with ``end_of_day``) so an hour grid covers the whole day. A datetime at
+    exactly midnight (the shape FastAPI produces for a date-only query param
+    like ``?date_to=2026-08-11``) is treated the same as a bare date with
+    ``end_of_day`` — otherwise a single-day hour query collapses to zero
+    buckets. Datetimes carrying a real time-of-day are never expanded.
     """
     if isinstance(value, datetime):
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        if end_of_day and aware.hour == 0 and aware.minute == 0 and aware.second == 0 and aware.microsecond == 0:
+            return aware.replace(hour=23, minute=59, second=59, microsecond=0)
+        return aware
     return datetime.combine(value, time(23, 59, 59) if end_of_day else time.min, tzinfo=UTC)
 
 

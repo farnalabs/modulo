@@ -2451,6 +2451,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/schemas/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Schema Counts Endpoint
+         * @description Return total schema count and per-folder counts for the caller's org.
+         *
+         *     A single GROUP BY query over the schemas table, org-scoped via RLS and an
+         *     explicit organisation_id filter.
+         */
+        get: operations["schema_counts_endpoint_api_v1_schemas_counts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schemas/{schema_id}": {
         parameters: {
             query?: never;
@@ -7331,7 +7354,7 @@ export interface components {
          * AnalyticsStatus
          * @enum {string}
          */
-        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "waiting_for_lock" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled";
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled";
         /**
          * AnalyticsTriggerType
          * @enum {string}
@@ -8711,6 +8734,11 @@ export interface components {
              * @default
              */
             email_from: string;
+            /**
+             * Smtp Timeout
+             * @default 30
+             */
+            smtp_timeout: number;
         };
         /** EmailSettingsUpdate */
         EmailSettingsUpdate: {
@@ -8744,6 +8772,11 @@ export interface components {
              * @default false
              */
             clear_password: boolean;
+            /**
+             * Smtp Timeout
+             * @default 30
+             */
+            smtp_timeout: number;
         };
         /** ErrorEventDetail */
         ErrorEventDetail: {
@@ -11861,6 +11894,15 @@ export interface components {
             description?: string | null;
             /** Selected Node Ids */
             selected_node_ids: string[];
+        };
+        /** SchemaCountsResponse */
+        SchemaCountsResponse: {
+            /** Total */
+            total: number;
+            /** By Folder */
+            by_folder: {
+                [key: string]: number;
+            };
         };
         /** SchemaFieldListResponse */
         SchemaFieldListResponse: {
@@ -20339,6 +20381,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    schema_counts_endpoint_api_v1_schemas_counts_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchemaCountsResponse"];
                 };
             };
             /** @description Validation Error */

@@ -419,7 +419,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it.each(['pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock'])('shows the cancel button for %s runs', async (status) => {
+  it.each(['pending', 'running', 'awaiting_human', 'claimed'])('shows the cancel button for %s runs', async (status) => {
     const wrapper = await mountWithDetail({ ...baseDetail(), status })
     expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(true)
     wrapper.unmount()

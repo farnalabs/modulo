@@ -221,7 +221,7 @@ describe('RunsListView', () => {
     expect(wrapper.text()).not.toContain('(+child)')
   })
 
-  it.each(['pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock'])('renders a stop button for %s runs', async (status) => {
+  it.each(['pending', 'running', 'awaiting_human', 'claimed'])('renders a stop button for %s runs', async (status) => {
     mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
     const wrapper = mountView()
     await flushPromises()
