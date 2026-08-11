@@ -1,7 +1,7 @@
 <template>
   <FeatureGate feature-name="mcp_server" show-disabled>
 
-    <div data-theme="agent" class="page-narrow">
+    <div data-theme="agent" class="page-wide">
     <PageHeader title="MCP Configuration" subtitle="Configure Model Context Protocol (MCP) server settings and API keys" />
 
     <LoadingSpinner v-if="loading" />
