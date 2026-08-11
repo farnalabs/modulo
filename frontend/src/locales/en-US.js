@@ -2097,6 +2097,10 @@ export default {
     }
   },
   "components": {
+    "Sparkline": {
+      "no_data": "No data",
+      "chart_series": "Chart with {count} data points: {values}"
+    },
     "ViewToggle": {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."
