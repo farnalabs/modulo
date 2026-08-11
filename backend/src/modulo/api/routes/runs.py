@@ -30,6 +30,7 @@ from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitiv
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
+from modulo.core.exceptions import OrgDeletedError
 from modulo.core.node_output_split import node_return, node_telemetry
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
@@ -502,6 +503,18 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
+        ) from None
+
+    except OrgDeletedError as exc:
+        _log.exception("runs.trigger_run")
+        if exc.deleted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
 
     except HTTPException:

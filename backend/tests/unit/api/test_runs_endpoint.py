@@ -19,6 +19,7 @@ from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.exceptions import OrgDeletedError
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -281,6 +282,58 @@ def test_trigger_run_pipeline_not_found_returns_404(client: TestClient) -> None:
         resp = client.post(
             "/api/v1/runs",
             json={"pipeline_id": str(uuid.uuid4())},
+        )
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/runs — deleted / missing organisation
+# ---------------------------------------------------------------------------
+
+
+def test_trigger_run_deleted_org_returns_409(client: TestClient) -> None:
+    pipeline = _make_pipeline()
+
+    with (
+        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            return_value=_make_snapshot(),
+        ),
+        patch(
+            "modulo.api.routes.runs.create_run",
+            side_effect=OrgDeletedError(org_id=_ORG_ID, deleted=True),
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/runs",
+            json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {"k": "v"}},
+        )
+
+    assert resp.status_code == 409
+    assert "deleted" in resp.json()["detail"]
+
+
+def test_trigger_run_missing_org_returns_404(client: TestClient) -> None:
+    pipeline = _make_pipeline()
+
+    with (
+        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            return_value=_make_snapshot(),
+        ),
+        patch(
+            "modulo.api.routes.runs.create_run",
+            side_effect=OrgDeletedError(org_id=_ORG_ID, deleted=False),
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/runs",
+            json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {"k": "v"}},
         )
 
     assert resp.status_code == 404
