@@ -88,7 +88,15 @@ class EventBus:
         broker = self._redis_broker
         if broker is None:
             return
-        task = asyncio.create_task(self._redis_broadcast(broker, org_id, event))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (sync/threaded call site) — the fire-and-forget
+            # broadcast cannot be scheduled. Fail open: the in-memory fan-out
+            # already happened, Redis is best-effort (cross-worker only).
+            _log.warning("event_bus.redis_broadcast_skipped", extra={"org_id": org_id})
+            return
+        task = loop.create_task(self._redis_broadcast(broker, org_id, event))
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
 
