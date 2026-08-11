@@ -131,6 +131,18 @@ class ConnectorHub:
         return self
 
     async def __aexit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Release every held connector and its decrypted credentials.
+
+        Drops the hub's references to all connectors and ACLs so the
+        connector objects (and the credential-bearing state they carry)
+        become unreachable and are eligible for garbage collection. The hub
+        is marked uninitialised; a subsequent ``initialise()`` rebuilds it
+        for the next run. Safe to call multiple times and without an
+        ``async with`` block.
+        """
         self._connectors.clear()
         self._acls.clear()
         self._initialised = False
