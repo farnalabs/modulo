@@ -288,6 +288,7 @@ class TestConstants:
             "get_trigger",
             "update_trigger",
             "delete_trigger",
+            "set_org_triggers_paused",
             "list_housekeeping",
             "perform_housekeeping",
             "create_connector",
