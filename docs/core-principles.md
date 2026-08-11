@@ -49,7 +49,7 @@ Modulo orchestrates work to external agent runtimes; it owns dispatch, auth, aud
 ## 8. Correction never rewrites history
 A failed output produces a new run with feedback attached; the original stays as it was. FeedbackRecords are immutable after creation.
 **Why:** an editable trail is not a trail; the correction loop is a first-class pipeline, not an in-place edit.
-**Where:** `modulo/core/feedback_manager/`, `docs/product-map/evals/feedback-records.md`, `docs/product-map/evals/feedback-correction.md`, `docs/prd.md` feedback section.
+**Where:** `modulo/core/feedback_manager/`, `docs/product-map/evals/feedback-records.md`, `docs/product-map/core/feedback-correction.md`, `docs/prd.md` feedback section.
 **Benefit:** you can trust the history while still improving the system.
 
 ## 9. Self-hosted, no telemetry
