@@ -40,10 +40,11 @@ from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
 from sqlalchemy import select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
+from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
 
@@ -148,6 +149,10 @@ _MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
 _EXECUTOR_SUPERSEDED_ERROR_CODE = "executor_superseded"
 
 # Exported reconciliation stats for /healthz/ready (PR D — hitl-health-obs).
+# The ``age_terminalized`` / ``enqueue_failed_ttl_terminalized`` keys are
+# semantic aliases of the executor-superseded (age-bound wedge) and
+# enqueue-failed-TTL terminalizers respectively, exposed alongside the
+# implementation-named counters so ops has one vocabulary.
 _dispatcher_reconcile_stats: dict[str, Any] = {
     "last_run_at": None,
     "scanned": 0,
@@ -158,7 +163,10 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "nodeless_failed": 0,
     "claim_cap_terminalized": 0,
     "mid_graph_wedge_terminalized": 0,
+    "age_terminalized": 0,
     "dispatch_failed_terminalized": 0,
+    "enqueue_failed_ttl_terminalized": 0,
+    "enqueue_failed_redispatched": 0,
     "enqueue_failed_capped": 0,
 }
 
@@ -175,7 +183,10 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
     _dispatcher_reconcile_stats["claim_cap_terminalized"] = stats.get("claim_cap_terminalized", 0)
     _dispatcher_reconcile_stats["mid_graph_wedge_terminalized"] = stats.get("mid_graph_wedge_terminalized", 0)
+    _dispatcher_reconcile_stats["age_terminalized"] = stats.get("age_terminalized", 0)
     _dispatcher_reconcile_stats["dispatch_failed_terminalized"] = stats.get("dispatch_failed_terminalized", 0)
+    _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
+    _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
     _dispatcher_reconcile_stats["enqueue_failed_capped"] = stats.get("enqueue_failed_capped", 0)
 
 
@@ -233,7 +244,7 @@ async def read_dispatcher_reconcile_stats(redis_client: AsyncRedis) -> dict[str,
     return data if isinstance(data, dict) else None
 
 
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 def _machine_hostname() -> str:
@@ -261,11 +272,12 @@ def _get_engine() -> AsyncEngine:
     if _ENGINE is None:
         with _ENGINE_LOCK:
             if _ENGINE is None:
-                settings = get_settings()
-                kw: dict[str, Any] = {"url": settings.database_url}
-                if settings.modulo_db.lower() == "postgres":
-                    kw["connect_args"] = {"timeout": 10, "ssl": False}
-                _ENGINE = create_async_engine(**kw)
+                # D4: one engine per process — the shared factory (Fly/HAProxy
+                # knobs) instead of a second singleton. Lazy import keeps
+                # db.session's module-level `engine` out of the worker graph.
+                from modulo.db.session import get_shared_engine
+
+                _ENGINE = get_shared_engine()
     return _ENGINE
 
 
@@ -2381,7 +2393,10 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "nodeless_failed": 0,
         "claim_cap_terminalized": 0,
         "mid_graph_wedge_terminalized": 0,
+        "age_terminalized": 0,
         "dispatch_failed_terminalized": 0,
+        "enqueue_failed_ttl_terminalized": 0,
+        "enqueue_failed_redispatched": 0,
         "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
     }
@@ -2432,6 +2447,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     summary["mid_graph_wedge_terminalized"] += await _terminalize_mid_graph_wedges(
                         session, org_id, max_age_minutes=max_age_minutes
                     )
+                    summary["age_terminalized"] = summary["mid_graph_wedge_terminalized"]
                     # B5: claim-cap terminalizer — INDEPENDENT of the reconcile
                     # predicates, stale-heartbeat gated (a LIVE run on its final
                     # claim is never killed; a capped run whose heartbeat froze
@@ -2504,6 +2520,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 continue
                             await _fail_run_dispatch_failed(session, row.id, org_id)
                             summary["dispatch_failed_terminalized"] += 1
+                            summary["enqueue_failed_ttl_terminalized"] += 1
                             continue
                         if enqueue_failed_redispatched >= ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK:
                             summary["enqueue_failed_capped"] += 1
@@ -2630,6 +2647,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                             summary["repaired"] += 1
                             if is_enqueue_failed:
                                 enqueue_failed_redispatched += 1
+                                summary["enqueue_failed_redispatched"] += 1
                             _log.info(
                                 "dispatcher_reconcile: re-dispatched run %s as %s (%s)",
                                 row.id,
@@ -2683,6 +2701,28 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).
+        #
+        # D1: update the OTel runtime gauges/counters from this tick (best-effort,
+        # only when telemetry is enabled). The sample reads the runs table via a
+        # system-scoped session; the stall-reason counters reflect THIS tick's
+        # terminalizers (their error_code labels match the runbook).
+        if get_settings().modulo_telemetry_enabled:
+            try:
+                from modulo.core.error_tracking.metrics import record_stall_reason, sample_run_runtime_metrics
+
+                await sample_run_runtime_metrics(_open_factory())
+                if summary["nodeless_failed"]:
+                    record_stall_reason("executor_stalled", summary["nodeless_failed"])
+                if summary["claim_cap_terminalized"]:
+                    record_stall_reason("claim_cap_exhausted", summary["claim_cap_terminalized"])
+                if summary["mid_graph_wedge_terminalized"]:
+                    record_stall_reason("executor_superseded", summary["mid_graph_wedge_terminalized"])
+                if summary["dispatch_failed_terminalized"]:
+                    record_stall_reason("dispatch_failed", summary["dispatch_failed_terminalized"])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning("dispatcher_reconcile.metrics_update_failed", exc_info=True)
         set_dispatcher_reconcile_stats(summary)
         await write_dispatcher_reconcile_stats(redis_client, summary)
         return summary

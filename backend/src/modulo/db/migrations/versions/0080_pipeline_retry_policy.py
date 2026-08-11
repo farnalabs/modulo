@@ -1,7 +1,7 @@
 """Add pipelines.retry_policy.
 
-Revision ID: 0079_pipeline_retry_policy
-Revises: 0078_run_daily_facts_telemetry_bytes
+Revision ID: 0080_pipeline_retry_policy
+Revises: 0079_schema_folders
 Create Date: 2026-08-10
 
 Adds the pipeline-level ``retry_policy`` JSON column: ``{"on": ["stall" |
@@ -18,8 +18,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0079_pipeline_retry_policy"
-down_revision: str | None = "0078_run_daily_facts_telemetry_bytes"
+revision: str = "0080_pipeline_retry_policy"
+down_revision: str | None = "0079_schema_folders"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

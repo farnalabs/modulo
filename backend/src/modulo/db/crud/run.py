@@ -24,7 +24,7 @@ from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 
 _log = logging.getLogger(__name__)
 
@@ -77,6 +77,23 @@ _RUN_CONCURRENCY_MIN = 1
 _RUN_CONCURRENCY_MAX = 100
 
 
+class OrgDeletedError(RuntimeError):
+    """Raised by ``create_run`` when the target organisation is soft-deleted or missing.
+
+    The soft-deleted-org guard refuses to create a run in an org whose deletion
+    flow has set status='deleted' (or in a hard-deleted org — no row). A domain
+    exception (not ``ValueError``) so API routes and cron/trigger callers can map
+    it to a structured 4xx (409 for a deleted org, 404 for a missing org) instead
+    of a generic 500. Defined here (not in ``modulo.core.exceptions``) because
+    the ``db-does-not-import-core`` contract does not exempt this module.
+    """
+
+    def __init__(self, *, org_id: uuid.UUID | None = None, deleted: bool = True) -> None:
+        self.org_id = org_id
+        self.deleted = deleted
+        super().__init__(f"cannot create run: organisation {org_id} is " + ("deleted" if deleted else "missing"))
+
+
 def _input_hash(payload: dict[str, Any]) -> str:
     """Stable SHA-256 hex digest of a JSON-serialisable payload."""
     serialised = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -97,6 +114,23 @@ async def create_run(
     parent_run_id: uuid.UUID | None = None,
     rate_limit_key: str | None = None,
 ) -> Run:
+    # Soft-deleted-org guard (follow-up gap from the reconcile delivery): a run
+    # must never be created in an org whose deletion flow has set status='deleted'
+    # (or in a hard-deleted org — no row). Trigger-initiated runs already fail via
+    # ``ensure_triggers_resumable`` below (a non-active status is treated as
+    # paused); this covers MANUAL runs (``trigger_id=None`` / exempt types) that
+    # bypass the pause gate. Read the status directly (never the ORM identity
+    # map) so a freshly toggled row is observed, mirroring ``org_is_paused``.
+    # Raised as ``OrgDeletedError`` (not ValueError) so routes/cron callers can
+    # map it to a structured 4xx instead of a generic 500.
+    org_status_result = await session.execute(
+        text("SELECT status FROM organisations WHERE id = :oid"),
+        {"oid": str(org_id)},
+    )
+    org_status = org_status_result.scalar_one_or_none()
+    if org_status is None or org_status == "deleted":
+        raise OrgDeletedError(org_id=org_id, deleted=org_status == "deleted")
+
     # Org-wide pause kill-switch — the SINGLE authority gate for trigger-initiated
     # runs (webhook, replay, cron, polling, agent_signal). Manual runs (POST /runs,
     # MCP trigger_pipeline), test_trigger (trigger_type="manual"), feedback
@@ -604,17 +638,19 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
     return run
 
 
-# Active (non-terminal) run statuses. A pending run only counts when
-# ``include_pending=True`` is requested (variant-group quota); capacity gates
-# pass ``include_pending=False`` because a pending run does not hold a slot.
-_ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
+# Active (non-terminal) run statuses — the canonical set defined ONCE in
+# models.run (the never-entered ``waiting_for_lock`` sub-state was excised in
+# migration 0074/0075). A pending run only counts when ``include_pending=True``
+# is requested (variant-group quota); capacity gates pass
+# ``include_pending=False`` because a pending run does not hold a slot.
+_ACTIVE_RUN_STATUSES = ACTIVE_RUN_STATUSES
 
 
 def _active_run_statuses(include_pending: bool) -> set[str]:
     """Resolve the status set for an active-run count.
 
-    * ``include_pending=False`` (capacity gate): running/awaiting_human/claimed/
-      waiting_for_lock — a pending run does not hold capacity.
+    * ``include_pending=False`` (capacity gate): running/awaiting_human/claimed
+      — a pending run does not hold capacity.
     * ``include_pending=True`` (quota): all non-terminal runs including
       ``pending``.
     """
@@ -668,8 +704,8 @@ async def count_active_runs_for_pipeline(
     instead of three):
 
     * ``include_pending=False`` (capacity gate): counts only runs that are
-      actually executing or claimed (running/awaiting_human/claimed/
-      waiting_for_lock) — a pending run does not hold capacity.
+      actually executing or claimed (running/awaiting_human/claimed) — a
+      pending run does not hold capacity.
     * ``include_pending=True`` (variant-group quota): counts all non-terminal
       runs including ``pending``, preserving the 429 quota semantics.
 
@@ -698,8 +734,8 @@ async def count_active_runs_for_org(
     across all pipelines. ``include_pending`` selects the same two behaviours:
 
     * ``include_pending=False`` (dispatch admission gate): counts only runs
-      that are actually executing or claimed (running/awaiting_human/claimed/
-      waiting_for_lock) — a pending run does not hold capacity.
+      that are actually executing or claimed (running/awaiting_human/claimed) —
+      a pending run does not hold capacity.
     * ``include_pending=True`` (quota semantics): counts all non-terminal runs
       including ``pending``.
 

@@ -1,11 +1,33 @@
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
+
+if TYPE_CHECKING:
+    from modulo.db.models.account import Account
+
+
+class SchemaFolder(OrgScoped):
+    __tablename__ = "schema_folders"
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("schema_folders.id", ondelete="CASCADE"))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    parent: Mapped[Optional["SchemaFolder"]] = relationship(
+        "SchemaFolder", remote_side="SchemaFolder.id", back_populates="children"
+    )
+    children: Mapped[list["SchemaFolder"]] = relationship(
+        "SchemaFolder", remote_side="SchemaFolder.parent_id", back_populates="parent"
+    )
+    creator: Mapped["Account"] = relationship()
 
 
 class Schema(OrgScoped):
@@ -18,9 +40,14 @@ class Schema(OrgScoped):
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("schema_folders.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     deprecated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     system: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+
+    folder: Mapped[Optional["SchemaFolder"]] = relationship("SchemaFolder")
 
 
 class SchemaVersion(OrgScoped):

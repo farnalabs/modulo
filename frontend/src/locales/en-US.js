@@ -10,29 +10,6 @@ export default {
       "approving": "Approving...",
       "approved_redirecting": "Approved — redirecting to the application...",
     },
-    "TeamComparisonView": {
-      "failed_to_load_data": "Failed to load data:",
-      "failed_to_load_teams": "Failed to load teams:",
-      "sidebyside_eval_pass_rates_and_pipeline_metrics_across_teams": "Side-by-side eval pass rates and pipeline metrics across teams",
-      "total_runs": "Total Runs",
-      "team_comparison": "Team Comparison",
-      "active_pipelines": "Active Pipelines",
-      "run_status": "Run Status",
-      "failed_to_load_dashboard": "Failed to load dashboard:",
-      "teams": "Teams",
-      "team": "Team",
-      "members": "Members",
-      "running": "Running",
-      "awaiting": "Awaiting",
-      "failed": "Failed",
-      "idle": "Idle",
-      "pipeline_eval_breakdown": "{name} — Pipeline Eval Breakdown",
-      "pipeline_count": "{count} pipeline | {count} pipelines",
-      "no_eval_data_available": "No eval data available for this team's pipelines.",
-      "no_teams_found": "No teams found. Create teams in Settings to see comparison data.",
-      "eval_count": "{count} eval | {count} evals",
-      "passed_count": "{count} passed"
-    },
     "LibraryView": {
       "title": "Library",
       "all_types": "All types",
@@ -1426,14 +1403,6 @@ export default {
       "export_ready": "Export ready",
       "this_action_cannot_be_undone": "This action cannot be undone."
     },
-    "ApiChangelogView": {
-      "no_api_version_history_is_available_yet": "No API version history is available yet.",
-      "api_changelog": "API Changelog",
-      "version_history_and_deprecation_notices_for_the_modulo_api": "Version history and deprecation notices for the Modulo API",
-      "no_changelog_entries": "No changelog entries",
-      "load_error": "Unable to load the changelog right now. Please try again later.",
-      "load_error_with_detail": "Unable to load the changelog right now. Please try again later. ({detail})"
-    },
     "OnboardingWizard": {
       "wire_pipeline": "Wire Pipeline",
       "run_inference": "Run Inference",
@@ -1782,7 +1751,8 @@ export default {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
       "browser_monitoring": "Browser Monitoring",
       "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "explainer": "Browser Monitoring captures client-side errors and telemetry from the web app — JavaScript errors, failed network requests, and unhandled exceptions that occur in the browser. Choose an error-tracking backend below (for example Sentry) and provide its DSN or collector endpoint; once enabled, captured errors are sent to that service automatically. Tracked errors appear in the Error Dashboard (Admin > Error Dashboard), where they can be grouped, filtered, and alerted on. Server-side OpenTelemetry traces are configured separately on the Observability settings page."
     },
     "ABTestModelsView": {
       "model_backend": "Model Backend",
@@ -1934,7 +1904,21 @@ export default {
       "deprecate": "Deprecate",
       "cancel": "Cancel",
       "schemas": "Schemas",
-      "empty_hint": "Schemas are created through inference or direct creation."
+      "empty_hint": "Schemas are created through inference or direct creation.",
+      "folders": "Folders",
+      "new_folder": "New Folder",
+      "all_schemas": "All Schemas",
+      "rename_folder": "Rename Folder",
+      "delete_folder": "Delete Folder",
+      "folder_name": "Folder name",
+      "view_edit": "View / Edit",
+      "schema_actions": "Schema actions",
+      "deprecation_title": "Deprecate \"{name}\"?",
+      "deprecation_description": "This schema will be marked as deprecated. Agents using it will still function, but it will no longer appear as active. This action can be reversed by a future reactivation.",
+      "uncategorised": "Uncategorised",
+      "no_folder": "No folder",
+      "move_to_folder": "Move to Folder",
+      "move_to_folder_description": "Choose a folder for \"{name}\"."
     },
     "SettingsTriggersView": {
       "title": "Triggers",
@@ -2104,6 +2088,10 @@ export default {
     }
   },
   "components": {
+    "Sparkline": {
+      "no_data": "No data",
+      "chart_series": "Chart with {count} data points: {values}"
+    },
     "ViewToggle": {
       "saved_views": "Saved Views",
       "select_a_saved_view": "Select a saved view..."
@@ -2154,7 +2142,9 @@ export default {
     "pipelines": {
       "FolderTree": {
         "parent_folder": "Parent folder",
-        "no_parent_root_level": "No parent (root level)"
+        "no_parent_root_level": "No parent (root level)",
+        "delete_confirm_empty": "Are you sure you want to delete this folder?",
+        "delete_confirm_with_items": "Are you sure you want to delete this folder? {itemNoun} will be moved to {uncategorisedLabel}."
       }
     },
     "onboarding": {
@@ -2463,8 +2453,6 @@ export default {
       "item_saved_views": "Saved Views",
       "item_error_dashboard": "Error Dashboard",
       "item_notification_log": "Notification Log",
-      "item_api_changelog": "API Changelog",
-      "item_team_comparison": "Team Comparison",
       "item_plugins": "Plugins",
       "item_feedback_inbox": "Feedback Inbox",
       "item_organisations": "Organisations",
@@ -2582,8 +2570,6 @@ export default {
     "browser_monitoring": "Browser Monitoring",
     "error_dashboard": "Error Dashboard",
     "notification_log": "Notification Log",
-    "api_changelog": "API Changelog",
-    "team_comparison": "Team Comparison",
     "schema_editor": "Editor",
     "schema_infer": "Infer",
     "sso": "SSO",

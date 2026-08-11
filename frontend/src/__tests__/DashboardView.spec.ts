@@ -352,6 +352,68 @@ describe('DashboardView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('No eval data yet')
   })
+
+  it('passes trend dates as labels and units to every dashboard sparkline', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      if (url === '/api/v1/dashboard/trends') {
+        return Promise.resolve({
+          data: {
+            days: 7,
+            run_counts: [
+              { date: '2026-06-23', run_count: 18 },
+              { date: '2026-06-24', run_count: 22 },
+              { date: '2026-06-25', run_count: 15 },
+            ],
+            eval_pass_rates: [
+              { date: '2026-06-23', total_evals: 10, passed_evals: 8, pass_rate: 80 },
+              { date: '2026-06-24', total_evals: 10, passed_evals: 9, pass_rate: 90 },
+              { date: '2026-06-25', total_evals: 10, passed_evals: 8, pass_rate: 80 },
+            ],
+            token_spend: [
+              { date: '2026-06-23', total_spend_usd: 12.5 },
+              { date: '2026-06-24', total_spend_usd: 15.2 },
+              { date: '2026-06-25', total_spend_usd: 10.1 },
+            ],
+            hitl_volume: [],
+            rejection_trend: [],
+            correlation: [],
+            feedback_volume: [],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    const sparklines = wrapper.findAllComponents({ name: 'SparklineChart' })
+    // 2 card sparklines (eval pass rate, token spend) + 3 run-activity sparklines.
+    expect(sparklines.length).toBe(5)
+    // Card sparklines carry units.
+    expect(sparklines[0].props('unit')).toBe('%')
+    expect(sparklines[1].props('unit')).toBe('$')
+    // Card sparkline labels come from summary.trend dates.
+    expect(sparklines[0].props('labels')).toEqual(mockSummaryData.trend.map(d => d.date))
+    // Run-activity sparklines carry trend dates as labels and per-series units.
+    expect(sparklines[2].props('unit')).toBe('Runs')
+    expect(sparklines[2].props('labels')).toEqual(['2026-06-23', '2026-06-24', '2026-06-25'])
+    expect(sparklines[3].props('unit')).toBe('%')
+    expect(sparklines[4].props('unit')).toBe('$')
+  })
+
+  it('renders the no-data placeholder inside sparklines when the trend is empty', async () => {
+    setupEmptyMocks()
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    // Token spend card sparkline gets an empty series → placeholder, not a line.
+    const sparkline = wrapper.find('[data-testid="sparkline"]')
+    expect(sparkline.exists()).toBe(true)
+    expect(sparkline.find('polyline').exists()).toBe(false)
+    expect(sparkline.find('.sparkline-no-data').exists()).toBe(true)
+  })
 })
 
 describe('StatCard delta arrow', () => {
