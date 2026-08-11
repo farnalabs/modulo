@@ -4,9 +4,12 @@ QA lens pass (correctness, bugs, maintainability, deps) on the three handlers
 registered in ``api/main.py`` that shape every error response in the API:
 ``http_exception_handler``, ``validation_exception_handler``, and
 ``unhandled_exception_handler``. The handlers are the bridge between the RFC
-9457 problem models and Starlette/FastAPI; these tests lock the bridge contract
-so a regression in request-id propagation, header merging, or the 500 fallback
-is caught at the unit layer rather than by a production regression.
+9457 problem models and Starlette/FastAPI — the last line of defence for
+converting exceptions into ProblemDetail responses. These tests lock the bridge
+contract (ProblemException fast-path, plain-HTTPException mapping, header
+merging, request-id propagation, the validation join, and the 500 fallback that
+carries ``request_id`` and ``instance``) so a regression is caught at the unit
+layer rather than by a production regression.
 """
 
 import asyncio
@@ -67,10 +70,31 @@ class TestHttpExceptionHandler:
         assert body["detail"] == "gone"
         assert body["request_id"] == "rid-1"
 
+    async def test_plain_http_exception_maps_to_problem_detail(self) -> None:
+        resp = await http_exception_handler(_Request("rid-1"), StarletteHTTPException(status_code=404, detail="gone"))  # type: ignore[arg-type]
+        assert resp.status_code == 404
+        body = _body(resp)
+        assert body["type"] == "urn:problem:modulo:not_found"
+        assert body["title"] == "Not Found"
+        assert body["status"] == 404
+        assert body["detail"] == "gone"
+        assert body["request_id"] == "rid-1"
+
     def test_http_exception_without_request_id(self) -> None:
         resp = _run_http(_Request(), StarletteHTTPException(status_code=400, detail="bad"))
         body = _body(resp)
         assert "request_id" not in body
+
+    def test_plain_http_exception_merges_headers(self) -> None:
+        exc = StarletteHTTPException(status_code=429, detail="slow", headers={"Retry-After": "5"})
+        resp = _run_http(_Request("rid-5"), exc)
+        assert resp.headers.get("retry-after") == "5"
+
+    async def test_plain_http_exception_carries_headers(self) -> None:
+        exc = StarletteHTTPException(status_code=429, detail="slow down", headers={"Retry-After": "30"})
+        resp = await http_exception_handler(_Request(), exc)  # type: ignore[arg-type]
+        assert resp.status_code == 429
+        assert resp.headers.get("retry-after") == "30"
 
     def test_problem_exception_returns_its_own_problem(self) -> None:
         exc = ProblemException(ProblemType.RATE_LIMITED, detail="slow down", instance="/x")
@@ -80,6 +104,23 @@ class TestHttpExceptionHandler:
         assert body["type"] == "urn:problem:modulo:rate_limited"
         assert body["instance"] == "/x"
         assert body["request_id"] == "rid-2"
+
+    async def test_problem_exception_takes_the_fast_path(self) -> None:
+        exc = ProblemException(ProblemType.RATE_LIMITED, detail="slow down", headers={"Retry-After": "5"})
+        resp = await http_exception_handler(_Request("rid-9"), exc)  # type: ignore[arg-type]
+        assert resp.status_code == 429
+        body = _body(resp)
+        assert body["type"] == "urn:problem:modulo:rate_limited"
+        assert body["title"] == "Rate Limited"
+        assert body["detail"] == "slow down"
+        assert body["request_id"] == "rid-9"
+        assert resp.headers.get("retry-after") == "5"
+
+    async def test_problem_exception_request_id_fills_state_gap(self) -> None:
+        exc = ProblemException(ProblemType.FORBIDDEN, detail="no")
+        resp = await http_exception_handler(_Request(None), exc)  # type: ignore[arg-type]
+        body = _body(resp)
+        assert "request_id" not in body
 
     def test_problem_exception_headers_are_propagated(self) -> None:
         exc = ProblemException(ProblemType.RATE_LIMITED, detail="slow", headers={"Retry-After": "30"})
@@ -91,10 +132,11 @@ class TestHttpExceptionHandler:
         resp = _run_http(_Request("rid-4"), exc)
         assert resp.headers.get("x-request-id") == "rid-4"
 
-    def test_plain_http_exception_merges_headers(self) -> None:
-        exc = StarletteHTTPException(status_code=429, detail="slow", headers={"Retry-After": "5"})
-        resp = _run_http(_Request("rid-5"), exc)
-        assert resp.headers.get("retry-after") == "5"
+    async def test_unknown_status_falls_back_to_500(self) -> None:
+        resp = await http_exception_handler(_Request(), StarletteHTTPException(status_code=418, detail="teapot"))  # type: ignore[arg-type]
+        body = _body(resp)
+        assert resp.status_code == 500
+        assert body["type"] == "urn:problem:modulo:internal_error"
 
 
 class TestValidationExceptionHandler:
@@ -110,6 +152,27 @@ class TestValidationExceptionHandler:
         assert body["type"] == "urn:problem:modulo:validation_error"
         assert body["detail"] == "body.name: field required; query.limit: must be <= 100"
         assert body["request_id"] == "rid-6"
+
+    async def test_returns_422_problem_with_joined_errors(self) -> None:
+        exc = RequestValidationError(errors=[{"loc": ("body", "name"), "msg": "field required"}])
+        resp = await validation_exception_handler(_Request("rid-v"), exc)  # type: ignore[arg-type]
+        assert resp.status_code == 422
+        body = _body(resp)
+        assert body["type"] == "urn:problem:modulo:validation_error"
+        assert body["title"] == "Validation Error"
+        assert body["detail"] == "body.name: field required"
+        assert body["request_id"] == "rid-v"
+
+    async def test_joins_multiple_errors(self) -> None:
+        exc = RequestValidationError(
+            errors=[
+                {"loc": ("query", "limit"), "msg": "must be <= 100"},
+                {"loc": ("body", "items", 0, "id"), "msg": "invalid"},
+            ]
+        )
+        resp = await validation_exception_handler(_Request(), exc)  # type: ignore[arg-type]
+        body = _body(resp)
+        assert body["detail"] == "query.limit: must be <= 100; body.items.0.id: invalid"
 
     def test_empty_errors_use_default_detail(self) -> None:
         exc = RequestValidationError([])
@@ -127,8 +190,24 @@ class TestUnhandledExceptionHandler:
         assert body["instance"] == "/boom"
         assert body["request_id"] == "rid-8"
 
+    async def test_returns_500_problem_with_instance_and_request_id(self) -> None:
+        resp = await unhandled_exception_handler(_Request("rid-u", "/crash"), RuntimeError("boom"))  # type: ignore[arg-type]
+        assert resp.status_code == 500
+        body = _body(resp)
+        assert body["type"] == "urn:problem:modulo:internal_error"
+        assert body["title"] == "Internal Error"
+        assert body["status"] == 500
+        assert body["detail"] == "An unexpected error occurred"
+        assert body["instance"] == "/crash"
+        assert body["request_id"] == "rid-u"
+
     def test_returns_500_without_request_id(self) -> None:
         resp = _run_unhandled(_Request(path="/boom"), RuntimeError("kaboom"))
+        body = _body(resp)
+        assert "request_id" not in body
+
+    async def test_request_id_omitted_when_state_missing(self) -> None:
+        resp = await unhandled_exception_handler(_Request(None), ValueError("boom"))  # type: ignore[arg-type]
         body = _body(resp)
         assert "request_id" not in body
 
