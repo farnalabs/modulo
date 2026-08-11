@@ -5,22 +5,19 @@ delivery-tasks: [task-nv12-api-versioning]
 bdd: []
 code:
   - backend/src/modulo/api/middleware/deprecation_headers.py
-  - backend/src/modulo/api/routes/changelog.py
   - backend/src/modulo/api/main.py
-  - frontend/src/views/ApiChangelogView.vue
   - backend/docs/operations/api-versioning.md
   - backend/docs/operations/migrations/v1-config-to-admin.md
 
 depends-on: []
 unit-tests:
   - backend/tests/unit/api/test_deprecation_headers.py
-  - backend/tests/unit/api/test_changelog.py
 status: partial
 ---
 
 # API Versioning
 
-URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Changelog endpoint at `GET /api/v1/changelog`. Deprecation headers via `DeprecationHeaderMiddleware`.
+URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/docs/operations/api-versioning.md`. Deprecation headers via `DeprecationHeaderMiddleware`.
 
 ## Behaviours
 
@@ -29,11 +26,6 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - [ ] New API major version can be added alongside previous version (parallel version routing)
 - [x] `DeprecationHeaderMiddleware` adds `Deprecation: true`, `Sunset`, and `Link` headers to deprecated endpoints
 - [x] At least one real endpoint is registered as deprecated via `DeprecationHeaderMiddleware.deprecate()`
-- [x] `GET /api/v1/changelog` returns all entries sorted by date descending
-- [x] `GET /api/v1/changelog/latest` returns the most recent entry
-- [x] Changelog entry includes `version`, `date`, `summary`, `changes`, `deprecations`, `migration_url`
-- [x] Frontend `ApiChangelogView.vue` renders changelog entries with version badges and deprecation highlights
-- [x] Frontend shows link to migration guide when `migration_url` is present
 - [x] Migration guide exists for the deprecated endpoint at `backend/docs/operations/migrations/v1-config-to-admin.md`
 - [x] Deprecated endpoint returns `410 Gone` when the sunset date has passed (grace period)
 - [ ] Deprecated endpoint is removed entirely after the 30-day grace period
@@ -42,8 +34,7 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - [ ] Minor version bumps (`v1.0` → `v1.1`) are backward-compatible and do not require a new URL prefix
 - [x] Breaking change definition is documented (field removals, type changes, semantic changes, auth changes, endpoint removal, required field additions)
 - [x] Adding new fields, new endpoints, bug fixes, performance improvements do NOT require version bump
-- [ ] Major version deprecation is announced in the changelog and via admin UI notification
-- [x] `/api/v1/changelog` endpoint has unit tests
+- [ ] Major version deprecation is announced via admin UI notification
 - [x] `DeprecationHeaderMiddleware` has unit tests
 - [ ] BDD feature files exist for versioning/deprecation behaviour
 
@@ -52,23 +43,9 @@ URL-path versioning (`/api/v1/`, `/api/v2/`, etc.). Policy document at `backend/
 - No dedicated PRD section for API versioning — policy lives in `backend/docs/operations/api-versioning.md` only
 - No version routing mechanism exists — `/api/v1/` is hardcoded in every router's `APIRouter(prefix="/api/v1/...")`, making parallel version support impossible without significant refactoring
 - Only one migration guide exists (`v1-config-to-admin.md`) — no generic `v1-to-v2.md` pattern established
-- Changelog entries are lost on server restart (in-memory only with `_SEED_ENTRIES`) — no DB-backed persistence
 - No BDD feature files for API versioning behaviour
 - The "at most two major versions supported" policy cannot currently be enforced without a version routing mechanism
 - `DeprecationHeaderMiddleware.deprecate()` is called for `/api/v1/system-admin/config` with a future sunset date — the 410 Gone logic is tested but no endpoint has actually passed its sunset in production
-
-## Error Handling
-
-- [x] `GET /api/v1/changelog` returns empty list when no entries exist (no crash)
-- [x] `GET /api/v1/changelog/latest` returns 404 when no entries exist
-- [x] Frontend shows inline error on fetch failure with retry button
-- [x] Frontend shows empty state when no changelog entries exist
-
-## Edge Cases
-
-- [x] Single changelog entry renders correctly
-- [ ] No changelog entries — `_SEED_ENTRIES` is statically seeded but has no programmatic API to add entries
-- [ ] Changelog entries are lost on server restart (in-memory only)
 
 ## Resilience & Integration Robustness
 

@@ -134,7 +134,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/admin/purge"): "admin.py inline _require_admin",
     ("POST", "/api/v1/admin/runs/purge"): "admin.py inline org_role==admin",
     ("PUT", "/api/v1/admin/runs/retention"): "admin.py inline org_role==admin",
-    ("POST", "/api/v1/changelog"): "seed/alpha changelog entry (no user auth)",
     # Team member management: inline admin-OR-team-operator check in handler
     # (a team operator may manage their own team's members).
     ("POST", "/api/v1/teams/{team_id}/members"): "inline admin-or-team-operator check",

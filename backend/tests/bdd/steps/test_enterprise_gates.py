@@ -185,13 +185,6 @@ def get_pipelines(request: Any, ctx: dict[str, Any], client: Any) -> None:
         _store_response(request, ctx, resp)
 
 
-@when(parsers.parse("I GET /api/v1/changelog"))
-def get_changelog(request: Any, ctx: dict[str, Any], client: Any) -> None:
-    _setup_client(ctx.get("license_key", ""), client, ctx)
-    resp = client.get("/api/v1/changelog")
-    _store_response(request, ctx, resp)
-
-
 @when(parsers.parse("I GET /api/v1/admin/costs"))
 def get_admin_costs(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx.get("license_key", ""), client, ctx)

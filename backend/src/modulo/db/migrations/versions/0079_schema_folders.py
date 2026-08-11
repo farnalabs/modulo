@@ -8,6 +8,9 @@ Schema folders mirror the pipeline_folders feature: a schema can be
 assigned to an org-scoped folder via ``schemas.folder_id`` (nullable FK
 with ON DELETE SET NULL), and folders can nest via ``parent_id`` with a
 ``sort_order`` used for manual reordering.
+
+Migration chain: 0077_add_stalled_status -> 0078_run_daily_facts_telemetry_bytes
+(merged on main) -> 0079_schema_folders (this branch).
 """
 
 from collections.abc import Sequence

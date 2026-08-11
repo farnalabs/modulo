@@ -57,7 +57,6 @@ from modulo.api.routes.analytics import router as analytics_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
-from modulo.api.routes.changelog import router as changelog_router
 from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
@@ -1229,7 +1228,6 @@ app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
 app.include_router(admin_housekeeping_router)
 app.include_router(auth_router)
-app.include_router(changelog_router)
 app.include_router(sso_router)
 app.include_router(analytics_router)
 app.include_router(dashboard_router)

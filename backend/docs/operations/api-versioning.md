@@ -35,14 +35,14 @@ The following changes do not require a new API version:
 
 When an API version or endpoint is deprecated:
 
-1. **Announcement:** Deprecation is announced in the changelog (see `/api/v1/changelog`) and, for major versions, via a notification in the Modulo admin UI
+1. **Announcement:** Deprecation is announced via a notification in the Modulo admin UI
 2. **Deprecation headers:** All deprecated endpoints return:
    - `Deprecation: true` — signals the endpoint is deprecated
    - `Sunset: <ISO-date>` — the date after which the endpoint will be removed
    - `Link: <migration-url>; rel="deprecation"` — link to the migration guide
 3. **Minimum deprecation period:** 90 days from announcement to sunset, except for security fixes (which may be shorter at the discretion of the Modulo team)
 4. **Grace period:** After the sunset date, the endpoint returns `410 Gone` for a further 30 days before being removed entirely
-5. **Breaking security fixes** may be deployed with a shorter deprecation window; this is documented in the changelog entry
+5. **Breaking security fixes** may be deployed with a shorter deprecation window
 
 ## Migration Guides
 
@@ -52,19 +52,6 @@ Each new API version gets a migration guide at `docs/operations/migrations/v1-to
 - Before/after request/response examples
 - Common migration pitfalls
 - Automated migration tooling, if available
-
-## Changelog
-
-All API changes are published at `/api/v1/changelog`. The changelog endpoint returns entries sorted by date descending. Each entry includes:
-
-| Field | Type | Description |
-|---|---|---|
-| `version` | `string` | API version identifier (e.g. `"1.0"`, `"1.1"`, `"2.0"`) |
-| `date` | `string` | ISO 8601 date of the change |
-| `summary` | `string` | One-line summary of the change |
-| `changes` | `list[string]` | Individual change descriptions |
-| `deprecations` | `list[string]` or null | Features being deprecated in this release |
-| `migration_url` | `string` or null | Link to the migration guide, if applicable |
 
 ## API Lifecycle
 
