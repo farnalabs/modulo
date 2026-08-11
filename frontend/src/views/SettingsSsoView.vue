@@ -1,7 +1,7 @@
 <template>
   <FeatureGate feature-name="sso" required-tier="team" show-disabled>
 
-    <div class="page-narrow">
+    <div class="page-wide">
       <header class="flex items-center justify-between">
         <PageHeader :title="$t('views.SettingsSsoView.title')" :subtitle="$t('views.SettingsSsoView.description')" />
         <Button
@@ -19,7 +19,7 @@
       <ErrorAlert v-else-if="error" :message="error" :on-retry="loadProviders" />
 
       <template v-else>
-        <div v-if="formMode === 'add'" class="card p-6">
+        <div v-if="formMode === 'add'" class="card max-w-3xl p-6">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsSsoView.new_sso_provider') }}</h2>
           <SsoProviderForm
             :data="formData"

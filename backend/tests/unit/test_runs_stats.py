@@ -276,6 +276,13 @@ def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() 
             started_at=None,
             error_code="boom",
         ),
+        _run(
+            status="stalled",
+            created_at=now - timedelta(days=4),
+            completed_at=None,
+            started_at=None,
+            error_code="executor_stalled",
+        ),
     ]
     res = MagicMock()
     res.scalars.return_value.all.return_value = runs
@@ -283,15 +290,16 @@ def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() 
 
     result = asyncio.run(get_run_stats(session, "30d"))
 
-    assert result["total_runs"] == 4
+    assert result["total_runs"] == 5
     assert result["success_rate"] == 0.0
     assert result["runs_by_day"] == [
+        {"date": str((now - timedelta(days=4)).date()), "count": 1, "success": 0, "failed": 1},
         {"date": str((now - timedelta(days=3)).date()), "count": 1, "success": 0, "failed": 1},
         {"date": str((now - timedelta(days=2)).date()), "count": 1, "success": 0, "failed": 1},
         {"date": str((now - timedelta(days=1)).date()), "count": 1, "success": 0, "failed": 1},
         {"date": str(now.date()), "count": 1, "success": 0, "failed": 1},
     ]
-    assert result["failure_by_reason"] == [{"reason": "boom", "count": 1}]
+    assert result["failure_by_reason"] == [{"reason": "boom", "count": 1}, {"reason": "executor_stalled", "count": 1}]
 
 
 def test_get_run_stats_generic_period_mapping() -> None:

@@ -952,7 +952,7 @@ class TestSaqSettingsDefaults:
 # ---------------------------------------------------------------------------
 
 
-_COUNTABLE_STATUSES = {"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"}
+_COUNTABLE_STATUSES = {"pending", "running", "awaiting_human", "claimed"}
 
 
 class TestCountActiveRuns:
@@ -983,7 +983,7 @@ class TestCountActiveRuns:
         session = _FakeAsyncSession()
         await count_active_runs_for_pipeline(session, uuid.uuid4(), include_pending=False)  # type: ignore[arg-type]
         statuses = self._in_clause_statuses(executed[0][1])
-        assert statuses == {"running", "awaiting_human", "claimed", "waiting_for_lock"}
+        assert statuses == {"running", "awaiting_human", "claimed"}
 
     async def test_include_pending_true_includes_pending(self) -> None:
         from modulo.db.crud.run import count_active_runs_for_pipeline

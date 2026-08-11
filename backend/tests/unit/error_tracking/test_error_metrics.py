@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import types
 from collections.abc import Iterator
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,18 +25,35 @@ def _reset_metric_handles() -> None:
         metrics_mod._errors_total,
         metrics_mod._error_groups_active,
         metrics_mod._error_alerts_total,
+        metrics_mod._runs_running_gauge,
+        metrics_mod._runs_oldest_running_gauge,
+        metrics_mod._runs_stall_reason_total,
+        metrics_mod._runs_claim_count_histogram,
     )
     metrics_mod._errors_total = None
     metrics_mod._error_groups_active = None
     metrics_mod._error_alerts_total = None
+    metrics_mod._runs_running_gauge = None
+    metrics_mod._runs_oldest_running_gauge = None
+    metrics_mod._runs_stall_reason_total = None
+    metrics_mod._runs_claim_count_histogram = None
     yield
-    metrics_mod._errors_total, metrics_mod._error_groups_active, metrics_mod._error_alerts_total = saved
+    (
+        metrics_mod._errors_total,
+        metrics_mod._error_groups_active,
+        metrics_mod._error_alerts_total,
+        metrics_mod._runs_running_gauge,
+        metrics_mod._runs_oldest_running_gauge,
+        metrics_mod._runs_stall_reason_total,
+        metrics_mod._runs_claim_count_histogram,
+    ) = saved
 
 
 def _make_meter() -> MagicMock:
     meter = MagicMock()
     meter.create_counter.return_value = MagicMock()
     meter.create_gauge.return_value = MagicMock()
+    meter.create_histogram.return_value = MagicMock()
     return meter
 
 
@@ -53,6 +70,7 @@ def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
     meter = MagicMock()
     meter.create_counter.return_value = MagicMock()
     meter.create_gauge.return_value = MagicMock()
+    meter.create_histogram.return_value = MagicMock()
     fake_metrics.get_meter_provider = MagicMock(return_value=None)
     fake_otel = types.ModuleType("opentelemetry")
     fake_otel.metrics = fake_metrics
@@ -260,3 +278,140 @@ class TestRecordErrorAlert:
             1,
             attributes={"level": "critical", "action_type": "webhook"},
         )
+
+
+# =========================================================================
+# Run-runtime instruments (D1) — gauges/counter/histogram + sampling
+# =========================================================================
+
+
+class TestInitRuntimeMetrics:
+    def test_no_meter_leaves_handles_unset(self) -> None:
+        with patch.object(metrics_mod, "_get_meter", return_value=None):
+            metrics_mod.init_runtime_metrics()
+        assert metrics_mod._runs_running_gauge is None
+        assert metrics_mod._runs_oldest_running_gauge is None
+        assert metrics_mod._runs_stall_reason_total is None
+        assert metrics_mod._runs_claim_count_histogram is None
+
+    def test_registers_all_instruments(self) -> None:
+        meter = _make_meter()
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
+            metrics_mod.init_runtime_metrics()
+        assert metrics_mod._runs_running_gauge is meter.create_gauge.return_value
+        assert metrics_mod._runs_oldest_running_gauge is meter.create_gauge.return_value
+        assert metrics_mod._runs_stall_reason_total is meter.create_counter.return_value
+        assert metrics_mod._runs_claim_count_histogram is meter.create_histogram.return_value
+        names = [call.kwargs["name"] for call in meter.create_gauge.call_args_list]
+        assert "runs_running_count" in names
+        assert "runs_oldest_running_age_seconds" in names
+        meter.create_counter.assert_called_once()
+        assert meter.create_counter.call_args.kwargs["name"] == "runs_stall_reason_total"
+        meter.create_histogram.assert_called_once()
+        assert meter.create_histogram.call_args.kwargs["name"] == "runs_claim_count_total"
+
+    def test_idempotent(self) -> None:
+        metrics_mod._runs_running_gauge = MagicMock()
+        metrics_mod._runs_oldest_running_gauge = MagicMock()
+        metrics_mod._runs_stall_reason_total = MagicMock()
+        metrics_mod._runs_claim_count_histogram = MagicMock()
+        with patch.object(metrics_mod, "_get_meter") as get_meter:
+            metrics_mod.init_runtime_metrics()
+        get_meter.assert_not_called()
+
+    def test_unsupported_instrument_skipped(self) -> None:
+        meter = _make_meter()
+        meter.create_histogram.side_effect = AttributeError("histogram unsupported")
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
+            metrics_mod.init_runtime_metrics()
+        assert metrics_mod._runs_running_gauge is meter.create_gauge.return_value
+        assert metrics_mod._runs_claim_count_histogram is None
+
+
+class TestRecordStallReason:
+    def test_lazily_initializes_and_records(self) -> None:
+        meter = _make_meter()
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
+            metrics_mod.record_stall_reason("executor_superseded", 3)
+        counter = meter.create_counter.return_value
+        counter.add.assert_called_once_with(
+            3,
+            attributes={"stall_reason": "executor_superseded"},
+        )
+
+    def test_zero_count_noop(self) -> None:
+        counter = MagicMock()
+        metrics_mod._runs_stall_reason_total = counter
+        metrics_mod.record_stall_reason("claim_cap_exhausted", 0)
+        counter.add.assert_not_called()
+
+    def test_noop_when_no_meter(self) -> None:
+        with patch.object(metrics_mod, "_get_meter", return_value=None):
+            metrics_mod.record_stall_reason("executor_stalled")
+        assert metrics_mod._runs_stall_reason_total is None
+
+
+class TestUpdateRunsLiveness:
+    def test_sets_gauges(self) -> None:
+        running_gauge = MagicMock()
+        oldest_gauge = MagicMock()
+        metrics_mod._runs_running_gauge = running_gauge
+        metrics_mod._runs_oldest_running_gauge = oldest_gauge
+        metrics_mod.update_runs_liveness(4, 123.5)
+        running_gauge.set.assert_called_once_with(4)
+        oldest_gauge.set.assert_called_once_with(123.5)
+
+    def test_none_age_skips_oldest_gauge(self) -> None:
+        running_gauge = MagicMock()
+        oldest_gauge = MagicMock()
+        metrics_mod._runs_running_gauge = running_gauge
+        metrics_mod._runs_oldest_running_gauge = oldest_gauge
+        metrics_mod.update_runs_liveness(0, None)
+        running_gauge.set.assert_called_once_with(0)
+        oldest_gauge.set.assert_not_called()
+
+
+class TestSampleRunRuntimeMetrics:
+    @pytest.mark.asyncio
+    async def test_updates_gauges_and_histogram(self) -> None:
+        """The sampler reads the runs table (running count, oldest age,
+        per-run claim counts) and pushes them into the instruments."""
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 2
+        oldest_result = MagicMock()
+        oldest_result.scalar_one.return_value = 60.0
+        claim_rows = MagicMock()
+        claim_rows.scalars.return_value = iter([1, 3])
+
+        session = MagicMock(spec=AsyncSession)
+        _results = [count_result, oldest_result, claim_rows]
+        session.execute = AsyncMock(side_effect=lambda stmt, *a, **k: _results.pop(0))
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        running_gauge = MagicMock()
+        oldest_gauge = MagicMock()
+        histogram = MagicMock()
+        metrics_mod._runs_running_gauge = running_gauge
+        metrics_mod._runs_oldest_running_gauge = oldest_gauge
+        metrics_mod._runs_claim_count_histogram = histogram
+
+        await metrics_mod.sample_run_runtime_metrics(factory)
+
+        running_gauge.set.assert_called_once_with(2)
+        oldest_gauge.set.assert_called_once_with(60.0)
+        assert histogram.record.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_failure_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await metrics_mod.sample_run_runtime_metrics(factory)
+        assert "metrics.sample_run_runtime_failed" in caplog.text

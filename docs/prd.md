@@ -916,6 +916,7 @@ An agent definition contains:
 ### 8.3 Schema System
 
 - Versioned (semver), reusable, composable
+- **Folder organisation**: the schema list supports organisation-scoped, nested folders for grouping schemas (mirroring the pipeline folders feature). Users can create, rename, reorder, and delete folders, filter the schema list by folder, and move a schema into a folder or back to the unfiled list via drag-and-drop or the actions menu. Deleting a folder does not delete schemas: schemas directly assigned to it become unfiled, and direct child folders become top-level folders. Folder access uses the same organisation RLS context as schema access, and the folder API returns `501 Not Implemented` when the required database migration has not been applied.
 - **Deletion protection**: schema versions referenced by any PipelineSnapshot, agent definition, or library entry cannot be deleted. Deletion is soft (mark deprecated); hard delete requires zero active references.
 - **Deprecated schema behaviour**: a deprecated schema version can still be selected in the schema picker (shown with a deprecation warning badge) and pinned in new PipelineSnapshots — deprecation is a signal, not a block. Pipelines running against a deprecated schema version succeed; no runtime error is introduced by deprecation. Graph validation surfaces a warning (not error) when building a new snapshot against a deprecated version. Admins see a list of pipelines pinned to deprecated schema versions in the schema editor.
 - **New version creation**: creating a new schema version is an explicit action ("New version" button in the schema editor), not an auto-save. Editing an existing version's fields is blocked if the version is pinned by any agent — the user is required to create a new version. Draft versions (unpublished) may be edited freely.
@@ -1174,7 +1175,7 @@ Before run start: all referenced connector instances are health-checked. Failed 
 | `run_concurrency_limit` | Per organisation | Max concurrently executing/claimed runs across ALL pipelines in the org (sandbox-agent and otherwise). Default: `null` (unlimited). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried in the background; after the capacity-timeout TTL they terminal-fail with `capacity_timeout`. Stored in `Organisation.settings_json`. Independent of `sandbox_concurrency_limit`; both org caps share the same `org_capacity_limited` marker on deferred runs. |
 | Write lock | Per connector instance + target resource | Advisory lock on (connector_instance_id, target_resource) for write operations. Prevents concurrent runs corrupting shared state (e.g. two runs pushing to the same git branch). |
 
-Write lock is advisory (application-layer, using Postgres `pg_try_advisory_lock`). If the lock cannot be acquired, the run enters a `waiting_for_lock` sub-state. The timeout is set per-pipeline via `lock_wait_timeout_seconds` (default: 300, min: 30, max: 3600) stored in the Pipeline entity. After the timeout elapses, the run transitions to `failed` with error code `lock_wait_timeout`. This transition is shown in the state machine: `waiting_for_lock → failed` (timeout). Cancel from `waiting_for_lock` immediately releases via `pg_advisory_unlock` and transitions to `cancelled` (same as §7.8 cancel spec).
+Write lock is advisory (application-layer, using Postgres `pg_try_advisory_lock`). The `waiting_for_lock` run sub-state was **excised** in the runtime hardening (migrations 0074/0075): it is NOT part of the final run status set, and any legacy rows were backfilled to `pending`. The `lock_wait_timeout_seconds` knob (default: 300, min: 30, max: 3600, stored on the Pipeline entity) remains reserved for the write-lock design. The final run status set is exactly: `pending`, `running`, `awaiting_human`, `claimed`, `complete`, `failed`, `cancelled`, `eval_failed`.
 
 ### 8.8 HITL (Human-in-the-Loop)
 
@@ -1189,11 +1190,11 @@ pending
           → claimed            (user has opened the review; atomic DB lock held)
           → running            (after approve — continues)
           → running            (after reject — routes to reject-target node)
-      → waiting_for_lock       (advisory write lock not available)
       → complete
       → failed
       → cancelled
 ```
+The `waiting_for_lock` sub-state was excised in migrations 0074/0075 (rows backfilled to `pending`); it does not appear in the final status set.
 
 #### Cancellation Mechanics
 `POST /api/v1/runs/{id}/cancel` (MCP: `cancel_run` tool). Calling cancel on a terminal-state run returns 409 `run_already_terminal`.
@@ -1204,9 +1205,7 @@ pending
 
 **Cancel from `awaiting_human`**: immediately transitions the run to `cancelled`. Any held HITL claim is released: `claimed_by` reset to NULL, `claim_token` invalidated (DB row deleted). No notification is dispatched for the cancelled gate — the run is terminal.
 
-**Cancel from `waiting_for_lock`**: immediately releases the advisory lock via `pg_advisory_unlock` and transitions to `cancelled`.
-
-**UI behaviour**: the run detail page shows a "Cancel" button for all non-terminal runs (`pending`, `running`, `awaiting_human`, `claimed`, `waiting_for_lock`). The runs list page shows a per-row Stop action (two-step inline confirm) for the same non-terminal statuses; terminal rows show no action. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
+**UI behaviour**: the run detail page shows a "Cancel" button for all non-terminal runs (`pending`, `running`, `awaiting_human`, `claimed`). The runs list page shows a per-row Stop action (two-step inline confirm) for the same non-terminal statuses; terminal rows show no action. On cancel confirmation, the button is disabled and the status shows `cancelling` (pending the next transition check). On the next state push via WebSocket, the status updates to `cancelled`.
 
 #### HITL Gate Definition
 Each gate carries:
@@ -1421,7 +1420,7 @@ Append-only at application layer. V2: cryptographic chaining for tamper evidence
 - UI warns if pipeline edited while a run is `awaiting_human`
 - Snapshot stored by reference (schemas by ID+version; deletion protection is the integrity guarantee)
 
-**Team ownership changes and active runs**: changing a pipeline's `owner_team_id` is blocked while any run is in a non-terminal state (`pending`, `running`, `awaiting_human`, `waiting_for_lock`). The ViewModel returns `pipeline_has_active_runs`. After all runs complete, ownership change is permitted. The UI then warns: "Existing snapshots reference connectors from the previous team. Re-save the pipeline to rebind connectors for the new team." Old snapshots remain valid for historical run records but should not be used to start new runs after rebinding.
+**Team ownership changes and active runs**: changing a pipeline's `owner_team_id` is blocked while any run is in a non-terminal state (`pending`, `running`, `awaiting_human`, `claimed`; the `waiting_for_lock` sub-state was excised in migrations 0074/0075). The ViewModel returns `pipeline_has_active_runs`. After all runs complete, ownership change is permitted. The UI then warns: "Existing snapshots reference connectors from the previous team. Re-save the pipeline to rebind connectors for the new team." Old snapshots remain valid for historical run records but should not be used to start new runs after rebinding.
 
 ### 8.14 Community Library
 
@@ -2550,8 +2549,6 @@ Admin (advanced mode, default collapsed)
   Monitoring          (subgroup)
     Error Dashboard   /admin/errors
     Notification Log  /admin/notification-delivery
-    API Changelog     /admin/api-changelog
-    Team Comparison   /admin/teams/comparison
   Extensions          (subgroup)
     Plugins           /admin/plugins
     Remy Config       (moved to Remy group above)
@@ -3069,7 +3066,7 @@ Triggers, Runtime Config, Rate Limits, HITL Review, Observability, Error Forward
 Access Control (Users, Org Settings, Audit Log), Cost Management (Costs — Overview, Spend
 Limits, Cost Components, Cost Controls), System (Connectors, Model Backends, Node Categories,
 Feature Flags, Environments, Run Retention, Saved Views), Monitoring (Error Dashboard,
-Notification Log, API Changelog, Team Comparison), Extensions (Plugins, Feedback Inbox).
+Notification Log), Extensions (Plugins, Feedback Inbox).
 
 ### Active Context
 - **User**: {display_name} ({role}) — {org_name} ({plan_name})
@@ -3457,7 +3454,7 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 - [ ] Graph validation: topology; schema compatibility; connector capability; model backend health; pre-run input schema check
 - [ ] Sequential pipeline execution via LangGraph StateGraph
 - [ ] Per-node retry policy
-- [ ] Run state machine (all states including `claimed`, `waiting_for_lock`)
+- [ ] Run state machine (all states including `claimed`; `waiting_for_lock` excised in migrations 0074/0075)
 - [ ] Run concurrency controls (`max_concurrent_runs` per pipeline)
 - [ ] Error recovery: retry-from-node, retry-from-start
 - [ ] Manual (Placeholder) Node: pause run for human-provided output; `output_schema_id` validation on human input before run continues; no `agent_id`, `connector_binding`, or `model_backend_id`; review UI identical to HITL claim flow
@@ -4252,6 +4249,7 @@ The facts table is enriched with stall-dimension and run-lifecycle columns so th
 A dedicated `GET /api/v1/analytics/concurrency` endpoint (and the `query_analytics_concurrency` MCP tool) reconstructs "how many runs were running / queued at any instant" from the retained facts — no live `runs` reads. It requires the same `analytics.query` permission and `analytics_page` feature as the bucketed query and funnels through the same shared service (org predicate, rate limit, statement timeout, error semantics).
 
 - **Fact columns**: `run_daily_facts` gains `dispatched_at`, `started_at`, `completed_at` (absolute UTC instants copied from the source run — deliberately NOT FKs, facts survive the run purge) and `total_queue_wait_ms` (`started_at − created_at` — the FULL wait from run creation to execution start, covering capacity-deferral backoff plus the SAQ queue; NULL when either side is missing). The live writer and the daily backfill both populate them; a backfilled fact never carries NULL where the source provides a value.
+- **Launch-forward `total_queue_wait_ms`**: populated live for new runs (the live writer records `started_at − created_at` as each run completes) and backfilled per-day for historical runs from the 0076 migration launch date forward (consistent with the launch-forward coverage in 8.32.3). Runs that completed BEFORE the 0076 deploy keep `NULL` — the daily backfill fills `total_queue_wait_ms` only for the days it covers from the launch date onward and never reconstructs pre-launch values.
 - **Semantics**: per bucket, `max_active`/`avg_active` are the peak and time-weighted mean of the concurrent-run count computed from the `[started_at, completed_at)` overlap (a run spanning a bucket boundary counts in BOTH buckets; a never-completed run — `completed_at` NULL — counts as active through the bucket's end). `max_queued`/`avg_queued` are the peak and time-weighted mean queue depth: runs with `created_at <= t < started_at`, with never-started runs (`started_at` NULL) counting as queued through the end of the range.
 - **`pool_reference`**: the binding concurrency cap for the query scope — the org's `run_concurrency_limit`, or a single filtered pipeline's `max_concurrent_runs` when a `pipeline_id` filter is present.
 - **Params**: `group_by` (hour/day/week, with auto-granularity), `trigger_type`, `status`, repeated `pipeline_id`, `folder_id`, `date_from`/`date_to` (≤ 365 days), `limit` (≤ 1000). There is no dimension split — concurrency is an overall-series surface.

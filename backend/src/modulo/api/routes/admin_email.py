@@ -241,6 +241,8 @@ async def admin_test_email_settings(
         return {"ok": False, "message": "SMTP is not configured"}
     except EmailSendingError as exc:
         return {"ok": False, "message": str(exc)}
-    except Exception as exc:
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         logger.exception("admin_email.admin_test_email_settings")
-        return {"ok": False, "message": str(exc)}
+        return {"ok": False, "message": "Unexpected error while sending the test email"}

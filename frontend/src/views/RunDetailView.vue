@@ -247,7 +247,7 @@
               </td>
               <td class="py-3">
                 <button
-                  v-if="node.hasLogs"
+                  v-if="node.hasLogs || node.telemetry"
                   data-testid="run-detail-toggle-logs"
                   class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
                   @click="toggleNodeLogs(node.name)"
@@ -258,22 +258,13 @@
               </td>
               <td class="py-3">
                 <button
-                  v-if="revealedPrompts[node.name]?.prompt"
                   data-testid="run-detail-show-prompt"
-                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10"
-                  @click="showPrompt(node.name)"
-                >
-                  {{ $t('views.RunDetailView.view') }}
-                </button>
-                <button
-                  v-else-if="revealedPrompts[node.name] === undefined"
-                  data-testid="run-detail-reveal-prompt"
-                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-primary"
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                  :disabled="promptLoading.has(node.name)"
                   @click="revealPrompt(node.name)"
                 >
-                  {{ $t('views.RunDetailView.prompt_hidden_click_to_reveal') }}
+                  {{ $t('views.RunDetailView.view_prompt') }}
                 </button>
-                <span v-else class="text-xs text-muted-foreground">—</span>
               </td>
             </tr>
 
@@ -282,24 +273,28 @@
               v-for="node in nodeEntries"
               :key="'io-' + node.name"
               v-show="expandedNodes.has(node.name)"
+              data-testid="run-detail-io-row"
             >
               <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.input') }}</h4>
-                  <JsonViewer :data="node.io?.input ?? null" :show-toolbar="false" :max-height="'16rem'" />
+                  <JsonViewer v-if="node.io?.input != null" :data="node.io.input" :show-toolbar="false" :max-height="'16rem'" />
+                  <p v-else data-testid="run-detail-no-input" class="text-sm text-muted-foreground">{{ $t('views.RunDetailView.no_input_data') }}</p>
                 </div>
                 <div class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.output') }}</h4>
-                  <JsonViewer :data="node.io?.output ?? null" :show-toolbar="false" :max-height="'16rem'" />
+                  <JsonViewer v-if="node.io?.output != null" :data="node.io.output" :show-toolbar="false" :max-height="'16rem'" />
+                  <p v-else data-testid="run-detail-no-output" class="text-sm text-muted-foreground">{{ $t('views.RunDetailView.no_output_data') }}</p>
                 </div>
               </td>
             </tr>
 
-            <!-- Expandable Log rows -->
+            <!-- Expandable Telemetry / Log rows -->
             <tr
               v-for="node in nodeEntries"
               :key="'log-' + node.name"
               v-show="expandedLogs.has(node.name)"
+              data-testid="run-detail-log-row"
             >
               <td colspan="10" class="space-y-3 px-0 pb-4 pt-1">
                 <div
@@ -310,13 +305,39 @@
                   <h4 class="mb-2 text-xs font-semibold text-primary">{{ $t('views.RunDetailView.live_output') }}</h4>
                   <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ liveOutput[node.name] }}</code></pre>
                 </div>
+                <div v-if="node.telemetry" class="rounded-lg border bg-muted p-4" data-testid="run-detail-node-telemetry">
+                  <div class="mb-2 flex flex-wrap items-center gap-2">
+                    <h4 class="text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.telemetry') }}</h4>
+                    <span v-if="node.telemetry?.status != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium capitalize">{{ node.telemetry?.status }}</span>
+                    <span v-if="node.telemetry?.exit_code != null && Number(node.telemetry?.exit_code) !== 0" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.exit_code') }}: {{ node.telemetry?.exit_code }}</span>
+                    <span v-if="node.telemetry?.wall_clock_time_ms != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.wall_clock_time') }}: {{ formatMs(Number(node.telemetry?.wall_clock_time_ms)) }}</span>
+                    <span v-if="node.telemetry?.cost_estimate_usd != null" class="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">{{ $t('views.RunDetailView.cost_estimate') }}: {{ formatMoney(Number(node.telemetry?.cost_estimate_usd), currencyCode, 6) }}</span>
+                    <span
+                      v-if="node.stallReason"
+                      data-testid="run-detail-node-stall-telemetry"
+                      class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                      :title="node.stallReason"
+                    >
+                      {{ $t('views.RunDetailView.agent_stalled', { reason: node.stallReason }) }}
+                    </span>
+                  </div>
+                  <p v-if="nodeSummary(node)" class="text-xs whitespace-pre-wrap text-muted-foreground" data-testid="run-detail-node-summary">
+                    <span class="font-medium text-foreground">{{ $t('views.RunDetailView.summary') }}:</span> {{ nodeSummary(node) }}
+                  </p>
+                </div>
                 <div v-if="getNodeLog(node.name, 'agent_stdout')" class="rounded-lg border bg-muted p-4">
                   <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.RunDetailView.agent_stdout') }}</h4>
                   <pre class="max-h-96 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stdout') }}</code></pre>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stdout')" class="mt-1 text-xs text-muted-foreground">
+                    {{ $t('views.RunDetailView.log_truncated', { count: MAX_LOG_CHARS.toLocaleString() }) }}
+                  </p>
                 </div>
                 <div v-if="getNodeLog(node.name, 'agent_stderr')" class="rounded-lg border bg-destructive/10 p-4">
                   <h4 class="mb-2 text-xs font-semibold text-destructive">{{ $t('views.RunDetailView.agent_stderr') }}</h4>
                   <pre class="max-h-48 overflow-auto rounded bg-background p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap"><code>{{ getNodeLog(node.name, 'agent_stderr') }}</code></pre>
+                  <p v-if="isNodeLogTruncated(node.name, 'agent_stderr')" class="mt-1 text-xs text-muted-foreground">
+                    {{ $t('views.RunDetailView.log_truncated', { count: MAX_LOG_CHARS.toLocaleString() }) }}
+                  </p>
                 </div>
                 <div
                   v-if="!getNodeLog(node.name, 'agent_stdout') && !getNodeLog(node.name, 'agent_stderr') && !liveOutput[node.name]"
@@ -527,6 +548,7 @@ interface NodeEntry {
   cost: number | null
   traceId: string | null
   io: { input: unknown; output: unknown } | null
+  telemetry: Record<string, unknown> | null
   hasLogs: boolean
   stallReason: string | null
 }
@@ -572,6 +594,10 @@ const hitlNotes = ref('')
 const hitlMessage = ref<{ type: string; text: string } | null>(null)
 const liveOutput = ref<Record<string, string>>({})
 const liveOutputSeq = ref(0)
+
+// agent_stdout strings can reach ~512KB; cap the Logs pre for display.
+// (FAR-123 delivers the full truncation UX later.)
+const MAX_LOG_CHARS = 20000
 
 const shareSummary = computed(() => {
   const r = run.value
@@ -636,6 +662,11 @@ async function copyText(text: string) {
 }
 
 async function revealPrompt(nodeName: string) {
+  const cached = revealedPrompts.value[nodeName]
+  if (cached?.prompt) {
+    showPrompt(nodeName)
+    return
+  }
   if (promptLoading.value.has(nodeName)) return
   const runId = route.params.id as string
   if (!runId) return
@@ -666,9 +697,7 @@ async function revealPrompt(nodeName: string) {
       promptAlwaysVisible: d.prompt_always_visible,
     }
     revealedPrompts.value = { ...revealedPrompts.value, [nodeName]: revealed }
-    if (d.prompt_always_visible) {
-      showPrompt(nodeName)
-    }
+    showPrompt(nodeName)
   } finally {
     const s = new Set(promptLoading.value)
     s.delete(nodeName)
@@ -702,13 +731,36 @@ async function copyPromptText() {
 }
 
 function getNodeLog(nodeName: string, field: string): string | null {
-  const outputs = runIO.value?.outputs_json as Record<string, unknown> | null ?? {}
-  const nodeOutput = outputs[nodeName] as Record<string, unknown> | undefined
-  if (!nodeOutput) return null
-  const outputValue = nodeOutput.output as Record<string, unknown> | undefined
-  if (!outputValue) return null
-  const val = outputValue[field]
-  return typeof val === 'string' && val.length > 0 ? val : null
+  const nodeTelemetry = nodeTelemetryFor(nodeName)
+  if (!nodeTelemetry) return null
+  const val = nodeTelemetry[field]
+  if (typeof val !== 'string' || val.length === 0) return null
+  return val.length > MAX_LOG_CHARS ? val.slice(0, MAX_LOG_CHARS) : val
+}
+
+function isNodeLogTruncated(nodeName: string, field: string): boolean {
+  const nodeTelemetry = nodeTelemetryFor(nodeName)
+  const val = nodeTelemetry?.[field]
+  return typeof val === 'string' && val.length > MAX_LOG_CHARS
+}
+
+function nodeTelemetryFor(nodeName: string): Record<string, unknown> | null {
+  const telemetry = runIO.value?.node_telemetry as Record<string, unknown> | null ?? {}
+  const entry = telemetry[nodeName]
+  return entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null
+}
+
+function nodeSummary(node: NodeEntry): string | null {
+  const telemetryStatus = node.telemetry?.status
+  const output = node.io?.output as Record<string, unknown> | null | undefined
+  if (output && typeof output === 'object' && output !== null) {
+    const returnSummary = output.summary
+    if (typeof returnSummary === 'string' && returnSummary.length > 0 && telemetryStatus !== 'failed') {
+      return returnSummary
+    }
+  }
+  const telemetrySummary = node.telemetry?.summary
+  return typeof telemetrySummary === 'string' && telemetrySummary.length > 0 ? telemetrySummary : null
 }
 
 const statusBadgeClass = computed(() => {
@@ -717,6 +769,7 @@ const statusBadgeClass = computed(() => {
     running: 'badge badge-status-primary',
     complete: 'badge badge-status-success',
     failed: 'badge badge-status-destructive',
+    stalled: 'badge badge-status-destructive',
     cancelled: 'badge badge-status-warning',
     pending: 'badge badge-status-muted',
     awaiting_human: 'badge badge-status-pending',
@@ -837,13 +890,12 @@ const breakdownTotal = computed(() =>
 )
 
 const lastNodeOutput = computed(() => {
-  const outputs = runIO.value?.outputs_json as Record<string, { input?: unknown; output?: unknown }> | null | undefined
+  const outputs = runIO.value?.outputs_json as Record<string, unknown> | null | undefined
   if (!outputs) return null
   const keys = Object.keys(outputs)
-  if (keys.length === 0) return null
   for (let i = keys.length - 1; i >= 0; i--) {
-    const entry = outputs[keys[i]]
-    if (entry?.output != null) return entry.output
+    const value = outputs[keys[i]]
+    if (value != null) return value
   }
   return null
 })
@@ -885,6 +937,11 @@ function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
   return `${h}h ${m}m`
+}
+
+function formatMs(ms: number): string {
+  if (!Number.isFinite(ms)) return '—'
+  return formatDuration(ms / 1000)
 }
 
 async function copyOutput() {
@@ -1003,24 +1060,60 @@ async function rejectGate() {
   }
 }
 
+function resolveNodeIO(nodeOutput: Record<string, unknown> | undefined): { input: unknown; output: unknown } | null {
+  if (nodeOutput == null) return null
+  if (!Array.isArray(nodeOutput) && typeof nodeOutput === 'object') {
+    if ('artifacts' in nodeOutput) {
+      // Legacy mixed envelope — the meaningful output is under `output`.
+      return {
+        input: nodeOutput.input ?? runIO.value?.input_payload ?? null,
+        output: nodeOutput.output ?? null,
+      }
+    }
+    // P1+ pure return — honour an explicit `input` key, otherwise fall back to
+    // the run-level input payload; the value itself is the output when there is
+    // no `output` wrapper. An empty object carries no data — treat as absent.
+    if (Object.keys(nodeOutput).length === 0) {
+      return {
+        input: runIO.value?.input_payload ?? null,
+        output: null,
+      }
+    }
+    return {
+      input: nodeOutput.input ?? runIO.value?.input_payload ?? null,
+      output: nodeOutput.output !== undefined ? nodeOutput.output : nodeOutput,
+    }
+  }
+  // Pure scalar/array return — the value itself is the output.
+  return {
+    input: runIO.value?.input_payload ?? null,
+    output: nodeOutput,
+  }
+}
+
 const nodeEntries = computed<NodeEntry[]>(() => {
   const r = run.value
   if (!r) return []
 
   const ntu = r.node_token_usage as Record<string, NodeTokenUsage> | null ?? {}
   const outputs = runIO.value?.outputs_json as Record<string, unknown> | null ?? {}
+  const telemetry = runIO.value?.node_telemetry as Record<string, unknown> | null ?? {}
 
-  const names = new Set([...Object.keys(ntu), ...Object.keys(outputs)])
+  const names = new Set([...Object.keys(ntu), ...Object.keys(outputs), ...Object.keys(telemetry)])
   if (names.size === 0) return []
 
   return Array.from(names).map(name => {
     const usage = ntu[name] as NodeTokenUsage | undefined
     const nodeOutput = outputs[name] as Record<string, unknown> | undefined
-    const outputValue = (nodeOutput?.output as Record<string, unknown>) ?? {}
-    const hasLogs = !!(outputValue.agent_stdout || outputValue.agent_stderr)
-    const stallReason = typeof outputValue.stall_reason === 'string' && outputValue.stall_reason.length > 0
-      ? outputValue.stall_reason
+    const nodeTelemetry = (telemetry[name] as Record<string, unknown> | undefined) ?? null
+    const stallReason = nodeTelemetry && typeof nodeTelemetry.stall_reason === 'string' && nodeTelemetry.stall_reason.length > 0
+      ? nodeTelemetry.stall_reason
       : null
+    const hasLogs = !!(
+      nodeTelemetry &&
+      ((typeof nodeTelemetry.agent_stdout === 'string' && nodeTelemetry.agent_stdout.length > 0)
+        || (typeof nodeTelemetry.agent_stderr === 'string' && nodeTelemetry.agent_stderr.length > 0))
+    )
 
     return {
       name,
@@ -1030,12 +1123,8 @@ const nodeEntries = computed<NodeEntry[]>(() => {
       outputTokens: usage?.output_tokens ?? null,
       cost: usage?.model_cost_display_usd ?? usage?.cost_usd ?? null,
       traceId: run.value?.trace_id ?? null,
-      io: nodeOutput
-        ? {
-            input: nodeOutput.input ?? null,
-            output: nodeOutput.output ?? null,
-          }
-        : null,
+      io: resolveNodeIO(nodeOutput),
+      telemetry: nodeTelemetry,
       hasLogs,
       stallReason,
     }

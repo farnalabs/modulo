@@ -83,13 +83,20 @@ class AnalyticsResponse(BaseModel):
 
 
 class ConcurrencyBucket(BaseModel):
-    """One slot-utilization bucket — max/avg concurrent active + queued runs."""
+    """One slot-utilization bucket — max/avg concurrent active + queued runs.
+
+    ``key`` is always ``None`` (concurrency is an overall-series surface) and
+    ``pool_reference`` mirrors the top-level reference on every bucket — both
+    are surfaced so REST and the MCP tool return the identical schema.
+    """
 
     date: str
+    key: str | None = None
     max_active: int = 0
     avg_active: float = 0.0
     max_queued: int = 0
     avg_queued: float = 0.0
+    pool_reference: int | None = None
 
 
 class ConcurrencyResponse(BaseModel):

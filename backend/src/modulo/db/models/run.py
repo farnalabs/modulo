@@ -31,10 +31,17 @@ if TYPE_CHECKING:
     from modulo.db.models.team import Team
 
 
-# Single source of truth for terminal run statuses (ADR 020). Used by the
-# analytics facts writer, the maintenance backfill, and the run purge. Must be
-# a subset of the ``ck_runs_status`` CHECK-constraint values.
-TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+# Single source of truth for run status sets (ADR 020 / dist/runtime-core A1).
+# Both are subsets of the ``ck_runs_status`` CHECK-constraint values. The
+# never-entered ``waiting_for_lock`` sub-state was excised in migration 0074/0075
+# (rows backfilled to ``pending``); it MUST NOT appear in either set. Consumers
+# across the codebase (crud/run, cron_helpers, analytics) import these instead
+# of re-declaring their own tuples.
+TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
+
+# Non-terminal (active) run statuses — a run that still holds a slot. A pending
+# run is active but does not hold capacity (see crud.run._active_run_statuses).
+ACTIVE_RUN_STATUSES: frozenset[str] = frozenset({"pending", "running", "awaiting_human", "claimed"})
 
 
 class _GenRandomUuid(expression.FunctionElement[str]):
@@ -70,7 +77,7 @@ class Run(OrgScoped):
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', "
-            "'complete', 'failed', 'cancelled', 'eval_failed')",
+            "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),

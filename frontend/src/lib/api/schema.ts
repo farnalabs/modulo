@@ -1047,50 +1047,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/changelog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Changelog
-         * @description Return all changelog entries sorted by date descending.
-         */
-        get: operations["list_changelog_api_v1_changelog_get"];
-        put?: never;
-        /**
-         * Create Changelog Entry
-         * @description Add a new changelog entry (in-memory for alpha; persists across restarts via DB in v1).
-         */
-        post: operations["create_changelog_entry_api_v1_changelog_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/changelog/latest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Latest Changelog
-         * @description Return the most recent changelog entry.
-         */
-        get: operations["latest_changelog_api_v1_changelog_latest_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/auth/sso/providers": {
         parameters: {
             query?: never;
@@ -2534,6 +2490,23 @@ export interface paths {
         patch: operations["deprecate_schema_endpoint_api_v1_schemas__schema_id__deprecate_patch"];
         trace?: never;
     };
+    "/api/v1/schemas/{schema_id}/folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Move Schema To Folder Endpoint */
+        patch: operations["move_schema_to_folder_endpoint_api_v1_schemas__schema_id__folder_patch"];
+        trace?: never;
+    };
     "/api/v1/schemas/{schema_id}/versions": {
         parameters: {
             query?: never;
@@ -2730,6 +2703,59 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Folders Endpoint */
+        get: operations["list_folders_endpoint_api_v1_schema_folders_get"];
+        put?: never;
+        /** Create Folder Endpoint */
+        post: operations["create_folder_endpoint_api_v1_schema_folders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-folders/{folder_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Folder Endpoint */
+        delete: operations["delete_folder_endpoint_api_v1_schema_folders__folder_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Folder Endpoint */
+        patch: operations["update_folder_endpoint_api_v1_schema_folders__folder_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/schema-folders/{folder_id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Reorder Folder Endpoint */
+        patch: operations["reorder_folder_endpoint_api_v1_schema_folders__folder_id__move_patch"];
         trace?: never;
     };
     "/api/v1/model-backends": {
@@ -7305,7 +7331,7 @@ export interface components {
          * AnalyticsStatus
          * @enum {string}
          */
-        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "waiting_for_lock" | "complete" | "failed" | "cancelled" | "eval_failed";
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "waiting_for_lock" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled";
         /**
          * AnalyticsTriggerType
          * @enum {string}
@@ -7527,21 +7553,6 @@ export interface components {
             /** Role */
             role: string;
         };
-        /** ChangelogEntry */
-        ChangelogEntry: {
-            /** Version */
-            version: string;
-            /** Date */
-            date: string;
-            /** Summary */
-            summary: string;
-            /** Changes */
-            changes: string[];
-            /** Deprecations */
-            deprecations?: string[] | null;
-            /** Migration Url */
-            migration_url?: string | null;
-        };
         /** CheckResult */
         CheckResult: {
             /**
@@ -7760,10 +7771,16 @@ export interface components {
         /**
          * ConcurrencyBucket
          * @description One slot-utilization bucket — max/avg concurrent active + queued runs.
+         *
+         *     ``key`` is always ``None`` (concurrency is an overall-series surface) and
+         *     ``pool_reference`` mirrors the top-level reference on every bucket — both
+         *     are surfaced so REST and the MCP tool return the identical schema.
          */
         ConcurrencyBucket: {
             /** Date */
             date: string;
+            /** Key */
+            key?: string | null;
             /**
              * Max Active
              * @default 0
@@ -7784,6 +7801,8 @@ export interface components {
              * @default 0
              */
             avg_queued: number;
+            /** Pool Reference */
+            pool_reference?: number | null;
         };
         /** ConcurrencyResponse */
         ConcurrencyResponse: {
@@ -8212,21 +8231,6 @@ export interface components {
             /** Components */
             components?: components["schemas"]["CostReportComponent"][];
             annotations?: components["schemas"]["CostReportAnnotations"];
-        };
-        /** CreateChangelogEntryRequest */
-        CreateChangelogEntryRequest: {
-            /** Version */
-            version: string;
-            /** Date */
-            date: string;
-            /** Summary */
-            summary: string;
-            /** Changes */
-            changes: string[];
-            /** Deprecations */
-            deprecations?: string[] | null;
-            /** Migration Url */
-            migration_url?: string | null;
         };
         /** CreateEvalFromRunRequest */
         CreateEvalFromRunRequest: {
@@ -11760,6 +11764,12 @@ export interface components {
              * @default 0.000000
              */
             aggregate_cost_usd: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /** RunSummary */
         RunSummary: {
@@ -11852,6 +11862,11 @@ export interface components {
              * @default false
              */
             required: boolean;
+        };
+        /** SchemaFolderMoveRequest */
+        SchemaFolderMoveRequest: {
+            /** Folder Id */
+            folder_id?: string | null;
         };
         /** SchemaGenerateRequest */
         SchemaGenerateRequest: {
@@ -13999,6 +14014,8 @@ export interface components {
             description: string | null;
             /** Abstract Name */
             abstract_name: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
             /**
              * Created By
              * Format: uuid
@@ -16761,79 +16778,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_changelog_api_v1_changelog_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChangelogEntry"][];
-                };
-            };
-        };
-    };
-    create_changelog_entry_api_v1_changelog_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateChangelogEntryRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChangelogEntry"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    latest_changelog_api_v1_changelog_latest_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChangelogEntry"];
                 };
             };
         };
@@ -20316,6 +20260,7 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                folder_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -20500,6 +20445,43 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    move_schema_to_folder_endpoint_api_v1_schemas__schema_id__folder_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                schema_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SchemaFolderMoveRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -20855,6 +20837,177 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SchemaImportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_folders_endpoint_api_v1_schema_folders_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_folder_endpoint_api_v1_schema_folders_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_folder_endpoint_api_v1_schema_folders__folder_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_folder_endpoint_api_v1_schema_folders__folder_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reorder_folder_endpoint_api_v1_schema_folders__folder_id__move_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderMove"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"];
                 };
             };
             /** @description Validation Error */

@@ -119,6 +119,7 @@ def test_schema_create_valid(client: TestClient) -> None:
     mock_schema.name = "Test"
     mock_schema.description = None
     mock_schema.abstract_name = None
+    mock_schema.folder_id = None
     mock_schema.account_id = uuid.uuid4()
     mock_schema.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     mock_schema.updated_at = datetime(2025, 1, 1, tzinfo=UTC)

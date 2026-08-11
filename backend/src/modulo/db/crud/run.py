@@ -24,7 +24,7 @@ from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 
 _log = logging.getLogger(__name__)
 
@@ -44,7 +44,17 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 # constraint at commit time, or worse write an unknown status on backends
 # without the constraint).
 RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
-    {"pending", "running", "awaiting_human", "claimed", "complete", "failed", "cancelled", "eval_failed"}
+    {
+        "pending",
+        "running",
+        "awaiting_human",
+        "claimed",
+        "complete",
+        "failed",
+        "cancelled",
+        "eval_failed",
+        "stalled",
+    }
 )
 
 # Claimed-but-nodeless zombie repair code (shared). Another worker owns the
@@ -67,6 +77,23 @@ _RUN_CONCURRENCY_MIN = 1
 _RUN_CONCURRENCY_MAX = 100
 
 
+class OrgDeletedError(RuntimeError):
+    """Raised by ``create_run`` when the target organisation is soft-deleted or missing.
+
+    The soft-deleted-org guard refuses to create a run in an org whose deletion
+    flow has set status='deleted' (or in a hard-deleted org — no row). A domain
+    exception (not ``ValueError``) so API routes and cron/trigger callers can map
+    it to a structured 4xx (409 for a deleted org, 404 for a missing org) instead
+    of a generic 500. Defined here (not in ``modulo.core.exceptions``) because
+    the ``db-does-not-import-core`` contract does not exempt this module.
+    """
+
+    def __init__(self, *, org_id: uuid.UUID | None = None, deleted: bool = True) -> None:
+        self.org_id = org_id
+        self.deleted = deleted
+        super().__init__(f"cannot create run: organisation {org_id} is " + ("deleted" if deleted else "missing"))
+
+
 def _input_hash(payload: dict[str, Any]) -> str:
     """Stable SHA-256 hex digest of a JSON-serialisable payload."""
     serialised = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -87,6 +114,23 @@ async def create_run(
     parent_run_id: uuid.UUID | None = None,
     rate_limit_key: str | None = None,
 ) -> Run:
+    # Soft-deleted-org guard (follow-up gap from the reconcile delivery): a run
+    # must never be created in an org whose deletion flow has set status='deleted'
+    # (or in a hard-deleted org — no row). Trigger-initiated runs already fail via
+    # ``ensure_triggers_resumable`` below (a non-active status is treated as
+    # paused); this covers MANUAL runs (``trigger_id=None`` / exempt types) that
+    # bypass the pause gate. Read the status directly (never the ORM identity
+    # map) so a freshly toggled row is observed, mirroring ``org_is_paused``.
+    # Raised as ``OrgDeletedError`` (not ValueError) so routes/cron callers can
+    # map it to a structured 4xx instead of a generic 500.
+    org_status_result = await session.execute(
+        text("SELECT status FROM organisations WHERE id = :oid"),
+        {"oid": str(org_id)},
+    )
+    org_status = org_status_result.scalar_one_or_none()
+    if org_status is None or org_status == "deleted":
+        raise OrgDeletedError(org_id=org_id, deleted=org_status == "deleted")
+
     # Org-wide pause kill-switch — the SINGLE authority gate for trigger-initiated
     # runs (webhook, replay, cron, polling, agent_signal). Manual runs (POST /runs,
     # MCP trigger_pipeline), test_trigger (trigger_type="manual"), feedback
@@ -315,6 +359,24 @@ async def get_child_run_rollup(
 _COST_BREAKDOWN_SENTINEL: Any = object()
 
 
+def _json_bind(value: Any) -> str | bytes | None:
+    """Serialize a JSON-typed fenced-write param for asyncpg binding.
+
+    asyncpg's default ``json`` codec accepts only ``str``/``bytes`` — a raw
+    dict/list bound to ``CAST(:p AS json)`` raises ``DataError``. The fenced
+    statement casts the serialized string to json, so dicts/lists are encoded
+    here (mirroring SQLAlchemy's ORM ``JSON`` type serialization) while
+    already-serialized strings pass through unchanged.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode()
+    return json.dumps(value)
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -347,6 +409,7 @@ async def update_run_status(
             cost_breakdown=cost_breakdown,
             node_token_usage=node_token_usage,
             outputs_json=outputs_json,
+            node_telemetry_json=node_telemetry_json,
             claimed_by=claimed_by,
             clear_error_code=clear_error_code,
             claim_token=claim_token,
@@ -361,7 +424,7 @@ async def update_run_status(
         run.started_at = datetime.now(UTC)
     if claimed_by is not None:
         run.claimed_by = claimed_by
-    if status in ("complete", "failed", "cancelled", "eval_failed"):
+    if status in ("complete", "failed", "cancelled", "eval_failed", "stalled"):
         run.completed_at = datetime.now(UTC)
     if clear_error_code:
         # Explicitly clear a prior capacity marker (the error_code=... writes
@@ -404,7 +467,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN now() ELSE started_at END, "
     "completed_at = CASE "
     "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
-    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed') THEN now() "
+    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') THEN now() "
     "  ELSE completed_at END, "
     "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
     "error_code = CASE WHEN :clear_error_code THEN NULL "
@@ -418,7 +481,9 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "node_token_usage = CASE WHEN CAST(:node_token_usage AS json) IS NOT NULL "
     "  THEN CAST(:node_token_usage AS json) ELSE node_token_usage END, "
     "outputs_json = CASE WHEN CAST(:outputs_json AS json) IS NOT NULL "
-    "  THEN CAST(:outputs_json AS json) ELSE outputs_json END "
+    "  THEN CAST(:outputs_json AS json) ELSE outputs_json END, "
+    "node_telemetry_json = CASE WHEN CAST(:node_telemetry_json AS json) IS NOT NULL "
+    "  THEN CAST(:node_telemetry_json AS json) ELSE node_telemetry_json END "
     "WHERE id=:rid "
     "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
     "AND (CAST(:from_status AS text) IS NULL OR status = CAST(:from_status AS text)) "
@@ -439,6 +504,7 @@ async def _update_run_status_fenced(
     cost_breakdown: Any,
     node_token_usage: dict[str, Any] | None,
     outputs_json: dict[str, Any] | None,
+    node_telemetry_json: dict[str, Any] | None,
     claimed_by: str | None,
     clear_error_code: bool,
     claim_token: str,
@@ -470,10 +536,13 @@ async def _update_run_status_fenced(
             "cost_breakdown_sentinel": cost_breakdown is _COST_BREAKDOWN_SENTINEL,
             # When the sentinel is used the ELSE branch is never taken, but the
             # parameter still must be bindable (NULL json) — never the sentinel
-            # object itself.
-            "cost_breakdown": None if cost_breakdown is _COST_BREAKDOWN_SENTINEL else cost_breakdown,
-            "node_token_usage": node_token_usage,
-            "outputs_json": outputs_json,
+            # object itself. JSON-typed params are serialized via ``_json_bind``:
+            # asyncpg's json codec rejects raw dict/list (DataError), so the
+            # fenced terminal write must encode them exactly like the ORM path.
+            "cost_breakdown": None if cost_breakdown is _COST_BREAKDOWN_SENTINEL else _json_bind(cost_breakdown),
+            "node_token_usage": _json_bind(node_token_usage),
+            "outputs_json": _json_bind(outputs_json),
+            "node_telemetry_json": _json_bind(node_telemetry_json),
             "claimed_by": claimed_by,
             "clear_error_code": clear_error_code,
         },
@@ -486,7 +555,7 @@ async def _update_run_status_fenced(
 
 _TRANSITION_SQL = text(
     "UPDATE runs SET status=CAST(:target AS text), "
-    "completed_at = CASE WHEN CAST(:target AS text) IN ('complete', 'failed', 'cancelled', 'eval_failed') "
+    "completed_at = CASE WHEN CAST(:target AS text) IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') "
     "THEN now() ELSE completed_at END, "
     "error_code = COALESCE(CAST(:error_code AS text), error_code), "
     "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "
@@ -569,17 +638,19 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
     return run
 
 
-# Active (non-terminal) run statuses. A pending run only counts when
-# ``include_pending=True`` is requested (variant-group quota); capacity gates
-# pass ``include_pending=False`` because a pending run does not hold a slot.
-_ACTIVE_RUN_STATUSES = frozenset({"pending", "running", "awaiting_human", "claimed", "waiting_for_lock"})
+# Active (non-terminal) run statuses — the canonical set defined ONCE in
+# models.run (the never-entered ``waiting_for_lock`` sub-state was excised in
+# migration 0074/0075). A pending run only counts when ``include_pending=True``
+# is requested (variant-group quota); capacity gates pass
+# ``include_pending=False`` because a pending run does not hold a slot.
+_ACTIVE_RUN_STATUSES = ACTIVE_RUN_STATUSES
 
 
 def _active_run_statuses(include_pending: bool) -> set[str]:
     """Resolve the status set for an active-run count.
 
-    * ``include_pending=False`` (capacity gate): running/awaiting_human/claimed/
-      waiting_for_lock — a pending run does not hold capacity.
+    * ``include_pending=False`` (capacity gate): running/awaiting_human/claimed
+      — a pending run does not hold capacity.
     * ``include_pending=True`` (quota): all non-terminal runs including
       ``pending``.
     """
@@ -633,8 +704,8 @@ async def count_active_runs_for_pipeline(
     instead of three):
 
     * ``include_pending=False`` (capacity gate): counts only runs that are
-      actually executing or claimed (running/awaiting_human/claimed/
-      waiting_for_lock) — a pending run does not hold capacity.
+      actually executing or claimed (running/awaiting_human/claimed) — a
+      pending run does not hold capacity.
     * ``include_pending=True`` (variant-group quota): counts all non-terminal
       runs including ``pending``, preserving the 429 quota semantics.
 
@@ -663,8 +734,8 @@ async def count_active_runs_for_org(
     across all pipelines. ``include_pending`` selects the same two behaviours:
 
     * ``include_pending=False`` (dispatch admission gate): counts only runs
-      that are actually executing or claimed (running/awaiting_human/claimed/
-      waiting_for_lock) — a pending run does not hold capacity.
+      that are actually executing or claimed (running/awaiting_human/claimed) —
+      a pending run does not hold capacity.
     * ``include_pending=True`` (quota semantics): counts all non-terminal runs
       including ``pending``.
 
@@ -901,7 +972,7 @@ async def _get_run_stats_python(
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        elif r.status in ("failed", "cancelled", "eval_failed", "expired"):
+        elif r.status in ("failed", "cancelled", "eval_failed", "expired", "stalled"):
             by_day[day]["failed"] += 1
 
     for r in completed_runs:
@@ -913,7 +984,7 @@ async def _get_run_stats_python(
 
     failure_reasons: dict[str, int] = defaultdict(int)
     for r in runs:
-        if r.status in ("failed", "eval_failed") and r.error_code:
+        if r.status in ("failed", "eval_failed", "stalled") and r.error_code:
             failure_reasons[r.error_code] += 1
 
     return {
@@ -961,7 +1032,7 @@ async def _get_run_stats_postgres(
                     func.count().label("run_count"),
                     func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
                     func.sum(
-                        case((Run.status.in_(("failed", "cancelled", "eval_failed", "expired")), 1), else_=0)
+                        case((Run.status.in_(("failed", "cancelled", "eval_failed", "expired", "stalled")), 1), else_=0)
                     ).label("failed"),
                     func.avg(duration_ms).label("avg_duration"),
                 )
@@ -1011,7 +1082,7 @@ async def _get_run_stats_postgres(
                 .join(Pipeline, Run.pipeline_id == Pipeline.id)
                 .where(
                     *base_where,
-                    Run.status.in_(("failed", "eval_failed")),
+                    Run.status.in_(("failed", "eval_failed", "stalled")),
                     Run.error_code.is_not(None),
                     Run.error_code != "",
                 )
@@ -1081,7 +1152,7 @@ async def batch_delete_old_terminal_runs(
 ) -> int:
     """Delete terminal runs older than *max_age_days* in batches.
 
-    Only affects runs with status in (complete, failed, eval_failed, cancelled).
+    Only affects runs with a terminal status (``TERMINAL_STATUSES``).
     Returns total deleted count.
     """
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
@@ -1092,7 +1163,7 @@ async def batch_delete_old_terminal_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
+                        Run.status.in_(TERMINAL_STATUSES),
                         Run.created_at < cutoff,
                     )
                     .limit(batch_size)
@@ -1132,7 +1203,7 @@ async def purge_runs(
                 await session.execute(
                     select(Run.id)
                     .where(
-                        Run.status.in_(["complete", "failed", "eval_failed", "cancelled"]),
+                        Run.status.in_(TERMINAL_STATUSES),
                         Run.completed_at < cutoff,
                     )
                     .limit(batch_size)

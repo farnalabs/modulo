@@ -42,6 +42,7 @@ def _make_schema() -> MagicMock:
     s.name = "Test Schema"
     s.description = None
     s.abstract_name = None
+    s.folder_id = None
     s.account_id = uuid.uuid4()
     s.created_by = s.account_id
     s.created_at = _NOW

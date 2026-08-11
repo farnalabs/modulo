@@ -57,7 +57,6 @@ from modulo.api.routes.analytics import router as analytics_router
 from modulo.api.routes.api_keys import router as api_keys_router
 from modulo.api.routes.audit import router as audit_router
 from modulo.api.routes.auth import router as auth_router
-from modulo.api.routes.changelog import router as changelog_router
 from modulo.api.routes.composite_templates import router as composite_templates_router
 from modulo.api.routes.connectors import router as connectors_router
 from modulo.api.routes.contributions import router as contributions_router
@@ -98,6 +97,7 @@ from modulo.api.routes.registry import router as registry_router
 from modulo.api.routes.remy import router as remy_router
 from modulo.api.routes.run_ws import router as run_ws_router
 from modulo.api.routes.runs import router as runs_router
+from modulo.api.routes.schema_folders import router as schema_folders_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
 from modulo.api.routes.sso import router as sso_router
@@ -1228,7 +1228,6 @@ app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)
 app.include_router(admin_housekeeping_router)
 app.include_router(auth_router)
-app.include_router(changelog_router)
 app.include_router(sso_router)
 app.include_router(analytics_router)
 app.include_router(dashboard_router)
@@ -1242,6 +1241,7 @@ app.include_router(agents_router)
 app.include_router(parameter_schemas_router)
 app.include_router(hitl_router)
 app.include_router(schemas_router)
+app.include_router(schema_folders_router)
 app.include_router(model_backends_router)
 app.include_router(node_categories_router)
 app.include_router(composite_templates_router)

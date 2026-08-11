@@ -7,6 +7,7 @@ vi.mock('@/lib/api/client', () => ({
 }))
 
 let pushEvent: (eventType: string, data: Record<string, unknown>) => void
+let pushRawSse: (raw: string) => void
 let endStream: () => void
 
 beforeEach(() => {
@@ -34,9 +35,8 @@ beforeEach(() => {
     body: { getReader: () => mockReader },
   } as unknown as Response)
 
-  pushEvent = (eventType: string, data: Record<string, unknown>) => {
-    const sse = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`
-    const encoded = encoder.encode(sse)
+  pushRawSse = (raw: string) => {
+    const encoded = encoder.encode(raw)
     if (resolveNext) {
       const resolve = resolveNext
       resolveNext = null
@@ -44,6 +44,10 @@ beforeEach(() => {
     } else {
       queue.push({ done: false, value: encoded })
     }
+  }
+
+  pushEvent = (eventType: string, data: Record<string, unknown>) => {
+    pushRawSse(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`)
   }
 
   endStream = () => {
@@ -136,6 +140,78 @@ describe('eventBus', () => {
     await tick()
     await tick()
     expect(eventBus.connected).toBe(false)
+    // Unsubscribing the last handler disconnects and cancels the reconnect
+    // timer scheduled on stream end, so no stray timer leaks into later tests.
+    eventBus.unsubscribe('run', handler)
+  })
+
+  it('schedules a reconnect when the HTTP response is not ok', async () => {
+    vi.useFakeTimers()
+    vi.mocked(fetch).mockResolvedValue({ ok: false, body: null } as unknown as Response)
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    eventBus.subscribe('run', handler)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(eventBus.connected).toBe(false)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('stops reconnecting after the maximum number of attempts', async () => {
+    vi.useFakeTimers()
+    vi.mocked(fetch).mockResolvedValue({ ok: false, body: null } as unknown as Response)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(200_000)
+    expect(fetch).toHaveBeenCalledTimes(11)
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Max reconnect attempts'))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetch).toHaveBeenCalledTimes(11)
+    errorSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('reconnects a stream that has ended', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    eventBus.subscribe('run', handler)
+    await tick()
+    expect(eventBus.connected).toBe(true)
+    endStream()
+    await tick()
+    await tick()
+    expect(eventBus.connected).toBe(false)
+    eventBus.reconnect()
+    await tick()
+    expect(eventBus.connected).toBe(true)
+  })
+
+  it('ignores SSE events other than resource_changed', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    eventBus.subscribe('run', handler)
+    await tick()
+    pushEvent('token', { type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' })
+    await tick()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('ignores malformed SSE payloads and keeps processing later events', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    eventBus.subscribe('run', handler)
+    await tick()
+    pushRawSse('event: resource_changed\ndata: {not valid json\n\n')
+    await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled())
+    const event = { type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' }
+    triggerEvent(event)
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledWith(event))
   })
 })
 
@@ -200,6 +276,47 @@ describe('createSyncAdapter', () => {
     expect(remove).toHaveBeenCalledWith('del-1')
     expect(fetch).not.toHaveBeenCalled()
   })
+
+  it('calls fetch for a created event', async () => {
+    const { createSyncAdapter } = await import('../composables/useSyncStore')
+    const fetch = vi.fn().mockResolvedValue(undefined)
+    const remove = vi.fn()
+    const handleSyncEvent = createSyncAdapter({ dirtyIds: new Set<string>([]), fetch, remove })
+
+    const event: EventBusEvent = { type: 'run', id: 'new-1', action: 'created', version: 1, org_id: 'org-1', timestamp: '2024-01-01T00:00:04Z' }
+    handleSyncEvent(event)
+    expect(fetch).toHaveBeenCalledWith('new-1')
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('logs and swallows a rejected fetch so the bus is not poisoned', async () => {
+    const { createSyncAdapter } = await import('../composables/useSyncStore')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetch = vi.fn().mockRejectedValue(new Error('fetch boom'))
+    const remove = vi.fn()
+    const handleSyncEvent = createSyncAdapter({ dirtyIds: new Set<string>([]), fetch, remove })
+
+    const event: EventBusEvent = { type: 'run', id: 'bad-1', action: 'updated', version: 1, org_id: 'org-1' }
+    await expect(Promise.resolve(handleSyncEvent(event))).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenCalledWith('bad-1')
+    expect(errorSpy).toHaveBeenCalledWith('[SyncAdapter] fetch error', expect.any(Error))
+    errorSpy.mockRestore()
+  })
+
+  it('logs and swallows a remove error for a deleted event', async () => {
+    const { createSyncAdapter } = await import('../composables/useSyncStore')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetch = vi.fn().mockResolvedValue(undefined)
+    const remove = vi.fn(() => {
+      throw new Error('remove boom')
+    })
+    const handleSyncEvent = createSyncAdapter({ dirtyIds: new Set<string>([]), fetch, remove })
+
+    const event: EventBusEvent = { type: 'run', id: 'gone-1', action: 'deleted', version: 1, org_id: 'org-1' }
+    expect(() => handleSyncEvent(event)).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith('[SyncAdapter] remove error', expect.any(Error))
+    errorSpy.mockRestore()
+  })
 })
 
 describe('useDirtyTracker', () => {
@@ -211,5 +328,51 @@ describe('useDirtyTracker', () => {
     expect(tracker.isDirty('item-1')).toBe(true)
     tracker.markClean('item-1')
     expect(tracker.isDirty('item-1')).toBe(false)
+  })
+
+  it('tracks dirty state per id independently', async () => {
+    const { useDirtyTracker } = await import('../composables/useSyncStore')
+    const tracker = useDirtyTracker()
+    tracker.markDirty('a')
+    expect(tracker.isDirty('a')).toBe(true)
+    expect(tracker.isDirty('b')).toBe(false)
+    tracker.markClean('a')
+    expect(tracker.isDirty('b')).toBe(false)
+    tracker.markDirty('b')
+    expect(tracker.isDirty('b')).toBe(true)
+  })
+
+  it('deduplicates repeated markDirty calls', async () => {
+    const { useDirtyTracker } = await import('../composables/useSyncStore')
+    const tracker = useDirtyTracker()
+    tracker.markDirty('item-1')
+    tracker.markDirty('item-1')
+    expect(tracker.dirtyIds.value.size).toBe(1)
+  })
+
+  it('markClean on a non-dirty id is a no-op', async () => {
+    const { useDirtyTracker } = await import('../composables/useSyncStore')
+    const tracker = useDirtyTracker()
+    tracker.markClean('never-dirty')
+    expect(tracker.isDirty('never-dirty')).toBe(false)
+    expect(tracker.dirtyIds.value.size).toBe(0)
+  })
+
+  it('triggerRef notifies reactive effects on markDirty and markClean', async () => {
+    const { effect } = await import('vue')
+    const { useDirtyTracker } = await import('../composables/useSyncStore')
+    const tracker = useDirtyTracker()
+    const spy = vi.fn()
+    effect(() => {
+      void tracker.dirtyIds.value
+      spy()
+    })
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    tracker.markDirty('item-1')
+    expect(spy).toHaveBeenCalledTimes(2)
+
+    tracker.markClean('item-1')
+    expect(spy).toHaveBeenCalledTimes(3)
   })
 })
