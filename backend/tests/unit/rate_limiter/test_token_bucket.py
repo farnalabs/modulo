@@ -1,0 +1,97 @@
+"""Unit tests for the in-memory TokenBucket and TokenBucketRegistry."""
+
+import asyncio
+
+import pytest
+
+from modulo.core.rate_limiter import TokenBucket, TokenBucketRegistry
+
+
+class TestTokenBucket:
+    async def test_full_bucket_allows_burst(self) -> None:
+        bucket = TokenBucket(rate=1.0, burst=60)
+        for _ in range(60):
+            assert await bucket.consume() is True
+        assert await bucket.consume() is False
+
+    async def test_exact_burst_boundary(self) -> None:
+        bucket = TokenBucket(rate=0.5, burst=3)
+        assert await bucket.consume() is True
+        assert await bucket.consume() is True
+        assert await bucket.consume() is True
+        assert await bucket.consume() is False
+
+    async def test_refills_over_time(self) -> None:
+        bucket = TokenBucket(rate=2.0, burst=10)
+        for _ in range(10):
+            assert await bucket.consume() is True
+        assert await bucket.consume() is False
+
+        refill = 0.5 + 1 / 2.0  # enough wall time for 1+ tokens at rate 2/s
+        await asyncio.sleep(refill)
+        assert await bucket.consume() is True
+
+    async def test_never_exceeds_burst_ceiling(self) -> None:
+        bucket = TokenBucket(rate=100.0, burst=5)
+        assert await bucket.consume() is True
+        await asyncio.sleep(0.05)
+        bucket.reset()
+        for _ in range(5):
+            assert await bucket.consume() is True
+        assert await bucket.consume() is False
+
+    async def test_consume_zero_tokens_rejected(self) -> None:
+        bucket = TokenBucket(rate=1.0, burst=1)
+        with pytest.raises(ValueError, match="tokens must be > 0"):
+            await bucket.consume(0)
+
+    async def test_constructor_validates_rate(self) -> None:
+        with pytest.raises(ValueError, match="rate must be > 0"):
+            TokenBucket(rate=0, burst=1)
+        with pytest.raises(ValueError, match="rate must be > 0"):
+            TokenBucket(rate=-1, burst=1)
+
+    async def test_constructor_validates_burst(self) -> None:
+        with pytest.raises(ValueError, match="burst must be > 0"):
+            TokenBucket(rate=1.0, burst=0)
+        with pytest.raises(ValueError, match="burst must be > 0"):
+            TokenBucket(rate=1.0, burst=-5)
+
+    async def test_concurrent_consume_never_overdraws(self) -> None:
+        bucket = TokenBucket(rate=1.0, burst=10)
+        results = await asyncio.gather(*[bucket.consume() for _ in range(50)])
+        assert sum(results) == 10
+        assert await bucket.consume() is False
+
+    def test_reset_restores_full_capacity(self) -> None:
+        bucket = TokenBucket(rate=1.0, burst=4)
+        asyncio.get_event_loop().run_until_complete(bucket.consume())
+        assert bucket._tokens < bucket.burst
+        bucket.reset()
+        assert bucket._tokens == bucket.burst
+
+
+class TestTokenBucketRegistry:
+    async def test_lazy_bucket_creation_per_key(self) -> None:
+        registry = TokenBucketRegistry(rate=1.0, burst=2)
+        assert await registry.consume("client-a") is True
+        assert await registry.consume("client-a") is True
+        assert await registry.consume("client-a") is False
+        assert await registry.consume("client-b") is True
+
+    async def test_clients_are_isolated(self) -> None:
+        registry = TokenBucketRegistry(rate=1.0, burst=1)
+        assert await registry.consume("client-a") is True
+        assert await registry.consume("client-a") is False
+        assert await registry.consume("client-b") is True
+
+    def test_reset_clears_buckets(self) -> None:
+        registry = TokenBucketRegistry(rate=1.0, burst=1)
+        asyncio.get_event_loop().run_until_complete(registry.consume("client-a"))
+        registry.reset()
+        assert asyncio.get_event_loop().run_until_complete(registry.consume("client-a")) is True
+
+    async def test_concurrent_consume_registry(self) -> None:
+        registry = TokenBucketRegistry(rate=1.0, burst=5)
+        results = await asyncio.gather(*[registry.consume("k") for _ in range(20)])
+        assert sum(results) == 5
