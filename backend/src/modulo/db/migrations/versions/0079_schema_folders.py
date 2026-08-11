@@ -1,7 +1,7 @@
 """Add schema_folders table and folder_id to schemas.
 
-Revision ID: 0078_schema_folders
-Revises: 0077_add_stalled_status
+Revision ID: 0079_schema_folders
+Revises: 0078_run_daily_facts_telemetry_bytes
 Create Date: 2026-08-10
 
 Schema folders mirror the pipeline_folders feature: a schema can be
@@ -15,8 +15,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0078_schema_folders"
-down_revision: str | None = "0077_add_stalled_status"
+revision: str = "0079_schema_folders"
+down_revision: str | None = "0078_run_daily_facts_telemetry_bytes"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
