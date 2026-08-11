@@ -1405,7 +1405,12 @@ def make_sandbox_agent_fn(
                         if _drained_len > _MAX_DRAIN_WINDOW and _drained_chunks:
                             _drained_chunks[0] = _drained_chunks[0][-_MAX_DRAIN_WINDOW:]
                             _drained_len = len(_drained_chunks[0])
-                    _drain_offset = size
+                    # Self-correcting drain offset: ``size`` (get_info) can lag
+                    # ``len(text)`` when the agent appends between the probe and
+                    # the read. Advancing to the max keeps the no-double-emit
+                    # invariant — the next tick starts where THIS tick's emitted
+                    # bytes actually ended, not where the probe saw the file.
+                    _drain_offset = max(size, len(text))
 
                 # Redirect the agent's stdout/stderr into a sandbox log file so
                 # the process writes to a regular file — never a pipe that can

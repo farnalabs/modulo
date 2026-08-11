@@ -541,6 +541,70 @@ async def test_drain_captures_pipe_buffer_size_output():
     assert output["stdout_length"] == len(big)
 
 
+async def test_drain_no_double_emit_when_log_grows_between_probe_and_read():
+    """The agent appending between get_info and the read must not double-emit.
+
+    get_info reports the file size at probe time; the read returns the FULL
+    file, which can be longer if the agent appended in between. The drain
+    offset must advance to len(text) (not the stale get_info size) so the next
+    tick starts after the bytes that were actually emitted — otherwise bytes
+    [size, len(text)) are re-emitted on the following tick (D3 no-double-emit
+    invariant).
+
+    Scenario: tick 1 reads 50 bytes; on tick 2 the probe reports 100 but the
+    read returns 150 (50 bytes appended after the probe). The correct final
+    artifact is exactly 150 bytes; a stale offset re-emits the last 50.
+    """
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    probe_sizes = iter([50, 100, 150, 150])
+    read_contents = iter(["x" * 50, "x" * 150, "x" * 150, "x" * 150])
+
+    def _get_info(path, **kwargs):
+        return MagicMock(size=next(probe_sizes))
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return next(read_contents)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    wait_calls = {"n": 0}
+
+    async def _wait():
+        wait_calls["n"] += 1
+        if wait_calls["n"] < 3:
+            raise TimeoutError
+        return cmd_result
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == "x" * 150
+    assert output["stdout_length"] == 150
+
+
 # ---------------------------------------------------------------------------
 # FAR-98: first-class stall detection — stall_timeout_seconds + stall_reason
 # ---------------------------------------------------------------------------

@@ -526,13 +526,22 @@ async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
-    """System cron — purge old webhook trigger events (30-day retention)."""
+    """System cron — purge old webhook trigger events (30-day retention).
+
+    The system session factory is ``autobegin=False`` (the codebase DI
+    convention), so every batch needs an explicit transaction: the first
+    ``session.execute`` would otherwise raise ``InvalidRequestError: Autobegin
+    is disabled on this Session`` and the hourly cron would fail on every tick.
+    The transaction must begin PER BATCH (not once around the loop) because
+    ``cleanup_old_webhook_events`` commits at the end of each pass.
+    """
     from modulo.core.cleanup_jobs.webhook_dedup_cleanup import BATCH_SIZE, cleanup_old_webhook_events
 
     total = 0
     async with _make_session_factory()() as session:
         while True:
-            deleted = await cleanup_old_webhook_events(session)
+            async with session.begin():
+                deleted = await cleanup_old_webhook_events(session)
             total += deleted
             if deleted < BATCH_SIZE:
                 break
