@@ -1775,7 +1775,8 @@ export default {
       "feature_locked": "Monitoring configuration is not available on your current plan.",
       "browser_monitoring": "Browser Monitoring",
       "description": "Configure which client-side monitoring SDKs to load. Changes take effect immediately — no rebuild or page reload required.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "explainer": "Browser Monitoring captures client-side errors and telemetry from the web app — JavaScript errors, failed network requests, and unhandled exceptions that occur in the browser. Choose an error-tracking backend below (for example Sentry) and provide its DSN or collector endpoint; once enabled, captured errors are sent to that service automatically. Tracked errors appear in the Error Dashboard (Admin > Error Dashboard), where they can be grouped, filtered, and alerted on. Server-side OpenTelemetry traces are configured separately on the Observability settings page."
     },
     "ABTestModelsView": {
       "model_backend": "Model Backend",
