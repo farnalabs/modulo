@@ -106,6 +106,7 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.db.crud.hitl_gate_guard import HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
@@ -281,6 +282,46 @@ def _ctx_user_id_val() -> uuid.UUID:
 def _ctx_role_val() -> str | None:
     """Get role from the request context (None if unset — scope checks then fail closed)."""
     return _ctx_role.get(None)
+
+
+# PRD §7.18: MCP trigger_pipeline is limited to 60 calls/min per client. All
+# MCP tools share the /mcp HTTP path, so the middleware can't differentiate
+# this tool (it is capped by the general 200/min rule); the 60/min limit is
+# enforced here at the application level with a per-client in-memory bucket.
+_TRIGGER_PIPELINE_RATE = 60 / 60.0  # 60 tokens per 60s window
+_TRIGGER_PIPELINE_BURST = 60
+
+_trigger_pipeline_limiter = TokenBucketRegistry(
+    rate=_TRIGGER_PIPELINE_RATE,
+    burst=_TRIGGER_PIPELINE_BURST,
+)
+
+
+def _trigger_pipeline_client_key() -> str:
+    """Derive the per-client key for the trigger_pipeline rate limit.
+
+    Mirrors the middleware ``_client_key`` identity: API-key calls are keyed
+    by org + key id, OAuth/JWT calls by org + user id. Distinct clients never
+    share a bucket.
+    """
+    org = _ctx_org_id.get(None)
+    org_s = str(org) if org is not None else "unknown"
+    auth_type = _ctx_auth_type.get(None) or "unknown"
+    if auth_type == "api_key":
+        key_id = _ctx_key_id.get(None)
+        client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
+    else:
+        uid = _ctx_user_id.get(None)
+        client = f"user:{uid}" if uid is not None else "user:unknown"
+    return f"trigger_pipeline:{org_s}:{auth_type}:{client}"
+
+
+async def _trigger_pipeline_rate_allowed() -> bool:
+    """Consume one token from the caller's trigger_pipeline bucket.
+
+    Returns False once the caller exceeds 60 calls/min (rate=1.0, burst=60).
+    """
+    return await _trigger_pipeline_limiter.consume(_trigger_pipeline_client_key())
 
 
 # API-key role-cap degradation counter (ADR 017 DECISION 4): increments every
@@ -1566,7 +1607,12 @@ async def trigger_pipeline(
         if not await validate_current_auth():
             return _tool_auth_error("Token revoked or expired - re-authenticate")
         check_tool_scope(_ctx_role_val(), "trigger_pipeline")
-        from modulo.db.crud.pipeline import get_pipeline
+        if not await _trigger_pipeline_rate_allowed():
+            _log.warning(
+                "ratelimit.trigger_pipeline_exceeded",
+                extra={"client_key": _trigger_pipeline_client_key()},
+            )
+            return {"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}
         from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
         from modulo.db.crud.run import create_run
 
