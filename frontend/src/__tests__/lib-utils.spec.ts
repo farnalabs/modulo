@@ -104,7 +104,7 @@ describe('formatDateShort / formatDateShortWithTime / formatDateFilename', () =>
   })
 
   it('accepts Date objects and numeric timestamps', () => {
-    const d = new Date('2024-03-15T12:00:00Z')
+    const d = new Date('2024-03-15T12:00:00Z') // nosemgrep: new-date-without-guard
     expect(formatDateShort(d)).toBe('Mar 15, 2024')
     expect(formatDateShort(d.getTime())).toBe('Mar 15, 2024')
   })
