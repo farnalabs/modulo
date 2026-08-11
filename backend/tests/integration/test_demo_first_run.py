@@ -23,6 +23,12 @@ os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
 
+# Valid Fernet key (matches the FERNET_KEY default set in integration/conftest.py
+# and ci.yml). _seed_demo_data encrypts the demo model-backend credentials with
+# Fernet, so any Settings constructed here must carry a valid key — "a" * 32 is
+# not url-safe base64 and raises ValueError.
+_VALID_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -219,7 +225,7 @@ async def demo_client(
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
         modulo_auth_rate_limit_enabled=False,
@@ -256,7 +262,7 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
     )
@@ -307,7 +313,7 @@ async def test_seed_demo_data_no_org_no_crash(db_engine: AsyncEngine, db_url: st
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
     )
@@ -331,7 +337,7 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=False,
         modulo_csrf_enabled=False,
     )
@@ -368,7 +374,7 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
     )
