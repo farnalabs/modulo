@@ -1034,7 +1034,6 @@ export default {
       "run_input": "Run Input",
       "hide": "Hide",
       "show": "Show",
-      "prompt_hidden_click_to_reveal": "[Prompt hidden — click to reveal]",
       "prompt_dialog_description": "Rendered prompt sent to the LLM for this node.",
       "copied": "Copied!",
       "prompt_reveal_error": "Failed to reveal prompt.",
