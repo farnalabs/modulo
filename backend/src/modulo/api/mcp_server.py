@@ -88,7 +88,7 @@ from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 # authenticated last, leaking cross-tenant data.
 from modulo.core.dispatch import dispatch_run
 from modulo.core.documentation_indexer import DocumentationIndex
-from modulo.core.exceptions import SnapshotLockNotAvailableError
+from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -1612,6 +1612,11 @@ async def trigger_pipeline(
     except SnapshotLockNotAvailableError:
         _log.info("trigger_pipeline queued — snapshot lock not available for pipeline %s", pipeline_id)
         return {"pipeline_id": pipeline_id, "status": "queued", "detail": "Pipeline busy — queued for retry"}
+    except OrgDeletedError as exc:
+        _log.exception("trigger_pipeline failed — organisation deleted or missing")
+        if exc.deleted:
+            return {"error": "org_deleted", "detail": f"Organisation {exc.org_id} is deleted"}
+        return {"error": "org_not_found", "detail": f"Organisation {exc.org_id} not found"}
     except ProgrammingError:
         _log.exception("trigger_pipeline failed")
         return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
