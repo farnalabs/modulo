@@ -2,34 +2,52 @@
   <OverlayScrollbarsComponent
     defer
     :options="osOptions"
-    class="flex-1 min-h-0 relative pr-3"
+    class="flex-1 min-h-0 relative"
+    :class="collapsed ? 'w-full' : 'pr-3'"
     element="nav"
     :aria-label="$t('components.SidebarNav.main_navigation')"
   >
-    <div class="space-y-6">
-      <template v-for="group in visibleSidebarGroups" :key="group.id">
-        <SidebarGroup
-          :id="group.id"
-          :label="group.label"
-          :label-key="group.labelKey"
-          :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
-          :is-active="activeGroupIds.has(group.id)"
-          @toggle="toggleGroup(group.id, group.defaultCollapsed)"
-        >
-          <SidebarLink
-            v-for="item in group.items"
-            :key="item.to"
-            :to="item.to"
-            :icon="item.icon"
-            :label="item.label"
-            :label-key="item.labelKey"
-            :exact="item.exact"
-            :visibility="item.visibility"
-            @click="$emit('navigate')"
-          /></SidebarGroup>
-      </template>
+    <div v-if="collapsed" class="flex flex-col items-center gap-1">
+      <SidebarLink
+        v-for="item in visibleItems"
+        :key="item.to"
+        :to="item.to"
+        :icon="item.icon"
+        :label="item.label"
+        :label-key="item.labelKey"
+        :exact="item.exact"
+        :visibility="item.visibility"
+        :collapsed="true"
+        class="w-full"
+        @click="$emit('navigate')"
+      />
     </div>
-    <div class="pointer-events-none sticky bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-background to-transparent" aria-hidden="true" />
+    <template v-else>
+      <div class="space-y-6">
+        <template v-for="group in visibleSidebarGroups" :key="group.id">
+          <SidebarGroup
+            :id="group.id"
+            :label="group.label"
+            :label-key="group.labelKey"
+            :collapsed="isGroupCollapsed(group.id, group.defaultCollapsed)"
+            :is-active="activeGroupIds.has(group.id)"
+            @toggle="toggleGroup(group.id, group.defaultCollapsed)"
+          >
+            <SidebarLink
+              v-for="item in group.items"
+              :key="item.to"
+              :to="item.to"
+              :icon="item.icon"
+              :label="item.label"
+              :label-key="item.labelKey"
+              :exact="item.exact"
+              :visibility="item.visibility"
+              @click="$emit('navigate')"
+            /></SidebarGroup>
+        </template>
+      </div>
+      <div class="pointer-events-none sticky bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-background to-transparent" aria-hidden="true" />
+    </template>
   </OverlayScrollbarsComponent>
 </template>
 
@@ -56,6 +74,7 @@ const props = defineProps<{
   isSystemAdmin: boolean;
   userRole?: string | null;
   userPermissions?: string[];
+  collapsed?: boolean;
 }>();
 
 defineEmits<{
@@ -79,6 +98,8 @@ const activeGroupIds = computed(() => {
   }
   return ids
 })
+
+const visibleItems = computed(() => visibleSidebarGroups.value.flatMap((g) => g.items))
 
 const tierInfoLoaded = computed(() => planStore.tierRanks ? Object.keys(planStore.tierRanks).length > 0 : false);
 
