@@ -61,6 +61,20 @@ def _log_redis_error(task: asyncio.Task[Any]) -> None:
         pass
 
 
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    """Return the running event loop, or ``None`` when called with no loop.
+
+    ``publish``/``close`` are sync methods that may be invoked from threads
+    or during shutdown where no event loop is running. ``asyncio.create_task``
+    would raise ``RuntimeError`` there, so the caller must fall back to a
+    no-op (best-effort Redis broadcast fails open with a log).
+    """
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
 class RunEventBroker:
     """Fan-out broker for a single run. Thread-safe via asyncio primitives.
 
@@ -95,8 +109,15 @@ class RunEventBroker:
         for q in self._subscribers:
             q.put_nowait(event)
         if self._redis_broker is not None:
-            task = asyncio.create_task(self._redis_broker.publish(str(self._run_id), event.to_json()))
-            task.add_done_callback(_log_redis_error)
+            loop = _running_loop()
+            if loop is None:
+                _log.warning(
+                    "event_broker.redis_broadcast_skipped",
+                    extra={"run_id": str(self._run_id)},
+                )
+            else:
+                task = loop.create_task(self._redis_broker.publish(str(self._run_id), event.to_json()))
+                task.add_done_callback(_log_redis_error)
         return event
 
     def subscribe(self) -> asyncio.Queue[RunEvent | None]:
@@ -130,8 +151,15 @@ class RunEventBroker:
             q.put_nowait(None)
         self._subscribers.clear()
         if self._redis_broker is not None:
-            task = asyncio.create_task(self._redis_broker.close())
-            task.add_done_callback(_log_redis_error)
+            loop = _running_loop()
+            if loop is None:
+                _log.warning(
+                    "event_broker.redis_close_skipped",
+                    extra={"run_id": str(self._run_id)},
+                )
+            else:
+                task = loop.create_task(self._redis_broker.close())
+                task.add_done_callback(_log_redis_error)
 
     @property
     def is_closed(self) -> bool:
