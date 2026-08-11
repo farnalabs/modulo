@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -267,3 +267,166 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
     mock_finalize.assert_not_awaited()
     # The broker is closed so the retry re-entry gets a fresh one.
     registry.close.assert_called()
+
+
+class _GenericFailureError(Exception):
+    """A non-transient generic failure — its class name becomes the error_code,
+    matching the "failure" retry event (unlike NodeCancelledError subclasses)."""
+
+
+def _make_failure_compiled() -> MagicMock:
+    return _mock_compiled_raising(_GenericFailureError("boom"))
+
+
+def _enter_execute_patches(
+    stack: ExitStack,
+    factory: MagicMock,
+    run: MagicMock,
+    compiled: MagicMock,
+    registry: MagicMock,
+    settings: MagicMock,
+) -> AsyncMock:
+    """Enter every execute() patch needed for the retry-budget sequence tests.
+
+    Returns the ``finalize_cost`` mock so tests can assert on the terminal
+    finalization path.
+    """
+    finalize_mock = AsyncMock()
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_run", return_value=run))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.set_rls_org"))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry))
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()))
+    stack.enter_context(patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity))
+    stack.enter_context(patch("modulo.settings.get_settings", return_value=settings))
+    return finalize_mock
+
+
+async def _run_single_retry_attempt(
+    *,
+    node_attempt_count: int,
+    retry_policy: dict[str, Any],
+) -> tuple[str, Any, list[str], AsyncMock]:
+    """Run ONE execute() against a streaming _GenericFailureError with a FRESH
+    mock session.
+
+    Each real execute() invocation starts from a fresh DB session (the
+    session_factory creates a new session per call), so each simulated attempt
+    must build a fresh session mock — reusing one session mock across attempts
+    exhausts its canned result iterator and silently corrupts later attempts.
+
+    Returns ``(outcome, payload, statements, finalize_mock)`` where outcome is
+    ``"retry"`` (RunRetryPolicyError raised — the run was reset to pending and
+    re-dispatched) or ``"terminal"`` (execute() returned normally).
+    """
+    run = _make_run(node_attempt_count=node_attempt_count, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    compiled = _make_failure_compiled()
+
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
+        executor = PipelineExecutor(MagicMock())
+        try:
+            result = await executor.execute(
+                run_id=run.id,
+                org_id=uuid.uuid4(),
+                input_payload={},
+                claim_token="tok-claim-abc",
+            )
+        except RunRetryPolicyError as exc:
+            return "retry", exc, statements, mock_finalize
+        return "terminal", result, statements, mock_finalize
+
+
+async def test_execute_retry_policy_max_retries_1_retries_exactly_once():
+    """max_retries=1 means exactly ONE retry (two execution attempts).
+
+    Attempt 1 (node_attempt_count == 1 <= budget 1) re-dispatches; attempt 2
+    (node_attempt_count == 2 > budget 1) terminal-fails. This is the off-by-one
+    regression test: the old ``node_attempt_count < retry_budget`` comparison
+    yielded ZERO retries for max_retries=1.
+    """
+
+    policy = {"on": ["failure"], "max_retries": 1}
+
+    # Attempt 1 (count == budget): re-dispatch via RunRetryPolicyError.
+    kind, exc, statements, mock_finalize = await _run_single_retry_attempt(node_attempt_count=1, retry_policy=policy)
+    assert kind == "retry", f"attempt 1 should retry; got {kind}"
+    assert exc.status == "failed"
+    assert exc.max_retries == 1
+    resets = [s for s in statements if "status='pending'" in s]
+    assert len(resets) == 1
+    assert "claim_token=:tok" in resets[0]
+    mock_finalize.assert_not_awaited()
+
+    # Attempt 2 (count > budget): terminal fail — no re-dispatch.
+    kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(
+        node_attempt_count=2, retry_policy=policy
+    )
+    assert kind2 == "terminal", f"attempt 2 should be terminal; got {kind2}"
+    resets2 = [s for s in statements2 if "status='pending'" in s]
+    assert resets2 == []
+    mock_finalize2.assert_awaited_once()
+    assert mock_finalize2.await_args.kwargs["status"] == "failed"
+    assert result is not None
+
+
+async def test_execute_retry_policy_max_retries_5_retries_all_five():
+    """max_retries=5 means exactly FIVE retries (six execution attempts).
+
+    Attempts 1..5 (count 1..5 <= budget 5) re-dispatch; attempt 6 (count 6 > 5)
+    terminal-fails. The old ``<`` comparison terminal-failed after the 5th
+    attempt, yielding only four retries.
+    """
+
+    policy = {"on": ["failure"], "max_retries": 5}
+    retried = 0
+    terminal_result = None
+    for attempt in range(1, 7):
+        kind, payload, statements, mock_finalize = await _run_single_retry_attempt(
+            node_attempt_count=attempt, retry_policy=policy
+        )
+        if attempt <= 5:
+            assert kind == "retry", f"attempt {attempt} should retry; got {kind}"
+            assert payload.max_retries == 5
+            resets = [s for s in statements if "status='pending'" in s]
+            assert len(resets) == 1
+            mock_finalize.assert_not_awaited()
+            retried += 1
+        else:
+            assert kind == "terminal", f"attempt 6 should be terminal; got {kind}"
+            mock_finalize.assert_awaited_once()
+            assert mock_finalize.await_args.kwargs["status"] == "failed"
+            terminal_result = payload
+
+    assert retried == 5
+    assert terminal_result is not None
+
+
+async def test_execute_retry_policy_exhausted_boundary_terminal_no_redispatch():
+    """EXHAUSTED boundary: once the attempt count exceeds the retry budget
+    (count == budget + 1 after the budgeted retries are consumed) the run
+    terminal-fails — no fenced pending-reset, no RunRetryPolicyError. This
+    covers the terminal branch the existing tests only skirt.
+    """
+
+    kind, result, statements, mock_finalize = await _run_single_retry_attempt(
+        node_attempt_count=2, retry_policy={"on": ["failure"], "max_retries": 1}
+    )
+    assert kind == "terminal"
+    # No re-dispatch: no fenced pending-reset was issued.
+    resets = [s for s in statements if "status='pending'" in s]
+    assert resets == []
+    # Terminal failure via the single finalization path.
+    mock_finalize.assert_awaited_once()
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "_GenericFailureError"
+    assert result is not None

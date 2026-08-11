@@ -139,6 +139,14 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
       - ``"timeout"``:  ``error_code in ("node_timeout", "TimeoutError")``
       - ``"failure"``:  ``final_status == "failed"`` and not a stall/timeout outcome
 
+    Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
+    path only — a node returns a stalled output dict (``stall_reason``) in
+    ``_stream_graph``, which reaches this decision. The **executor-level
+    zombie-watchdog stall** (``execute_run`` watchdog terminal-fails the run and
+    cancels ``execute()``; the ``CancelledError`` is re-raised at the top of the
+    stream block before this decision runs) is NOT retried. See ``docs/prd.md``
+    §8.9.
+
     An absent/malformed policy or a 0 budget yields None (no retry) — the
     current behaviour is unchanged for pipelines without a policy.
     """
@@ -1398,7 +1406,14 @@ class PipelineExecutor:
                 and current_claim_token is not None
                 and current_claim_token != self._claim_token
             )
-            if node_attempt_count < retry_budget and not superseded:
+            # ``node_attempt_count`` is incremented to 1 on the FIRST real
+            # execution attempt (above), so ``<= retry_budget`` means the
+            # budget counts actual RETRIES: budget=1 retries attempt 1
+            # (1 <= 1) and is terminal after attempt 2 (2 <= 1 is false) —
+            # 1 retry, 2 attempts. ``< retry_budget`` would have yielded N
+            # total attempts (N-1 retries), contradicting the API's
+            # "max_retries means retries" contract.
+            if node_attempt_count <= retry_budget and not superseded:
                 _log.warning(
                     "pipeline.retry_policy",
                     extra={
