@@ -10,8 +10,24 @@ vi.mock('../../lib/api/client', () => ({
   clearAccessToken: vi.fn(),
 }))
 
+function mockMatchMedia(matches: boolean) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }))
+}
+
 beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
+  // jsdom has no matchMedia; default the layout to the desktop breakpoint so
+  // the expanded sidebar (with the plan badge) renders.
+  mockMatchMedia(true)
 })
 
 afterEach(() => {
