@@ -165,6 +165,25 @@ class TestGetEmailSettings:
         finally:
             admin_email.get_organisation = original
 
+    async def test_get_settings_non_numeric_timeout_falls_back_to_default(self, client_admin, mock_session):
+        import modulo.api.routes.admin_email as admin_email
+        from modulo.db.models.organisation import Organisation
+
+        org = Organisation(
+            id=ORG_ID,
+            name="Test",
+            slug="test",
+            settings_json={"email": {"smtp_host": "smtp.example.com", "smtp_timeout": "not-a-number"}},
+        )
+        original = admin_email.get_organisation
+        admin_email.get_organisation = AsyncMock(return_value=org)
+        try:
+            resp = await client_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
+            assert resp.status_code == 200
+            assert resp.json()["smtp_timeout"] == 30
+        finally:
+            admin_email.get_organisation = original
+
     async def test_get_settings_not_found(self, client_admin, mock_session):
         import modulo.api.routes.admin_email as admin_email
 

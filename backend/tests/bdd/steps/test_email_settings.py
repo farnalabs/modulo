@@ -105,11 +105,25 @@ def _call(method: str, path: str, ctx: dict[str, Any], request, json: dict | Non
     resp = client.request(method, path, json=json)
     request.node._resp = resp
     ctx["_last_resp"] = resp
+    ctx["response"] = resp
 
 
 @given("I am authenticated as a system admin")
 def _given_sys_admin(email_ctx: dict[str, Any]) -> None:
     email_ctx["_viewer"] = False
+
+
+@given(parsers.parse('I am authenticated as a viewer in org "{org}"'))
+def _given_viewer(org: str, email_ctx: dict[str, Any], request) -> None:
+    """Email-local viewer-auth step.
+
+    Defined locally (rather than relying on the shared step in ``conftest.py``
+    / other step modules) so this feature file is self-contained: it flips the
+    ``email_ctx`` viewer flag the ``_build_app`` auth override reads and sets
+    the ``request.node._viewer_auth`` marker ``_when_get_settings`` checks.
+    """
+    email_ctx["_viewer"] = True
+    request.node._viewer_auth = True
 
 
 @given("the organisation has no saved email settings")
@@ -206,6 +220,18 @@ def _when_post_test(to: str, email_ctx: dict[str, Any], request) -> None:
                 request,
                 json={"to": to},
             )
+
+
+@then(parsers.parse("the response status is {status:d}"))
+def _then_response_status(status: int, request) -> None:
+    """Email-local status check reading the response stored by ``_call``.
+
+    Mirrors the shared ``the response status is {status:d}`` step in
+    ``conftest.py`` so this feature file resolves deterministically regardless
+    of which other step modules are collected in the same session.
+    """
+    resp = request.node._resp
+    assert resp.status_code == status, f"Expected status {status}, got {resp.status_code}"
 
 
 @then("the email settings response has masked password and default timeout 30")

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_target_org_role
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.email_service import EmailSendingError, send_email
+from modulo.core.email_service import EmailSendingError, _effective_timeout, send_email
 from modulo.db.crud.organisation import get_organisation, update_organisation
 
 logger = logging.getLogger(__name__)
@@ -82,12 +83,13 @@ async def admin_get_email_settings(
         ) from None
 
     email_cfg = cfg.get("email", {})
+    timeout_raw = email_cfg.get("smtp_timeout", 30)
     return EmailSettingsResponse(
         smtp_host=email_cfg.get("smtp_host", ""),
         smtp_port=email_cfg.get("smtp_port", 587),
         smtp_username=email_cfg.get("smtp_username", ""),
         email_from=email_cfg.get("email_from", ""),
-        smtp_timeout=email_cfg.get("smtp_timeout", 30),
+        smtp_timeout=_effective_timeout(SimpleNamespace(smtp_timeout=timeout_raw)),
     )
 
 
