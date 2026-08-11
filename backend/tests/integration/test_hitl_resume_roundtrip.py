@@ -35,34 +35,6 @@ pytestmark = [
 
 
 # ---------------------------------------------------------------------------
-# Same known-production-bug workaround as test_runtime_conformance.py: the
-# fenced update_run_status binds dict/list to CAST(... AS json), which asyncpg
-# rejects. Test-side json-encoding ONLY; the fix belongs in db/crud/run.py.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def fenced_write_json_codec_workaround(monkeypatch: pytest.MonkeyPatch) -> None:
-    import json as _json
-
-    from modulo.core.cost_controller import finalize as _finalize
-    from modulo.db.crud import run as _run_crud
-
-    _json_params = ("cost_breakdown", "node_token_usage", "outputs_json")
-    _original = _run_crud.update_run_status
-
-    async def _adapted(session: Any, run_id: Any, status: str, **kwargs: Any) -> Any:
-        for key in _json_params:
-            val = kwargs.get(key)
-            if val is not None and not isinstance(val, (str, bytes)):
-                kwargs[key] = _json.dumps(val)
-        return await _original(session, run_id, status, **kwargs)
-
-    monkeypatch.setattr(_run_crud, "update_run_status", _adapted)
-    monkeypatch.setattr(_finalize, "update_run_status", _adapted)
-
-
-# ---------------------------------------------------------------------------
 # Seeds
 # ---------------------------------------------------------------------------
 
@@ -346,7 +318,6 @@ async def _resume_and_complete(
 async def test_hitl_resume_roundtrip_approve_with_modification(
     db_engine: AsyncEngine,
     migrated_db_url: str,
-    fenced_write_json_codec_workaround: None,
 ) -> None:
     """Approve-with-modification round-trip: the committed payload (including
     the human's modified output) is reconstructed verbatim and the resume runs
@@ -409,7 +380,6 @@ async def test_hitl_resume_roundtrip_approve_with_modification(
 async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
     db_engine: AsyncEngine,
     migrated_db_url: str,
-    fenced_write_json_codec_workaround: None,
 ) -> None:
     """The LIVE-BUG fix: a committed REJECTION must resume as rejected — the
     reconstructed payload is the exact ``{"action": "rejected", ...}`` decision,

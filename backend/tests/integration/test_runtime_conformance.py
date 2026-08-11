@@ -39,48 +39,6 @@ pytestmark = [
 
 
 # ---------------------------------------------------------------------------
-# KNOWN PRODUCTION BUG WORKAROUND (dist/runtime-core A1, db/crud/run.py):
-#
-# ``_update_run_status_fenced`` binds raw Python list/dict values
-# (``cost_breakdown``, ``node_token_usage``, ``outputs_json``) directly to
-# ``CAST(:param AS json)`` in a raw ``text()`` UPDATE. asyncpg's default json
-# codec only accepts str/bytes, so every terminal/pause write that carries a
-# cost breakdown or node output raises ``asyncpg.exceptions.DataError`` and the
-# run ends ``failed`` instead of ``complete``. The pre-#1003 ORM path worked
-# because SQLAlchemy's JSON type serialised.
-#
-# This fixture applies the EXACT production fix (json-encode the three JSON
-# params before the bind) TEST-SIDE ONLY so the conformance path — dispatch ->
-# RLS claim -> execute -> checkpoint -> finalize -> complete — can be proven.
-# It must be removed once ``db/crud/run.py`` is fixed; the fix belongs there.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def fenced_write_json_codec_workaround(monkeypatch: pytest.MonkeyPatch) -> None:
-    import json as _json
-
-    from modulo.core import cost_controller
-    from modulo.core.cost_controller import finalize as _finalize
-    from modulo.db.crud import run as _run_crud
-
-    _json_params = ("cost_breakdown", "node_token_usage", "outputs_json")
-    _original = _run_crud.update_run_status
-
-    async def _adapted(session: Any, run_id: Any, status: str, **kwargs: Any) -> Any:
-        for key in _json_params:
-            val = kwargs.get(key)
-            if val is not None and not isinstance(val, (str, bytes)):
-                kwargs[key] = _json.dumps(val)
-        return await _original(session, run_id, status, **kwargs)
-
-    monkeypatch.setattr(_run_crud, "update_run_status", _adapted)
-    # finalize.py holds a direct reference imported at module load.
-    monkeypatch.setattr(_finalize, "update_run_status", _adapted)
-    assert cost_controller.finalize.update_run_status is _adapted
-
-
-# ---------------------------------------------------------------------------
 # Seed helpers (raw SQL, minimal)
 # ---------------------------------------------------------------------------
 
@@ -263,7 +221,6 @@ async def test_conformance_run_completes(
     db_engine: AsyncEngine,
     app_engine: AsyncEngine,
     migrated_db_url: str,
-    fenced_write_json_codec_workaround: None,
 ) -> None:
     """The full happy path: dispatch (patched enqueue) -> claim under the
     non-superuser RLS role -> PipelineExecutor.execute drives a 1-node
