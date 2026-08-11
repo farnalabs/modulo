@@ -10,6 +10,8 @@ code:
   - backend/src/modulo/api/routes/admin_rate_limits.py
 unit-tests:
   - backend/tests/unit/rate_limiter/test_rate_limiter.py
+  - backend/tests/unit/rate_limiter/test_token_bucket.py
+  - backend/tests/unit/mcp/test_mcp_trigger_rate_limit.py
   - backend/tests/bdd/steps/test_rate_limiting.py
   - backend/tests/unit/api/test_rate_limiter_middleware.py
   - backend/tests/unit/api/test_rate_limiter_keys.py
@@ -36,7 +38,7 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - [ ] Webhook flood protection separate from per-trigger rate limit
 
 ### MCP trigger_pipeline tool
-- [ ] 60 calls per minute per MCP client ID (app-level TokenBucket with rate=1.0, burst=60)
+- [x] 60 calls per minute per MCP client ID (app-level TokenBucket with rate=1.0, burst=60)
 - [x] Returns error response when exceeded (returns `{"error":"rate_limited",...}`)
 
 ### POST /runs/{id}/hitl/{gate_id}/review
@@ -52,6 +54,7 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - [x] In-memory token bucket fallback when Redis unavailable
 - [x] Startup warning logged when running in-memory mode
 - [ ] Rate limiting uses in-memory token bucket in SQLite mode (no Redis — per-process counters only)
+- [x] Tool-level in-memory TokenBucket (`TokenBucket` / `TokenBucketRegistry`) enforces the MCP `trigger_pipeline` 60/min limit per client, independent of Redis
 - [x] Rate limit rules configurable at runtime via `PUT /api/v1/admin/rate-limits`
 - [x] Only admin users can read/update rate limit rules
 - [x] Bypass token (`MODULO_RATELIMIT_BYPASS_TOKEN`) skips rate limiting
@@ -117,13 +120,19 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - [x] Disabling via `modulo_auth_rate_limit_enabled=False` skips rate limiting entirely (get_auth_rate_limiter returns None)
 
 ## Known Gaps
-- BDD feature file at `backend/tests/bdd/features/model_backends/rate_limiting.feature` — 11 real scenarios written covering PRD §7.18 endpoints. Step definition path was fixed in this QA iteration (2026-07-04: path mismatch resolved, step definitions now load correctly).
+- BDD feature file at `backend/tests/bdd/features/model_backends/rate_limiting.feature` — 11 real scenarios written covering PRD §7.18 endpoints. Step definition path was fixed in this QA iteration (2026-07-04: path mismatch resolved, step definitions now load correctly). Note: several scenarios still reference step texts with no matching step definitions — wiring remains incomplete (tracked separately below).
 - No unit-test-level step definitions for the BDD scenarios (unit tests exist via `test_rate_limiting_bdd.py` but are not wired as BDD step definitions)
 - No integration/E2E test that exercises Redis sliding window against a real Redis
-- MCP-specific rate limit rules (`trigger_pipeline` vs general MCP calls) are not differentiated in middleware — all `/mcp` paths share 200 req/min rule (trigger_pipeline has a separate 60/min limit at the application level in `mcp_server.py`)
+- ~~MCP-specific rate limit rules (`trigger_pipeline` vs general MCP calls) are not differentiated in middleware — all `/mcp` paths share 200 req/min rule (trigger_pipeline has a separate 60/min limit at the application level in `mcp_server.py`)~~ — RESOLVED 2026-08-11: `trigger_pipeline` now enforces its own 60/min app-level limit in `mcp_server.py` (per-client in-memory `TokenBucketRegistry`, keyed by org + key/user id). The middleware still applies the general 200/min `/mcp` rule on top — the app-level bucket is per-tool, not per-request, so it cannot be expressed as an HTTP-path rule.
 - HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min
 
 ## QA History
+### 2026-08-11 — trigger_pipeline tool-level rate limit (improve-architecture)
+- Implemented the documented "MCP trigger_pipeline not implemented" gap (PRD §7.18 60/min per MCP client). Added async-safe in-memory `TokenBucket` (rate refill, burst ceiling, per-bucket `asyncio.Lock`) and `TokenBucketRegistry` (one bucket per client key, lazy creation, per-key isolation) to `core/rate_limiter.py`. Wired `trigger_pipeline` in `api/mcp_server.py` to consume from a per-client bucket (`rate=1.0`, `burst=60`) keyed by org + auth type + key/user id (mirrors middleware `_client_key`); exhausted calls return `{"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}` before any DB work and log `ratelimit.trigger_pipeline_exceeded`.
+- Added 20 unit tests (`tests/unit/rate_limiter/test_token_bucket.py` ×13: burst allow/exact boundary, refill over time, burst ceiling, zero-token rejection, constructor validation, concurrency never overdraws, reset + registry lazy-creation/isolation/reset/concurrency; `tests/unit/mcp/test_mcp_trigger_rate_limit.py` ×7: per-client key derivation for api_key/oauth/distinct clients, allowed-within-burst / denied-when-exhausted, full tool path returns `rate_limited` before DB calls, full tool path still succeeds within limit).
+- Marked behaviours `[ ]`→`[x]` (trigger_pipeline 60/min + tool-level TokenBucket), populated `unit-tests:` frontmatter, resolved the MCP-specific-rule Known Gap.
+- 20/20 new unit tests pass; 452 rate-limiter + MCP unit tests pass; ruff check + format clean; mypy --strict clean.
+
 ### 2026-07-12 — Round 3 re-QA (improve-architecture auth remaining)
 - Fixed E402 import ordering in core/rate_limiter.py: moved docstring before `from __future__ import annotations` so all imports sit at module level
 - Fixed dead code in middleware/rate_limiter.py:143-145: nested `if` after `return` statement was unreachable — restructured `auth_principal` type dispatch

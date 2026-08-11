@@ -1,12 +1,14 @@
-"""Redis-backed sliding-window rate limiter.
+"""Rate limiting primitives — Redis sliding window with in-memory fallback.
 
-Uses ZADD + ZREMRANGEBYSCORE on a sorted set per key.
-Window duration and max requests are configurable per-route.
-Redis is required — no in-memory fallback.
+Redis-backed sliding window uses ZADD + ZREMRANGEBYSCORE on a sorted set per
+key; window duration and max requests are configurable per-route. The
+in-memory ``TokenBucket`` provides a dependency-free per-process limiter for
+paths that must keep working without Redis (e.g. MCP tool-level limits).
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -65,6 +67,75 @@ class RateLimiterRegistry:
 
     async def check(self, key: str, max_requests: int, window_s: int = WINDOW_SECONDS) -> bool:
         return await self._sliding.check(key, max_requests, window_s)
+
+
+class TokenBucket:
+    """In-memory token bucket rate limiter (per-process, async-safe).
+
+    Refills continuously at ``rate`` tokens per second up to a ceiling of
+    ``burst``. ``consume`` is safe to call from concurrent tasks (guarded by
+    an ``asyncio.Lock``) and never goes below zero tokens.
+    """
+
+    def __init__(self, rate: float, burst: int) -> None:
+        if rate <= 0:
+            raise ValueError("rate must be > 0")
+        if burst <= 0:
+            raise ValueError("burst must be > 0")
+        self.rate = float(rate)
+        self.burst = int(burst)
+        self._tokens = float(burst)
+        self._last = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def consume(self, tokens: float = 1.0) -> bool:
+        """Consume ``tokens`` from the bucket.
+
+        Returns True when enough tokens are available (and removes them);
+        False when the bucket is empty (nothing is consumed).
+        """
+        if tokens <= 0:
+            raise ValueError("tokens must be > 0")
+        async with self._lock:
+            now = time.monotonic()
+            self._tokens = min(self.burst, self._tokens + (now - self._last) * self.rate)
+            self._last = now
+            if self._tokens < tokens:
+                return False
+            self._tokens -= tokens
+            return True
+
+    def reset(self) -> None:
+        """Refill the bucket back to full capacity."""
+        self._tokens = float(self.burst)
+        self._last = time.monotonic()
+
+
+class TokenBucketRegistry:
+    """Holds one :class:`TokenBucket` per client key (per-process).
+
+    Lazily creates a bucket for a key on first use, so clients are isolated
+    from each other: exhausting one key's bucket never affects another.
+    """
+
+    def __init__(self, rate: float, burst: int) -> None:
+        self.rate = float(rate)
+        self.burst = int(burst)
+        self._buckets: dict[str, TokenBucket] = {}
+        self._lock = asyncio.Lock()
+
+    async def consume(self, key: str) -> bool:
+        """Consume one token for ``key``; returns False when its bucket is empty."""
+        async with self._lock:
+            bucket = self._buckets.get(key)
+            if bucket is None:
+                bucket = TokenBucket(rate=self.rate, burst=self.burst)
+                self._buckets[key] = bucket
+            return await bucket.consume()
+
+    def reset(self) -> None:
+        """Drop all buckets (used by tests and on reconfiguration)."""
+        self._buckets.clear()
 
 
 class AuthRateLimiter:
