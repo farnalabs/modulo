@@ -97,6 +97,7 @@ from modulo.api.routes.registry import router as registry_router
 from modulo.api.routes.remy import router as remy_router
 from modulo.api.routes.run_ws import router as run_ws_router
 from modulo.api.routes.runs import router as runs_router
+from modulo.api.routes.schema_folders import router as schema_folders_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
 from modulo.api.routes.sso import router as sso_router
@@ -1240,6 +1241,7 @@ app.include_router(agents_router)
 app.include_router(parameter_schemas_router)
 app.include_router(hitl_router)
 app.include_router(schemas_router)
+app.include_router(schema_folders_router)
 app.include_router(model_backends_router)
 app.include_router(node_categories_router)
 app.include_router(composite_templates_router)

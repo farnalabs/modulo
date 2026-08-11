@@ -22,8 +22,10 @@ unit-tests:
   - backend/tests/unit/core/composite_engine/test_schema_mapping.py
 code:
   - backend/src/modulo/api/routes/schemas.py
+  - backend/src/modulo/api/routes/schema_folders.py
   - backend/src/modulo/api/routes/parameter_schemas.py
   - backend/src/modulo/db/crud/schema.py
+  - backend/src/modulo/db/crud/schema_folder.py
   - backend/src/modulo/db/models/schema.py
   - backend/src/modulo/core/schema_registry/__init__.py
   - backend/src/modulo/core/schema_registry/inference.py
@@ -187,7 +189,7 @@ CRUD for Schema and SchemaVersion, JSON Schema validation, import, migration, an
 - **No pre-run compatibility check** between node input/output schemas before pipeline execution
 - **No major/minor semver compatibility enforcement** — schema versions are not checked for breaking changes
 - **No draft version editing** — unpublished versions cannot be edited freely (only "New version" pattern)
-- **No frontend unit tests** for SchemaEditorView or SchemaListView
+- **No frontend unit tests** for SchemaEditorView (SchemaListView has coverage)
 - **Unique constraint**: org + schema name enforced at DB level but no graceful duplicate-name error in API
 - **Abstract schemas**: abstract_name field exists but no dedicated endpoint to list or filter by abstract schemas
 - **Pinned-version edit block**: PRD §8.3 specifies that editing an existing version's fields is blocked if the version is pinned by any agent — no enforcement exists yet

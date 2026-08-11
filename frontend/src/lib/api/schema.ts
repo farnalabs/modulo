@@ -2490,6 +2490,23 @@ export interface paths {
         patch: operations["deprecate_schema_endpoint_api_v1_schemas__schema_id__deprecate_patch"];
         trace?: never;
     };
+    "/api/v1/schemas/{schema_id}/folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Move Schema To Folder Endpoint */
+        patch: operations["move_schema_to_folder_endpoint_api_v1_schemas__schema_id__folder_patch"];
+        trace?: never;
+    };
     "/api/v1/schemas/{schema_id}/versions": {
         parameters: {
             query?: never;
@@ -2686,6 +2703,59 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Folders Endpoint */
+        get: operations["list_folders_endpoint_api_v1_schema_folders_get"];
+        put?: never;
+        /** Create Folder Endpoint */
+        post: operations["create_folder_endpoint_api_v1_schema_folders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema-folders/{folder_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Folder Endpoint */
+        delete: operations["delete_folder_endpoint_api_v1_schema_folders__folder_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Folder Endpoint */
+        patch: operations["update_folder_endpoint_api_v1_schema_folders__folder_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/schema-folders/{folder_id}/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Reorder Folder Endpoint */
+        patch: operations["reorder_folder_endpoint_api_v1_schema_folders__folder_id__move_patch"];
         trace?: never;
     };
     "/api/v1/model-backends": {
@@ -11793,6 +11863,11 @@ export interface components {
              */
             required: boolean;
         };
+        /** SchemaFolderMoveRequest */
+        SchemaFolderMoveRequest: {
+            /** Folder Id */
+            folder_id?: string | null;
+        };
         /** SchemaGenerateRequest */
         SchemaGenerateRequest: {
             /** Description */
@@ -13939,6 +14014,8 @@ export interface components {
             description: string | null;
             /** Abstract Name */
             abstract_name: string | null;
+            /** Folder Id */
+            folder_id?: string | null;
             /**
              * Created By
              * Format: uuid
@@ -20183,6 +20260,7 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                folder_id?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -20367,6 +20445,43 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["modulo__api__routes__schemas__SchemaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    move_schema_to_folder_endpoint_api_v1_schemas__schema_id__folder_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                schema_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SchemaFolderMoveRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -20722,6 +20837,177 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SchemaImportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_folders_endpoint_api_v1_schema_folders_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_folder_endpoint_api_v1_schema_folders_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_folder_endpoint_api_v1_schema_folders__folder_id__delete: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_folder_endpoint_api_v1_schema_folders__folder_id__patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reorder_folder_endpoint_api_v1_schema_folders__folder_id__move_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderMove"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderResponse"];
                 };
             };
             /** @description Validation Error */
