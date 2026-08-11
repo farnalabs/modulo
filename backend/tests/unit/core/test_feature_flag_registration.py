@@ -26,6 +26,25 @@ class TestSavedViewsFlag:
         assert flag.currently_active is True
 
 
+class TestMobileSidebarRailFlag:
+    def test_flag_is_registered(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("mobile_sidebar_rail")
+        assert flag is not None, "mobile_sidebar_rail flag must be registered in _KNOWN_FLAGS"
+
+    def test_flag_tier_is_community(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("mobile_sidebar_rail")
+        assert flag is not None
+        assert flag.tier == "community"
+
+    def test_flag_has_description(self) -> None:
+        registry = FeatureFlagRegistry()
+        flag = registry.get_flag("mobile_sidebar_rail")
+        assert flag is not None
+        assert len(flag.description) > 0
+
+
 class TestFeatureFlagModel:
     def test_creates_with_minimal_fields(self) -> None:
         flag = FeatureFlag(name="test_flag", tier="community", description="test")

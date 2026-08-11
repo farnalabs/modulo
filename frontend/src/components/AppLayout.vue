@@ -15,9 +15,13 @@
 
     <main
       class="flex-1 min-w-0 overflow-auto bg-background relative"
+      :class="showMobileHeader ? 'pt-14 md:pt-0' : ''"
       :style="remyDockedStyle"
     >
-      <div class="absolute top-0 left-0 right-0 z-10">
+      <div
+        class="absolute left-0 right-0 z-10"
+        :class="showMobileHeader ? 'top-14 md:top-0' : 'top-0'"
+      >
         <OnboardingBanner />
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
@@ -44,6 +48,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
+import { useMediaQuery } from "@vueuse/core";
 import { getAccessToken, clearAccessToken } from "../lib/api/client";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
@@ -62,6 +67,16 @@ const remyStore = useRemyStore();
 const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
 const isLight = ref(document.documentElement.classList.contains("light"));
+
+// The mobile hamburger header (drawn by AppSidebar when the mobile rail flag is
+// OFF) is a fixed h-14 overlay, so main content needs a pt-14 offset on mobile
+// only when that header is shown. When the mobile rail flag is ON there is no
+// fixed header — the rail is in-flow — so no offset. Mirrors AppSidebar's mode
+// decision exactly (same breakpoint + same flag).
+const isDesktop = useMediaQuery("(min-width: 768px)");
+const showMobileHeader = computed(
+  () => !isDesktop.value && !planStore.featureEnabled("mobile_sidebar_rail"),
+);
 
 const remyDockedStyle = computed(() =>
   remyStore.panelState === "docked" ? { paddingRight: `${remyStore.panelSize.width}px` } : undefined,

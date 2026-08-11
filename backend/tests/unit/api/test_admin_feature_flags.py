@@ -151,6 +151,46 @@ class TestListFeatureFlags:
         assert "error" in body
         assert body["error"]["code"] == "INTERNAL_ERROR"
 
+    def test_org_override_reflected_in_flags_payload(self, client: TestClient) -> None:
+        """An org-level feature_overrides entry must win over the registry default
+        in the /feature-flags payload the whole app (plan store) reads.
+
+        Regression: without the override overlay, the admin UI's "Override →
+        Enabled" only affected the admin view's own session, so an org-level
+        enable never took effect app-wide.
+        """
+        org = MagicMock()
+        org.settings_json = {"feature_overrides": {"sso": True}}
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new=AsyncMock(return_value=org),
+            ),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
+        body = resp.json()
+        # sso is a team-tier flag, inactive on the community mock registry — the
+        # org override flips it to True in the payload.
+        sso = next(f for f in body["flags"] if f["name"] == "sso")
+        assert sso["currently_active"] is True
+
+    def test_org_override_read_failure_falls_back_to_defaults(self, client: TestClient) -> None:
+        """A failed org-override read (e.g. mock/DB session without org data) must
+        fall back to the registry defaults instead of failing the request."""
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
+        assert resp.status_code == 200
+        body = resp.json()
+        sso = next(f for f in body["flags"] if f["name"] == "sso")
+        assert sso["currently_active"] is False
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/admin/feature-flags/{flag_name}

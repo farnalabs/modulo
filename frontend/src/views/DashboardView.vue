@@ -1,6 +1,6 @@
 <template>
   <div class="page-wide">
-    <DashboardNotificationsPanel class="mb-4" />
+    <DashboardNotificationsPanel class="-mt-3 mb-4" />
     <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title" />
 
     <!-- Loading skeleton grid -->

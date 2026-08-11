@@ -32,6 +32,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  delete (window as unknown as { matchMedia?: unknown }).matchMedia
 })
 
 import AppLayout from '../../components/AppLayout.vue'
@@ -43,8 +44,6 @@ const router = createRouter({
 })
 
 describe('AppLayout', () => {
-
-
   it('renders plan badge by default', async () => {
     const wrapper = mount(AppLayout, {
       global: {
@@ -70,5 +69,42 @@ describe('AppLayout', () => {
     await nextTick()
     await nextTick()
     expect(wrapper.text()).toContain('V1')
+  })
+
+  describe('mobile — hamburger drawer (flag OFF, default)', () => {
+    it('applies pt-14 to main and shows the hamburger header on mobile when the flag is off', async () => {
+      mockMatchMedia(false)
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      await nextTick()
+      await nextTick()
+      const main = wrapper.find('main')
+      expect(main.classes()).toContain('pt-14')
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
+    })
+  })
+
+  describe('mobile — icon rail (flag ON)', () => {
+    it('omits pt-14 from main and shows the rail on mobile when the flag is on', async () => {
+      mockMatchMedia(false)
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      const store = usePlanStore()
+      store.features['mobile_sidebar_rail'] = true
+      await nextTick()
+      await nextTick()
+      const main = wrapper.find('main')
+      expect(main.classes()).not.toContain('pt-14')
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+    })
   })
 })

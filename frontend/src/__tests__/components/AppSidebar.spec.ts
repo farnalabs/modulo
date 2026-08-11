@@ -50,6 +50,7 @@ vi.mock('vue-router', async () => {
 })
 
 import AppSidebar from '../../components/AppSidebar.vue'
+import { usePlanStore } from '../../stores/planStore'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -73,9 +74,19 @@ function mockMatchMedia(matches: boolean) {
   }))
 }
 
-function mountSidebar(props = {}, extra: Record<string, unknown> = {}) {
+interface MountOptions {
+  mobileRail?: boolean
+  [key: string]: unknown
+}
+
+function mountSidebar(props = {}, extra: MountOptions = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
+  const store = usePlanStore()
+  if (extra.mobileRail) {
+    store.features['mobile_sidebar_rail'] = true
+  }
+  const { mobileRail: _mobileRail, ...mountExtra } = extra
   return mount(AppSidebar, {
     props: {
       isSystemAdmin: true,
@@ -92,7 +103,7 @@ function mountSidebar(props = {}, extra: Record<string, unknown> = {}) {
         SvgIcon: { template: '<span class="svg-stub" />' },
       },
     },
-    ...extra,
+    ...mountExtra,
   })
 }
 
@@ -102,147 +113,227 @@ describe('AppSidebar', () => {
     delete (window as unknown as { matchMedia?: unknown }).matchMedia
   })
 
-  it('shows the collapsed icon rail by default on mobile', async () => {
-    const wrapper = mountSidebar()
-    await flushPromises()
-    expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
-    expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(false)
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  describe('mobile — hamburger drawer (flag OFF, default)', () => {
+    it('renders the hamburger drawer by default on mobile when the flag is off', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
+    })
+
+    it('opens the mobile drawer when the hamburger button is clicked', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-controls="mobile-sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-sidebar').classes()).toContain('translate-x-0')
+      expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(true)
+    })
+
+    it('closes the mobile drawer when the backdrop is clicked', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-controls="mobile-sidebar"]').trigger('click')
+      await flushPromises()
+      await wrapper.find('div[aria-hidden="true"].fixed.inset-0').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-sidebar').classes()).toContain('-translate-x-full')
+      expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(false)
+    })
+
+    it('closes the mobile drawer on Escape and returns focus to the hamburger button', async () => {
+      const wrapper = mountSidebar({}, { attachTo: document.body })
+      await flushPromises()
+      const button = wrapper.find('[aria-controls="mobile-sidebar"]')
+      await button.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-sidebar').classes()).toContain('translate-x-0')
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await flushPromises()
+
+      expect(wrapper.find('#mobile-sidebar').classes()).toContain('-translate-x-full')
+      expect(document.activeElement).toBe(button.element)
+
+      wrapper.unmount()
+    })
+
+    it('closes the mobile drawer when a nav item is activated', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      await wrapper.find('[aria-controls="mobile-sidebar"]').trigger('click')
+      await flushPromises()
+      const drawer = wrapper.find('#mobile-sidebar')
+      await drawer.find('.sidebar-link').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('#mobile-sidebar').classes()).toContain('-translate-x-full')
+    })
+
+    it('renders the profile link as a router-link to /admin/my-profile in the drawer', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      const link = wrapper.find('#mobile-sidebar a')
+      expect(link.attributes('href')).toBe('/admin/my-profile')
+      const avatar = wrapper.find('#mobile-sidebar .avatar-ring')
+      expect(avatar.exists()).toBe(true)
+    })
   })
 
-  it('opens the mobile overlay panel when the rail expand button is clicked', async () => {
-    const wrapper = mountSidebar()
-    await flushPromises()
-    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
-    expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(true)
+  describe('mobile — icon rail + overlay panel (flag ON, experimental)', () => {
+    it('shows the collapsed icon rail by default when the flag is on', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(false)
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+    })
+
+    it('opens the mobile overlay panel when the rail expand button is clicked', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+      expect(wrapper.find('div[aria-hidden="true"].fixed.inset-0').exists()).toBe(true)
+    })
+
+    it('closes the mobile panel when the backdrop is clicked', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      await wrapper.find('div[aria-hidden="true"].fixed.inset-0').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    })
+
+    it('closes the mobile panel on Escape', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await flushPromises()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    })
+
+    it('closes the mobile panel when a nav item is activated', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      const dialog = wrapper.find('[role="dialog"]')
+      await dialog.find('.sidebar-link').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    })
+
+    it('renders the avatar as a router-link to /admin/my-profile in rail mode', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      const avatar = wrapper.find('.avatar-ring')
+      expect(avatar.exists()).toBe(true)
+      expect(avatar.attributes('href')).toBe('/admin/my-profile')
+    })
+
+    it('returns focus to the rail expand trigger when the mobile panel closes', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
+      await flushPromises()
+
+      const expandButton = wrapper.find('[aria-label="Expand sidebar"]')
+      await expandButton.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await flushPromises()
+
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+      expect(document.activeElement).toBe(expandButton.element)
+
+      wrapper.unmount()
+    })
+
+    it('traps focus within the mobile dialog while it is open', async () => {
+      const wrapper = mountSidebar({}, { mobileRail: true, attachTo: document.body })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+
+      const dialog = wrapper.find('[role="dialog"]')
+      const focusables = dialog.findAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+      expect(focusables.length).toBeGreaterThan(0)
+      const first = focusables[0].element as HTMLElement
+      const last = focusables[focusables.length - 1].element as HTMLElement
+
+      last.focus()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
+      await flushPromises()
+      expect(document.activeElement).toBe(first)
+
+      first.focus()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))
+      await flushPromises()
+      expect(document.activeElement).toBe(last)
+
+      wrapper.unmount()
+    })
+
+    it('closes the mobile panel when the route changes while it is open', async () => {
+      const route = vi.mocked(useRoute)() as RouteLocationNormalizedLoaded
+      const wrapper = mountSidebar({}, { mobileRail: true })
+      await flushPromises()
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+
+      route.path = '/notifications'
+      await flushPromises()
+
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+
+      route.path = '/'
+    })
   })
 
-  it('closes the mobile panel when the backdrop is clicked', async () => {
-    const wrapper = mountSidebar()
-    await flushPromises()
-    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
-    await flushPromises()
-    await wrapper.find('div[aria-hidden="true"].fixed.inset-0').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-  })
+  describe('desktop — in-flow collapsible sidebar', () => {
+    it('shows the full sidebar on desktop and collapses to the rail', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      await flushPromises()
+      expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
 
-  it('closes the mobile panel on Escape', async () => {
-    const wrapper = mountSidebar()
-    await flushPromises()
-    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
-    await flushPromises()
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    await flushPromises()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-  })
+      await wrapper.find('[aria-label="Collapse sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
+      expect(localStorage.getItem('sidebar-collapsed')).toBe('true')
 
-  it('closes the mobile panel when a nav item is activated', async () => {
-    const wrapper = mountSidebar()
-    await flushPromises()
-    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
-    await flushPromises()
-    const dialog = wrapper.find('[role="dialog"]')
-    await dialog.find('.sidebar-link').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-  })
+      await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(true)
+      expect(localStorage.getItem('sidebar-collapsed')).toBe('false')
+    })
 
-  it('shows the full sidebar on desktop and collapses to the rail', async () => {
-    mockMatchMedia(true)
-    const wrapper = mountSidebar()
-    await flushPromises()
-    expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(true)
-    expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false)
+    it('does not render mobile chrome on desktop', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      await flushPromises()
+      expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(false)
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    })
 
-    await wrapper.find('[aria-label="Collapse sidebar"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
-    expect(localStorage.getItem('sidebar-collapsed')).toBe('true')
-
-    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[aria-label="Collapse sidebar"]').exists()).toBe(true)
-    expect(localStorage.getItem('sidebar-collapsed')).toBe('false')
-  })
-
-  it('renders the avatar as a router-link to /admin/my-profile in rail mode', async () => {
-    const wrapper = mountSidebar()
-    await flushPromises()
-    const avatar = wrapper.find('.avatar-ring')
-    expect(avatar.exists()).toBe(true)
-    expect(avatar.attributes('href')).toBe('/admin/my-profile')
-  })
-
-  it('renders the avatar as a router-link to /admin/my-profile in full mode', async () => {
-    mockMatchMedia(true)
-    const wrapper = mountSidebar()
-    await flushPromises()
-    const avatar = wrapper.find('.avatar-ring')
-    expect(avatar.exists()).toBe(true)
-    expect(avatar.attributes('href')).toBe('/admin/my-profile')
-  })
-
-  it('returns focus to the rail expand trigger when the mobile panel closes', async () => {
-    const wrapper = mountSidebar({}, { attachTo: document.body })
-    await flushPromises()
-
-    const expandButton = wrapper.find('[aria-label="Expand sidebar"]')
-    await expandButton.trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    await flushPromises()
-
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    expect(document.activeElement).toBe(expandButton.element)
-
-    wrapper.unmount()
-  })
-
-  it('traps focus within the mobile dialog while it is open', async () => {
-    const wrapper = mountSidebar({}, { attachTo: document.body })
-    await flushPromises()
-    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
-    await flushPromises()
-
-    const dialog = wrapper.find('[role="dialog"]')
-    const focusables = dialog.findAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    )
-    expect(focusables.length).toBeGreaterThan(0)
-    const first = focusables[0].element as HTMLElement
-    const last = focusables[focusables.length - 1].element as HTMLElement
-
-    last.focus()
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
-    await flushPromises()
-    expect(document.activeElement).toBe(first)
-
-    first.focus()
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))
-    await flushPromises()
-    expect(document.activeElement).toBe(last)
-
-    wrapper.unmount()
-  })
-
-  it('closes the mobile panel when the route changes while it is open', async () => {
-    const route = vi.mocked(useRoute)() as RouteLocationNormalizedLoaded
-    const wrapper = mountSidebar()
-    await flushPromises()
-    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
-
-    route.path = '/notifications'
-    await flushPromises()
-
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-
-    route.path = '/'
+    it('renders the avatar as a router-link to /admin/my-profile in full mode', async () => {
+      mockMatchMedia(true)
+      const wrapper = mountSidebar()
+      await flushPromises()
+      const avatar = wrapper.find('.avatar-ring')
+      expect(avatar.exists()).toBe(true)
+      expect(avatar.attributes('href')).toBe('/admin/my-profile')
+    })
   })
 })
