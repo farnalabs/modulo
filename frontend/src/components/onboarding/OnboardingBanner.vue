@@ -44,20 +44,6 @@
     </div>
 
     <div v-if="expanded" class="border-b bg-card px-4 py-3 space-y-1" data-testid="onboarding-banner-checklist">
-      <template v-if="store.progressPct >= 100">
-        <div class="text-center py-6 space-y-3">
-          <p class="text-lg font-semibold text-primary">Woohoo! All done! 🎉</p>
-          <p class="text-sm text-muted-foreground">You've completed all the onboarding steps.</p>
-          <button
-            class="inline-flex items-center justify-center rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-            @click="store.dismiss()"
-            data-testid="onboarding-dismiss-complete"
-          >
-            Dismiss Onboarding
-          </button>
-        </div>
-      </template>
-      <template v-else>
         <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{{ $t('components.onboarding.OnboardingBanner.recommended_actions') }}</p>
         <div
           v-for="action in store.actions"
@@ -120,7 +106,6 @@
             Seed example primitives
           </button>
         </div>
-      </template>
     </div>
   </div>
 </template>

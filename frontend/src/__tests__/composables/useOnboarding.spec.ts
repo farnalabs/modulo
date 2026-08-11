@@ -181,6 +181,20 @@ describe('useOnboardingStore', () => {
     expect(store.isActive).toBe(false)
   })
 
+  it('isActive is false once onboarding progress reaches 100%', async () => {
+    const { useOnboardingStore } = await import('../../composables/useOnboarding')
+    const store = useOnboardingStore()
+
+    await store.fetchStatus()
+    expect(store.isActive).toBe(true)
+
+    store.progressPct = 100
+    expect(store.isActive).toBe(false)
+
+    store.progressPct = 99.9
+    expect(store.isActive).toBe(true)
+  })
+
   it('completeAction posts the action id and refreshes status', async () => {
     const { useOnboardingStore } = await import('../../composables/useOnboarding')
     const store = useOnboardingStore()
