@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
@@ -16,6 +17,14 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
+
+# psycopg (used by the LangGraph checkpointer via ModuloPostgresSaver) cannot
+# run on Windows' default ProactorEventLoop. The integration session loop is
+# created via asyncio.new_event_loop(), which honours this policy — set the
+# Selector policy at import time so every integration session loop (and any
+# full PipelineExecutor.execute / resume run) works on Windows too.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Collection imports the FastAPI app before database fixtures run. Provide only
 # test-local defaults here so standalone collection never depends on a caller's
@@ -208,6 +217,14 @@ def migrated_db_url(db_url: str) -> str:
                 await conn.execute(text("ALTER TABLE webhook_payloads ADD COLUMN raw_payload JSON"))
             if "payload_ciphertext" in cols:
                 await conn.execute(text("ALTER TABLE webhook_payloads ALTER COLUMN payload_ciphertext DROP NOT NULL"))
+
+            # run_daily_facts: the analytics ORM maps telemetry_bytes (added with
+            # the analytics fact columns) but no migration creates it. A full
+            # PipelineExecutor.execute finalizes cost and writes a fact row, so
+            # the test DB must carry the column or every real execute test fails.
+            cols = await _existing_cols(conn, "run_daily_facts")
+            if "telemetry_bytes" not in cols:
+                await conn.execute(text("ALTER TABLE run_daily_facts ADD COLUMN telemetry_bytes BIGINT"))
 
             # LangGraph checkpoint tables — created at production startup by
             # ``ModuloPostgresSaver.setup()`` (main.py lifespan), not by any

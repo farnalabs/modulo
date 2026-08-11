@@ -1010,3 +1010,201 @@ async def test_org_run_capacity_preserves_awaiting_human_status_at_cap(
     assert state["error_code"] is None, "awaiting_human run must NOT carry the capacity marker"
     assert state["dispatched_at"] is not None
     assert state["dispatcher"] == "saq"
+
+
+# ---------------------------------------------------------------------------
+# dispatcher_reconcile DB-only terminalizers (B4/B5) — real Postgres under the
+# non-superuser RLS engine. These prove a 'running' SAQ run is terminalised
+# exactly when its lease is provably dead (stale heartbeat / age-bound wedge)
+# and NEVER while it is live (fresh heartbeat).
+# ---------------------------------------------------------------------------
+
+
+async def _seed_saq_running_run(
+    db_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    *,
+    claim_count: int = 1,
+    dispatcher: str | None = "saq",
+    heartbeat_at: datetime | None = None,
+    started_at: datetime | None = None,
+) -> uuid.UUID:
+    from sqlalchemy import insert
+
+    from modulo.db.models.run import Run
+
+    run_id = uuid.uuid4()
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    values: dict = {
+        "id": run_id,
+        "organisation_id": org_id,
+        "pipeline_id": pipeline_id,
+        "snapshot_id": snapshot_id,
+        "trigger_type": "manual",
+        "status": "running",
+        "input_hash": _hash(_next_run_number()),
+        "langgraph_thread_id": _thread_id(org_id, run_id),
+        "run_number": _next_run_number(),
+        "claim_count": claim_count,
+        "dispatcher": dispatcher,
+    }
+    values.update(
+        {col: value for col, value in (("heartbeat_at", heartbeat_at), ("started_at", started_at)) if value is not None}
+    )
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await session.execute(insert(Run).values(**values))
+    return run_id
+
+
+async def _terminalize_count(
+    app_engine: AsyncEngine,
+    org_id: uuid.UUID,
+    fn: Any,
+    **kwargs: Any,
+) -> int:
+    """Run a cron_helpers terminalizer under the non-superuser RLS engine."""
+    from modulo.db.rls import set_rls_org
+
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        return await fn(session, org_id, **kwargs)
+
+
+async def test_claim_cap_terminalizes_stale_capped_run_under_rls(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A running SAQ run at claim_count >= cap with a STALE heartbeat is
+    terminal-failed ``claim_cap_exhausted`` (B5) — selected INDEPENDENTLY of
+    the reconcile predicates, under the NOBYPASSRLS role."""
+    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+
+    org_id, user_id = await _seed_org_account(db_engine, "CapTermOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeCapTerm", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    now = datetime.now(UTC)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        claim_count=2,
+        heartbeat_at=now - timedelta(minutes=30),
+    )
+
+    count = await _terminalize_count(
+        app_engine,
+        org_id,
+        _terminalize_claim_cap_exhausted,
+        claim_cap=2,
+        stale_seconds=600,
+    )
+    assert count == 1
+
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "failed"
+    assert code == "claim_cap_exhausted"
+
+
+async def test_claim_cap_spares_live_capped_run_with_fresh_heartbeat(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A capped run with a FRESH heartbeat is a LIVE run on its final claim —
+    it must NOT be terminalised (the stale-heartbeat gate is the live-run
+    guard; claim_count increments on EVERY claim, so the cap alone is not
+    proof of death)."""
+    from modulo.core.cron_helpers import _terminalize_claim_cap_exhausted
+
+    org_id, user_id = await _seed_org_account(db_engine, "CapLiveOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeCapLive", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    now = datetime.now(UTC)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        claim_count=2,
+        heartbeat_at=now,
+    )
+
+    count = await _terminalize_count(
+        app_engine,
+        org_id,
+        _terminalize_claim_cap_exhausted,
+        claim_cap=2,
+        stale_seconds=600,
+    )
+    assert count == 0
+
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "running"
+
+
+async def test_mid_graph_wedge_terminalizes_age_bound_run_under_rls(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A running SAQ run whose started_at is older than the age-bound window is
+    terminal-failed ``executor_superseded`` (B4) — a mid-graph stall can keep
+    a fresh heartbeat alive, so the age gate bounds the damage."""
+    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+
+    org_id, user_id = await _seed_org_account(db_engine, "WedgeOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeWedge", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    now = datetime.now(UTC)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        started_at=now - timedelta(hours=3),
+    )
+
+    count = await _terminalize_count(app_engine, org_id, _terminalize_mid_graph_wedges, max_age_minutes=135)
+    assert count == 1
+
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "failed"
+    assert code == "executor_superseded"
+
+
+async def test_mid_graph_wedge_spares_recently_started_run(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run started within the age-bound window (a genuinely executing run)
+    is left untouched by the mid-graph wedge terminalizer."""
+    from modulo.core.cron_helpers import _terminalize_mid_graph_wedges
+
+    org_id, user_id = await _seed_org_account(db_engine, "WedgeLiveOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeWedgeLive", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    now = datetime.now(UTC)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        started_at=now - timedelta(minutes=10),
+    )
+
+    count = await _terminalize_count(app_engine, org_id, _terminalize_mid_graph_wedges, max_age_minutes=135)
+    assert count == 0
+
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "running"
