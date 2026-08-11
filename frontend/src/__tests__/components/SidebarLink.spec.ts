@@ -67,4 +67,19 @@ describe('SidebarLink', () => {
     const wrapper = mountLink({ to: '/pipelines' })
     expect(wrapper.find('a').attributes('aria-current')).toBeUndefined()
   })
+
+  it('renders icon-only when collapsed, with title and aria-label and no label text', () => {
+    const wrapper = mountLink({ collapsed: true })
+    expect(wrapper.find('a').attributes('title')).toBe('Pipelines')
+    expect(wrapper.find('a').attributes('aria-label')).toBe('Pipelines')
+    expect(wrapper.text()).not.toContain('Pipelines')
+    expect(wrapper.find('a').classes()).toContain('sidebar-link')
+  })
+
+  it('keeps the active class and aria-current when collapsed on a matching route', () => {
+    vi.mocked(useRoute).mockReturnValue(routeFor('/pipelines/123'))
+    const wrapper = mountLink({ collapsed: true })
+    expect(wrapper.find('a').attributes('aria-current')).toBe('page')
+    expect(wrapper.find('a').classes()).toContain('active')
+  })
 })
