@@ -5,6 +5,12 @@ to cache a single engine + session-factory across the process lifetime.
 This is thread-safe for async (single event-loop) usage but creates a
 singleton that persists across tests — override via `app.dependency_overrides`
 if test isolation is needed.
+
+The engine itself is NOT built here: ``get_or_create_engine`` delegates to
+``modulo.db.session.get_shared_engine`` so the API, dispatch, the SAQ worker
+and crons all share one per-process pool with identical Fly/HAProxy knobs
+(``pool_pre_ping``, ``statement_cache_size=0``) instead of each maintaining a
+divergent second pool.
 """
 
 import logging
@@ -23,7 +29,6 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from modulo.api.models.problem import ProblemException, ProblemType
@@ -500,30 +505,21 @@ def get_or_create_engine(settings: Settings) -> AsyncEngine:
     This is the non-Depends version — use it outside FastAPI route handlers
     (e.g. in the MCP sub-app or background tasks) to share the same connection
     pool used by the main API.
+
+    Delegates to :func:`modulo.db.session.get_shared_engine` — the one engine
+    factory per process — so dispatch, the SAQ worker, crons and the API share
+    a single pool with identical Fly/HAProxy knobs (``pool_pre_ping``,
+    ``statement_cache_size=0``) instead of maintaining divergent pools. The
+    API's pool sizing (20/10) is passed as the creation-time override; the
+    first caller in the process fixes the pool size for everyone. ``settings``
+    is retained for signature compatibility — the shared factory reads the
+    process settings via ``get_settings()``.
     """
     global _engine
     if _engine is None:
-        connect_args: dict[str, Any] = {"timeout": 10}
-        db_type = settings.modulo_db.lower()
+        from modulo.db.session import get_shared_engine
 
-        # asyncpg defaults to "prefer" SSL which causes ConnectionResetError
-        # on Fly Postgres private networks (no TLS listener). Explicitly
-        # disable SSL to match bootstrap_db.py's ssl=False pattern.
-        if db_type == "postgres":
-            connect_args["ssl"] = False
-            connect_args["statement_cache_size"] = 0  # HAProxy compat: disable asyncpg statement cache
-
-        kw: dict[str, Any] = {
-            "url": settings.database_url,
-            "pool_pre_ping": True,
-            "connect_args": connect_args,
-        }
-        if db_type != "sqlite":
-            kw["pool_size"] = 20
-            kw["max_overflow"] = 10
-            kw["pool_recycle"] = 3600
-            kw["pool_timeout"] = 30
-        _engine = create_async_engine(**kw)
+        _engine = get_shared_engine(pool_size=20, max_overflow=10)
     return _engine
 
 
