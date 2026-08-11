@@ -90,6 +90,12 @@ async def create_folder_endpoint(
                 account_id=principal.account_id,
                 parent_id=req.parent_id,
             )
+    except ValueError as e:
+        logger.info("schema_folders.create rejected: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        ) from None
     except ProgrammingError:
         logger.exception("schema_folders.create")
         raise HTTPException(
@@ -108,6 +114,11 @@ async def update_folder_endpoint(
     principal: TenantPrincipal = require_permission("schema.update"),
 ) -> FolderResponse:
     updates = req.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="No fields to update",
+        )
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

@@ -58,17 +58,22 @@ vi.mock('vue-router', async () => {
   }
 })
 
-vi.mock('@/composables/useApi', () => ({
-  useApi: () => ({
-    get: vi.fn().mockResolvedValue([
-      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
-    ]),
-    post: vi.fn(),
-    put: vi.fn(),
-    patch: patchMock.mockResolvedValue(undefined),
-    delete: vi.fn(),
-  }),
-}))
+const getMock = vi.hoisted(() => vi.fn())
+
+vi.mock('@/composables/useApi', () => {
+  getMock.mockResolvedValue([
+    { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+  ])
+  return {
+    useApi: () => ({
+      get: getMock,
+      post: vi.fn(),
+      put: vi.fn(),
+      patch: patchMock.mockResolvedValue(undefined),
+      delete: vi.fn(),
+    }),
+  }
+})
 
 import SchemaListView from '../views/SchemaListView.vue'
 
@@ -257,5 +262,29 @@ describe('SchemaListView', () => {
     await nextTick()
     expect(patchMock).toHaveBeenCalledWith('/api/v1/schemas/2/folder', { folder_id: null })
     expect(document.body.textContent).not.toContain('Move to Folder')
+  })
+
+  it('unfiles a schema when dropped on the All Schemas root', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const root = wrapper.find('[data-testid="folder-tree-all-pipelines"]')
+    expect(root.exists()).toBe(true)
+    await root.trigger('drop', { dataTransfer: { getData: () => '2' } })
+    await flushPromises()
+    await nextTick()
+    expect(patchMock).toHaveBeenCalledWith('/api/v1/schemas/2/folder', { folder_id: null })
+  })
+
+  it('shows folders-specific error copy when folders fail to load', async () => {
+    // First get() call is the FolderTree's own folder fetch; the second is
+    // this view's loadFolders — reject that one to surface folderError.
+    getMock.mockResolvedValueOnce([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
+    getMock.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Failed to load folders')
   })
 })

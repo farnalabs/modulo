@@ -2451,6 +2451,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/schemas/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Schema Counts Endpoint */
+        get: operations["schema_counts_endpoint_api_v1_schemas_counts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schemas/{schema_id}": {
         parameters: {
             query?: never;
@@ -9167,6 +9184,15 @@ export interface components {
             name?: string | null;
             /** Parent Id */
             parent_id?: string | null;
+        };
+        /** SchemaCountsResponse */
+        SchemaCountsResponse: {
+            /** Total */
+            total: number;
+            /** By Folder */
+            by_folder: {
+                [key: string]: number;
+            };
         };
         /** ForwarderConfigResponse */
         ForwarderConfigResponse: {
@@ -20252,6 +20278,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PendingGatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    schema_counts_endpoint_api_v1_schemas_counts_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchemaCountsResponse"];
                 };
             };
             /** @description Validation Error */

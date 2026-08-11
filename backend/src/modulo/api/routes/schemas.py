@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jsonschema import Draft202012Validator, ValidationError  # type: ignore[import-untyped]
 from jsonschema.exceptions import SchemaError as JsSchemaError  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +46,7 @@ from modulo.db.crud.schema import (
     update_schema,
 )
 from modulo.db.crud.schema_folder import move_schema_to_folder
+from modulo.db.models.schema import Schema
 from modulo.db.models.schema import SchemaVersion as SchemaVersionModel
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -92,6 +94,11 @@ class SchemaListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class SchemaCountsResponse(BaseModel):
+    total: int
+    by_folder: dict[str, int]
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +187,48 @@ async def list_schemas_endpoint(
         page=result.page,
         page_size=result.page_size,
     )
+
+
+@handle_db_errors("schemas.counts_endpoint")
+@router.get("/counts", response_model=SchemaCountsResponse)
+async def schema_counts_endpoint(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("schema.list"),
+) -> SchemaCountsResponse:
+    """Return total schema count and per-folder counts for the caller's org.
+
+    A single GROUP BY query over the schemas table, org-scoped via RLS and an
+    explicit organisation_id filter.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            rows = (
+                await session.execute(
+                    select(Schema.folder_id, func.count(Schema.id))
+                    .where(Schema.organisation_id == principal.organisation_id)
+                    .group_by(Schema.folder_id)
+                )
+            ).all()
+    except ProgrammingError:
+        logger.exception("schemas.counts")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Schema management is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        logger.exception("schemas.counts")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Schema management is temporarily unavailable.",
+        ) from None
+    total = 0
+    by_folder: dict[str, int] = {}
+    for folder_id, count in rows:
+        total += count
+        if folder_id is not None:
+            by_folder[str(folder_id)] = count
+    return SchemaCountsResponse(total=total, by_folder=by_folder)
 
 
 @handle_db_errors("schemas.create_schema_endpoint")

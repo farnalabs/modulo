@@ -53,6 +53,17 @@ async def _check_parent_depth(session: AsyncSession, parent_id: uuid.UUID) -> No
         raise ValueError(f"Folder nesting depth would exceed {_MAX_FOLDER_DEPTH} levels")
 
 
+async def _parent_exists_in_org(session: AsyncSession, parent_id: uuid.UUID) -> bool:
+    """Return True if a folder with ``parent_id`` is visible in the current RLS org.
+
+    FK checks run as the table owner and bypass RLS, so a caller who knows
+    another org's folder UUID could otherwise attach a folder under a hidden
+    parent. This explicit org-scoped existence check closes that hole.
+    """
+    result = await session.execute(select(SchemaFolder.id).where(SchemaFolder.id == parent_id))
+    return result.scalar_one_or_none() is not None
+
+
 async def create_folder(
     session: AsyncSession,
     *,
@@ -62,6 +73,8 @@ async def create_folder(
     parent_id: uuid.UUID | None = None,
 ) -> SchemaFolder:
     if parent_id is not None:
+        if not await _parent_exists_in_org(session, parent_id):
+            raise ValueError(f"Parent folder not found: {parent_id}")
         await _check_parent_depth(session, parent_id)
     folder = SchemaFolder(
         organisation_id=org_id,
@@ -100,6 +113,8 @@ async def update_folder(
         if new_parent_id is not None:
             if new_parent_id == folder_id:
                 raise ValueError("A folder cannot be its own parent")
+            if not await _parent_exists_in_org(session, new_parent_id):
+                raise ValueError(f"Parent folder not found: {new_parent_id}")
             if await _folder_is_ancestor(session, new_parent_id, folder_id):
                 raise ValueError("A folder cannot be moved under one of its own descendants")
             await _check_parent_depth(session, new_parent_id)
