@@ -7,6 +7,7 @@ vi.mock('@/lib/api/client', () => ({
 }))
 
 let pushEvent: (eventType: string, data: Record<string, unknown>) => void
+let pushRawSse: (raw: string) => void
 let endStream: () => void
 
 beforeEach(() => {
@@ -34,9 +35,8 @@ beforeEach(() => {
     body: { getReader: () => mockReader },
   } as unknown as Response)
 
-  pushEvent = (eventType: string, data: Record<string, unknown>) => {
-    const sse = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`
-    const encoded = encoder.encode(sse)
+  pushRawSse = (raw: string) => {
+    const encoded = encoder.encode(raw)
     if (resolveNext) {
       const resolve = resolveNext
       resolveNext = null
@@ -44,6 +44,10 @@ beforeEach(() => {
     } else {
       queue.push({ done: false, value: encoded })
     }
+  }
+
+  pushEvent = (eventType: string, data: Record<string, unknown>) => {
+    pushRawSse(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`)
   }
 
   endStream = () => {
@@ -136,6 +140,78 @@ describe('eventBus', () => {
     await tick()
     await tick()
     expect(eventBus.connected).toBe(false)
+    // Unsubscribing the last handler disconnects and cancels the reconnect
+    // timer scheduled on stream end, so no stray timer leaks into later tests.
+    eventBus.unsubscribe('run', handler)
+  })
+
+  it('schedules a reconnect when the HTTP response is not ok', async () => {
+    vi.useFakeTimers()
+    vi.mocked(fetch).mockResolvedValue({ ok: false, body: null } as unknown as Response)
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    eventBus.subscribe('run', handler)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(eventBus.connected).toBe(false)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('stops reconnecting after the maximum number of attempts', async () => {
+    vi.useFakeTimers()
+    vi.mocked(fetch).mockResolvedValue({ ok: false, body: null } as unknown as Response)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { eventBus } = await import('../composables/useEventStream')
+    eventBus.subscribe('run', vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(200_000)
+    expect(fetch).toHaveBeenCalledTimes(11)
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Max reconnect attempts'))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetch).toHaveBeenCalledTimes(11)
+    errorSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('reconnects a stream that has ended', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    eventBus.subscribe('run', handler)
+    await tick()
+    expect(eventBus.connected).toBe(true)
+    endStream()
+    await tick()
+    await tick()
+    expect(eventBus.connected).toBe(false)
+    eventBus.reconnect()
+    await tick()
+    expect(eventBus.connected).toBe(true)
+  })
+
+  it('ignores SSE events other than resource_changed', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    eventBus.subscribe('run', handler)
+    await tick()
+    pushEvent('token', { type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' })
+    await tick()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('ignores malformed SSE payloads and keeps processing later events', async () => {
+    const { eventBus } = await import('../composables/useEventStream')
+    const handler = vi.fn()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    eventBus.subscribe('run', handler)
+    await tick()
+    pushRawSse('event: resource_changed\ndata: {not valid json\n\n')
+    await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled())
+    const event = { type: 'run', id: 'r-1', action: 'updated', version: 2, org_id: 'org-1' }
+    triggerEvent(event)
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledWith(event))
   })
 })
 
