@@ -442,6 +442,32 @@ def test_create_azure_openai_model_backend_round_trips(client: TestClient) -> No
     assert body["has_credentials"] is True
 
 
+def test_create_custom_model_backend_round_trips(client: TestClient) -> None:
+    """A custom (demo stub) provider is accepted by the endpoint and round-trips.
+
+    The hub registration path for custom rows is covered directly in
+    tests/unit/model_backend_hub/test_hub.py (test_initialise_custom_provider_registers_and_invokes).
+    """
+    custom_body = {**_CREATE_BODY, "provider": "custom", "model_id": "demo-model"}
+    backend = _make_backend(credentials_ciphertext=b"encrypted_bytes")
+    backend.provider = "custom"
+    backend.model_id = "demo-model"
+    with (
+        patch("modulo.api.routes.model_backends.create_model_backend", return_value=backend),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/model-backends", json=custom_body)
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["provider"] == "custom"
+    assert body["model_id"] == "demo-model"
+    assert "credentials_ciphertext" not in body
+    assert "api_key" not in body
+    assert body["has_credentials"] is True
+
+
 def test_list_model_backends_sqlalchemy_error_returns_503(client: TestClient) -> None:
     from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
 
