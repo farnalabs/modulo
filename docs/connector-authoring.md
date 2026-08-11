@@ -7,14 +7,12 @@ implements the `ConnectorBase` ABC and registers with the `ConnectorHub`.
 
 ```
 ConnectorBase (ABC)          ← modulo/connectors/base.py
-  ├── FilesystemConnector    ← modulo/connectors/filesystem/
-  ├── GitHubConnector        ← modulo/connectors/github/
-  ├── GitLabConnector        ← modulo/connectors/gitlab/
-  ├── JiraConnector          ← modulo/connectors/jira/
-  ├── LinearConnector        ← modulo/connectors/linear/
-  ├── SlackConnector         ← modulo/connectors/slack/
-  ├── ShellConnector         ← modulo/connectors/shell/
-  └── YourConnector          ← your package
+  ├── 40+ built-in connectors (filesystem, github, gitlab, jira,
+  │   linear, slack, shell, pagerduty, sentry, datadog, and more)
+  │   see modulo/connectors/ for the full list
+  ├── CIRunnerBase           ← modulo/connectors/ci_runner/ (abstract CI runner)
+  ├── TicketTrackerBase      ← modulo/connectors/ticket_tracker/ (abstract issue tracker mixin)
+  └── YourConnector          ← your package (via entry point)
 ```
 
 ## ConnectorBase interface

@@ -37,11 +37,38 @@ See [`docs/system-requirements.md`](./system-requirements.md) for backend limita
 | `FERNET_KEY` | **Yes** | – | Fernet encryption key, exactly 44 base64-encoded bytes |
 | `FERNET_KEY_OLD` | No | – | Previous Fernet key for no-downtime rotation; decrypt falls back to this when `FERNET_KEY` is rotated |
 | `MODULO_USERS` | For seeding | – | Comma-separated `user:pass` pairs for initial user seed |
-| `MODULO_ADMIN_SECRET` | No | – | Shared secret for `modulo-migrate` CLI auth bypass |
-| `MODULO_ADMIN_TOKEN` | No | – | Admin token for `modulo-migrate` CLI (alternative to env) |
+| `MODULO_ADMIN_PASSWORD` | No | – | Admin password for single-admin alpha auth (at least one of `MODULO_ADMIN_PASSWORD` or `MODULO_USERS` must be set) |
+| `MODULO_ADMIN_SECRET` | No | – | **CLI-only**. Shared secret for `modulo-migrate` CLI auth bypass (not part of the Settings class; read directly by the CLI tool) |
+| `MODULO_ADMIN_TOKEN` | No | – | **CLI-only**. Admin JWT for `modulo-migrate` CLI (alternative to env; not part of the Settings class) |
 | `MODULO_SECRETS_BACKEND` | No | `fernet` | Secrets backend: `fernet`, `vault`, or `aws` |
 
 See [`docs/deployment-security.md`](./deployment-security.md) for key rotation procedures and [`docs/security/secret-management.md`](./security/secret-management.md) for backend-specific configuration.
+
+---
+
+## License Key
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_LICENSE_KEY` | No | – | Base64-encoded signed JSON payload enabling Team-tier features. Verified at startup using the embedded Ed25519 public key. |
+| `MODULO_LICENSE_PUBLIC_KEY` | No | – | Ed25519 public key (hex) for license signature verification. Defaults to dev/test key; set in production. |
+
+---
+
+## SSO / SAML 2.0
+
+Team-tier feature (requires valid `MODULO_LICENSE_KEY`). Configurable via env vars or the admin SSO providers UI.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_OIDC_PROVIDERS` | No | `[]` | JSON array of `{provider_id, client_id, client_secret, discovery_url}` objects. **Deprecated** — use the admin SSO providers UI. |
+| `MODULO_SAML_ENABLED` | No | `false` | Enable SAML 2.0 authentication |
+| `MODULO_SAML_IDP_METADATA_URL` | No | – | SAML IdP metadata URL |
+| `MODULO_SAML_IDP_METADATA_XML` | No | – | SAML IdP metadata XML (alternative to URL) |
+| `MODULO_SAML_ENTITY_ID` | No | `modulo` | SAML SP entity ID |
+| `MODULO_SAML_SP_PRIVATE_KEY` | No | – | SAML SP private key |
+| `MODULO_SAML_SP_X509_CERT` | No | – | SAML SP X.509 certificate |
+| `MODULO_SSO_DEFAULT_ROLE` | No | `runner` | Default org role assigned on JIT provisioning |
 
 ---
 
@@ -53,6 +80,10 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |
 | `MODULO_LOG_LEVEL` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `MODULO_WS_TOKEN_TTL_SECONDS` | No | `60` | WebSocket auth token TTL in seconds |
+| `DEBUG` | No | `false` | Enable debug mode (test/staging environments) |
+| `MODULO_DEV_MODE` | No | `false` | Enable preview / in-development features |
+| `INACTIVITY_TIMEOUT_MINUTES` | No | `480` | Session inactivity timeout in minutes (0 to disable) |
 
 ---
 
@@ -78,6 +109,10 @@ executor – only in-memory rate limiting and an in-memory event broker.
 | `SAQ_AUTH_USERNAME` | Yes (system worker) | – | Fail-closed web UI auth user; maps to the `AUTH_USER` env SAQ's web reads |
 | `SAQ_RUN_RETRIES` | No | `5` | SAQ retries per run job – `N` is N total attempts (N-1 retries) |
 | `SAQ_RETRY_DELAY` | No | `60` | Fixed retry delay in seconds (`retry_backoff=False`) |
+| `SAQ_RUN_TIMEOUT` | No | `7200` | Per-run execution ceiling; the job must reach a terminal state within this budget (seconds) |
+| `SAQ_RUN_CLAIM_CAP` | No | `20` | Per-claim cap on SAQ claim attempts for `dispatcher='saq'` runs |
+| `SAQ_SETUP_GRACE_SECONDS` | No | `600` | Zombie-run protection: a run must dispatch at least one node within this window or the watchdog fails it |
+| `SAQ_CLAIMED_NODELESS_MINUTES` | No | `45` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed |
 | `SAQ_JOB_HEARTBEAT` | No | `300` | SAQ job heartbeat knob (per-job `heartbeat`) |
 | `SAQ_E2B_IDEMPOTENCY` | No | `true` | Per-claim E2B idempotency key `run:{id}:e2b:{claim_token}` |
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |
@@ -124,6 +159,8 @@ Rate limits are hardcoded in `RateLimitMiddleware` (see [`backend/src/modulo/api
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_AUTH_MAX_ATTEMPTS` | No | `10` | Login attempts per sliding window |
+| `MODULO_AUTH_RATE_LIMIT_ENABLED` | No | `true` | Enable auth-specific rate limiting |
+| `MODULO_AUTH_WINDOW_SECONDS` | No | `60` | Auth rate limit window in seconds |
 | `MODULO_RATELIMIT_BYPASS_TOKEN` | No | – | Shared secret to bypass rate limiting (for CI/CD) |
 
 Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to in-memory no-op without Redis. Auth rate limiter requires Redis and is disabled without it.
@@ -134,9 +171,8 @@ Rate limiting uses Redis sliding window (ZADD + ZREMRANGEBYSCORE). Falls back to
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider |
+| `MODULO_E2B_API_KEY` | For E2B | – | E2B sandbox API key for runtime provider (read directly from env, not via Settings) |
 | `MODULO_MAX_LOCAL_CONCURRENCY` | No | `2` | Max concurrent local agents (LocalRuntimeProvider) |
-| `OLLAMA_BASE_URL` | For Ollama | `http://localhost:11434` | Ollama server URL for local model backends |
 | `E2B_SANDBOX_USD_PER_HOUR` | No | `0.13` | Hourly USD rate for an E2B sandbox, used to estimate per-run agent runtime cost from wall-clock time; default reflects the opencode template (2 vCPU / 2 GiB) rate; set to your E2B sandbox rate. |
 
 ---
@@ -166,7 +202,8 @@ LOAD.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_DEMO_MODE` | No | `false` | Enables demo pipeline with StubModelBackend. Deprecated legacy alias for `modulo_seed_demo_data` – still works but migrated to the new name. |
+| `MODULO_DEMO_MODE` | No | `false` | **Deprecated**. Enables demo pipeline with StubModelBackend. Legacy alias for `MODULO_SEED_DEMO_DATA` — migrated automatically at startup. |
+| `MODULO_SEED_DEMO_DATA` | No | `false` | Seed demo pipeline data on startup. Uses `StubModelBackend` so no external API keys required. Replaces `MODULO_DEMO_MODE`. |
 | `MODULO_PLUGIN_DISCOVERY` | No | `true` | Enable automatic plugin discovery |
 
 ---
@@ -194,6 +231,61 @@ See [`docs/operations/backup.md`](./operations/backup.md) for backup configurati
 
 ---
 
+## SMTP (Email)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SMTP_HOST` | For email | – | SMTP server hostname. When empty, email dispatch is disabled. |
+| `SMTP_PORT` | No | `587` | SMTP server port |
+| `SMTP_USERNAME` | No | – | SMTP authentication username |
+| `SMTP_PASSWORD` | No | – | SMTP authentication password |
+| `EMAIL_FROM` | No | – | From-address for outgoing emails |
+| `SMTP_TIMEOUT` | No | `30` | SMTP connection/send timeout in seconds |
+
+---
+
+## Worker Liveness Watchdog
+
+An in-process asyncio task running in the web-process FastAPI lifespan that reads SAQ worker liveness from Redis every tick and fires alerts when all workers are dead. No alert is sent until at least one alert channel is configured.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `WATCHDOG_ENABLED` | No | `true` | Enable the watchdog tick |
+| `WATCHDOG_TICK_SECONDS` | No | `30` | Tick interval in seconds |
+| `WATCHDOG_WORKER_STALE_SECONDS` | No | `180` | Worker considered stale after this many seconds without heartbeat |
+| `WATCHDOG_ALERT_STATE_TTL_SECONDS` | No | `604800` | Edge-triggered alert state TTL (default 7 days) |
+| `ALERT_WEBHOOK_URL` | No | – | Slack-compatible webhook URL for watchdog alerts |
+| `ALERT_TEAMS_WEBHOOK_URL` | No | – | Microsoft Teams incoming webhook URL |
+| `ALERT_EMAIL_TO` | No | – | Comma-separated email recipients for watchdog alerts |
+
+---
+
+## SSE Event Stream
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_SSE_MAX_CONNECTIONS_PER_ORG` | No | `100` | Max concurrent SSE connections per org |
+| `MODULO_SSE_MAX_CONNECTIONS_PER_USER` | No | `10` | Max concurrent SSE connections per user |
+| `MODULO_SSE_ZOMBIE_TIMEOUT_SECONDS` | No | `2.0` | Zombie connection timeout in seconds |
+
+---
+
+## CSRF Protection
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_CSRF_ENABLED` | No | `true` | Enable CSRF protection middleware |
+| `MODULO_CSRF_EXEMPT_PATHS` | No | `/api/v1/health,/api/v1/triggers,/api/v1/auth` | Comma-separated paths exempt from CSRF |
+
+---
+
+## SCIM Provisioning
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MODULO_SCIM_TOKEN` | No | – | SCIM bearer token for identity provider provisioning |
+| `MODULO_SCIM_DEFAULT_ORG_ID` | No | – | Default org ID for SCIM provisioning; uses first org if empty |
+
 ---
 
 ## TLS / Connection Security
@@ -204,8 +296,14 @@ See [`docs/operations/backup.md`](./operations/backup.md) for backup configurati
 | `VAULT_TOKEN` | For Vault | – | Vault authentication token |
 | `VAULT_ROLE_ID` | For Vault | – | Vault AppRole role ID |
 | `VAULT_SECRET_ID` | For Vault | – | Vault AppRole secret ID |
+| `AWS_ACCESS_KEY_ID` | For AWS Secrets Manager | – | AWS access key for the Secrets Manager backend |
+| `AWS_SECRET_ACCESS_KEY` | For AWS Secrets Manager | – | AWS secret access key |
+| `AWS_REGION` | No | `us-east-1` | AWS region for Secrets Manager |
+| `AWS_PROFILE` | No | – | AWS profile name for Secrets Manager |
 
 See [`docs/security/secret-management.md`](./security/secret-management.md) for Vault and AWS Secrets Manager configuration.
+
+Secrets backend selection: `MODULO_SECRETS_BACKEND` (default: `fernet`, options: `fernet`, `vault`, `aws`).
 
 ---
 
