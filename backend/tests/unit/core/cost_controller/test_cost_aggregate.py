@@ -394,3 +394,22 @@ def test_calculated_without_formula_is_eval_error() -> None:
     assert breakdown[0]["error"] == "eval_error"
     assert breakdown[0]["amount_usd"] == "0.000000"
     assert total == Decimal(0)
+
+
+def test_e2b_rate_identifier_resolves_end_to_end() -> None:
+    # e2b_rate is a registered formula-visible identifier; a formula referencing
+    # it directly must resolve (with settings) instead of failing as eval_error.
+    class _Settings:
+        e2b_sandbox_usd_per_hour = "0.5"
+
+    comp = CostComponentConfig(
+        name="sandbox_infra",
+        display_name="Sandbox Infrastructure",
+        kind="calculated",
+        formula="e2b_rate * wall_clock_hours",
+    )
+    tele = _tel(wall_clock_elapsed_s=Decimal(3600))
+    breakdown, total = build_cost_breakdown(tele, [comp], settings=_Settings())
+    assert total == Decimal("0.500000")
+    assert breakdown[0].get("error") is None
+    assert breakdown[0]["amount_usd"] == "0.500000"

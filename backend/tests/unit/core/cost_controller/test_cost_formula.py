@@ -60,6 +60,16 @@ def test_negative_result_is_eval_error() -> None:
     assert exc_info.value.code == "eval_error"
 
 
+def test_missing_param_is_eval_error() -> None:
+    # A formula may validate at save time (its identifiers are in the
+    # allowlist) while a param is absent at eval time (e.g. a calculated
+    # component with no rate source). The documented contract is that a missing
+    # param surfaces as CostFormulaError(eval_error), not a raw KeyError.
+    with pytest.raises(CostFormulaError) as exc_info:
+        evaluate_formula("rate * wall_clock_hours", _params(wall_clock_hours=Decimal(1)), _SANDBOX)
+    assert exc_info.value.code == "eval_error"
+
+
 def test_decimal_end_to_end() -> None:
     result = evaluate_formula("0.1 + 0.2", _params(), _SANDBOX)
     assert result.quantize(Decimal("0.000001")) == Decimal("0.3")

@@ -158,16 +158,20 @@ def build_params(
 
     ``rate`` resolves from ``component.rate_usd``; when NULL and a registered
     ``rate_fallback`` is present, the fallback value is used (currently exactly
-    ``e2b_rate`` -> ``Settings.e2b_sandbox_usd_per_hour``). All values are
+    ``e2b_rate`` -> ``Settings.e2b_sandbox_usd_per_hour``). ``e2b_rate`` is
+    ALSO exposed as a formula param from the same setting when available (it is
+    a registered, formula-visible identifier — registry §2.2). All values are
     Decimal-typed (ints too).
     """
-    rate: Decimal | None = _coerce_decimal(component.rate_usd)
-    if rate is None and component.rate_fallback == "e2b_rate" and settings is not None:
+    e2b_rate: Decimal | None = None
+    if settings is not None:
         try:
-            rate = Decimal(str(settings.e2b_sandbox_usd_per_hour))
+            e2b_rate = Decimal(str(settings.e2b_sandbox_usd_per_hour))
         except Exception:
             _log.warning("cost_params.e2b_rate_unavailable", exc_info=True)
-            rate = None
+    rate: Decimal | None = _coerce_decimal(component.rate_usd)
+    if rate is None and component.rate_fallback == "e2b_rate":
+        rate = e2b_rate
     hours = telemetry.wall_clock_elapsed_s / Decimal(3600)
 
     params: dict[str, Decimal] = {
@@ -184,6 +188,8 @@ def build_params(
         params["reported"] = telemetry.reported.get(component.report_key, Decimal(0))
     if rate is not None:
         params["rate"] = rate
+    if e2b_rate is not None:
+        params["e2b_rate"] = e2b_rate
     return params
 
 

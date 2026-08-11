@@ -311,6 +311,31 @@ def test_build_params_rate_usd_takes_precedence_over_fallback() -> None:
     assert params["rate"] == Decimal("2.0")
 
 
+def test_build_params_exposes_e2b_rate_param_when_settings_available() -> None:
+    # e2b_rate is a registered, formula-visible identifier (registry §2.2) —
+    # it must resolve when settings are available, not just feed the rate fallback.
+    comp = CostComponentConfig(
+        name="sandbox_infra",
+        display_name="Sandbox",
+        kind="calculated",
+        formula="e2b_rate * wall_clock_hours",
+    )
+    params = build_params(_tel(wall_clock_elapsed_s=Decimal(3600)), comp, settings=_Settings("0.5"))
+    assert params["e2b_rate"] == Decimal("0.5")
+    assert "rate" not in params
+
+
+def test_build_params_omits_e2b_rate_param_without_settings() -> None:
+    comp = CostComponentConfig(
+        name="sandbox_infra",
+        display_name="Sandbox",
+        kind="calculated",
+        formula="e2b_rate * wall_clock_hours",
+    )
+    params = build_params(_tel(wall_clock_elapsed_s=Decimal(3600)), comp)
+    assert "e2b_rate" not in params
+
+
 def test_build_params_unregistered_fallback_is_ignored() -> None:
     comp = CostComponentConfig(
         name="sandbox_infra",

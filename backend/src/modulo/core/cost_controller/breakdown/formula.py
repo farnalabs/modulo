@@ -224,7 +224,10 @@ def _evaluate(node: Any, params: dict[str, Decimal]) -> Decimal:
     if op == "num":
         return Decimal(node[1])
     if op == "ident":
-        return params[node[1]]
+        try:
+            return params[node[1]]
+        except KeyError:
+            raise CostFormulaError("eval_error", f"missing formula parameter {node[1]!r}") from None
     if op == "neg":
         return -_evaluate(node[1], params)
     if op == "group":
