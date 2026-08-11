@@ -100,7 +100,7 @@ _ADMISSIBLE_STATUSES = frozenset({"pending", "running", "awaiting_human", "claim
 
 # Terminal statuses. A run in one of these is already finalised; it must never
 # be resurrected AND must never spawn (or hold) a retry task.
-_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed"})
+_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
 
 _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512
@@ -1748,6 +1748,10 @@ class PipelineExecutor:
         segments_completed = 0
         lg_config = {**config, "callbacks": [self._otel_bridge]}
         _first_node_signalled = False
+        # Set when a captured sandbox-agent node output carries stall_reason —
+        # a stalled node RETURNS a failed output dict instead of raising, so
+        # the run must be recorded as 'stalled', not 'complete' (FAR-98).
+        stalled_node_reason: str | None = None
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 if guard is not None:
@@ -1792,6 +1796,7 @@ class PipelineExecutor:
                                 completed_node_outputs[name] = output
                                 stall_reason = _node_output_stall_reason(output)
                                 if stall_reason:
+                                    stalled_node_reason = stall_reason
                                     broker.publish(
                                         "run_stalled",
                                         {"node_id": name, "stall_reason": stall_reason},
@@ -1871,6 +1876,9 @@ class PipelineExecutor:
                                         node_budget,
                                     )
 
+            if stalled_node_reason:
+                broker.publish("run_failed", {"error": "executor_stalled", "detail": stalled_node_reason})
+                return "stalled", "executor_stalled", stalled_node_reason, node_token_usage or None
             broker.publish("run_completed", {})
             return "complete", None, None, node_token_usage or None
         except GraphInterrupt as exc:

@@ -60,7 +60,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.run import Run
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.stage import Stage
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
@@ -2980,7 +2980,7 @@ async def admin_purge_stale_runs(
         )
 
     cutoff = datetime.now(UTC) - timedelta(days=request.older_than_days)
-    terminal_states = ("complete", "failed", "eval_failed", "cancelled")
+    terminal_states = TERMINAL_STATUSES
 
     try:
         async with session.begin():
@@ -3525,7 +3525,7 @@ async def admin_get_storage(
 
     breakdown: dict[str, int] = {row.status: row.cnt for row in status_rows}
 
-    terminal_states = ("complete", "failed", "eval_failed", "cancelled")
+    terminal_states = TERMINAL_STATUSES
     terminal_count = sum(breakdown.get(s, 0) for s in terminal_states)
     estimated_saved_bytes = terminal_count * 4096
 
