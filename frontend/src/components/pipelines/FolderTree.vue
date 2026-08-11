@@ -1,12 +1,12 @@
 <template>
   <div data-testid="folder-tree" class="hidden md:flex w-64 border-r border-border h-screen sticky top-0 overflow-y-auto bg-card flex-col">
     <div class="p-3 border-b border-border flex items-center justify-between shrink-0">
-      <h3 class="text-sm font-semibold text-foreground">{{ $t('views.PipelineListView.folders') }}</h3>
+      <h3 class="text-sm font-semibold text-foreground">{{ labels.folders }}</h3>
       <button
         data-testid="folder-tree-new"
         class="rounded p-1 hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
         @click="openCreateDialog"
-        :aria-label="$t('views.PipelineListView.new_folder')"
+        :aria-label="labels.newFolder"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </button>
@@ -20,8 +20,8 @@
         @click="$emit('select-folder', null)"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <span class="truncate">{{ $t('views.PipelineListView.all_pipelines') }}</span>
-        <span v-if="props.pipelineCounts?.['__all__'] !== undefined" class="ml-auto text-xs text-muted-foreground">{{ props.pipelineCounts['__all__'] }}</span>
+        <span class="truncate">{{ labels.allItems }}</span>
+        <span v-if="counts?.['__all__'] !== undefined" class="ml-auto text-xs text-muted-foreground">{{ counts['__all__'] }}</span>
       </button>
 
       <div v-if="loading" class="px-3 py-2 space-y-2">
@@ -71,21 +71,21 @@
 
             <!-- Folder name -->
             <span class="truncate">{{ element.folder.name }}</span>
-            <span v-if="props.pipelineCounts?.[element.folder.id] !== undefined" class="ml-1 text-xs text-muted-foreground shrink-0">{{ props.pipelineCounts[element.folder.id] }}</span>
+            <span v-if="counts?.[element.folder.id] !== undefined" class="ml-1 text-xs text-muted-foreground shrink-0">{{ counts[element.folder.id] }}</span>
 
             <!-- Action buttons (rename, delete) -->
             <div class="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
               <button
                 class="rounded p-0.5 hover:bg-accent-foreground/10 text-muted-foreground hover:text-foreground transition-colors"
                 @click.stop="openRenameDialog(element.folder)"
-                :aria-label="$t('views.PipelineListView.rename_folder')"
+                :aria-label="labels.renameFolder"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
               </button>
               <button
                 class="rounded p-0.5 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                 @click.stop="openDeleteConfirm(element.folder)"
-                :aria-label="$t('views.PipelineListView.delete_folder')"
+                :aria-label="labels.deleteFolder"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
               </button>
@@ -99,11 +99,11 @@
     <Dialog v-model:open="showCreateDialog">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{{ $t('views.PipelineListView.new_folder') }}</DialogTitle>
+          <DialogTitle>{{ labels.newFolder }}</DialogTitle>
         </DialogHeader>
         <div class="space-y-4">
           <div>
-            <label for="folder-tree-new-name" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
+            <label for="folder-tree-new-name" class="mb-1 block text-sm font-medium">{{ labels.folderName }}</label>
             <Input id="folder-tree-new-name" v-model="newFolderName" placeholder="Folder name" @keyup.enter="handleCreate" />
           </div>
 
@@ -136,11 +136,11 @@
     <Dialog v-model:open="showRenameDialog">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{{ $t('views.PipelineListView.rename_folder') }}</DialogTitle>
+          <DialogTitle>{{ labels.renameFolder }}</DialogTitle>
         </DialogHeader>
         <div class="space-y-4">
           <div>
-            <label for="folder-tree-rename-name" class="mb-1 block text-sm font-medium">{{ $t('views.PipelineListView.folder_name') }}</label>
+            <label for="folder-tree-rename-name" class="mb-1 block text-sm font-medium">{{ labels.folderName }}</label>
             <Input id="folder-tree-rename-name" v-model="renameFolderName" placeholder="Folder name" @keyup.enter="handleRename" />
           </div>
           <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
@@ -158,7 +158,7 @@
     <Dialog v-model:open="showDeleteConfirm">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle class="text-destructive">{{ $t('views.PipelineListView.delete_folder') }}</DialogTitle>
+          <DialogTitle class="text-destructive">{{ labels.deleteFolder }}</DialogTitle>
           <DialogDescription>{{ deleteConfirmMessage }}</DialogDescription>
         </DialogHeader>
         <div v-if="deleteError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
@@ -175,6 +175,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import draggable from 'vuedraggable'
 import { useApi } from '@/composables/useApi'
 import { formatApiError } from '../../lib/api/formatError'
@@ -198,7 +199,17 @@ interface FlatTreeItem {
 
 const props = defineProps<{
   selectedFolderId: string | null
+  /** @deprecated use itemCounts */
   pipelineCounts?: Record<string, number>
+  itemCounts?: Record<string, number>
+  /** API prefix for the folder resource, e.g. /api/v1/pipeline-folders */
+  apiBase?: string
+  /** i18n namespace holding the folder labels (folders, new_folder, ...) */
+  i18nNs?: string
+  /** i18n key (within i18nNs) for the "all items" entry */
+  allItemsKey?: string
+  /** noun used in the delete-confirmation copy, e.g. "Pipelines" */
+  itemNoun?: string
 }>()
 
 const emit = defineEmits<{
@@ -207,7 +218,25 @@ const emit = defineEmits<{
   (e: 'move-pipeline', payload: { pipelineId: string; folderId: string }): void
 }>()
 
+const { t } = useI18n()
 const { get, post, patch, delete: deleteRequest } = useApi()
+
+const apiBase = computed(() => props.apiBase ?? '/api/v1/pipeline-folders')
+const counts = computed(() => props.itemCounts ?? props.pipelineCounts)
+const itemNoun = computed(() => props.itemNoun ?? 'Pipelines')
+
+const labels = computed(() => {
+  const ns = props.i18nNs ?? 'views.PipelineListView'
+  return {
+    folders: t(`${ns}.folders`),
+    newFolder: t(`${ns}.new_folder`),
+    allItems: t(`${ns}.${props.allItemsKey ?? 'all_pipelines'}`),
+    renameFolder: t(`${ns}.rename_folder`),
+    deleteFolder: t(`${ns}.delete_folder`),
+    folderName: t(`${ns}.folder_name`),
+    uncategorised: t(`${ns}.uncategorised`),
+  }
+})
 
 const allFolders = ref<FolderItem[]>([])
 const loading = ref(false)
@@ -261,18 +290,21 @@ const flatTree = computed(() => {
 
 const deleteConfirmMessage = computed(() => {
   if (!deleteTarget.value) return ''
-  const count = props.pipelineCounts?.[deleteTarget.value.id]
+  const count = counts.value?.[deleteTarget.value.id]
   if (count && count > 0) {
-    return 'Are you sure you want to delete this folder? Pipelines will be moved to Uncategorised.'
+    return t('components.pipelines.FolderTree.delete_confirm_with_items', {
+      itemNoun: itemNoun.value,
+      uncategorisedLabel: labels.value.uncategorised,
+    })
   }
-  return 'Are you sure you want to delete this folder?'
+  return t('components.pipelines.FolderTree.delete_confirm_empty')
 })
 
 async function loadFolders() {
   loading.value = true
   error.value = null
   try {
-    allFolders.value = await get<FolderItem[]>('/api/v1/pipeline-folders')
+    allFolders.value = await get<FolderItem[]>(apiBase.value)
   } catch (e: unknown) {
     error.value = formatApiError(e)
   } finally {
@@ -306,7 +338,7 @@ async function onDragEnd() {
         const folder = items[i].folder
         if (folder.sort_order !== i) {
           try {
-            await patch(`/api/v1/pipeline-folders/${folder.id}/move`, { sort_order: i })
+            await patch(`${apiBase.value}/${folder.id}/move`, { sort_order: i })
           } catch {
             console.warn(`Failed to update sort_order for folder ${folder.id}`)
           }
@@ -338,7 +370,7 @@ async function handleCreate() {
     if (newFolderParentId.value && newFolderParentId.value !== 'null') {
       body.parent_id = newFolderParentId.value
     }
-    await post<FolderItem>('/api/v1/pipeline-folders', body)
+    await post<FolderItem>(apiBase.value, body)
     showCreateDialog.value = false
     newFolderParentId.value = null
     emit('folders-changed')
@@ -362,7 +394,7 @@ async function handleRename() {
   renaming.value = true
   renameError.value = null
   try {
-    await patch<FolderItem>(`/api/v1/pipeline-folders/${renameTarget.value.id}`, {
+    await patch<FolderItem>(`${apiBase.value}/${renameTarget.value.id}`, {
       name: renameFolderName.value.trim(),
     })
     showRenameDialog.value = false
@@ -387,7 +419,7 @@ async function handleDelete() {
   deleting.value = true
   deleteError.value = null
   try {
-    await deleteRequest<void>(`/api/v1/pipeline-folders/${deleteTarget.value.id}`)
+    await deleteRequest<void>(`${apiBase.value}/${deleteTarget.value.id}`)
     const deletedId = deleteTarget.value.id
     showDeleteConfirm.value = false
     deleteTarget.value = null

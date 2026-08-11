@@ -44,6 +44,7 @@ from modulo.db.crud.schema import (
     list_schemas,
     update_schema,
 )
+from modulo.db.crud.schema_folder import move_schema_to_folder
 from modulo.db.models.schema import SchemaVersion as SchemaVersionModel
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -76,6 +77,7 @@ class SchemaResponse(BaseModel):
     name: str
     description: str | None
     abstract_name: str | None
+    folder_id: uuid.UUID | None = None
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
@@ -136,13 +138,14 @@ class SchemaVersionListResponse(BaseModel):
 async def list_schemas_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    folder_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("schema.list"),
 ) -> SchemaListResponse:
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
-            result = await list_schemas(session, cursor=None, limit=page_size)
+            result = await list_schemas(session, cursor=None, limit=page_size, folder_id=folder_id)
     except IntegrityError:
         logger.exception("schemas.list_schemas_endpoint")
         raise HTTPException(
@@ -366,6 +369,43 @@ async def deprecate_schema_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred.",
+        ) from None
+    if schema is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
+    return SchemaResponse.model_validate(schema)
+
+
+# ---------------------------------------------------------------------------
+# Folder assignment
+# ---------------------------------------------------------------------------
+
+
+class SchemaFolderMoveRequest(BaseModel):
+    folder_id: uuid.UUID | None = None
+
+
+@handle_db_errors("schemas.move_to_folder")
+@router.patch("/{schema_id}/folder", response_model=SchemaResponse)
+async def move_schema_to_folder_endpoint(
+    schema_id: uuid.UUID,
+    req: SchemaFolderMoveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("schema.update"),
+) -> SchemaResponse:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            schema = await move_schema_to_folder(session, schema_id, req.folder_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        ) from None
+    except ProgrammingError:
+        logger.exception("schemas.move_to_folder")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="This feature is not available. Run database migrations to enable it.",
         ) from None
     if schema is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schema not found")
