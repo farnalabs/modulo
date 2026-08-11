@@ -125,6 +125,106 @@ class TestSendEmail:
                     body_html="<html><body><h1>Test</h1></body></html>",
                 )
 
+    def test_send_email_oserror_network_failure_retried_and_wrapped(self) -> None:
+        """OSError (connection refused, DNS, timeout) must be retried and wrapped
+        in EmailSendingError — previously such failures escaped uncaught because
+        only smtplib.SMTPException was handled."""
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = ConnectionRefusedError(
+                111, "Connection refused"
+            )
+
+            with pytest.raises(EmailSendingError, match="Connection refused"):
+                send_email(
+                    settings,
+                    to=["admin@example.com"],
+                    subject="Test",
+                    body_html="<html><body><h1>Test</h1></body></html>",
+                )
+
+            # _MAX_RETRIES + 1 = 3 attempts total
+            assert mock_smtp.return_value.__enter__.return_value.send_message.call_count == 3
+
+    def test_send_email_timeout_retried_and_wrapped(self) -> None:
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = TimeoutError("timed out")
+
+            with pytest.raises(EmailSendingError, match="timed out"):
+                send_email(
+                    settings,
+                    to=["admin@example.com"],
+                    subject="Test",
+                    body_html="<html><body><h1>Test</h1></body></html>",
+                )
+
+            assert mock_smtp.return_value.__enter__.return_value.send_message.call_count == 3
+
+    def test_send_email_transient_network_error_then_success(self) -> None:
+        """A transient OSError on the first attempt must not abort — the retry
+        succeeds on the next attempt."""
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+            mock_server.send_message.side_effect = [
+                TimeoutError("timed out"),
+                None,
+            ]
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+            assert result is True
+            assert mock_server.send_message.call_count == 2
+
+    def test_send_email_auth_failure_redacts_credentials(self) -> None:
+        """SMTP auth failures can echo the configured username/password in the
+        server response — the raised EmailSendingError must redact them."""
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
+                "smtplib"
+            ).SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted. user failed authentication")
+
+            with pytest.raises(EmailSendingError) as exc_info:
+                send_email(
+                    settings,
+                    to=["admin@example.com"],
+                    subject="Test",
+                    body_html="<html><body><h1>Test</h1></body></html>",
+                )
+
+            message = str(exc_info.value)
+            assert "user" not in message
+            assert "pass" not in message
+            assert "********" in message
+
+    def test_send_email_error_redacts_password_in_network_message(self) -> None:
+        """Error detail strings must never contain the SMTP password even when
+        the underlying exception embeds it."""
+        settings = MockSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
+                "smtplib"
+            ).SMTPException("authentication failed for pass")
+
+            with pytest.raises(EmailSendingError) as exc_info:
+                send_email(
+                    settings,
+                    to=["admin@example.com"],
+                    subject="Test",
+                    body_html="<html><body><h1>Test</h1></body></html>",
+                )
+
+            assert "pass" not in str(exc_info.value)
+            assert "********" in str(exc_info.value)
+
     def test_send_email_empty_recipients_returns_false(self) -> None:
         settings = MockSettings()
         result = send_email(

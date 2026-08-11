@@ -34,6 +34,7 @@ from sqlalchemy.exc import DBAPIError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.core.analytics.builder import (
+    CONCURRENCY_MAX_RAW_ROWS,
     HOUR_GROUPBY_MAX_RANGE_DAYS,
     AnalyticsDimension,
     AnalyticsGroupBy,
@@ -404,10 +405,13 @@ async def run_concurrency_query(
     auto-granularity, hour cap, statement timeout) but buckets the overlap of
     the runs' ``[started_at, completed_at)`` intervals in Python instead of a
     GROUP BY. ``dimension`` is accepted for surface parity and ignored — there
-    is no per-dimension concurrency split. Returns ``{group_by, date_from,
-    date_to, pool_reference, buckets}`` where each bucket carries ``{date,
-    key: None, max_active, avg_active, max_queued, avg_queued,
-    pool_reference}``.
+    is no per-dimension concurrency split. The raw scan is bounded by
+    ``CONCURRENCY_MAX_RAW_ROWS``: when the filtered scan exceeds the cap the
+    query raises ``AnalyticsValidationError`` telling the caller to narrow the
+    range — it never silently truncates (a partial scan would yield wrong
+    max/avg counts). Returns ``{group_by, date_from, date_to, pool_reference,
+    buckets}`` where each bucket carries ``{date, key: None, max_active,
+    avg_active, max_queued, avg_queued, pool_reference}``.
     """
     if _rate_limited(str(org_id)):
         raise AnalyticsRateLimitedError("Rate limit exceeded")
@@ -441,6 +445,11 @@ async def run_concurrency_query(
         stmt=stmt,
         params=bind,
     )
+    if len(rows) > CONCURRENCY_MAX_RAW_ROWS:
+        raise AnalyticsValidationError(
+            f"concurrency query exceeded the {CONCURRENCY_MAX_RAW_ROWS}-row raw cap — "
+            "reduce the date range or add pipeline/status filters"
+        )
     buckets = bucket_concurrency_rows(
         rows,
         group_by=effective_group_by,

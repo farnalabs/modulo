@@ -166,7 +166,9 @@
       class="flex-1 overflow-auto bg-background pt-14 md:pt-0 relative"
       :style="remyDockedStyle"
     >
-      <OnboardingBanner />
+      <div class="absolute top-14 md:top-0 left-0 right-0 z-10">
+        <OnboardingBanner />
+      </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
       <router-view v-slot="{ Component, route }">
         <transition name="page">

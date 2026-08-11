@@ -157,6 +157,20 @@ describe('RunsListView', () => {
     expect(wrapper.text()).toContain('—')
   })
 
+  it('shows a live elapsed duration with an (elapsed) suffix for executing runs', async () => {
+    mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status: 'running', completed_at: null }])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const durationCell = wrapper.find('[data-testid="runs-list-duration-run1"]')
+    expect(durationCell.exists()).toBe(true)
+    expect(durationCell.text()).toContain('(elapsed)')
+    expect(durationCell.text()).not.toContain('—')
+    const liveElapsed = durationCell.find('[role="status"]')
+    expect(liveElapsed.exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('shows aggregate cost with a (+child) marker when child runs exist', async () => {
     mockResponses['/api/v1/runs'] = listWith([
       { ...baseRun, child_runs_cost_usd: '0.25', aggregate_cost_usd: '0.75' },
@@ -218,7 +232,7 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it.each(['complete', 'failed', 'cancelled', 'eval_failed'])('renders no stop button for %s runs', async (status) => {
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed', 'stalled'])('renders no stop button for %s runs', async (status) => {
     mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
     const wrapper = mountView()
     await flushPromises()
