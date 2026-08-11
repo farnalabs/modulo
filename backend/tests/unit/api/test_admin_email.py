@@ -127,6 +127,7 @@ class TestGetEmailSettings:
             assert data["email_from"] == "noreply@example.com"
         finally:
             admin_email.get_organisation = original
+
     async def test_get_settings_empty(self, client_admin, mock_session):
         import modulo.api.routes.admin_email as admin_email
         from modulo.db.models.organisation import Organisation
