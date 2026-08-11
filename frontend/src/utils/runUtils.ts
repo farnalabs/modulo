@@ -9,7 +9,6 @@ export function runStatusBadgeClass(status: string): string {
     cancelled: 'bg-muted text-muted-foreground',
     eval_failed: 'bg-destructive/10 text-destructive',
     claimed: 'bg-warning/10 text-warning',
-    waiting_for_lock: 'bg-muted text-muted-foreground',
   }
   return map[status] ?? 'bg-muted text-muted-foreground'
 }

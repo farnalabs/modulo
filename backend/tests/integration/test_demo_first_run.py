@@ -23,6 +23,10 @@ os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
 
+# Valid Fernet key (matches the FERNET_KEY default set in integration/conftest.py
+# and ci.yml). _seed_demo_data encrypts the demo model-backend credentials with
+# Fernet, so any Settings constructed here must carry a valid key — "a" * 32 is
+# not url-safe base64 and raises ValueError.
 _VALID_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 
 
