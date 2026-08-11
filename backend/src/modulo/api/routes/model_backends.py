@@ -287,6 +287,15 @@ async def create_model_backend_endpoint(
                 fallback_backend_ids=fallback_ids,
                 tier=req.tier,
             )
+
+            import json
+
+            from modulo.core.secrets_backend import create_secrets_backend
+
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+            secret_value = json.dumps({"api_key": req.api_key})
+            await secrets_backend.set_secret(str(mb.id), secret_value)
+            response = _to_response(mb)
     except IntegrityError:
         logger.exception("model_backends.create_model_backend_endpoint")
         raise HTTPException(
@@ -313,14 +322,7 @@ async def create_model_backend_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating model backend.",
         ) from None
-    import json
-
-    from modulo.core.secrets_backend import create_secrets_backend
-
-    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-    secret_value = json.dumps({"api_key": req.api_key})
-    await secrets_backend.set_secret(str(mb.id), secret_value)
-    return _to_response(mb)
+    return response
 
 
 @handle_db_errors("model_backends.get_model_backend_endpoint")
@@ -386,6 +388,18 @@ async def update_model_backend_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mb = await update_model_backend(session, backend_id, updates)
+            if mb is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
+            await session.refresh(mb)
+            if req.api_key is not None:
+                import json
+
+                from modulo.core.secrets_backend import create_secrets_backend
+
+                secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+                secret_value = json.dumps({"api_key": req.api_key})
+                await secrets_backend.set_secret(str(mb.id), secret_value)
+            response = _to_response(mb)
     except IntegrityError:
         logger.exception("model_backends.update_model_backend_endpoint")
         raise HTTPException(
@@ -412,17 +426,7 @@ async def update_model_backend_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating model backend.",
         ) from None
-    if mb is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model backend not found")
-    if req.api_key is not None:
-        import json
-
-        from modulo.core.secrets_backend import create_secrets_backend
-
-        secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-        secret_value = json.dumps({"api_key": req.api_key})
-        await secrets_backend.set_secret(str(mb.id), secret_value)
-    return _to_response(mb)
+    return response
 
 
 @handle_db_errors("model_backends.delete_model_backend_endpoint")
