@@ -22,6 +22,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.graph_validator import GraphValidator
+from modulo.core.graph_validator._types import ValidationResult
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.crud.pipeline import create_pipeline
@@ -234,6 +236,7 @@ async def export_pipeline_bundle(
                 "graph_nodes_json": pipeline.graph_nodes_json or [],
                 "run_context_defaults": dict(pipeline.run_context_defaults or {}),
                 "node_timeout_seconds": pipeline.node_timeout_seconds,
+                "retry_policy": dict(pipeline.retry_policy or {}),
                 "visibility": "org",  # Always strip team scoping
             },
             "agents": agents_list,
@@ -659,6 +662,25 @@ def suggest_import_name(
     return f"{proposed_name} {suffix} {idx}"
 
 
+def _sanitize_retry_policy(imported: Any) -> dict[str, Any]:
+    """Validate an imported pipeline ``retry_policy``; coerce malformed to {}.
+
+    A malformed policy is a hard pre-run failure at execute time
+    (``GraphValidator.check_retry_policy`` → ``GraphValidationError``), which
+    would break EVERY run of an imported pipeline. Import is best-effort copy:
+    never let a malformed bundled policy permanently break the imported
+    pipeline's runs, so invalid policies are dropped to the no-policy default
+    ({}). A valid policy is returned unchanged (as a shallow copy).
+    """
+    if not isinstance(imported, dict):
+        return {}
+    check = ValidationResult()
+    GraphValidator.check_retry_policy(imported, check)
+    if check.is_valid:
+        return dict(imported)
+    return {}
+
+
 async def get_existing_pipeline_names(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -1010,6 +1032,11 @@ async def materialize_import(
         raise RuntimeError(f"Failed to create pipeline '{pname}' after {_MAX_NAME_RETRIES} attempts")
 
     pipeline.graph_nodes_json = list(graph_nodes)
+    imported_retry_policy = pipeline_info.get("retry_policy")
+    sanitized_retry_policy = _sanitize_retry_policy(imported_retry_policy)
+    if imported_retry_policy is not None and sanitized_retry_policy != imported_retry_policy:
+        warnings.append("Imported pipeline 'retry_policy' was malformed; dropped to the no-policy default ({}).")
+    pipeline.retry_policy = sanitized_retry_policy
     await session.flush()
 
     # --- Step 4: Create edges ---

@@ -53,6 +53,7 @@ from modulo.core.eval_engine import (
     EvalResult as EngineEvalResult,
 )
 from modulo.core.graph_validator import GraphValidator
+from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.hitl_manager import HITLManager
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import (
@@ -108,6 +109,77 @@ _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512
 
 _log = logging.getLogger(__name__)
+
+# Pipeline retry_policy events (must stay in sync with the API schema in
+# api/routes/pipelines.py and the graph validator). A policy can retry on:
+#   - "stall":    run ended "stalled" / error_code "executor_stalled"
+#   - "timeout":  error_code "node_timeout" / "TimeoutError"
+#   - "failure":  any other "failed" terminal status
+_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
+_RETRY_POLICY_MAX_RETRIES = 5
+
+
+class RunRetryPolicyError(NodeCancelledError):
+    """A run ended in a state the pipeline's ``retry_policy`` says to retry.
+
+    Subclasses ``NodeCancelledError`` so the caller
+    (``run_executor_with_watchdog``) treats the re-raise as a transient retry
+    — the SAQ job is re-dispatched and the run (already reset to ``pending``)
+    is claimed and executed again.
+    """
+
+    def __init__(self, status: str, max_retries: int) -> None:
+        super().__init__(node="retry_policy", message=f"retry_policy: status={status!r}, budget={max_retries}")
+        self.status = status
+        self.max_retries = max_retries
+
+
+def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) -> int | None:
+    """Return the retry budget (``max_retries``) for a terminal outcome, or None.
+
+    Matching rules:
+      - ``"stall"``:    ``final_status == "stalled"`` or ``error_code == "executor_stalled"``
+      - ``"timeout"``:  ``error_code in ("node_timeout", "TimeoutError")``
+      - ``"failure"``:  ``final_status == "failed"`` and not a stall/timeout outcome
+
+    Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
+    path only — a node returns a stalled output dict (``stall_reason``) in
+    ``_stream_graph``, which reaches this decision. The **executor-level
+    zombie-watchdog stall** (``execute_run`` watchdog terminal-fails the run and
+    cancels ``execute()``; the ``CancelledError`` is re-raised at the top of the
+    stream block before this decision runs) is NOT retried. See ``docs/prd.md``
+    §8.9.
+
+    An absent/malformed policy or a 0 budget yields None (no retry) — the
+    current behaviour is unchanged for pipelines without a policy.
+    """
+    if not isinstance(policy, dict):
+        return None
+    events = policy.get("on")
+    if not isinstance(events, list) or not events:
+        return None
+    max_retries = policy.get("max_retries", 0)
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int):
+        return None
+    if not 0 <= max_retries <= _RETRY_POLICY_MAX_RETRIES:
+        return None
+    if max_retries == 0:
+        return None
+    event_set = set(events)
+    code = error_code or ""
+    if "stall" in event_set and (final_status == "stalled" or code == "executor_stalled"):
+        return max_retries
+    if "timeout" in event_set and code in ("node_timeout", "TimeoutError"):
+        return max_retries
+    if (
+        "failure" in event_set
+        and final_status == "failed"
+        # Timeout is a distinct event — a "failure"-only policy must not retry
+        # a timeout outcome, and a stall is not a generic failure.
+        and code not in ("node_timeout", "TimeoutError", "executor_stalled")
+    ):
+        return max_retries
+    return None
 
 
 class RunNotFoundError(KeyError):
@@ -1061,9 +1133,30 @@ class PipelineExecutor:
             if not validation.is_valid:
                 raise GraphValidationError(validation.issues, run_id)
 
+            # A malformed pipeline retry_policy must not silently disable retries
+            # at run time — surface it as a hard validation error (default no-policy
+            # is unaffected). Only dict values carry a policy; None/non-dicts (e.g.
+            # legacy rows) are the no-policy default and _retry_after_policy
+            # already fail-safes them to no retry.
+            retry_policy_check = ValidationResult()
+            _retry_policy_value = getattr(pipeline, "retry_policy", None)
+            if isinstance(_retry_policy_value, dict):
+                GraphValidator.check_retry_policy(_retry_policy_value, retry_policy_check)
+                if not retry_policy_check.is_valid:
+                    raise GraphValidationError(retry_policy_check.issues, run_id)
+
         # Capture scalar attributes before the session closes.
         pipeline_id = run.pipeline_id
         max_concurrent = pipeline.max_concurrent_runs
+        pipeline_retry_policy: dict[str, Any] = {}
+        try:
+            raw_policy = getattr(pipeline, "retry_policy", None)
+            if isinstance(raw_policy, dict):
+                pipeline_retry_policy = raw_policy
+        except Exception:
+            # A malformed/legacy retry_policy must never crash the run —
+            # default to no retry.
+            pipeline_retry_policy = {}
         guard = RunawayGuard(
             max_duration_seconds=pipeline.max_duration_seconds,
             max_steps=pipeline.max_steps,
@@ -1293,6 +1386,74 @@ class PipelineExecutor:
             final_status = "failed"
             error_code = type(exc).__name__
             error_detail = _tb
+
+        # Retry policy: if the run ended in a state the pipeline's
+        # retry_policy says to retry and the attempt budget remains, reset the
+        # run to pending + release the dispatch lease + re-raise so SAQ
+        # re-dispatches it as a new attempt — the same fenced pattern as the
+        # NodeCancelledError path above. The E2B dispatch fence was retired in
+        # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
+        # fenced pending-reset below IS the fence release.
+        retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code)
+        if retry_budget is not None:
+            node_attempt_count = 0
+            current_claim_token: str | None = None
+            async with self._session_factory() as session, session.begin():
+                await set_rls_org(session, org_id)
+                current_run = await get_run(session, run_id)
+                if current_run is not None:
+                    node_attempt_count = int(current_run.node_attempt_count or 0)
+                    current_claim_token = current_run.claim_token
+            superseded = (
+                self._claim_token is not None
+                and current_claim_token is not None
+                and current_claim_token != self._claim_token
+            )
+            # ``node_attempt_count`` is incremented to 1 on the FIRST real
+            # execution attempt (above), so ``<= retry_budget`` means the
+            # budget counts actual RETRIES: budget=1 retries attempt 1
+            # (1 <= 1) and is terminal after attempt 2 (2 <= 1 is false) —
+            # 1 retry, 2 attempts. ``< retry_budget`` would have yielded N
+            # total attempts (N-1 retries), contradicting the API's
+            # "max_retries means retries" contract.
+            if node_attempt_count <= retry_budget and not superseded:
+                _log.warning(
+                    "pipeline.retry_policy",
+                    extra={
+                        "run_id": str(run_id),
+                        "status": final_status,
+                        "error_code": error_code,
+                        "attempt": node_attempt_count,
+                        "budget": retry_budget,
+                    },
+                )
+                # Fenced pending-reset: a conditional UPDATE guarded by OUR
+                # captured claim token + status='running' so a superseded
+                # original cannot demote the successor's running row and a
+                # cancellation cannot be reversed.
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    await session.execute(
+                        text(
+                            "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
+                            "WHERE id=:rid AND claim_token=:tok AND status='running' "
+                            "AND cancellation_requested = false"
+                        ),
+                        {"rid": str(run_id), "tok": self._claim_token},
+                    )
+                # The re-raise below propagates out of execute() BEFORE the
+                # post-stream try/finally, so run its cleanup here: clear the
+                # cancellation check + hubs and close the run's broker so the
+                # retry re-entry gets a fresh broker and no stale contextvars.
+                set_cancellation_check(None)
+                set_model_backend_hub(None)
+                set_connector_hub(None)
+                if model_backend_hub is not None:
+                    await _teardown_hub(model_backend_hub)
+                if connector_hub is not None:
+                    await _teardown_hub(connector_hub)
+                get_registry().close(run_id)
+                raise RunRetryPolicyError(final_status, retry_budget)
 
         try:
             # Record audit events for block failures.
