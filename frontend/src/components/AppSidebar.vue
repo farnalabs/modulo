@@ -5,6 +5,7 @@
   >
     <SidebarRail
       v-if="showRail"
+      ref="railRef"
       :is-system-admin="isSystemAdmin"
       :user-role="userRole"
       :user-permissions="userPermissions"
@@ -68,6 +69,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useMediaQuery } from "@vueuse/core";
+import { useRoute } from "vue-router";
 import SidebarFull from "./SidebarFull.vue";
 import SidebarRail from "./SidebarRail.vue";
 import { useSidebar } from "../composables/useSidebar";
@@ -90,8 +92,13 @@ defineEmits<{
 const isDesktop = useMediaQuery("(min-width: 768px)");
 const { collapsed, setCollapsed } = useSidebar();
 
+const route = useRoute();
 const mobileExpanded = ref(false);
 const mobilePanelRef = ref<HTMLElement | null>(null);
+const railRef = ref<InstanceType<typeof SidebarRail> | null>(null);
+
+const FOCUSABLE_SELECTOR =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 const showRail = computed(() => !isDesktop.value || collapsed.value);
 const showMobilePanel = computed(() => !isDesktop.value && mobileExpanded.value);
@@ -106,27 +113,70 @@ function onCollapse() {
   else mobileExpanded.value = false;
 }
 
-function handleMobileEscape(e: KeyboardEvent) {
+function handleMobileKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     mobileExpanded.value = false;
+    return;
+  }
+  if (e.key !== "Tab") return;
+
+  const dialog = mobilePanelRef.value;
+  if (!dialog) return;
+
+  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+  if (focusable.length === 0) {
+    e.preventDefault();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  const focusInside = active instanceof HTMLElement && dialog.contains(active);
+
+  if (e.shiftKey) {
+    if (active === first || !focusInside) {
+      e.preventDefault();
+      last.focus();
+    }
+  } else if (active === last || !focusInside) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+function focusRailExpandButton() {
+  const railEl = railRef.value?.$el;
+  if (railEl instanceof HTMLElement) {
+    railEl.querySelector<HTMLElement>("button")?.focus();
   }
 }
 
 watch(showMobilePanel, (open) => {
   if (open) {
-    document.addEventListener("keydown", handleMobileEscape);
+    document.addEventListener("keydown", handleMobileKeydown);
     nextTick(() => {
       const firstFocusable = mobilePanelRef.value?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        FOCUSABLE_SELECTOR,
       );
       firstFocusable?.focus();
     });
   } else {
-    document.removeEventListener("keydown", handleMobileEscape);
+    document.removeEventListener("keydown", handleMobileKeydown);
+    focusRailExpandButton();
   }
 });
 
+watch(
+  () => route.path,
+  () => {
+    if (showMobilePanel.value) {
+      mobileExpanded.value = false;
+    }
+  },
+);
+
 onUnmounted(() => {
-  document.removeEventListener("keydown", handleMobileEscape);
+  document.removeEventListener("keydown", handleMobileKeydown);
 });
 </script>

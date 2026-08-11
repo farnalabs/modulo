@@ -1,13 +1,53 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, useRoute } from 'vue-router'
+import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 vi.mock('../../lib/api/client', () => ({
   api: { GET: vi.fn().mockResolvedValue({ data: null, error: undefined }) },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
   clearAccessToken: vi.fn(),
 }))
+
+vi.mock('vue-router', async () => {
+  const { reactive } = await import('vue')
+  const route = reactive({
+    path: '/',
+    fullPath: '/',
+    params: {},
+    query: {},
+    hash: '',
+    matched: [],
+    name: 'dashboard',
+    redirectedFrom: undefined,
+    meta: {},
+  })
+  const router = {
+    install: vi.fn(),
+    push: vi.fn(),
+    replace: vi.fn(),
+    resolve: vi.fn(),
+    go: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    beforeEach: vi.fn(),
+    afterEach: vi.fn(),
+    onError: vi.fn(),
+    currentRoute: { value: route },
+    getRoutes: vi.fn(() => []),
+    addRoute: vi.fn(),
+    removeRoute: vi.fn(),
+    hasRoute: vi.fn(() => false),
+    isReady: vi.fn(() => Promise.resolve(true)),
+  }
+  return {
+    useRoute: () => route,
+    useRouter: () => router,
+    createRouter: () => router,
+    createWebHistory: () => ({}),
+  }
+})
 
 import AppSidebar from '../../components/AppSidebar.vue'
 
@@ -33,7 +73,7 @@ function mockMatchMedia(matches: boolean) {
   }))
 }
 
-function mountSidebar(props = {}) {
+function mountSidebar(props = {}, extra: Record<string, unknown> = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   return mount(AppSidebar, {
@@ -52,6 +92,7 @@ function mountSidebar(props = {}) {
         SvgIcon: { template: '<span class="svg-stub" />' },
       },
     },
+    ...extra,
   })
 }
 
@@ -142,5 +183,66 @@ describe('AppSidebar', () => {
     const avatar = wrapper.find('.avatar-ring')
     expect(avatar.exists()).toBe(true)
     expect(avatar.attributes('href')).toBe('/admin/my-profile')
+  })
+
+  it('returns focus to the rail expand trigger when the mobile panel closes', async () => {
+    const wrapper = mountSidebar({}, { attachTo: document.body })
+    await flushPromises()
+
+    const expandButton = wrapper.find('[aria-label="Expand sidebar"]')
+    await expandButton.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(expandButton.element)
+
+    wrapper.unmount()
+  })
+
+  it('traps focus within the mobile dialog while it is open', async () => {
+    const wrapper = mountSidebar({}, { attachTo: document.body })
+    await flushPromises()
+    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.find('[role="dialog"]')
+    const focusables = dialog.findAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    )
+    expect(focusables.length).toBeGreaterThan(0)
+    const first = focusables[0].element as HTMLElement
+    const last = focusables[focusables.length - 1].element as HTMLElement
+
+    last.focus()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
+    await flushPromises()
+    expect(document.activeElement).toBe(first)
+
+    first.focus()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))
+    await flushPromises()
+    expect(document.activeElement).toBe(last)
+
+    wrapper.unmount()
+  })
+
+  it('closes the mobile panel when the route changes while it is open', async () => {
+    const route = vi.mocked(useRoute)() as RouteLocationNormalizedLoaded
+    const wrapper = mountSidebar()
+    await flushPromises()
+    await wrapper.find('[aria-label="Expand sidebar"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+
+    route.path = '/notifications'
+    await flushPromises()
+
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+
+    route.path = '/'
   })
 })
