@@ -12,7 +12,7 @@ export function useMutation<TInput = void, TOutput = void>(
 
   return {
     loading: computed(() => mutation.isPending.value),
-    error: computed(() => mutation.error.value ? (mutation.error.value?.message ?? 'An error occurred') : null),
+    error: computed(() => mutation.error.value ? (mutation.error.value?.message || 'An error occurred') : null),
     mutate: async (input: TInput) => {
       return await mutation.mutateAsync(input)
     },
