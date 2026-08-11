@@ -2229,15 +2229,16 @@ export default {
       "modulo_logo": "Modulo logo"
     },
     "AppLayout": {
-      "close_navigation": "Close navigation",
-      "open_navigation": "Open navigation",
       "all_features": "All Features",
-      "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
       "remy_performing_actions": "Remy is performing actions on this page",
       "remy_stop": "Stop",
       "modulo": "Modulo",
       "search_pages": "Search pages",
-      "toggle_theme": "Toggle theme"
+      "toggle_theme": "Toggle theme",
+      "collapse_sidebar": "Collapse sidebar",
+      "expand_sidebar": "Expand sidebar",
+      "user_profile": "User profile",
+      "main_navigation": "Main navigation"
     },
     "SidebarFooter": {
       "plan_expires_on": "Plan expires on",
