@@ -38,6 +38,7 @@ _EXPECTED_TOOLS = frozenset(
         "get_trigger",
         "update_trigger",
         "delete_trigger",
+        "set_org_triggers_paused",
         "create_model_backend",
         "create_connector",
         "create_trigger",

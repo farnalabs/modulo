@@ -2745,6 +2745,72 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
         return _tool_error("Failed to delete trigger")
 
 
+@mcp.tool(
+    description="Pause or resume all pipeline triggers for the current organisation. "
+    "When paused, new trigger-initiated runs (webhook, cron, polling, agent_signal, "
+    "replay) are blocked at the run-creation gate; manual runs, MCP trigger_pipeline, "
+    "and scheduled reports are not paused. Idempotent: setting the state it is "
+    "already in is a no-op that returns the current state without writing an audit event."
+)
+@_RETRY_DB
+async def set_org_triggers_paused(paused: bool) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "set_org_triggers_paused")
+
+        org_id = _ctx_org_id_val()
+
+        from datetime import UTC
+
+        from modulo.core.audit_logger import append_audit_event
+        from modulo.db.crud.organisation import get_organisation
+
+        async with _session(org_id) as s:
+            org = await get_organisation(s, org_id)
+            if org is None:
+                return {"error": "not_found", "detail": "Organisation not found"}
+
+            # Idempotency: toggling to the current state is a no-op (no audit write).
+            if org.triggers_paused == paused:
+                paused_at = org.triggers_paused_at.isoformat() if org.triggers_paused_at else None
+                return {"paused": org.triggers_paused, "paused_at": paused_at}
+
+            org.triggers_paused = paused
+            org.triggers_paused_at = datetime.now(UTC) if paused else None
+            await s.flush()
+
+            # Audit is fail-open-with-alert: the toggle ALWAYS commits; a failed
+            # audit write is loudly logged and never rolls back the toggle.
+            try:
+                await append_audit_event(
+                    s,
+                    org_id=org_id,
+                    event_type="triggers_paused",
+                    actor_user_id=_ctx_user_id_val(),
+                    payload_json={"paused": paused},
+                )
+            except SQLAlchemyError:
+                _log.exception("set_org_triggers_paused audit write failed")
+            except Exception:
+                _log.exception("set_org_triggers_paused audit write failed (non-DB)")
+
+            return {
+                "paused": org.triggers_paused,
+                "paused_at": org.triggers_paused_at.isoformat() if org.triggers_paused_at else None,
+            }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("set_org_triggers_paused failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except StarletteHTTPException:
+        return {"error": "not_found", "detail": "Organisation not found"}
+    except Exception:
+        _log.exception("set_org_triggers_paused failed")
+        return _tool_error("Failed to update org trigger pause state")
+
+
 @mcp.tool(description="Delete a pipeline by ID.")
 @_RETRY_DB
 async def delete_pipeline(
