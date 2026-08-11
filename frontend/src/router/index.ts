@@ -78,8 +78,6 @@ const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
-const ApiChangelogView = () => import('../views/ApiChangelogView.vue')
-const TeamComparisonView = () => import('../views/TeamComparisonView.vue')
 const StageBoardView = () => import('../views/StageBoardView.vue')
 const PipelineEditorView = () => import('../views/PipelineEditorView.vue')
 const CompositeEditorView = () => import('../views/pipeline/CompositeEditorView.vue')
@@ -390,16 +388,6 @@ const router = createRouter({
       path: '/admin/plugins',
       name: 'admin-plugins',
       component: AdminPluginsView,
-    },
-    {
-      path: '/admin/api-changelog',
-      name: 'api-changelog',
-      component: ApiChangelogView,
-    },
-    {
-      path: '/admin/teams/comparison',
-      name: 'team-comparison',
-      component: TeamComparisonView,
     },
     {
       path: '/admin/notification-delivery',
