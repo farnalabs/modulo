@@ -120,7 +120,17 @@ Abstraction over external tool integrations. ConnectorType defines an abstract c
 |-----------|------|------------|
 | `FilesystemConnector` | `git-host` | read/write files, git commit/push |
 | `GitHubConnector` | `git-host` | read/write via API, create PR |
+| `GitLabConnector` | `git-host` | read/write via API, merge requests |
 | `ShellConnector` | `shell` | run commands in WorkspaceLease |
+| `SlackConnector` | `messaging` | send messages, search channels |
+| `JiraConnector` | `issue-tracker` | create/search/update issues |
+| `LinearConnector` | `issue-tracker` | create/search/update issues |
+| `NotionConnector` | `documentation` | read/write pages and databases |
+| `ConfluenceConnector` | `documentation` | read/write pages |
+| `PagerDutyConnector` | `incident-management` | trigger/acknowledge/resolve incidents |
+| `SentryConnector` | `error-tracking` | list/search issues, create events |
+| `DatadogConnector` | `monitoring` | query metrics, create monitors |
+| *(40+ built-in connectors total — see `modulo/connectors/`)* | | |
 
 ### Model Backend Hub (`modulo/model_backends/`)
 
