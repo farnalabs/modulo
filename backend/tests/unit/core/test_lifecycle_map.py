@@ -93,7 +93,8 @@ async def test_create_lifecycle_map_passes_all_fields(session: AsyncMock) -> Non
         content_json={"stages": []},
     )
     session.add.assert_called_once_with(created)
-    session.flush.assert_awaited_once()
+    # create now also flushes the derived junction projection rows.
+    session.flush.assert_awaited()
     assert result is created
 
 

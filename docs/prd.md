@@ -4006,7 +4006,7 @@ From the user's perspective: the Lifecycle Map is the first thing they see when 
 | **Transition Edge** | A directed connection between two stage nodes. Carries trigger metadata describing *how* work moves from one stage to the next — even if Modulo doesn't own the trigger. |
 | **Trigger Metadata** | A structured annotation on a transition edge: `trigger_type: "pipeline_completed" \| "webhook" \| "cron" \| "manual" \| "external"`, a human-readable description of who/what fires it, and optionally a link to the trigger definition if Modulo-managed. |
 | **Graduated Stage** | A stage node that started as `external` or `manual` and was later linked to a Modulo pipeline. The map preserves its history — previous versions show what it looked like before graduation. |
-| **Map Version** | An immutable snapshot of the entire map DAG. Versions are created on explicit save. Older versions remain viewable to track process evolution. |
+| **Map Version** | An immutable snapshot of the entire map DAG. Versions are created on explicit save. Older versions remain viewable to track process evolution. V1: a save bumps the version counter and publishes the content as the active version; an immutable version-history table is a later slice. |
 
 #### 8.31.2 Stage Node Types
 
@@ -4099,7 +4099,7 @@ The editor is available from `/lifecycle-maps` in the sidebar (Core group, or a 
 
 | Existing Concept | How It Relates |
 |---|---|
-| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. The same pipeline can appear in multiple maps. |
+| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. A pipeline may be a stage of **one active map at a time** — the lifecycle-map stage junction enforces this (a pipeline graduating into a new map must first be freed from its previous active map by deleting or un-linking it there). |
 | **Stage Board** (§8.4) | The Stage Board shows cards for pipelines. The Lifecycle Map shows the *logical flow* that those pipelines belong to. They are complementary views: the board is "what's running now"; the map is "what are all the steps." |
 | **Trigger** (§8.5) | A transition edge with `trigger_type: "webhook"` or `"cron"` can link to a Modulo Trigger entity. The trigger definition lives separately; the edge just references it. |
 | **Manual Node** (§8.4) | A `manual` stage node is the lifecycle-level equivalent of a Manual pipeline node — a human step with no automation. Manual stages document the handoff; Manual pipeline nodes pause execution for human input. They are independent concepts at different fractal levels. |
@@ -4138,7 +4138,7 @@ content_json:
       estimated_frequency: daily
 ```
 
-Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles.
+Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles. **V1 implementation note:** a save (POST/PUT on `/versions`) validates and canonicalises the content, replaces the active `content_json`, and bumps the version counter; the active map state is served as a single version entry. Immutable per-version snapshots with browse-back are a later slice.
 
 #### 8.31.10 The 80% Target
 
