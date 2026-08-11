@@ -7,25 +7,25 @@
 ## 1. Schema seams
 Every boundary in a pipeline is a typed contract. Inputs validate against `input_schema`, outputs against `output_schema` (JSON Schema draft-07), before anything moves. Schemas are org-scoped, versioned (semver), reusable, composable; abstract schemas enable type-constraint matching during workflow import; schema inference generates drafts from connector data.
 **Why:** an agent cannot pass garbage downstream without a record of it. Typed seams make automation auditable and failures loud.
-**Where:** Schema Registry (`modulo/core/schema_registry/`), run lifecycle validation steps, `docs/product-map/core/schema-system.md`, `schema-versioning.md`.
+**Where:** Schema Registry (`modulo/core/schema_registry/`), run lifecycle validation steps, `docs/product-map/core/schema-system.md`, `docs/product-map/core/schema-versioning.md`.
 **Benefit:** what you see is what runs; mismatches fail loudly at the seam.
 
 ## 2. Immutability of runs
 A run executes against a frozen `PipelineSnapshot`: agent versions, schema pins, connector bindings, model backend pins, prompt version hashes, environment profile - all pinned at run-start, never resolved live. Pauses and resumes behave identically. Completed runs are unaffected by later changes (connector removal, prompt edits, pipeline edits).
 **Why:** reproducibility and trust - a run's outcome is a function of its snapshot, not of whatever changed since.
-**Where:** `architecture.md` snapshot lifecycle, `docs/product-map/pipelines/pipeline-versioning.md`, `pipeline-diff-rollback.md`, `docs/prd.md` snapshot section.
+**Where:** `architecture.md` snapshot lifecycle, `docs/product-map/pipelines/pipeline-versioning.md`, `docs/product-map/pipelines/pipeline-diff-rollback.md`, `docs/prd.md` snapshot section.
 **Benefit:** pause for a week, resume, same behavior; the audit trail stays truthful.
 
 ## 3. Audit as a first-class output
 Every state-changing action produces an immutable, org-scoped AuditEvent (actor, action, resource, timestamp). Append-only at DB level (0005 triggers), SHA-256-linked chain for verifiability. SOC 2 evidence export builds on it.
 **Why:** governance requires a record you can trust after the fact; the trail is a product output, not an afterthought.
-**Where:** `modulo/core/audit_logger/`, `docs/product-map/core/audit-crypto-chain.md`, `audit-trail.md`, `soc2-evidence-export.md`, `docs/adr/004-user-deactivation-replaces-deletion.md`.
+**Where:** `modulo/core/audit_logger/`, `docs/product-map/core/audit-crypto-chain.md`, `docs/product-map/core/audit-trail.md`, `docs/product-map/core/soc2-evidence-export.md`, `docs/adr/004-user-deactivation-replaces-deletion.md`.
 **Benefit:** the history you inspect is exactly what happened; auditors and operators read the same truth.
 
 ## 4. Deterministic gates
 Automated quality checks (regex, JSON Schema, custom function, scored eval) run before HITL gates on the same edge, with pass thresholds and warn/block behavior. A gate either passes or it doesn't; the run history shows which gate caught what.
 **Why:** automation must be checked by rules, not vibes; evals make quality measurable per run.
-**Where:** `modulo/core/eval_engine/`, `docs/product-map/evals/eval-engine.md`, `eval-gates.md`, `docs/architecture.md` eval engine section.
+**Where:** `modulo/core/eval_engine/`, `docs/product-map/evals/eval-engine.md`, `docs/product-map/evals/eval-gates.md`, `docs/architecture.md` eval engine section.
 **Benefit:** failures surface at the gate with evidence, not after merge.
 
 ## 5. Humans in the loop where it matters
@@ -49,7 +49,7 @@ Modulo orchestrates work to external agent runtimes; it owns dispatch, auth, aud
 ## 8. Correction never rewrites history
 A failed output produces a new run with feedback attached; the original stays as it was. FeedbackRecords are immutable after creation.
 **Why:** an editable trail is not a trail; the correction loop is a first-class pipeline, not an in-place edit.
-**Where:** `modulo/core/feedback_manager/`, `docs/product-map/evals/feedback-records.md`, `feedback-correction.md`, `docs/prd.md` feedback section.
+**Where:** `modulo/core/feedback_manager/`, `docs/product-map/evals/feedback-records.md`, `docs/product-map/evals/feedback-correction.md`, `docs/prd.md` feedback section.
 **Benefit:** you can trust the history while still improving the system.
 
 ## 9. Self-hosted, no telemetry
