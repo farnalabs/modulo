@@ -15,7 +15,7 @@
 
     <main
       class="flex-1 min-w-0 overflow-auto bg-background relative"
-      :class="onboardingActive ? 'pt-[8.25rem] md:pt-20' : 'pt-14 md:pt-0'"
+      :class="onboardingActive ? 'pt-[8.25rem] md:pt-20' : 'pt-0 md:pt-0'"
       :style="remyDockedStyle"
     >
       <div class="absolute top-0 left-0 right-0 z-10">
