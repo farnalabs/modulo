@@ -146,13 +146,13 @@
                 <label
                   v-for="opt in retryPolicyOptions"
                   :key="opt.value"
-                  class="flex items-center gap-2 text-xs"
+                  class="flex min-h-6 items-center gap-2 text-xs"
                 >
                   <input
                     type="checkbox"
                     :value="opt.value"
                     v-model="retryPolicyEvents"
-                    class="h-3.5 w-3.5"
+                    class="h-4 w-4"
                     :data-testid="`pipeline-editor-retry-event-${opt.value}`"
                   />
                   {{ $t(opt.labelKey) }}
