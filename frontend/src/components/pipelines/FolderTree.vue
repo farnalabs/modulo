@@ -16,8 +16,14 @@
       <button
         data-testid="folder-tree-all-pipelines"
         class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
-        :class="selectedFolderId === null ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground'"
+        :class="[
+          selectedFolderId === null ? 'bg-accent text-accent-foreground font-medium' : 'text-foreground',
+          dragOverRoot ? 'bg-accent/70 ring-1 ring-inset ring-primary' : '',
+        ]"
         @click="$emit('select-folder', null)"
+        @dragover.prevent="dragOverRoot = true"
+        @dragleave="dragOverRoot = false"
+        @drop="onRootDrop($event)"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <span class="truncate">{{ labels.allItems }}</span>
@@ -215,7 +221,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'select-folder', folderId: string | null): void
   (e: 'folders-changed'): void
-  (e: 'move-pipeline', payload: { pipelineId: string; folderId: string }): void
+  (e: 'move-pipeline', payload: { pipelineId: string; folderId: string | null }): void
 }>()
 
 const { t } = useI18n()
@@ -243,6 +249,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 
 const draggableItems = ref<FlatTreeItem[]>([])
+const dragOverRoot = ref(false)
 const showCreateDialog = ref(false)
 const newFolderName = ref('')
 const newFolderParentId = ref<string | null>(null)
@@ -320,6 +327,15 @@ function onFolderDrop(folderId: string, event: DragEvent) {
   const pipelineId = event.dataTransfer?.getData('text/plain')
   if (pipelineId) {
     emit('move-pipeline', { pipelineId, folderId })
+    emit('folders-changed')
+  }
+}
+
+function onRootDrop(event: DragEvent) {
+  dragOverRoot.value = false
+  const itemId = event.dataTransfer?.getData('text/plain')
+  if (itemId) {
+    emit('move-pipeline', { pipelineId: itemId, folderId: null })
     emit('folders-changed')
   }
 }

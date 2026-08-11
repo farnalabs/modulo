@@ -1883,7 +1883,7 @@ export default {
     },
     "SchemaListView": {
       "deprecate_schema": "Deprecate schema",
-      "failed_to_load_schemas": "Failed to load schemas:",
+      "failed_to_load_folders": "Failed to load folders:",
       "deprecating": "Deprecating...",
       "manage_schemas_and_deprecate_outdated_definitions": "Manage schemas and deprecate outdated definitions",
       "no_schemas_found": "No schemas found",
