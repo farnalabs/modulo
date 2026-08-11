@@ -8715,6 +8715,11 @@ export interface components {
              * @default
              */
             email_from: string;
+            /**
+             * Smtp Timeout
+             * @default 30
+             */
+            smtp_timeout: number;
         };
         /** EmailSettingsUpdate */
         EmailSettingsUpdate: {
@@ -8743,6 +8748,11 @@ export interface components {
              * @default
              */
             email_from: string;
+            /**
+             * Smtp Timeout
+             * @default 30
+             */
+            smtp_timeout: number;
             /**
              * Clear Password
              * @default false

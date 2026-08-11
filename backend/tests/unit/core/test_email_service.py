@@ -13,6 +13,7 @@ class MockSettings:
     smtp_username = "user"
     smtp_password = "pass"
     email_from = "noreply@example.com"
+    smtp_timeout = 30
 
 
 class MockSettingsNoSMTP:
@@ -63,6 +64,90 @@ class TestSendEmail:
 
             assert result is True
             mock_server.send_message.assert_called_once()
+
+    def test_send_email_custom_timeout(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = 15
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+            assert result is True
+            mock_smtp.assert_called_once_with("smtp.example.com", 587, timeout=15)
+
+    def test_send_email_timeout_missing_attr_falls_back_to_default(self) -> None:
+        class MinimalSettings:
+            def __init__(self) -> None:
+                self.smtp_host = "smtp.example.com"
+                self.smtp_port = 587
+                self.smtp_username = ""
+                self.smtp_password = ""
+                self.email_from = "noreply@example.com"
+
+        settings = MinimalSettings()
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+            assert result is True
+            mock_smtp.assert_called_once_with("smtp.example.com", 587, timeout=30)
+
+    def test_send_email_timeout_invalid_value_falls_back_to_default(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = "not-a-number"
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+            assert result is True
+            mock_smtp.assert_called_once_with("smtp.example.com", 587, timeout=30)
+
+    def test_send_email_timeout_zero_or_huge_clamped(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = 0
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+            send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+            mock_smtp.assert_called_once_with("smtp.example.com", 587, timeout=30)
+
+        settings.smtp_timeout = 9999
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+            send_email(
+                settings,
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+            mock_smtp.assert_called_once_with("smtp.example.com", 587, timeout=120)
 
     def test_send_email_no_auth(self) -> None:
         settings = MockSettings()

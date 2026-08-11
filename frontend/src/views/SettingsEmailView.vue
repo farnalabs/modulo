@@ -56,6 +56,17 @@
                 :placeholder="$t('views.SettingsEmailView.email_from_placeholder')"
               />
             </div>
+            <div>
+              <label for="settingsemailview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsEmailView.smtp_timeout') }}</label>
+              <input id="settingsemailview-field-6"
+                v-model.number="form.smtp_timeout"
+                type="number"
+                min="1"
+                max="120"
+                class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :placeholder="$t('views.SettingsEmailView.smtp_timeout_placeholder')"
+              />
+            </div>
 
             <div class="flex items-center gap-3 pt-2">
               <Button
@@ -113,6 +124,7 @@ interface EmailForm {
   smtp_username: string
   smtp_password: string
   email_from: string
+  smtp_timeout: number
 }
 
 const planStore = usePlanStore()
@@ -130,6 +142,7 @@ const { loading, error: loadError, load: loadSettings } = useDataFetch(
       form.smtp_username = res.data.smtp_username || ''
       form.smtp_password = ''
       form.email_from = res.data.email_from || ''
+      form.smtp_timeout = res.data.smtp_timeout || 30
     }
     return res
   },
@@ -147,6 +160,7 @@ const form = reactive<EmailForm>({
   smtp_username: '',
   smtp_password: '',
   email_from: '',
+  smtp_timeout: 30,
 })
 
 function getOrgId(): string | null {
@@ -171,6 +185,7 @@ async function saveSettings() {
         smtp_username: form.smtp_username,
         smtp_password: form.smtp_password,
         email_from: form.email_from,
+        smtp_timeout: form.smtp_timeout,
       },
     })
     if (err) {

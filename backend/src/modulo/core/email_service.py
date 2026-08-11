@@ -11,10 +11,28 @@ _log = logging.getLogger(__name__)
 _MAX_RETRIES = 2
 _RETRY_DELAY = 1.0
 _REDACTED = "********"
+_DEFAULT_TIMEOUT = 30
+_MAX_TIMEOUT = 120
 
 
 class EmailSendingError(Exception):
     pass
+
+
+def _effective_timeout(settings: object) -> int:
+    """Resolve the SMTP timeout from a settings-like object.
+
+    Callers may pass either the app ``Settings`` or a minimal object built from
+    org-level email configuration. A missing, non-numeric, or out-of-range value
+    falls back to the 30-second default so a malformed org override can never
+    break email sending.
+    """
+    value = getattr(settings, "smtp_timeout", _DEFAULT_TIMEOUT)
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_TIMEOUT
+    return _DEFAULT_TIMEOUT if timeout < 1 else min(timeout, _MAX_TIMEOUT)
 
 
 def _redact_credentials(message: str, settings: Settings) -> str:
@@ -60,9 +78,11 @@ def send_email(
 
     last_exc: smtplib.SMTPException | OSError | None = None
 
+    timeout = _effective_timeout(settings)
+
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout) as server:
                 server.starttls()
                 if settings.smtp_username:
                     server.login(settings.smtp_username, settings.smtp_password)

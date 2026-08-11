@@ -25,15 +25,17 @@ class EmailSettingsResponse(BaseModel):
     smtp_username: str = ""
     smtp_password: str = "********"
     email_from: str = ""
+    smtp_timeout: int = 30
 
 
 class EmailSettingsUpdate(BaseModel):
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""
-    smtp_password: str = ""
+    smtp_password: str = Field("", max_length=256)
     email_from: str = ""
     clear_password: bool = False
+    smtp_timeout: int = Field(30, ge=1, le=120)
 
 
 class TestEmailRequest(BaseModel):
@@ -85,6 +87,7 @@ async def admin_get_email_settings(
         smtp_port=email_cfg.get("smtp_port", 587),
         smtp_username=email_cfg.get("smtp_username", ""),
         email_from=email_cfg.get("email_from", ""),
+        smtp_timeout=email_cfg.get("smtp_timeout", 30),
     )
 
 
@@ -137,6 +140,7 @@ async def admin_update_email_settings(
     elif req.smtp_password:
         merged["smtp_password"] = req.smtp_password
     merged["email_from"] = req.email_from
+    merged["smtp_timeout"] = req.smtp_timeout
     settings_json["email"] = merged
 
     try:
@@ -170,6 +174,7 @@ async def admin_update_email_settings(
         smtp_port=req.smtp_port,
         smtp_username=req.smtp_username,
         email_from=req.email_from,
+        smtp_timeout=req.smtp_timeout,
     )
 
 
@@ -225,6 +230,7 @@ async def admin_test_email_settings(
     temp_settings.smtp_username = email_cfg.get("smtp_username", "")
     temp_settings.smtp_password = email_cfg.get("smtp_password", "")
     temp_settings.email_from = email_cfg.get("email_from", "")
+    temp_settings.smtp_timeout = email_cfg.get("smtp_timeout", 30)
 
     try:
         success = await asyncio.to_thread(
