@@ -113,15 +113,17 @@ async def update_folder_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
+            if folder is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+            await session.refresh(folder)
+            response = FolderResponse.model_validate(folder)
     except ProgrammingError:
         logger.exception("pipeline_folders.update(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
-    if folder is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
-    return FolderResponse.model_validate(folder)
+    return response
 
 
 @router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -160,12 +162,14 @@ async def reorder_folder_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             folder = await update_folder(session, folder_id, updates)
+            if folder is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+            await session.refresh(folder)
+            response = FolderResponse.model_validate(folder)
     except ProgrammingError:
         logger.exception("pipeline_folders.reorder(%s)", folder_id)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="This feature is not available. Run database migrations to enable it.",
         ) from None
-    if folder is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
-    return FolderResponse.model_validate(folder)
+    return response
