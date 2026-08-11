@@ -288,6 +288,69 @@ def test_update_agent_max_input_length(client: TestClient) -> None:
     assert resp.json()["max_input_length"] == 10000
 
 
+def test_update_agent_patch_returns_200_and_reflects_update(client: TestClient) -> None:
+    """Regression: PATCH with a valid body must return 200, not 500.
+
+    The CRUD ``update_agent`` flush expires the server-generated ``updated_at``
+    column (``onupdate=func.current_timestamp()``). Building the response
+    AFTER the ``session.begin()`` block commits — on the ``autobegin=False``
+    DI session — used to raise ``InvalidRequestError: Autobegin is disabled``
+    when ``AgentResponse.model_validate`` re-loaded the expired attribute,
+    turning a successful committed update into a 500.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from modulo.db.models.agent import Agent
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    agent_id = uuid.uuid4()
+    agent = Agent(
+        id=agent_id,
+        organisation_id=_ORG_ID,
+        name="Test Agent",
+        account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        is_executable=True,
+        input_schema_id=_SCHEMA_ID,
+        input_schema_version="1.0",
+        output_schema_id=_SCHEMA_ID,
+        output_schema_version="1.0",
+        prompt_template="Hello",
+        model_backend_id=_BACKEND_ID,
+        description="A test agent for unit tests",
+        connector_type_refs=[],
+        evals=[],
+        retry_policy={},
+        token_budget=None,
+        max_input_length=None,
+        library_id=None,
+        prompt_always_visible=False,
+        required_environment_capabilities=[],
+        template_id=None,
+        agent_command=None,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        async with engine.begin() as conn:
+            await conn.run_sync(Agent.__table__.create)
+        factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with factory() as session:
+            async with session.begin():
+                session.add(agent)
+                await session.flush()
+            yield session
+        await engine.dispose()
+
+    client.app.dependency_overrides[get_db_session] = override_session
+
+    with patch("modulo.api.routes.agents.set_rls_org"):
+        resp = client.patch(f"/api/v1/agents/{agent_id}", json={**_UPDATE_BODY, "name": "Updated"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Updated"
+
+
 # ── Generic agent criteria validation tests ──────────────────────────────
 
 

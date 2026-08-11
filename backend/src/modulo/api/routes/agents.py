@@ -439,6 +439,10 @@ async def update_agent_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             updated = await update_agent(session, agent_id, updates)
+            if updated is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+            await session.refresh(updated)
+            response = AgentResponse.model_validate(updated)
     except IntegrityError:
         _log.exception("agents.update_agent_endpoint")
         raise HTTPException(
@@ -457,15 +461,15 @@ async def update_agent_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database operation failed. Please try again.",
         ) from None
+    except HTTPException:
+        raise
     except Exception:
         _log.exception("Unexpected error updating agent (write path)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred. Please try again.",
         ) from None
-    if updated is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-    return AgentResponse.model_validate(updated)
+    return response
 
 
 @handle_db_errors("agents.optimize_prompt")
