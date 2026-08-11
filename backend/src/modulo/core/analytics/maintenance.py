@@ -8,8 +8,11 @@ INSERT...SELECT anti-join and ``ON CONFLICT`` are Postgres-idiomatic).
 Roles:
 
 - ``backfill_facts``  — per-day INSERT...SELECT anti-join (idempotent).
-- ``backfill_batches`` — Python-driven day loop, ONE transaction per day,
-  hard-capped batches per invocation (remainder re-enqueued next run).
+- ``backfill_ledger`` — per-day org-level spend-ledger gap-fill (inserts
+  days with no existing org-level row only; never overwrites live rows).
+- ``backfill_batches`` — Python-driven day loop (newest-first), ONE
+  transaction per day, hard-capped batches per invocation (remainder
+  re-enqueued next run).
 - ``reconcile_facts`` — day-aggregate cross-check vs the org daily ledger
   (org-level rows only), direction-aware, auto-repair within source
   availability, cooldown-keyed alerts beyond it.
@@ -39,6 +42,7 @@ from modulo.core.analytics.metrics import (
     set_backfill_rows,
     set_retention_lag,
 )
+from modulo.core.cost_controller.breakdown.constants import COST_COLUMN_CAP
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -51,6 +55,7 @@ _log = logging.getLogger(__name__)
 
 __all__ = [
     "backfill_facts",
+    "backfill_ledger",
     "reconcile_facts",
     "retention_facts",
     "run_maintenance",
@@ -281,12 +286,84 @@ async def backfill_facts(session: Any, day: date) -> int:
     return result.rowcount or 0
 
 
+async def backfill_ledger(session: Any, day: date) -> int:
+    """Per-day ORG-LEVEL spend-ledger gap-fill for terminal runs on *day*.
+
+    ONLY inserts org-level ``org_daily_run_counts`` rows (``team_id IS NULL``)
+    for days that have NO existing org-level row (``ON CONFLICT DO NOTHING``)
+    — it fills historical gaps and NEVER overwrites a live-written row
+    (especially today's, which the daily cron would otherwise clobber). The
+    aggregation mirrors the live writer's semantics (``check_and_record_spend``
+    / ``_add_spend``): it excludes limit-refused runs (``ledger_refused_at``
+    NOT NULL — their amount lives in ``refused_spend_usd``, not
+    ``total_spend_usd``) and zero-cost pre-component-read terminals
+    (``total_cost_usd`` = 0, which the live writer never writes to the
+    ledger), and applies the same ``COST_COLUMN_CAP`` clamp with the
+    ``clamped`` flag. Backfilled rows never carry a refused amount. Returns
+    the number of organisations upserted (rows actually inserted).
+    """
+    agg_stmt = (
+        sa.select(
+            Run.organisation_id.label("organisation_id"),
+            sa.func.count().label("run_count"),
+            sa.func.coalesce(sa.func.sum(Run.total_cost_usd), 0).label("total_spend_usd"),
+        )
+        .where(
+            Run.status.in_(TERMINAL_STATUSES),
+            Run.ledger_refused_at.is_(None),
+            Run.total_cost_usd > 0,
+            sa.func.date_trunc("day", sa.func.coalesce(Run.started_at, Run.created_at)) == day,
+        )
+        .group_by(Run.organisation_id)
+    )
+    rows = (await session.execute(agg_stmt)).all()
+    if not rows:
+        return 0
+    insert_stmt = pg_insert(OrgDailyRunCount).values(
+        [
+            {
+                "id": sa.func.gen_random_uuid(),
+                "organisation_id": org_id,
+                "team_id": None,
+                "run_date": day,
+                "run_count": run_count,
+                "total_spend_usd": min(total_spend, COST_COLUMN_CAP),
+                "clamped": total_spend > COST_COLUMN_CAP,
+                # Explicit zero: the column has a Python-side default that is
+                # NOT applied on a multi-VALUES insert, and omitting it would
+                # render NULL against the NOT NULL column.
+                "refused_spend_usd": Decimal(0),
+            }
+            for org_id, run_count, total_spend in rows
+        ]
+    )
+    stmt = insert_stmt.on_conflict_do_nothing(
+        index_elements=[
+            OrgDailyRunCount.organisation_id,
+            OrgDailyRunCount.team_id,
+            OrgDailyRunCount.run_date,
+        ],
+    )
+    result = await session.execute(stmt)
+    return result.rowcount or 0
+
+
 async def backfill_batches(session: Any, *, max_batches: int = _BACKFILL_MAX_BATCHES) -> dict[str, Any]:
-    """Backfill day-by-day from the oldest needed day to today.
+    """Backfill day-by-day from today BACKWARD (newest day first).
 
     ONE transaction per day (``SET LOCAL timezone 'UTC'`` inside each, so
-    ``run_date`` matches the live writer). Bounded by ``max_batches`` — the
-    remainder is picked up by the next daily invocation (idempotent).
+    ``run_date`` matches the live writer), and each day backfills BOTH the
+    run-level facts and the org-level spend ledger in the same transaction
+    (one batch = one day = facts + ledger).
+
+    The loop iterates NEWEST-first — ``today``, ``today - 1``, ... — so a
+    daily invocation fills the recent window the dashboard reads (the current
+    period plus the previous period it diffs against) before spending batches
+    on older days. The INSERT...SELECT anti-join and the ledger upsert are
+    both idempotent, so ordering never affects correctness; newest-first just
+    makes dashboards correct on the FIRST run instead of burning all 30
+    batches on ancient empty days of a young org. Bounded by ``max_batches``
+    — the remainder is picked up by the next daily invocation (idempotent).
     """
     today = datetime.now(UTC).date()
     oldest = _subtract_months(today, _FACTS_RETENTION_MONTHS)
@@ -295,10 +372,11 @@ async def backfill_batches(session: Any, *, max_batches: int = _BACKFILL_MAX_BAT
     for offset in range((today - oldest).days + 1):
         if batches >= max_batches:
             break
-        day = oldest + timedelta(days=offset)
+        day = today - timedelta(days=offset)
         async with session.begin():
             await session.execute(sa.text("SELECT set_config('timezone', 'UTC', true)"))
             rows += await backfill_facts(session, day)
+            await backfill_ledger(session, day)
         batches += 1
     set_backfill_rows(rows)
     set_backfill_last_run_ts(datetime.now(UTC).timestamp())
