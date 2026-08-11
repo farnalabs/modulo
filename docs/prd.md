@@ -2550,8 +2550,6 @@ Admin (advanced mode, default collapsed)
   Monitoring          (subgroup)
     Error Dashboard   /admin/errors
     Notification Log  /admin/notification-delivery
-    API Changelog     /admin/api-changelog
-    Team Comparison   /admin/teams/comparison
   Extensions          (subgroup)
     Plugins           /admin/plugins
     Remy Config       (moved to Remy group above)
@@ -3069,7 +3067,7 @@ Triggers, Runtime Config, Rate Limits, HITL Review, Observability, Error Forward
 Access Control (Users, Org Settings, Audit Log), Cost Management (Costs — Overview, Spend
 Limits, Cost Components, Cost Controls), System (Connectors, Model Backends, Node Categories,
 Feature Flags, Environments, Run Retention, Saved Views), Monitoring (Error Dashboard,
-Notification Log, API Changelog, Team Comparison), Extensions (Plugins, Feedback Inbox).
+Notification Log), Extensions (Plugins, Feedback Inbox).
 
 ### Active Context
 - **User**: {display_name} ({role}) — {org_name} ({plan_name})

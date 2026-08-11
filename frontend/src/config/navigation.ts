@@ -72,8 +72,6 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'admin-errors': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
   'admin-error-detail': { icon: 'AlertTriangle', labelKey: 'components.SidebarNav.item_error_dashboard' },
   'admin-notification-delivery': { icon: 'Bell', labelKey: 'components.SidebarNav.item_notification_log' },
-  'api-changelog': { icon: 'History', labelKey: 'components.SidebarNav.item_api_changelog' },
-  'team-comparison': { icon: 'BarChart', labelKey: 'components.SidebarNav.item_team_comparison' },
   'admin-plugins': { icon: 'Puzzle', labelKey: 'components.SidebarNav.item_plugins' },
   'environment-profiles': { icon: 'Container', labelKey: 'components.SidebarNav.item_environment_profiles' },
   'feedback-inbox': { icon: 'MessageSquare', labelKey: 'components.SidebarNav.item_feedback_inbox' },
