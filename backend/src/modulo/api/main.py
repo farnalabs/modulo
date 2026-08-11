@@ -710,6 +710,16 @@ async def _seed_demo_data(settings: Settings) -> None:
             select(ModelBackend).where(ModelBackend.organisation_id == org_id).limit(1)
         )
         if existing_mbs.scalar_one_or_none() is None:
+            from cryptography.fernet import Fernet
+
+            demo_fixture_map = {
+                "What is Modulo?": json.dumps(
+                    {
+                        "answer": "Modulo orchestrates AI agents into SDLC pipelines.",
+                        "demo": True,
+                    }
+                )
+            }
             mb = ModelBackend(
                 organisation_id=org_id,
                 account_id=demo_account.id,
@@ -717,7 +727,10 @@ async def _seed_demo_data(settings: Settings) -> None:
                 display_name="Stub Model (Demo)",
                 provider="custom",
                 model_id="demo-model",
-                credentials_ciphertext=b"demo-encrypted",
+                # Valid Fernet token so the hub's credentials_ciphertext fallback
+                # decrypts to {"api_key": "demo"} instead of skipping the row.
+                credentials_ciphertext=Fernet(settings.fernet_key.encode()).encrypt(b"demo"),
+                default_params={"fixture_map": demo_fixture_map},
             )
             session.add(mb)
             logger.info("startup.demo_model_backend_seeded")

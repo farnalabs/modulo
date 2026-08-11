@@ -14,9 +14,11 @@ import importlib
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self, cast
+
+from langchain_core.messages import BaseMessage
 
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.core.secrets_backend import SecretsBackend
@@ -377,6 +379,56 @@ _API_KEY_REQUIRED_PROVIDERS: frozenset[str] = frozenset(
 )
 
 
+def _extract_fixture_map(
+    creds: dict[str, Any],
+    default_params: dict[str, Any],
+) -> dict[str, str]:
+    """Return the stub fixture_map from default_params or creds, never raising."""
+    for source in (default_params, creds):
+        raw = source.get("fixture_map")
+        if isinstance(raw, dict):
+            return {str(key): str(value) for key, value in raw.items()}
+    return {}
+
+
+def _build_custom_stub_backend(fixture_map: dict[str, str]) -> ModelBackendBase:
+    """Build a hub-compatible async stub backend for provider='custom'.
+
+    StubModelBackend inherits BaseChatModel's synchronous ``invoke()``, which is
+    incompatible with the hub's ``await backend.invoke()`` contract (node_runner
+    awaits the result). This wrapper adapts it to ModelBackendBase, mirroring the
+    _StubAdapter pattern used throughout the test suite. The lazy import preserves
+    module-level import isolation (see test_import_does_not_load_provider_adapters).
+    """
+
+    from modulo.model_backends.stub.backend import StubModelBackend
+
+    class _CustomStubBackend(ModelBackendBase):
+        def __init__(self, fixture_map: Mapping[str, str] | None = None, **kwargs: Any) -> None:
+            del kwargs
+            self._stub = StubModelBackend(fixture_map)
+
+        async def invoke(self, messages: list[BaseMessage], **kwargs: Any) -> BaseMessage:
+            return await self._stub.ainvoke(messages, **kwargs)
+
+        def stream(
+            self,
+            messages: list[BaseMessage],
+            tools: list[dict[str, Any]] | None = None,
+            **kwargs: Any,
+        ) -> Any:
+            return self._stub.astream(messages, tools=tools, **kwargs)
+
+        async def health_check(self) -> HealthResult:
+            return await self._stub.health_check()
+
+        @property
+        def backend_id(self) -> str:
+            return "custom/stub"
+
+    return _CustomStubBackend(fixture_map)
+
+
 def _build_backend(
     provider: str,
     model_id: str,
@@ -404,6 +456,8 @@ def _build_backend(
             location=creds.get("location", "us-central-1"),
             **default_params,
         )
+    if provider == "custom":
+        return _build_custom_stub_backend(_extract_fixture_map(creds, default_params))
     if provider in _API_KEY_REQUIRED_PROVIDERS and "api_key" not in creds:
         raise ValueError(f"Missing 'api_key' in credentials for provider {provider!r}")
 
