@@ -6,8 +6,6 @@ onboarding flow, and demo pipeline lifecycle with a real database via testcontai
 
 import os
 import uuid
-
-_VALID_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
@@ -24,6 +22,8 @@ os.environ.setdefault("MODULO_AUTH_RATE_LIMIT_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
 
 pytestmark = pytest.mark.integration
+
+_VALID_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 
 
 # ---------------------------------------------------------------------------
