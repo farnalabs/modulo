@@ -18,7 +18,7 @@
       :class="onboardingActive ? 'pt-[8.25rem] md:pt-20' : 'pt-0 md:pt-0'"
       :style="remyDockedStyle"
     >
-      <div class="absolute top-0 left-0 right-0 z-10">
+      <div class="relative z-10">
         <OnboardingBanner />
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />
