@@ -5,8 +5,19 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 
+from modulo.api.routes.lifecycle_maps import (
+    GraduateStageRequest,
+    LifecycleMapCreate,
+    LifecycleMapUpdate,
+    VersionSaveRequest,
+    create_lifecycle_map_endpoint,
+    graduate_lifecycle_map_stage_endpoint,
+    save_lifecycle_map_version_endpoint,
+    update_lifecycle_map_endpoint,
+)
 from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
     delete_lifecycle_map,
@@ -450,3 +461,131 @@ async def test_derive_skips_shape_incompatible_rows(session: AsyncMock) -> None:
     derived = [c.args[0] for c in session.add.call_args_list if isinstance(c.args[0], LifecycleMapStage)]
     assert len(derived) == 1
     assert derived[0].stage_id == "s1"
+
+
+# ---------------------------------------------------------------------------
+# Route exception ordering — a pipeline conflict must surface as 409, not 422
+#
+# LifecycleMapPipelineConflictError subclasses LifecycleMapContentError, so a
+# handler that lists the parent clause first swallows the conflict and returns
+# 422. These tests drive the conflict through the ROUTE handlers (the exact
+# except-clause ordering that was dead code), not the service layer — a
+# regression that reintroduces the dead 409 branch fails here.
+# ---------------------------------------------------------------------------
+
+_CONFLICT_MSG = "pipeline(s) already a stage of another active lifecycle map"
+
+
+class _RoutePrincipal:
+    """Minimal tenant principal exposing the attributes the handlers read."""
+
+    organisation_id = _ORG_ID
+    account_id = _ACCOUNT_ID
+    org_role = "admin"
+
+
+def _route_session() -> AsyncMock:
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=session)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+async def _assert_conflict_409(handler: object, *args: object, **kwargs: object) -> None:
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await handler(*args, **kwargs)  # type: ignore[misc]
+    assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+    assert _CONFLICT_MSG in excinfo.value.detail
+
+
+async def test_save_version_route_maps_pipeline_conflict_to_409() -> None:
+    with patch(
+        "modulo.api.routes.lifecycle_maps.save_map_version",
+        AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
+    ):
+        await _assert_conflict_409(
+            save_lifecycle_map_version_endpoint,
+            lifecycle_map_id=_MAP_ID,
+            req=VersionSaveRequest(stages=[], edges=[]),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+
+
+async def test_update_route_maps_pipeline_conflict_to_409() -> None:
+    with (
+        patch(
+            "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+            AsyncMock(return_value=_make_map()),
+        ),
+        patch(
+            "modulo.api.routes.lifecycle_maps.update_lifecycle_map",
+            AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
+        ),
+    ):
+        await _assert_conflict_409(
+            update_lifecycle_map_endpoint,
+            lifecycle_map_id=_MAP_ID,
+            req=LifecycleMapUpdate(content_json={"stages": []}),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+
+
+async def test_graduate_route_maps_pipeline_conflict_to_409() -> None:
+    with patch(
+        "modulo.api.routes.lifecycle_maps.graduate_stage",
+        AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
+    ):
+        await _assert_conflict_409(
+            graduate_lifecycle_map_stage_endpoint,
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            stage_id="s1",
+            req=GraduateStageRequest(pipeline_id=str(_PIPE_ID)),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+
+
+async def test_create_route_maps_pipeline_conflict_to_409() -> None:
+    with patch(
+        "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+        AsyncMock(side_effect=LifecycleMapPipelineConflictError(_CONFLICT_MSG)),
+    ):
+        await _assert_conflict_409(
+            create_lifecycle_map_endpoint,
+            req=LifecycleMapCreate(name="Release Plan", content_json={"stages": []}),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+
+
+async def test_save_version_route_maps_content_error_to_422() -> None:
+    """A plain content-validation error still maps to 422 after the conflict
+    clause moved ahead of the parent class — the parent clause must remain
+    reachable for genuine shape errors."""
+    with (
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(side_effect=LifecycleMapContentError("content_json.stages must be an array")),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await save_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            req=VersionSaveRequest(stages=[], edges=[]),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY

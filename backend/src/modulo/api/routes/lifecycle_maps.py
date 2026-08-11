@@ -360,10 +360,10 @@ async def create_lifecycle_map_endpoint(
                 version=req.version,
                 content_json=req.content_json,
             )
-    except LifecycleMapContentError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except LifecycleMapContentError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.create_lifecycle_map_endpoint")
         raise HTTPException(
@@ -449,10 +449,10 @@ async def update_lifecycle_map_endpoint(
             if "content_json" in updates:
                 updates["version"] = current.version + 1
             lifecycle_map = await update_lifecycle_map(session, lifecycle_map_id, updates)
-    except LifecycleMapContentError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except LifecycleMapContentError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.update_lifecycle_map_endpoint")
         raise HTTPException(
@@ -621,10 +621,10 @@ async def save_lifecycle_map_version_endpoint(
                 edges=req.edges,
                 notes=req.notes,
             )
-    except LifecycleMapContentError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except LifecycleMapContentError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.save_version_endpoint")
         raise HTTPException(
@@ -680,10 +680,10 @@ async def update_lifecycle_map_version_endpoint(
                 edges=req.edges,
                 notes=req.notes,
             )
-    except LifecycleMapContentError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except LifecycleMapContentError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.update_version_endpoint")
         raise HTTPException(
@@ -776,10 +776,10 @@ async def graduate_lifecycle_map_stage_endpoint(
                 stage_id=stage_id,
                 pipeline_id=req.pipeline_id,
             )
-    except LifecycleMapContentError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except LifecycleMapContentError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.graduate_stage_endpoint")
         raise HTTPException(
