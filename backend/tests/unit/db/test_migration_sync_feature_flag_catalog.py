@@ -8,7 +8,6 @@ never pick it up. This test keeps the migration's flag list in sync with the
 current head of the chain (0082_lifecycle_map_stages, on top of
  0081_pipeline_retry_policy, on top of 0080_add_mobile_sidebar_rail_flag) — so the
 head property holds against the current chain.
- 0081_pipeline_retry_policy, on top of 0080_add_mobile_sidebar_rail_flag) — so the head property holds against the current chain.
 """
 
 import importlib.util
