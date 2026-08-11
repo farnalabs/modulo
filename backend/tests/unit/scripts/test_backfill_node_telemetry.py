@@ -186,6 +186,26 @@ def test_split_row_skipped_recovery_marker_is_telemetry_only():
     assert new_telemetry["n1"] == {"skipped": True}
 
 
+def test_split_row_skipped_flag_with_artifacts_keeps_return():
+    """A top-level ``skipped`` key alongside an artifacts list is NOT a recovery
+    marker: the node-type splitter folds ``skipped`` into telemetry AND returns
+    the real return value. Mirror finalize._split_merge_outputs -- the return
+    must be kept in outputs_json, never dropped (lossless).
+    """
+    envelope = {
+        "artifacts": [
+            {"output": {"output_json": {"answer": 42}, "status": "ok"}},
+        ],
+        "output": {"status": "complete"},
+        "skipped": True,
+    }
+    ok, new_outputs, new_telemetry, reason = backfill._split_row({"n1": envelope}, {"n1": "sandbox_agent"}, "run-1")
+    assert ok is True and reason is None
+    assert "n1" in new_outputs
+    assert new_outputs["n1"] == {"answer": 42}
+    assert new_telemetry["n1"]["skipped"] is True
+
+
 def test_split_row_empty_outputs_splits_trivially():
     ok, new_outputs, new_telemetry, reason = backfill._split_row(None, None, "run-1")
     assert ok is True and reason is None

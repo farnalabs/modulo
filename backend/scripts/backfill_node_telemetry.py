@@ -148,12 +148,13 @@ def _split_row(
         if not _can_split_losslessly(envelope, node_type):
             return False, {}, {}, f"node {node_id!r}: no lossless split (node_type={node_type!r})"
         return_value, telemetry = split_node_output(envelope, node_type, None, run_id=run_id, node_id=node_id)
-        if telemetry.get("skipped") is True:
-            # Skipped recovery marker: telemetry is the SOLE record (mirrors the
-            # P1 writer -- no outputs_json entry is created).
-            new_telemetry[node_id] = telemetry
-            continue
-        new_outputs[node_id] = return_value
+        # Mirror finalize._split_merge_outputs EXACTLY: omit the outputs entry
+        # only for a TRUE skipped recovery marker (return None AND the skipped
+        # flag). A top-level `skipped` key alongside an artifacts list is NOT a
+        # recovery marker -- the node-type splitter folds `skipped` into
+        # telemetry AND returns a real value, which must be kept (lossless).
+        if not (return_value is None and telemetry.get("skipped") is True):
+            new_outputs[node_id] = return_value
         new_telemetry[node_id] = telemetry
     return True, new_outputs, new_telemetry, None
 
