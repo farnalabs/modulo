@@ -216,6 +216,23 @@ def _db_is_at_head(engine: Engine) -> bool:
     return versions == {head}
 
 
+def _invocation_is_upgrade() -> bool:
+    """Return True when the current alembic invocation is an UPGRADE.
+
+    The boot fast-path (:func:`run_migrations_online`) must only skip when there
+    is genuinely nothing to do — the DB is already at head AND the invocation
+    moves FORWARD. ``alembic downgrade`` must ALWAYS run: it exists to move the
+    DB AWAY from head, so skipping it while at head made downgrades a silent
+    no-op (dist/runtime-ops fix). The app lifespan calls
+    ``command.upgrade(config, 'heads')`` programmatically, where ``cmd_opts``
+    is absent — the direction is upgrade by construction, so the default is
+    True. The CLI sets ``config.cmd_opts.command`` ('upgrade'/'downgrade').
+    """
+    opts = getattr(config, "cmd_opts", None) if config is not None else None
+    command = getattr(opts, "command", None) if opts is not None else None
+    return command != "downgrade"
+
+
 def run_migrations_online() -> None:
     """Run migrations via a sync engine — no event loop needed.
 
@@ -226,9 +243,9 @@ def run_migrations_online() -> None:
     `alembic upgrade heads` runs via the shared advisory lock, so the web and
     worker entrypoint migrations that both fire on a fresh deploy cannot race.
 
-    Fast-path: when the DB is already at the head revision, skip the advisory
-    lock and the alembic run entirely so boot is instant and machines never
-    contend for the lock.
+    Fast-path: when the DB is already at the head revision AND the invocation
+    is an upgrade (never a downgrade), skip the advisory lock and the alembic
+    run entirely so boot is instant and machines never contend for the lock.
     """
     assert config is not None
     url = config.get_main_option("sqlalchemy.url") or ""
@@ -236,7 +253,7 @@ def run_migrations_online() -> None:
 
     engine = create_engine(sync_url, poolclass=NullPool)
     try:
-        if _db_is_at_head(engine):
+        if _invocation_is_upgrade() and _db_is_at_head(engine):
             _log.info("startup.migrations_already_at_head -- skipping migration run")
             return
         with _migration_advisory_lock(engine, url), engine.begin() as connection:

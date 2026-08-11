@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from modulo.api.routes.health import _check_dispatcher_reconcile
+from modulo.api.routes.health import _check_dispatcher_reconcile, _check_stale_run_recovery
 from modulo.core import cron_helpers as ch
 from modulo.settings import Settings
 
@@ -135,3 +135,97 @@ class TestCheckDispatcherReconcile:
             result = await _check_dispatcher_reconcile()
         assert result.status == "ok"
         assert "scanned=2" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_new_counters(self) -> None:
+        """The readiness detail surfaces the D1 counters (terminalizers,
+        enqueue-failed recovery) even when zero."""
+        fake = _FakeStatsRedis(
+            blob=_fresh_payload(
+                claim_cap_terminalized=1,
+                nodeless_failed=2,
+                enqueue_failed_redispatched=3,
+                age_terminalized=4,
+            ).encode()
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert "claim_cap_terminalized=1" in result.detail
+        assert "nodeless_failed=2" in result.detail
+        assert "enqueue_failed_redispatched=3" in result.detail
+        assert "age_terminalized=4" in result.detail
+
+
+def _srr_payload(**overrides: Any) -> str:
+    payload: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "recovered": 2,
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+class TestCheckStaleRunRecovery:
+    """D1 advisory check — the stale-run sweep (every 5 min) persists its
+    outcome to a shared Redis key; a missing or >15min-stale key warns without
+    gating readiness."""
+
+    @pytest.mark.asyncio
+    async def test_never_run_degraded(self) -> None:
+        fake = _FakeStatsRedis(blob=None)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_stale_run_recovery()
+        assert result.status == "degraded"
+        assert "has never run" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_ok(self) -> None:
+        fake = _FakeStatsRedis(blob=_srr_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_stale_run_recovery()
+        assert result.status == "ok"
+        assert "recovered=2" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_stale_run_degraded(self) -> None:
+        stale_at = (datetime.now(UTC) - timedelta(minutes=20)).isoformat()
+        fake = _FakeStatsRedis(blob=_srr_payload(last_run_at=stale_at).encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_stale_run_recovery()
+        assert result.status == "degraded"
+        assert "stale" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_unparsable_degraded(self) -> None:
+        fake = _FakeStatsRedis(blob=b"not-json")
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_stale_run_recovery()
+        assert result.status == "degraded"
+        assert "unparsable" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_redis_read_error_fails_open(self) -> None:
+        fake = _FakeStatsRedis(fail_get=True)
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_stale_run_recovery()
+        assert result.status == "ok"
+        assert "unavailable" in result.detail

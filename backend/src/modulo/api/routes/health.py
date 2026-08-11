@@ -32,7 +32,7 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import asyncpg  # type: ignore[import-untyped]
 import redis.asyncio as aioredis
@@ -64,6 +64,14 @@ _consecutive_stale_probes: int = 0
 # dispatcher_reconcile runs on a 60s system-cron tick; a last_run_at older
 # than 60s means at least one tick was missed -> report "stale" (advisory).
 _RECONCILE_STALE_SECONDS = 60
+
+# stale_run_recovery (D1): the legacy sweep runs every 5 min on the system
+# worker and persists its outcome to this Redis key (saq_worker wraps the sweep
+# call to write it). A last_run_at older than 15 min — or no key at all — means
+# the sweep is stale or never ran; the readiness check reports it ADVISORY
+# (never gates) so a dead sweep alerts without blocking bluegreen.
+_STALE_RUN_RECOVERY_STATS_KEY = "saq:cron:stats:stale_run_recovery"
+_STALE_RUN_RECOVERY_STALE_SECONDS = 15 * 60
 
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
@@ -493,21 +501,86 @@ async def _check_dispatcher_reconcile() -> CheckResult:
         return CheckResult(
             status="degraded",
             detail=(
-                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run); "
-                f"last_run_at={stats['last_run_at']}, "
-                f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
-                f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
-                f"deduped={stats.get('deduped', 0)}"
+                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run); {_format_reconcile_detail(stats)}"
             ),
         )
     return CheckResult(
         status="ok",
-        detail=(
-            f"last_run_at={stats['last_run_at']}, "
-            f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
-            f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
-            f"deduped={stats.get('deduped', 0)}"
-        ),
+        detail=f"last_run_at={stats['last_run_at']}, {_format_reconcile_detail(stats)}",
+    )
+
+
+def _format_reconcile_detail(stats: dict[str, Any]) -> str:
+    """Human-readable reconciliation counters for the readiness check detail.
+
+    Surfaces the reconcile outcome counters (D1): scanned/repaired/skipped/
+    redis_errors/deduped plus the terminalizer and enqueue-failed recovery
+    counters. Every counter defaults to 0 so a pre-D worker's payload renders
+    without error.
+    """
+    return (
+        f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
+        f"skipped={stats.get('skipped', 0)}, redis_errors={stats.get('redis_errors', 0)}, "
+        f"deduped={stats.get('deduped', 0)}, nodeless_failed={stats.get('nodeless_failed', 0)}, "
+        f"claim_cap_terminalized={stats.get('claim_cap_terminalized', 0)}, "
+        f"age_terminalized={stats.get('age_terminalized', 0)}, "
+        f"dispatch_failed_terminalized={stats.get('dispatch_failed_terminalized', 0)}, "
+        f"enqueue_failed_ttl_terminalized={stats.get('enqueue_failed_ttl_terminalized', 0)}, "
+        f"enqueue_failed_redispatched={stats.get('enqueue_failed_redispatched', 0)}, "
+        f"enqueue_failed_capped={stats.get('enqueue_failed_capped', 0)}, "
+        f"capacity_deferred={stats.get('capacity_deferred', 0)}"
+    )
+
+
+async def _check_stale_run_recovery() -> CheckResult:
+    """ADVISORY — last stale_run_recovery sweep outcome (never gates readiness).
+
+    The legacy stale-run sweep (``saq_worker.stale_run_recovery``) runs in the
+    SYSTEM WORKER process every 5 min and persists its outcome (``recovered`` +
+    ``last_run_at``) to ``saq:cron:stats:stale_run_recovery`` (D1). This check
+    reads that key — "never run" now means the sweep genuinely has not run (or
+    its persistence failed). A last_run_at older than 15 min reports
+    "degraded" to alert operators while the app remains healthy. Fail-open on
+    Redis read errors.
+    """
+    settings = get_settings()
+    r: aioredis.Redis | None = None
+    try:
+        r = aioredis.Redis.from_url(settings.redis_url, socket_connect_timeout=3)
+        raw = await r.get(_STALE_RUN_RECOVERY_STATS_KEY)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.warning("health._check_stale_run_recovery redis read failed: %s", exc)
+        return CheckResult(status="ok", detail="stale_run_recovery check unavailable (redis read failed)")
+    finally:
+        if r is not None:
+            with contextlib.suppress(Exception):
+                await r.aclose()
+
+    if raw is None:
+        return CheckResult(status="degraded", detail="stale_run_recovery has never run")
+    try:
+        data = json.loads(raw)
+        last_run_at = data.get("last_run_at")
+        recovered = data.get("recovered", 0)
+    except (ValueError, TypeError):
+        return CheckResult(status="degraded", detail="stale_run_recovery stats unparsable")
+    if not last_run_at:
+        return CheckResult(status="degraded", detail="stale_run_recovery last_run_at missing")
+    try:
+        last_run = datetime.fromisoformat(last_run_at)
+    except (ValueError, TypeError):
+        return CheckResult(status="degraded", detail="stale_run_recovery last_run_at unparsable")
+    stale_seconds = (datetime.now(UTC) - last_run).total_seconds()
+    if stale_seconds > _STALE_RUN_RECOVERY_STALE_SECONDS:
+        return CheckResult(
+            status="degraded",
+            detail=(f"stale_run_recovery stale ({stale_seconds:.0f}s since last run, last recovered={recovered})"),
+        )
+    return CheckResult(
+        status="ok",
+        detail=f"last_run_at={last_run_at}, recovered={recovered}",
     )
 
 
@@ -634,7 +707,7 @@ async def liveness() -> dict[str, str]:
 @handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
 async def readiness(response: Response) -> ReadinessResponse:
-    db_check, redis_check, cp_check, mig_check, saq_check, cron_check, dr_check = await asyncio.gather(
+    db_check, redis_check, cp_check, mig_check, saq_check, cron_check, dr_check, srr_check = await asyncio.gather(
         _check_database(),
         _check_redis(),
         _check_checkpointer(),
@@ -642,6 +715,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         _check_saq_workers(),
         _check_system_crons(),
         _check_dispatcher_reconcile(),
+        _check_stale_run_recovery(),
     )
     bg_check = _check_break_glass()
 
@@ -656,6 +730,7 @@ async def readiness(response: Response) -> ReadinessResponse:
         # warning never degrades readiness (plan §3 watchdog reduction).
         "break_glass": bg_check,
         "dispatcher_reconcile": dr_check,
+        "stale_run_recovery": srr_check,
     }
 
     # Aggregate over the NON-advisory checks only.
