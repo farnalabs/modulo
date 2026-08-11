@@ -266,4 +266,16 @@ describe('useOnboarding', () => {
     store.dismissed = true
     expect(store.isActive).toBe(false)
   })
+
+  it('isActive is false once onboarding progress reaches 100%', () => {
+    const store = useOnboardingStore()
+    store.ready = true
+    expect(store.isActive).toBe(true)
+
+    store.progressPct = 100
+    expect(store.isActive).toBe(false)
+
+    store.progressPct = 99.9
+    expect(store.isActive).toBe(true)
+  })
 })
