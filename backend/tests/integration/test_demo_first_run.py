@@ -6,6 +6,8 @@ onboarding flow, and demo pipeline lifecycle with a real database via testcontai
 
 import os
 import uuid
+
+_VALID_FERNET_KEY = "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
@@ -219,7 +221,7 @@ async def demo_client(
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
         modulo_auth_rate_limit_enabled=False,
@@ -256,7 +258,7 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
     )
@@ -307,7 +309,7 @@ async def test_seed_demo_data_no_org_no_crash(db_engine: AsyncEngine, db_url: st
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
     )
@@ -331,7 +333,7 @@ async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_u
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=False,
         modulo_csrf_enabled=False,
     )
@@ -368,7 +370,7 @@ async def test_seed_demo_data_idempotent(db_engine: AsyncEngine, db_url: str) ->
     settings = Settings(
         database_url=db_url,
         secret_key="a" * 32,
-        fernet_key="a" * 32,
+        fernet_key=_VALID_FERNET_KEY,
         modulo_demo_mode=True,
         modulo_csrf_enabled=False,
     )
