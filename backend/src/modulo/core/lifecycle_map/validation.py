@@ -39,6 +39,22 @@ def _require_non_empty_str(value: Any, *, field: str, index: int) -> str:
     return value
 
 
+def _require_bounded_str(value: Any, *, field: str, index: int, max_length: int) -> str:
+    """Require a non-empty string no longer than *max_length* characters.
+
+    Stage ``id``/``name`` flow into the ``String(255)`` junction columns
+    (``lifecycle_map_stages.stage_id`` / ``stage_name``), so unbounded values
+    would raise ``DataError`` at flush time and surface as a 503 instead of a
+    friendly 422 validation error.
+    """
+    text = _require_non_empty_str(value, field=field, index=index)
+    if len(text) > max_length:
+        raise LifecycleMapContentError(
+            f"lifecycle-map stage #{index}: {field!r} must be at most {max_length} characters (got {len(text)})"
+        )
+    return text
+
+
 def _normalise_pipeline_id(value: Any, *, index: int) -> str | None:
     if value is None:
         return None
@@ -59,8 +75,8 @@ def _normalise_stage(raw: Any, index: int) -> dict[str, Any]:
         raise LifecycleMapContentError(f"lifecycle-map stage #{index} must be an object")
     stage: dict[str, Any] = dict(raw)
 
-    stage["id"] = _require_non_empty_str(stage.get("id"), field="id", index=index)
-    stage["name"] = _require_non_empty_str(stage.get("name"), field="name", index=index)
+    stage["id"] = _require_bounded_str(stage.get("id"), field="id", index=index, max_length=255)
+    stage["name"] = _require_bounded_str(stage.get("name"), field="name", index=index, max_length=200)
 
     stage_type: Any = None
     for key in _STAGE_TYPE_KEYS:

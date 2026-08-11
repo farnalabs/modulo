@@ -112,7 +112,7 @@ def _backfill_existing_maps() -> None:
     )
     _log_rows = result.rowcount if result is not None else 0
     if _log_rows:
-        print(f"[migration 0081] backfilled {_log_rows} lifecycle_map_stages row(s)")  # noqa: T201
+        print(f"[migration 0082] backfilled {_log_rows} lifecycle_map_stages row(s)")  # noqa: T201
 
 
 def upgrade() -> None:

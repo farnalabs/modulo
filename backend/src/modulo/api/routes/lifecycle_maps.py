@@ -536,6 +536,12 @@ async def restore_lifecycle_map_endpoint(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from exc
+    except IntegrityError as exc:
+        _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Lifecycle map cannot be restored: a stage pipeline is already registered in another active map.",
+        ) from exc
     except SQLAlchemyError as exc:
         _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
         raise HTTPException(

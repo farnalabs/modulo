@@ -48,6 +48,7 @@ async def create_lifecycle_map(
         content_json=normalize_content(content_json),
     )
     session.add(lifecycle_map)
+    await _check_pipeline_uniqueness(session, lifecycle_map)
     await session.flush()
     await derive_lifecycle_map_stages(session, lifecycle_map)
     return lifecycle_map

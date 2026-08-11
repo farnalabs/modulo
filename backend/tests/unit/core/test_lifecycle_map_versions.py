@@ -2,11 +2,13 @@
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from modulo.core.lifecycle_map.service import (
+    create_lifecycle_map,
     delete_lifecycle_map,
     derive_lifecycle_map_stages,
     graduate_stage,
@@ -164,6 +166,32 @@ def test_normalize_content_rejects_non_object_payload() -> None:
         normalize_content(["stages"])  # type: ignore[arg-type]
 
 
+def test_normalize_content_rejects_overlong_stage_name() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'name' must be at most 200 characters"):
+        normalize_content({"stages": [{"id": "s1", "name": "x" * 201, "type": "manual"}]})
+
+
+def test_normalize_content_rejects_overlong_stage_id() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'id' must be at most 255 characters"):
+        normalize_content({"stages": [{"id": "x" * 256, "name": "Build", "type": "manual"}]})
+
+
+def test_normalize_content_accepts_stage_at_length_caps() -> None:
+    result = normalize_content({"stages": [{"id": "x" * 255, "name": "y" * 200, "type": "manual"}]})
+    assert result["stages"][0]["id"] == "x" * 255
+    assert result["stages"][0]["name"] == "y" * 200
+
+
+def test_normalize_content_rejects_empty_stage_name() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'name' must be a non-empty string"):
+        normalize_content({"stages": [{"id": "s1", "name": "   ", "type": "manual"}]})
+
+
+def test_normalize_content_rejects_empty_stage_id() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'id' must be a non-empty string"):
+        normalize_content({"stages": [{"id": "", "name": "Build", "type": "manual"}]})
+
+
 # ---------------------------------------------------------------------------
 # save_map_version
 # ---------------------------------------------------------------------------
@@ -314,6 +342,23 @@ async def test_restore_lifecycle_map_rederives_junction_rows(session: AsyncMock)
     assert derived[0].pipeline_id == _PIPE_ID
 
 
+async def test_restore_lifecycle_map_propagates_integrity_error_for_re_registered_pipeline(
+    session: AsyncMock,
+) -> None:
+    """Restoring a map whose stage pipeline was re-registered in another active
+    map fires the partial unique index; the IntegrityError must propagate so the
+    restore route maps it to 409 (not a generic SQLAlchemyError 503)."""
+    lm = _make_map(
+        deleted_at=datetime.now(UTC),
+        content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]},
+    )
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+    session.flush = AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
+
+    with pytest.raises(IntegrityError):
+        await restore_lifecycle_map(session, _MAP_ID)
+
+
 # ---------------------------------------------------------------------------
 # update_lifecycle_map — content_json path validates + derives
 # ---------------------------------------------------------------------------
@@ -337,6 +382,51 @@ async def test_update_lifecycle_map_normalizes_content_and_derives(session: Asyn
     assert "stage_type" not in lm.content_json["stages"][0]
     derived = [c.args[0] for c in session.add.call_args_list if isinstance(c.args[0], LifecycleMapStage)]
     assert len(derived) == 1
+
+
+# ---------------------------------------------------------------------------
+# create_lifecycle_map — friendly pipeline-uniqueness pre-check
+# ---------------------------------------------------------------------------
+
+
+async def test_create_lifecycle_map_rejects_pipeline_registered_elsewhere(session: AsyncMock) -> None:
+    """The create path runs the friendly pipeline-uniqueness pre-check, so a
+    duplicate pipeline-in-active-map fails with a clear conflict error before
+    the DB partial unique index fires (which would surface as a generic 409)."""
+    created = _make_map(
+        content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]}
+    )
+    session.execute.return_value = MagicMock(all=MagicMock(return_value=[(_PIPE_ID,)]))
+
+    with (
+        patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created),
+        pytest.raises(LifecycleMapPipelineConflictError, match="already a stage of another active lifecycle map"),
+    ):
+        await create_lifecycle_map(
+            session,
+            org_id=_ORG_ID,
+            name="Release Plan",
+            account_id=_ACCOUNT_ID,
+            content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]},
+        )
+
+
+async def test_create_lifecycle_map_without_pipeline_ids_skips_uniqueness_query(session: AsyncMock) -> None:
+    created = _make_map(content_json={"stages": [{"id": "s1", "name": "Manual", "type": "manual"}]})
+
+    with patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls:
+        result = await create_lifecycle_map(
+            session,
+            org_id=_ORG_ID,
+            name="No Pipelines",
+            account_id=_ACCOUNT_ID,
+            content_json={"stages": [{"id": "s1", "name": "Manual", "type": "manual"}]},
+        )
+
+    assert result is created
+    model_cls.assert_called_once()
+    session.add.assert_any_call(created)
+    session.flush.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
