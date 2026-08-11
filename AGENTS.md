@@ -656,6 +656,18 @@ Rules:
 
 - **GitHub Actions step ordering: `Configure opencode auth` must precede `Run opencode fix`** → The auth step writes the API key to `~/.local/share/opencode/auth.json`. Without it, opencode runs without credentials and cannot call the LLM, so it produces no file edits. Both steps need identical `if:` conditions referencing `steps.fetch-ci.outputs.ci_failures`.
 
+### The opencode `agent`-node HTTP provider is unreliable — use `sandbox_agent` + the CLI
+
+The `opencode` model provider is an OpenAI-compatible backend that talks to the
+external zen HTTP gateway at `https://opencode.ai/zen/go/v1` (see
+`backend/src/modulo/model_backends/opencode/` and the hub's
+`_OPENAI_COMPATIBLE_BACKENDS` entry). It is an external dependency, not a
+first-party endpoint:
+
+- **The gateway's `/chat/completions` path can fail upstream while `/models` works.** Verified 2026-08-11: `/models` returned 200 with the same key, but every completion request returned HTTP 500. When an `agent` node uses the `opencode` provider, the run failed with a misleading `error_code` (`AuthenticationError` or the raw openai error type) even though the key was valid — the gateway was down, not the credentials.
+- **The reliable path for opencode work is `sandbox_agent` + the opencode CLI** (`opencode run --model opencode-go/deepseek-v4-flash`, key via `OPENCODE_API_KEY` / `~/.local/share/opencode/auth.json`), which is what all production pipelines (Branch Fixer, PR Reviewer, improve-*) use. It does not depend on the zen gateway. Prefer it for any opencode-typed work.
+- **Classification fix (2026-08-11):** `OpenAICompatibleBackend.invoke()`/`stream()` now re-raise upstream HTTP 5xx and connection failures as `ProviderUnavailableError` (run `error_code` = `ProviderUnavailableError`), while genuine 4xx auth errors still surface as `openai.AuthenticationError`. A gateway outage is now distinguishable from a bad key. The hub still builds the plain `OpenAICompatibleBackend` for `opencode`; `OpenCodeBackend` is a drop-in subclass that pins the zen base URL.
+
 #
 ## Pre-commit hooks (appended from root AGENTS.md)
 
