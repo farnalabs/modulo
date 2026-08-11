@@ -53,6 +53,26 @@ def _make_mock_page(**overrides: Any) -> MagicMock:
     return MagicMock(items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False, **overrides)
 
 
+class _BreakdownOnlyPlan:
+    """Plan-context stub enabling admin_cost_breakdown but NOT admin_spend_limits.
+
+    Mirrors the PlanContext protocol so the anomalies surface can be proven to
+    be gated by its governing feature rather than the spend-limits feature.
+    """
+
+    def feature_enabled(self, name: str) -> bool:
+        return name == "admin_cost_breakdown"
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "team"
+
+    def has_license_key(self) -> bool:
+        return True
+
+
 def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
     from modulo.api.dependencies import _get_engine as _eng
     from modulo.api.dependencies import get_db_session, get_plan_context
@@ -62,7 +82,10 @@ def _setup_client(license_key: str, client: Any, ctx: dict[str, Any]) -> None:
     from modulo.core.feature_flags import CommunityTier, LicenseData, LicenseKeyTier
     from modulo.settings import Settings, get_settings
 
-    if license_key == "":
+    custom_plan = ctx.get("custom_plan")
+    if custom_plan is not None:
+        _plan = custom_plan
+    elif license_key == "":
         _plan = CommunityTier()
     else:
         _plan = LicenseKeyTier(
@@ -126,6 +149,12 @@ def expired_team_license(ctx: dict[str, Any]) -> None:
     from modulo.settings import get_settings
 
     get_settings.cache_clear()
+
+
+@given(parsers.parse("I have a license with cost breakdown but no spend limits"))
+def license_cost_breakdown_only(ctx: dict[str, Any]) -> None:
+    ctx["license_key"] = ""
+    ctx["custom_plan"] = _BreakdownOnlyPlan()
 
 
 # ── SSO endpoints ─────────────────────────────────────────────────────────
@@ -208,6 +237,17 @@ def get_admin_costs(request: Any, ctx: dict[str, Any], client: Any) -> None:
         patch("modulo.api.routes.costs.set_rls_org"),
     ):
         resp = client.get("/api/v1/admin/costs")
+        _store_response(request, ctx, resp)
+
+
+@when(parsers.parse("I GET /api/v1/admin/costs/anomalies"))
+def get_admin_costs_anomalies(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    _setup_client(ctx.get("license_key", ""), client, ctx)
+    with (
+        patch("modulo.api.routes.costs.list_anomalies", return_value=[]),
+        patch("modulo.api.routes.costs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/admin/costs/anomalies")
         _store_response(request, ctx, resp)
 
 
