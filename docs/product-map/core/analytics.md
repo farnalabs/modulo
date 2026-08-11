@@ -19,7 +19,7 @@ unit-tests:
   - backend/tests/integration/test_analytics_endpoint.py
   - backend/tests/integration/test_run_daily_facts.py
 depends-on: [feat-core-cost-breakdown, feat-core-run-retention]
-status: covered
+status: partial
 ---
 
 # Analytics
@@ -74,4 +74,8 @@ outlives the `runs` rows it was derived from.
 ## Known Gaps
 
 - **Frontend analytics page not shipped** — endpoint is feature-gated off by default until the frontend ships (§8.32.6).
-- **No BDD feature file** — coverage is via integration tests only.
+- **No BDD feature file** — coverage is via integration tests only (2026-08-11: status demoted `covered` → `partial`; the product map legend reserves `covered` for features whose behaviours are all exercised by BDD tests).
+
+## QA History
+
+- 2026-08-11: improve-architecture: corrected `status: covered` → `partial` — entry has no `bdd:` field and no BDD feature file exists; coverage is unit + integration only, so `covered` (all behaviours BDD-tested) was inaccurate.
