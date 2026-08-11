@@ -538,7 +538,7 @@ class FeatureFlagRegistry:
         # Flags seeded ``is_active=false`` in the DB catalog (experiments that
         # must ship default-OFF everywhere). ``__init__`` runs ``_refresh()``
         # before ``_load_catalog``, so guard with getattr.
-        inactive = getattr(self, "_inactive_flags", set())
+        inactive: set[str] = getattr(self, "_inactive_flags", set())
 
         for flag in self._flags:
             if flag.name in inactive:
