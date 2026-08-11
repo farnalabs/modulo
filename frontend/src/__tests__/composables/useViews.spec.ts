@@ -119,4 +119,90 @@ describe('useViews', () => {
     composable.setCurrentView('nonexistent')
     expect(composable.currentView.value).toBeNull()
   })
+
+  it('flips loading while fetchViews is in flight', async () => {
+    const { api } = await import('../../lib/api/client')
+    let resolveGet!: (value: unknown) => void
+    ;(api.GET as any).mockImplementation(() => new Promise((resolve) => { resolveGet = resolve }))
+
+    const composable = useViews('runs')
+    const pending = composable.fetchViews()
+
+    expect(composable.loading.value).toBe(true)
+    expect(composable.error.value).toBeNull()
+
+    resolveGet({ data: { items: mockViews }, error: null })
+    await pending
+    expect(composable.loading.value).toBe(false)
+  })
+
+  it('ignores a second fetchViews call while already loading', async () => {
+    const { api } = await import('../../lib/api/client')
+    let resolveGet!: (value: unknown) => void
+    ;(api.GET as any).mockImplementation(() => new Promise((resolve) => { resolveGet = resolve }))
+
+    const composable = useViews('runs')
+    const first = composable.fetchViews()
+    const second = composable.fetchViews()
+
+    resolveGet({ data: { items: mockViews }, error: null })
+    await Promise.all([first, second])
+
+    expect(api.GET).toHaveBeenCalledTimes(1)
+    expect(composable.views.value).toEqual(mockViews)
+  })
+
+  it('force re-fetches even while loading', async () => {
+    const { api } = await import('../../lib/api/client')
+    let resolveFirst!: (value: unknown) => void
+    let resolveSecond!: (value: unknown) => void
+    let call = 0
+    ;(api.GET as any).mockImplementation(() => {
+      call++
+      return new Promise((resolve) => {
+        if (call === 1) resolveFirst = resolve
+        else resolveSecond = resolve
+      })
+    })
+
+    const composable = useViews('runs')
+    const first = composable.fetchViews()
+
+    const second = composable.fetchViews(true)
+    resolveFirst({ data: { items: [] }, error: null })
+    await first
+
+    resolveSecond({ data: { items: mockViews }, error: null })
+    await second
+
+    expect(api.GET).toHaveBeenCalledTimes(2)
+    expect(composable.views.value).toEqual(mockViews)
+  })
+
+  it('clears a previous error on a successful fetchViews', async () => {
+    const { api } = await import('../../lib/api/client')
+    ;(api.GET as any).mockResolvedValueOnce({ data: null, error: { message: 'boom' } })
+    ;(api.GET as any).mockResolvedValueOnce({ data: { items: mockViews }, error: null })
+
+    const composable = useViews('runs')
+    await composable.fetchViews()
+    expect(composable.error.value).toBe('boom')
+
+    await composable.fetchViews()
+    expect(composable.error.value).toBeNull()
+    expect(composable.views.value).toEqual(mockViews)
+  })
+
+  it('keeps prior views when a subsequent fetch fails', async () => {
+    const { api } = await import('../../lib/api/client')
+    ;(api.GET as any).mockResolvedValueOnce({ data: { items: mockViews }, error: null })
+    ;(api.GET as any).mockResolvedValueOnce({ data: null, error: { message: 'down' } })
+
+    const composable = useViews('runs')
+    await composable.fetchViews()
+    await composable.fetchViews()
+
+    expect(composable.error.value).toBe('down')
+    expect(composable.views.value).toEqual(mockViews)
+  })
 })

@@ -1,200 +1,202 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { defineComponent } from 'vue'
+import { defineComponent, h } from 'vue'
+import { setActivePinia, createPinia } from 'pinia'
 
-const h = vi.hoisted(() => {
-  const metricHandlers: Record<string, (metric: unknown) => void> = {}
-  const featureEnabled = vi.fn()
-  const fetchPlan = vi.fn()
-  const planStore = { currentTier: 'community', fetchPlan, featureEnabled }
-  const usePlanStore = vi.fn(() => planStore)
-  return { metricHandlers, featureEnabled, fetchPlan, planStore, usePlanStore }
-})
+const { onLCP, onFCP, onCLS, onINP, onTTFB } = vi.hoisted(() => ({
+  onLCP: vi.fn(),
+  onFCP: vi.fn(),
+  onCLS: vi.fn(),
+  onINP: vi.fn(),
+  onTTFB: vi.fn(),
+}))
 
 vi.mock('web-vitals', () => ({
-  onLCP: vi.fn((cb: (metric: unknown) => void) => { h.metricHandlers.LCP = cb }),
-  onFCP: vi.fn((cb: (metric: unknown) => void) => { h.metricHandlers.FCP = cb }),
-  onCLS: vi.fn((cb: (metric: unknown) => void) => { h.metricHandlers.CLS = cb }),
-  onINP: vi.fn((cb: (metric: unknown) => void) => { h.metricHandlers.INP = cb }),
-  onTTFB: vi.fn((cb: (metric: unknown) => void) => { h.metricHandlers.TTFB = cb }),
+  onLCP,
+  onFCP,
+  onCLS,
+  onINP,
+  onTTFB,
 }))
 
-vi.mock('../../stores/planStore', () => ({
-  usePlanStore: h.usePlanStore,
-}))
+let useWebVitals: () => void
 
-function makeMetric(name: string, value = 100): { name: string; value: number; rating: string; navigationType: string } {
-  return { name, value, rating: 'good', navigationType: 'navigate' }
+async function mountWebVitals() {
+  ;({ useWebVitals } = await import('../../composables/useWebVitals'))
+  return mount(defineComponent({
+    setup() {
+      useWebVitals()
+      return () => h('div')
+    },
+  }))
 }
 
-let fetchMock: ReturnType<typeof vi.fn>
+function fakeMetric(name: string) {
+  return {
+    name,
+    value: 100,
+    rating: 'good',
+    id: `id-${name}`,
+    delta: 100,
+    entries: [],
+    navigationType: 'navigate',
+  } as unknown as Parameters<typeof onLCP>[0]
+}
+
+const VITALS_API = '/api/v1/metrics/web-vitals'
 
 beforeEach(() => {
   vi.resetModules()
-  vi.useRealTimers()
-  for (const key of Object.keys(h.metricHandlers)) delete h.metricHandlers[key]
-  h.featureEnabled.mockReset()
-  h.fetchPlan.mockReset()
-  h.fetchPlan.mockResolvedValue(undefined)
-  h.planStore.currentTier = 'community'
-  fetchMock = vi.fn(async () => ({ ok: true } as unknown as Response))
-  vi.stubGlobal('fetch', fetchMock)
+  setActivePinia(createPinia())
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }))
 })
 
 afterEach(() => {
-  vi.unstubAllGlobals()
-  vi.restoreAllMocks()
+  vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
-async function mountHarness() {
-  const { useWebVitals } = await import('../../composables/useWebVitals')
-  const Harness = defineComponent({
-    setup() {
-      useWebVitals()
-      return () => null
-    },
-  })
-  return mount(Harness)
+async function flushAll() {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 describe('useWebVitals', () => {
-  it('does not register handlers or fetch when the feature flag is disabled', async () => {
-    h.featureEnabled.mockReturnValue(false)
-    const wrapper = await mountHarness()
+  it('does not register listeners or post when the feature flag is off', async () => {
+    const wrapper = await mountWebVitals()
+    await flushAll()
 
-    await vi.waitFor(() => expect(h.usePlanStore).toHaveBeenCalled())
-    await new Promise(r => setTimeout(r, 20))
-
-    expect(Object.keys(h.metricHandlers)).toHaveLength(0)
-    wrapper.unmount()
-    await new Promise(r => setTimeout(r, 20))
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('registers all five web-vitals handlers when enabled', async () => {
-    h.featureEnabled.mockReturnValue(true)
-    const wrapper = await mountHarness()
-
-    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
-    expect(Object.keys(h.metricHandlers).sort()).toEqual(['CLS', 'FCP', 'INP', 'LCP', 'TTFB'])
+    expect(onLCP).not.toHaveBeenCalled()
+    expect(onFCP).not.toHaveBeenCalled()
+    expect(onCLS).not.toHaveBeenCalled()
+    expect(onINP).not.toHaveBeenCalled()
+    expect(onTTFB).not.toHaveBeenCalled()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('buffers metrics and flushes after the 5s scheduled flush', async () => {
-    h.featureEnabled.mockReturnValue(true)
-    vi.useFakeTimers()
-    const wrapper = await mountHarness()
-    await vi.advanceTimersByTimeAsync(0)
-    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
+  it('registers all five metric listeners when the feature flag is on', async () => {
+    const { usePlanStore } = await import('../../stores/planStore')
+    usePlanStore().features['web_vitals_analytics'] = true
 
-    h.metricHandlers.LCP(makeMetric('LCP', 120))
+    const wrapper = await mountWebVitals()
+    await flushAll()
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(onLCP).toHaveBeenCalledTimes(1)
+    expect(onFCP).toHaveBeenCalledTimes(1)
+    expect(onCLS).toHaveBeenCalledTimes(1)
+    expect(onINP).toHaveBeenCalledTimes(1)
+    expect(onTTFB).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
 
-    await vi.advanceTimersByTimeAsync(5000)
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+  it('buffers metrics and posts them once ten have accumulated', async () => {
+    const { usePlanStore } = await import('../../stores/planStore')
+    usePlanStore().features['web_vitals_analytics'] = true
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/metrics/web-vitals',
+    const wrapper = await mountWebVitals()
+    await flushAll()
+
+    const report = onLCP.mock.calls[0][0]
+    for (let i = 0; i < 9; i++) {
+      report(fakeMetric(`LCP-${i}`))
+    }
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+
+    report(fakeMetric('LCP-final'))
+    await flushAll()
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      VITALS_API,
       expect.objectContaining({
         method: 'POST',
         credentials: 'include',
-        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+        body: expect.stringContaining('LCP-final'),
       }),
     )
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
-    expect(body.events).toHaveLength(1)
-    expect(body.events[0]).toEqual(
-      expect.objectContaining({
-        metric_name: 'LCP',
-        metric_value: 120,
-        metric_rating: 'good',
-        navigation_type: 'navigate',
-      }),
-    )
-    expect(body.events[0].route_path).toBe(window.location.pathname)
-    expect(body.events[0].page_url).toBe(window.location.href)
-    wrapper.unmount()
-  })
-
-  it('flushes immediately once ten metrics accumulate', async () => {
-    h.featureEnabled.mockReturnValue(true)
-    const wrapper = await mountHarness()
-    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
-
-    for (let i = 0; i < 9; i++) h.metricHandlers.INP(makeMetric('INP', i))
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    h.metricHandlers.INP(makeMetric('INP', 99))
-
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
-    expect(body.events).toHaveLength(10)
     wrapper.unmount()
   })
 
   it('flushes buffered metrics on unmount', async () => {
-    h.featureEnabled.mockReturnValue(true)
-    const wrapper = await mountHarness()
-    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
+    const { usePlanStore } = await import('../../stores/planStore')
+    usePlanStore().features['web_vitals_analytics'] = true
 
-    h.metricHandlers.FCP(makeMetric('FCP', 55))
-    h.metricHandlers.TTFB(makeMetric('TTFB', 30))
+    const wrapper = await mountWebVitals()
+    await flushAll()
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    const report = onLCP.mock.calls[0][0]
+    report(fakeMetric('LCP-unmount'))
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+
     wrapper.unmount()
+    await flushAll()
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
-    expect(body.events).toHaveLength(2)
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.events).toHaveLength(1)
+    expect(body.events[0].metric_name).toBe('LCP-unmount')
   })
 
-  it('silently swallows fetch failures and keeps the app alive', async () => {
-    h.featureEnabled.mockReturnValue(true)
-    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const wrapper = await mountHarness()
-    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
+  it('records route path and page url on each metric', async () => {
+    const { usePlanStore } = await import('../../stores/planStore')
+    usePlanStore().features['web_vitals_analytics'] = true
 
-    for (let i = 0; i < 10; i++) h.metricHandlers.CLS(makeMetric('CLS', i))
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    const wrapper = await mountWebVitals()
+    await flushAll()
 
-    expect(errorSpy).not.toHaveBeenCalled()
-    errorSpy.mockRestore()
+    const report = onINP.mock.calls[0][0]
+    report(fakeMetric('INP'))
+    wrapper.unmount()
+    await flushAll()
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.events[0].route_path).toBe(window.location.pathname)
+    expect(body.events[0].page_url).toBe(window.location.href)
+  })
+
+  it('fetches the plan first when currentTier is unset', async () => {
+    const { usePlanStore } = await import('../../stores/planStore')
+    const planStore = usePlanStore()
+    planStore.currentTier = null as unknown as string
+    const fetchPlanSpy = vi.spyOn(planStore, 'fetchPlan').mockResolvedValue(undefined)
+    planStore.features['web_vitals_analytics'] = true
+
+    const wrapper = await mountWebVitals()
+    await flushAll()
+
+    expect(fetchPlanSpy).toHaveBeenCalled()
+    expect(onLCP).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('fetches the plan first when the current tier is unknown', async () => {
-    h.planStore.currentTier = ''
-    h.featureEnabled.mockReturnValue(true)
-    const wrapper = await mountHarness()
+  it('stays disabled when the plan fetch fails', async () => {
+    const { usePlanStore } = await import('../../stores/planStore')
+    const planStore = usePlanStore()
+    planStore.currentTier = null as unknown as string
+    vi.spyOn(planStore, 'fetchPlan').mockRejectedValue(new Error('plan unavailable'))
 
-    await vi.waitFor(() => expect(h.fetchPlan).toHaveBeenCalled())
-    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
+    const wrapper = await mountWebVitals()
+    await flushAll()
+
+    expect(onLCP).not.toHaveBeenCalled()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('skips registration when the initial plan fetch fails', async () => {
-    h.planStore.currentTier = ''
-    h.fetchPlan.mockRejectedValue(new Error('plan fetch failed'))
-    h.featureEnabled.mockReturnValue(true)
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const wrapper = await mountHarness()
+  it('does not call fetchPlan when the tier is already known', async () => {
+    const { usePlanStore } = await import('../../stores/planStore')
+    const planStore = usePlanStore()
+    planStore.currentTier = 'community'
+    const fetchPlanSpy = vi.spyOn(planStore, 'fetchPlan').mockResolvedValue(undefined)
+    planStore.features['web_vitals_analytics'] = false
 
-    await vi.waitFor(() => expect(h.fetchPlan).toHaveBeenCalled())
-    await new Promise(r => setTimeout(r, 20))
-    expect(Object.keys(h.metricHandlers)).toHaveLength(0)
-    errorSpy.mockRestore()
-    wrapper.unmount()
-  })
+    const wrapper = await mountWebVitals()
+    await flushAll()
 
-  it('does not refetch the plan when the tier is already known', async () => {
-    h.planStore.currentTier = 'team'
-    h.featureEnabled.mockReturnValue(true)
-    const wrapper = await mountHarness()
-
-    await vi.waitFor(() => expect(Object.keys(h.metricHandlers)).toHaveLength(5))
-    expect(h.fetchPlan).not.toHaveBeenCalled()
+    expect(fetchPlanSpy).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

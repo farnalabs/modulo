@@ -368,6 +368,9 @@ class Settings(BaseSettings):
     smtp_username: str = Field("")
     smtp_password: str = Field(default="", repr=False)
     email_from: str = Field("")
+    # SMTP connection/send timeout in seconds (per attempt). Org-level email
+    # settings can override this per-organisation via the admin email-settings API.
+    smtp_timeout: int = Field(30, ge=1, le=120)
 
     model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 

@@ -159,6 +159,20 @@ def get_admin_audit(request: Any, ctx: dict[str, Any], client: Any) -> None:
         _store_response(request, ctx, resp)
 
 
+@when(parsers.parse("I GET /api/v1/admin/audit/export"))
+def get_admin_audit_export(request: Any, ctx: dict[str, Any], client: Any) -> None:
+    _setup_client(ctx.get("license_key", ""), client, ctx)
+    with (
+        patch("modulo.api.routes.audit.set_rls_org"),
+        patch(
+            "modulo.api.routes.audit.export_chain",
+            return_value={"items": [], "total": 0, "next_cursor": None, "prev_cursor": None},
+        ),
+    ):
+        resp = client.get("/api/v1/admin/audit/export")
+        _store_response(request, ctx, resp)
+
+
 @when(parsers.parse("I GET /api/v1/admin/costs/limits"))
 def get_admin_costs_limits(request: Any, ctx: dict[str, Any], client: Any) -> None:
     _setup_client(ctx.get("license_key", ""), client, ctx)

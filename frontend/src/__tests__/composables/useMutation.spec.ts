@@ -1,104 +1,92 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ref } from 'vue'
+import { mount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
+import { useMutation } from '../../composables/useMutation'
 
-const h = vi.hoisted(() => {
-  const mutationFn: { value: ((input: unknown) => Promise<unknown>) | null } = { value: null }
-  return { mutationFn }
-})
-
-const isPending = ref(false)
-const error = ref<Error | null>(null)
-const mutateAsync = vi.fn(async (input: unknown) => {
-  if (!h.mutationFn.value) return input
-  return h.mutationFn.value(input)
-})
-
-vi.mock('@tanstack/vue-query', () => ({
-  useMutation: (opts: { mutationFn: (input: unknown) => Promise<unknown> }) => {
-    h.mutationFn.value = opts.mutationFn
-    return {
-      isPending,
-      error,
-      mutateAsync,
-    }
-  },
-  useQueryClient: () => ({ setQueryData: vi.fn() }),
-  useQuery: () => ({
-    data: ref(undefined),
-    error: ref(null),
-    isLoading: ref(false),
-    isFetching: ref(false),
-    refetch: vi.fn(),
-  }),
-}))
-
-beforeEach(() => {
-  vi.clearAllMocks()
-  isPending.value = false
-  error.value = null
-  h.mutationFn.value = null
-})
-
-async function setupMutation<TInput = void, TOutput = void>(fn: (input: TInput) => Promise<TOutput>) {
-  const { useMutation } = await import('../../composables/useMutation')
-  return useMutation<TInput, TOutput>(fn)
+function mountUseMutation<TInput, TOutput>(fn: (input: TInput) => Promise<TOutput>) {
+  let result!: ReturnType<typeof useMutation<TInput, TOutput>>
+  mount(defineComponent({
+    setup() {
+      result = useMutation(fn)
+      return () => h('div')
+    },
+  }))
+  return result
 }
 
 describe('useMutation', () => {
-  it('mutate resolves with the output of the mutation function', async () => {
-    const mutate = await setupMutation<number, number>(async (n) => n * 2)
-
-    await expect(mutate.mutate(21)).resolves.toBe(42)
-    expect(mutateAsync).toHaveBeenCalledWith(21)
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
-  it('loading is false before and after a mutation', async () => {
-    const mutate = await setupMutation<number, number>(async (n) => n)
+  it('starts idle with no error', () => {
+    const composable = mountUseMutation(async () => 'done')
 
-    expect(mutate.loading.value).toBe(false)
-    await mutate.mutate(1)
-    expect(mutate.loading.value).toBe(false)
+    expect(composable.loading.value).toBe(false)
+    expect(composable.error.value).toBeNull()
   })
 
-  it('loading reflects the pending state', async () => {
-    const mutate = await setupMutation<number, number>(async (n) => n)
-    isPending.value = true
-    expect(mutate.loading.value).toBe(true)
-    isPending.value = false
-    expect(mutate.loading.value).toBe(false)
+  it('returns the mutation output on success', async () => {
+    const composable = mountUseMutation(async (input: string) => `echo:${input}`)
+
+    await expect(composable.mutate('hello')).resolves.toBe('echo:hello')
   })
 
-  it('error is null when the mutation succeeds', async () => {
-    const mutate = await setupMutation<number, number>(async (n) => n)
-    await mutate.mutate(1)
-    expect(mutate.error.value).toBeNull()
+  it('toggles loading while the mutation is in flight', async () => {
+    const resolvers: Array<(value: string) => void> = []
+    const composable = mountUseMutation(() => new Promise<string>((resolve) => { resolvers.push(resolve) }))
+
+    const pending = composable.mutate(undefined)
+    await vi.waitFor(() => expect(resolvers.length).toBe(1))
+    expect(composable.loading.value).toBe(true)
+
+    resolvers[0]('ok')
+    await pending
+    expect(composable.loading.value).toBe(false)
   })
 
-  it('surfaces the mutation error message', async () => {
-    const mutate = await setupMutation<number, number>(async (n) => n)
-    error.value = new Error('mutation failed')
-    expect(mutate.error.value).toBe('mutation failed')
+  it('rejects and records the error message when the mutation fails', async () => {
+    const composable = mountUseMutation(async () => { throw new Error('mutation exploded') })
+
+    await expect(composable.mutate(undefined)).rejects.toThrow('mutation exploded')
+    expect(composable.error.value).toBe('mutation exploded')
+    expect(composable.loading.value).toBe(false)
   })
 
-  it('falls back to a generic message when the error has no message', async () => {
-    const mutate = await setupMutation<number, number>(async (n) => n)
-    error.value = { message: null } as unknown as Error
-    expect(mutate.error.value).toBe('An error occurred')
+  it('records a generic error message when the error has no message', async () => {
+    const composable = mountUseMutation(async () => { throw new Error() })
+
+    await expect(composable.mutate(undefined)).rejects.toThrow()
+    expect(composable.error.value).toBe('An error occurred')
   })
 
-  it('propagates a rejected mutation to the caller', async () => {
-    const mutate = await setupMutation<number, number>(async () => {
-      throw new Error('nope')
+  it('records the message of a non-Error rejection', async () => {
+    const composable = mountUseMutation(async () => { throw { status: 500 } })
+
+    await expect(composable.mutate(undefined)).rejects.toBeTruthy()
+    expect(composable.error.value).toBe('An error occurred')
+  })
+
+  it('forwards the input argument to the mutation function', async () => {
+    const fn = vi.fn(async (input: { id: number }) => input.id)
+    const composable = mountUseMutation(fn)
+
+    await composable.mutate({ id: 123 })
+    expect(fn).toHaveBeenCalledWith({ id: 123 })
+  })
+
+  it('clears the error before the next mutation', async () => {
+    let shouldFail = true
+    const composable = mountUseMutation(async () => {
+      if (shouldFail) throw new Error('first failed')
+      return 'ok'
     })
 
-    await expect(mutate.mutate(1)).rejects.toThrow('nope')
-  })
+    await expect(composable.mutate(undefined)).rejects.toThrow()
+    expect(composable.error.value).toBe('first failed')
 
-  it('passes the input through to the mutation function', async () => {
-    const fn = vi.fn(async (input: { id: string }) => input)
-    const mutate = await setupMutation<{ id: string }, { id: string }>(fn)
-
-    await mutate.mutate({ id: 'abc' })
-    expect(fn).toHaveBeenCalledWith({ id: 'abc' })
+    shouldFail = false
+    await composable.mutate(undefined)
+    expect(composable.error.value).toBeNull()
   })
 })

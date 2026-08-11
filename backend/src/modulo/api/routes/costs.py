@@ -171,8 +171,6 @@ class SetSpendLimitRequest(BaseModel):
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
-    _: object = require_feature("admin_spend_limits"),
-    __: object = require_feature("admin_cost_breakdown"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
     session: AsyncSession = Depends(get_db_session),
 ) -> CostReportResponse:
