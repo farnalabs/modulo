@@ -521,17 +521,14 @@ class TestBackfillLedger:
         class _FakeInsert:
             def __init__(self, model) -> None:
                 captured["model"] = model
-                self.excluded = SimpleNamespace(
-                    run_count="excluded.run_count", total_spend_usd="excluded.total_spend_usd"
-                )
 
             def values(self, rows) -> _FakeInsert:
                 captured["values"] = rows
                 return self
 
-            def on_conflict_do_update(self, index_elements=None, set_=None) -> _FakeInsert:
+            def on_conflict_do_nothing(self, index_elements=None) -> _FakeInsert:
                 captured["index_elements"] = index_elements
-                captured["set_"] = set_
+                captured["on_conflict"] = "do_nothing"
                 return self
 
         monkeypatch.setattr(maintenance_mod, "pg_insert", _FakeInsert)
@@ -559,18 +556,24 @@ class TestBackfillLedger:
         assert captured["values"][0]["run_date"] == day
         assert captured["values"][0]["run_count"] == 3
         assert captured["values"][0]["total_spend_usd"] == Decimal("1.25")
+        assert captured["values"][0]["clamped"] is False
+        assert captured["values"][0]["refused_spend_usd"] == Decimal(0)
         assert captured["values"][1]["organisation_id"] == org_b
         assert captured["values"][1]["team_id"] is None
-        # ON CONFLICT target (the unique index incl. NULLS NOT DISTINCT) and
-        # the DO UPDATE refresh set — re-running the same day reconciles, never
-        # duplicates.
+        # ON CONFLICT target (the unique index incl. NULLS NOT DISTINCT) with
+        # DO NOTHING — a day with an existing live org-level row is left
+        # untouched (no update path exists).
+        assert captured["on_conflict"] == "do_nothing"
         assert [c.key for c in captured["index_elements"]] == ["organisation_id", "team_id", "run_date"]
-        assert set(captured["set_"]) == {"run_count", "total_spend_usd"}
-        # Aggregate query: terminal-status + UTC-day predicate, grouped by org.
+        assert "set_" not in captured
+        # Aggregate query mirrors the live writer: terminal-status + UTC-day
+        # predicate, grouped by org, EXCLUDING refused and zero-cost runs.
         agg_stmt = session.execute.await_args_list[0].args[0]
         agg_sql = str(agg_stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "GROUP BY runs.organisation_id" in agg_sql
         assert "runs.status IN" in agg_sql
+        assert "runs.ledger_refused_at IS NULL" in agg_sql
+        assert "runs.total_cost_usd > 0" in agg_sql
         assert "date_trunc('day', coalesce(runs.started_at, runs.created_at))" in agg_sql
         assert "'2026-08-06'" in agg_sql
 
@@ -581,7 +584,27 @@ class TestBackfillLedger:
         # No orgs to upsert -> the insert statement is never built/executed.
         assert session.execute.await_count == 1
 
-    async def test_idempotent_upsert_same_day_twice(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_does_not_overwrite_a_live_written_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        day = date(2026, 8, 6)
+        org_a = "22222222-2222-4222-8222-222222222222"
+        captured = self._capturing_insert(monkeypatch)
+        session = _session(
+            execute_side_effect=[
+                SimpleNamespace(all=lambda: [(org_a, 3, Decimal("1.25"))]),
+                # rowcount 0 = the conflict was swallowed by DO NOTHING, so the
+                # pre-existing live org-level row is preserved untouched.
+                SimpleNamespace(rowcount=0),
+            ]
+        )
+
+        result = await maintenance_mod.backfill_ledger(session, day)
+
+        assert result == 0
+        assert captured["on_conflict"] == "do_nothing"
+        assert "set_" not in captured
+        assert len(captured["values"]) == 1
+
+    async def test_idempotent_same_day_twice(self, monkeypatch: pytest.MonkeyPatch) -> None:
         day = date(2026, 8, 6)
         org_a = "22222222-2222-4222-8222-222222222222"
         captured = self._capturing_insert(monkeypatch)
@@ -593,10 +616,27 @@ class TestBackfillLedger:
                 ]
             )
             assert await maintenance_mod.backfill_ledger(session, day) == 1
-        # Both invocations upsert via ON CONFLICT DO UPDATE (no duplicates by
-        # construction) — the refresh set targets exactly the aggregated cols.
-        assert captured["set_"]["run_count"] == "excluded.run_count"
-        assert captured["set_"]["total_spend_usd"] == "excluded.total_spend_usd"
+        # DO NOTHING: a second pass never duplicates or overwrites — the unique
+        # (org, team, run_date) index swallows the conflict by construction.
+        assert captured["on_conflict"] == "do_nothing"
+        assert [c.key for c in captured["index_elements"]] == ["organisation_id", "team_id", "run_date"]
+
+    async def test_clamps_spend_to_column_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        day = date(2026, 8, 6)
+        org_a = "22222222-2222-4222-8222-222222222222"
+        captured = self._capturing_insert(monkeypatch)
+        session = _session(
+            execute_side_effect=[
+                SimpleNamespace(all=lambda: [(org_a, 5, maintenance_mod.COST_COLUMN_CAP + Decimal("0.01"))]),
+                SimpleNamespace(rowcount=1),
+            ]
+        )
+
+        result = await maintenance_mod.backfill_ledger(session, day)
+
+        assert result == 1
+        assert captured["values"][0]["total_spend_usd"] == maintenance_mod.COST_COLUMN_CAP
+        assert captured["values"][0]["clamped"] is True
 
 
 class TestReconcileFacts:

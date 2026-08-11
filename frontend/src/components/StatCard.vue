@@ -26,15 +26,18 @@
             class="inline-flex items-center gap-0.5 text-xs font-medium"
             :class="deltaClass"
           >
-            <span aria-hidden="true">{{ deltaArrow }}</span>{{ deltaPctText }}
+            <span aria-hidden="true">{{ deltaArrow }}</span>{{ deltaAbsText }} ({{ deltaPctText }})
           </span>
           <span
-            v-else-if="delta != null && noBaselineLabel"
-            class="inline-flex items-center text-xs font-medium text-muted-foreground"
+            v-else-if="deltaAbs != null && noBaselineLabel"
+            class="inline-flex items-center gap-0.5 text-xs font-medium text-muted-foreground"
             data-testid="stat-no-baseline"
+            role="img"
+            :aria-label="noBaselineLabel"
             :title="noBaselineLabel"
-            >—</span
           >
+            <span aria-hidden="true">{{ deltaAbsArrow }}</span>{{ deltaAbsText }}
+          </span>
         </div>
       </div>
     </div>
@@ -84,8 +87,33 @@ const deltaPct = computed(() => {
   return typeof d === "number" && Number.isFinite(d) ? d : null;
 });
 
+const deltaAbs = computed(() => {
+  const { current, previous } = props.delta ?? {};
+  if (typeof current !== "number" || typeof previous !== "number") return null;
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+  return current - previous;
+});
+
+const deltaAbsText = computed(() => {
+  const d = deltaAbs.value;
+  if (d == null) return "";
+  if (d === 0) return "0";
+  const sign = d > 0 ? "+" : "-";
+  const abs = Math.abs(d);
+  const formatted = Number.isInteger(abs) ? String(abs) : abs.toFixed(1);
+  return `${sign}${formatted}`;
+});
+
 const deltaArrow = computed(() => {
   const d = deltaPct.value;
+  if (d == null) return "";
+  if (d > 0) return "▲";
+  if (d < 0) return "▼";
+  return "→";
+});
+
+const deltaAbsArrow = computed(() => {
+  const d = deltaAbs.value;
   if (d == null) return "";
   if (d > 0) return "▲";
   if (d < 0) return "▼";

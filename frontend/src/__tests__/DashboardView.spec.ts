@@ -488,6 +488,7 @@ describe('StatCard delta arrow', () => {
       },
     })
     expect(wrapper.text()).toContain('▼')
+    expect(wrapper.text()).toContain('-4')
     expect(wrapper.text()).toContain('50.0%')
   })
 
@@ -500,6 +501,7 @@ describe('StatCard delta arrow', () => {
       },
     })
     expect(wrapper.text()).toContain('▲')
+    expect(wrapper.text()).toContain('+4')
     expect(wrapper.text()).toContain('100.0%')
   })
 
@@ -512,6 +514,7 @@ describe('StatCard delta arrow', () => {
       },
     })
     expect(wrapper.text()).toContain('→')
+    expect(wrapper.text()).toContain('0')
     expect(wrapper.text()).toContain('0.0%')
   })
 
@@ -535,12 +538,47 @@ describe('StatCard delta arrow', () => {
     })
     const fallback = wrapper.find('[data-testid="stat-no-baseline"]')
     expect(fallback.exists()).toBe(true)
-    expect(fallback.text()).toBe('—')
+    // Flat arrow + absolute 0 — no relative % (there is no baseline to diff).
+    expect(fallback.text()).toContain('→')
+    expect(fallback.text()).toContain('0')
     expect(fallback.attributes('title')).toBe('No prior period data')
-    // No % and no direction arrows — the em-dash replaces the delta.
+    expect(fallback.attributes('aria-label')).toBe('No prior period data')
     expect(wrapper.text()).not.toContain('%')
     expect(wrapper.text()).not.toContain('▲')
     expect(wrapper.text()).not.toContain('▼')
+  })
+
+  it('renders the absolute delta with an accessible name when there is no prior-period baseline', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 788,
+        delta: { current: 788, previous: 0, delta_pct: null },
+        noBaselineLabel: 'No prior period data',
+      },
+    })
+    const fallback = wrapper.find('[data-testid="stat-no-baseline"]')
+    expect(fallback.exists()).toBe(true)
+    // Absolute change shown despite the % being a hyphen (no baseline).
+    expect(fallback.text()).toContain('▲')
+    expect(fallback.text()).toContain('+788')
+    // A11y: the em-dash/arrow alone is not a name — role=img + aria-label.
+    expect(fallback.attributes('role')).toBe('img')
+    expect(fallback.attributes('aria-label')).toBe('No prior period data')
+    expect(fallback.attributes('title')).toBe('No prior period data')
+    expect(wrapper.text()).not.toContain('%')
+  })
+
+  it('does not render a no-baseline fallback when only one of current/previous is a number', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 788,
+        delta: { current: 788, previous: null, delta_pct: null },
+        noBaselineLabel: 'No prior period data',
+      },
+    })
+    expect(wrapper.find('[data-testid="stat-no-baseline"]').exists()).toBe(false)
   })
 
   it('does not render the no-baseline fallback when noBaselineLabel is undefined', () => {

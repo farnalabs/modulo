@@ -8,7 +8,8 @@ INSERT...SELECT anti-join and ``ON CONFLICT`` are Postgres-idiomatic).
 Roles:
 
 - ``backfill_facts``  — per-day INSERT...SELECT anti-join (idempotent).
-- ``backfill_ledger`` — per-day org-level spend-ledger upsert (idempotent).
+- ``backfill_ledger`` — per-day org-level spend-ledger gap-fill (inserts
+  days with no existing org-level row only; never overwrites live rows).
 - ``backfill_batches`` — Python-driven day loop (newest-first), ONE
   transaction per day, hard-capped batches per invocation (remainder
   re-enqueued next run).
@@ -41,6 +42,7 @@ from modulo.core.analytics.metrics import (
     set_backfill_rows,
     set_retention_lag,
 )
+from modulo.core.cost_controller.breakdown.constants import COST_COLUMN_CAP
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -285,16 +287,20 @@ async def backfill_facts(session: Any, day: date) -> int:
 
 
 async def backfill_ledger(session: Any, day: date) -> int:
-    """Per-day ORG-LEVEL spend-ledger upsert for terminal runs on *day*.
+    """Per-day ORG-LEVEL spend-ledger gap-fill for terminal runs on *day*.
 
-    Aggregates terminal runs whose UTC day (``coalesce(started_at,
-    created_at)``) is *day*, grouped by organisation, and upserts the
-    org-level ``org_daily_run_counts`` row (``team_id IS NULL``). Idempotent —
-    the unique ``uq_org_daily_run_counts (organisation_id, team_id,
-    run_date)`` index (NULLS NOT DISTINCT, so NULL team_ids collide) is the
-    conflict target and ``ON CONFLICT DO UPDATE`` refreshes ``run_count`` /
-    ``total_spend_usd`` so a re-run reconciles instead of duplicating. Returns
-    the number of organisations upserted.
+    ONLY inserts org-level ``org_daily_run_counts`` rows (``team_id IS NULL``)
+    for days that have NO existing org-level row (``ON CONFLICT DO NOTHING``)
+    — it fills historical gaps and NEVER overwrites a live-written row
+    (especially today's, which the daily cron would otherwise clobber). The
+    aggregation mirrors the live writer's semantics (``check_and_record_spend``
+    / ``_add_spend``): it excludes limit-refused runs (``ledger_refused_at``
+    NOT NULL — their amount lives in ``refused_spend_usd``, not
+    ``total_spend_usd``) and zero-cost pre-component-read terminals
+    (``total_cost_usd`` = 0, which the live writer never writes to the
+    ledger), and applies the same ``COST_COLUMN_CAP`` clamp with the
+    ``clamped`` flag. Backfilled rows never carry a refused amount. Returns
+    the number of organisations upserted (rows actually inserted).
     """
     agg_stmt = (
         sa.select(
@@ -304,6 +310,8 @@ async def backfill_ledger(session: Any, day: date) -> int:
         )
         .where(
             Run.status.in_(TERMINAL_STATUSES),
+            Run.ledger_refused_at.is_(None),
+            Run.total_cost_usd > 0,
             sa.func.date_trunc("day", sa.func.coalesce(Run.started_at, Run.created_at)) == day,
         )
         .group_by(Run.organisation_id)
@@ -319,7 +327,8 @@ async def backfill_ledger(session: Any, day: date) -> int:
                 "team_id": None,
                 "run_date": day,
                 "run_count": run_count,
-                "total_spend_usd": total_spend,
+                "total_spend_usd": min(total_spend, COST_COLUMN_CAP),
+                "clamped": total_spend > COST_COLUMN_CAP,
                 # Explicit zero: the column has a Python-side default that is
                 # NOT applied on a multi-VALUES insert, and omitting it would
                 # render NULL against the NOT NULL column.
@@ -328,16 +337,12 @@ async def backfill_ledger(session: Any, day: date) -> int:
             for org_id, run_count, total_spend in rows
         ]
     )
-    stmt = insert_stmt.on_conflict_do_update(
+    stmt = insert_stmt.on_conflict_do_nothing(
         index_elements=[
             OrgDailyRunCount.organisation_id,
             OrgDailyRunCount.team_id,
             OrgDailyRunCount.run_date,
         ],
-        set_={
-            "run_count": insert_stmt.excluded.run_count,
-            "total_spend_usd": insert_stmt.excluded.total_spend_usd,
-        },
     )
     result = await session.execute(stmt)
     return result.rowcount or 0
