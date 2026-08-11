@@ -91,7 +91,6 @@ export const RUN_STATUSES = [
   "running",
   "awaiting_human",
   "claimed",
-  "waiting_for_lock",
   "complete",
   "failed",
   "cancelled",
