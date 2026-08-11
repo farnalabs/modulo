@@ -47,7 +47,6 @@ import AdminAuditView from '../views/AdminAuditView.vue'
 import AdminFeatureFlagsView from '../views/AdminFeatureFlagsView.vue'
 import AdminSpendLimitsView from '../views/AdminSpendLimitsView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
-import ApiChangelogView from '../views/ApiChangelogView.vue'
 import DashboardView from '../views/DashboardView.vue'
 import EvalEditorView from '../views/EvalEditorView.vue'
 import FeedbackInboxView from '../views/FeedbackInboxView.vue'
@@ -66,7 +65,6 @@ import SettingsRuntimeConfigView from '../views/SettingsRuntimeConfigView.vue'
 import SettingsSsoView from '../views/SettingsSsoView.vue'
 import SettingsTeamsView from '../views/SettingsTeamsView.vue'
 import SettingsTriggerEventLogView from '../views/SettingsTriggerEventLogView.vue'
-import TeamComparisonView from '../views/TeamComparisonView.vue'
 import VariantCompareView from '../views/VariantCompareView.vue'
 
 const viewModules: Record<string, Component> = {
@@ -75,7 +73,6 @@ const viewModules: Record<string, Component> = {
   AdminFeatureFlagsView,
   AdminSpendLimitsView,
   AdminUsersView,
-  ApiChangelogView,
   DashboardView,
   EvalEditorView,
   FeedbackInboxView,
@@ -94,14 +91,12 @@ const viewModules: Record<string, Component> = {
   SettingsSsoView,
   SettingsTeamsView,
   SettingsTriggerEventLogView,
-  TeamComparisonView,
   VariantCompareView,
 }
 
 const viewsWithAgentTheme = [
   'AdminSpendLimitsView',
   'AdminFeatureFlagsView',
-  'ApiChangelogView',
   'SettingsRateLimitsView',
 ]
 

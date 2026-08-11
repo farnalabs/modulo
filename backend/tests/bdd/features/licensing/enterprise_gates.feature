@@ -45,8 +45,6 @@ Feature: Team Gate Enforcement
     Given I do not have a Team license
     When I GET /api/v1/pipelines
     Then the response status is 200
-    When I GET /api/v1/changelog
-    Then the response status is 200
 
   Scenario: License expiry degrades Team features to Community tier
     Given I have an expired Team license
