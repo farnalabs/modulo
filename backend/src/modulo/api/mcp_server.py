@@ -991,6 +991,7 @@ async def list_runs(
                     "started_at": r.started_at.isoformat() if r.started_at else None,
                     "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                     "error_code": r.error_code,
+                    "error_detail": r.error_detail,
                     "total_cost_usd": float(r.total_cost_usd) if r.total_cost_usd is not None else None,
                     "child_runs_cost_usd": float(child_cost),
                     "child_runs_count": child_count,
