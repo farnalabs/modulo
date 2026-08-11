@@ -22,6 +22,20 @@ describe('loadMonitorConfig', () => {
     expect(config.enabled).toBe(false)
   })
 
+  it('disables tracking for any truthy disable flag value', () => {
+    for (const value of ['true', '1', 1, {}]) {
+      (window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = value
+      expect(loadMonitorConfig().enabled).toBe(false)
+    }
+  })
+
+  it('stays enabled when the disable flag is falsy', () => {
+    for (const value of [false, '', 0, null]) {
+      (window as unknown as Record<string, unknown>).__MODULO_ERROR_TRACKING_DISABLED__ = value
+      expect(loadMonitorConfig().enabled).toBe(true)
+    }
+  })
+
   it('returns environment from import.meta.env.MODE', () => {
     const config = loadMonitorConfig()
     expect(config.environment).toBe('test')

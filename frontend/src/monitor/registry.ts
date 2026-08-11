@@ -35,7 +35,11 @@ export class MonitorBackendRegistry {
   setUser(user: UserInfo | null): void {
     for (const backend of this.backends) {
       if (typeof backend.setUser === 'function') {
-        backend.setUser(user)
+        try {
+          backend.setUser(user)
+        } catch (error) {
+          console.error('[MonitorBackendRegistry] Backend error:', error)
+        }
       }
     }
   }
@@ -43,7 +47,11 @@ export class MonitorBackendRegistry {
   setTags(tags: Record<string, string>): void {
     for (const backend of this.backends) {
       if (typeof backend.setTags === 'function') {
-        backend.setTags(tags)
+        try {
+          backend.setTags(tags)
+        } catch (error) {
+          console.error('[MonitorBackendRegistry] Backend error:', error)
+        }
       }
     }
   }
