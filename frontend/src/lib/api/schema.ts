@@ -7331,7 +7331,7 @@ export interface components {
          * AnalyticsStatus
          * @enum {string}
          */
-        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "waiting_for_lock" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled";
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled";
         /**
          * AnalyticsTriggerType
          * @enum {string}
