@@ -67,6 +67,23 @@ _RUN_CONCURRENCY_MIN = 1
 _RUN_CONCURRENCY_MAX = 100
 
 
+class OrgDeletedError(RuntimeError):
+    """Raised by ``create_run`` when the target organisation is soft-deleted or missing.
+
+    The soft-deleted-org guard refuses to create a run in an org whose deletion
+    flow has set status='deleted' (or in a hard-deleted org — no row). A domain
+    exception (not ``ValueError``) so API routes and cron/trigger callers can map
+    it to a structured 4xx (409 for a deleted org, 404 for a missing org) instead
+    of a generic 500. Defined here (not in ``modulo.core.exceptions``) because
+    the ``db-does-not-import-core`` contract does not exempt this module.
+    """
+
+    def __init__(self, *, org_id: uuid.UUID | None = None, deleted: bool = True) -> None:
+        self.org_id = org_id
+        self.deleted = deleted
+        super().__init__(f"cannot create run: organisation {org_id} is " + ("deleted" if deleted else "missing"))
+
+
 def _input_hash(payload: dict[str, Any]) -> str:
     """Stable SHA-256 hex digest of a JSON-serialisable payload."""
     serialised = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -94,13 +111,15 @@ async def create_run(
     # paused); this covers MANUAL runs (``trigger_id=None`` / exempt types) that
     # bypass the pause gate. Read the status directly (never the ORM identity
     # map) so a freshly toggled row is observed, mirroring ``org_is_paused``.
+    # Raised as ``OrgDeletedError`` (not ValueError) so routes/cron callers can
+    # map it to a structured 4xx instead of a generic 500.
     org_status_result = await session.execute(
         text("SELECT status FROM organisations WHERE id = :oid"),
         {"oid": str(org_id)},
     )
     org_status = org_status_result.scalar_one_or_none()
     if org_status is None or org_status == "deleted":
-        raise ValueError("cannot create run: organisation is " + ("deleted" if org_status == "deleted" else "missing"))
+        raise OrgDeletedError(org_id=org_id, deleted=org_status == "deleted")
 
     # Org-wide pause kill-switch — the SINGLE authority gate for trigger-initiated
     # runs (webhook, replay, cron, polling, agent_signal). Manual runs (POST /runs,

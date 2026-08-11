@@ -1378,20 +1378,30 @@ def make_sandbox_agent_fn(
                         )
                         return
                     text = content if isinstance(content, str) else bytes(content).decode("utf-8", "replace")
+                    # Capture the pre-truncation content length BEFORE the window
+                    # bound below: ``full_len`` is the authoritative absolute end
+                    # of the file as READ this tick. The probe ``size`` (get_info)
+                    # is taken before the read and can lag it when the agent
+                    # appends between probe and read.
+                    full_len = len(text)
                     # D3 trailing-window bound: the E2B files API has no range
                     # read, so the full log was transferred again above. Only the
                     # last _MAX_DRAIN_WINDOW bytes are retained/processed —
                     # bounded per-tick memory and slicing on a multi-MB log.
-                    # ``size`` (from get_info) is the authoritative absolute
-                    # file length; ``window_start`` is the absolute offset the
-                    # retained slice begins at, and the new-bytes slice is
-                    # computed against it, so truncation never loses or
-                    # double-emits (the emitted chunk is always a suffix).
+                    # ``full_len`` (what the read actually returned) is the
+                    # authoritative absolute file length; ``window_start`` is the
+                    # absolute offset the retained slice begins at, and the
+                    # new-bytes slice is computed against it, so truncation never
+                    # loses or double-emits (the emitted chunk is always a
+                    # suffix). Deriving ``window_start`` from the STALE probe
+                    # ``size`` instead of ``full_len`` shifts the retained slice
+                    # left and permanently drops the first (full_len - size)
+                    # bytes of new in-window content.
                     if len(text) > _MAX_DRAIN_WINDOW:
                         text = text[-_MAX_DRAIN_WINDOW:]
-                    window_start = max(size - len(text), 0)
+                    window_start = max(full_len - len(text), 0)
                     emit_start = max(_drain_offset, window_start)
-                    new = text[emit_start - window_start :] if emit_start < size else ""
+                    new = text[emit_start - window_start :] if emit_start < full_len else ""
                     if new:
                         _drained_chunks.append(new)
                         _drained_len += len(new)
@@ -1405,12 +1415,13 @@ def make_sandbox_agent_fn(
                         if _drained_len > _MAX_DRAIN_WINDOW and _drained_chunks:
                             _drained_chunks[0] = _drained_chunks[0][-_MAX_DRAIN_WINDOW:]
                             _drained_len = len(_drained_chunks[0])
-                    # Self-correcting drain offset: ``size`` (get_info) can lag
-                    # ``len(text)`` when the agent appends between the probe and
-                    # the read. Advancing to the max keeps the no-double-emit
-                    # invariant — the next tick starts where THIS tick's emitted
-                    # bytes actually ended, not where the probe saw the file.
-                    _drain_offset = max(size, len(text))
+                    # Self-correcting drain offset: ``full_len`` (what this tick's
+                    # read returned) can exceed the STALE probe ``size`` when the
+                    # agent appends between probe and read. Advancing to the max
+                    # keeps the no-double-emit invariant — the next tick starts
+                    # where THIS tick's emitted bytes actually ended, not where
+                    # the probe saw the file.
+                    _drain_offset = max(_drain_offset, full_len)
 
                 # Redirect the agent's stdout/stderr into a sandbox log file so
                 # the process writes to a regular file — never a pipe that can
