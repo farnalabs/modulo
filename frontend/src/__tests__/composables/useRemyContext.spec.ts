@@ -11,20 +11,26 @@ vi.mock('vue-router', async (importOriginal) => {
   }
 })
 
-let route: ReturnType<typeof reactive>
+interface LooseRouteState {
+  name: RouteLocationNormalizedLoaded['name'] | null
+  params: Record<string, unknown>
+  path: string
+}
 
-function setRoute(patch: Partial<RouteLocationNormalizedLoaded>) {
+let route: LooseRouteState
+
+function setRoute(patch: Partial<LooseRouteState>) {
   Object.assign(route, patch)
   vi.mocked(useRoute).mockReturnValue(route as unknown as RouteLocationNormalizedLoaded)
 }
 
 beforeEach(() => {
   vi.resetModules()
-  route = reactive<Partial<RouteLocationNormalizedLoaded>>({
+  route = reactive<LooseRouteState>({
     name: null,
     params: {},
     path: '/',
-  } as Partial<RouteLocationNormalizedLoaded>)
+  })
   vi.mocked(useRoute).mockReturnValue(route as unknown as RouteLocationNormalizedLoaded)
 })
 

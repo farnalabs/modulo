@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ref, type Ref } from 'vue'
+import { ref } from 'vue'
+import type { useDataFetch } from '../../composables/useDataFetch'
 
 const h = vi.hoisted(() => {
   const setQueryData = vi.fn()
@@ -70,7 +71,13 @@ describe('useDataFetch queryFn contract', () => {
   })
 
   it('forwards non-detail error shapes through formatApiError', async () => {
-    await setupFetch<number>(() => Promise.resolve({ error: { message: 'kaboom' } }), { initialValue: 0 })
+    await setupFetch<number>(
+      () =>
+        Promise.resolve({
+          error: { message: 'kaboom' },
+        } as unknown as { error: { detail?: unknown } }),
+      { initialValue: 0 },
+    )
 
     await expect(h.capturedQueryFn.value!()).rejects.toThrow('kaboom')
   })
