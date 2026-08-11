@@ -450,6 +450,84 @@ class TestHeartbeat:
         # Every heartbeat is fenced with the executor's claim token (plan F3a).
         heartbeat_mock.assert_awaited_with(engine, "run-1", "org-1", job=None, claim_token="tok-a")
 
+    async def test_heartbeat_loop_superseded_breaks_without_further_sleeps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A single ClaimSupersededError breaks the loop after the FIRST
+        heartbeat — no further sleeps run, the abort is prompt (plan F3a)."""
+        calls = {"n": 0}
+
+        async def _superseded(*_a: object, **_kw: object) -> None:
+            calls["n"] += 1
+            raise pe.ClaimSupersededError("superseded")
+
+        monkeypatch.setattr(pe, "heartbeat_once", _superseded)
+        monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock())
+        superseded = asyncio.Event()
+        await pe.heartbeat_loop(
+            MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", superseded=superseded
+        )
+        assert superseded.is_set()
+        assert calls["n"] == 1
+        # Exactly ONE lead-in sleep then the superseded heartbeat breaks the loop.
+        assert pe.asyncio.sleep.await_count == 1
+
+    async def test_heartbeat_loop_transient_failure_then_success_continues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A transient Exception is counted but does NOT break the loop — the
+        next successful heartbeat resets the counter (fail-open on a single
+        hiccup; only 3 consecutive failures set ``health_failed``)."""
+        heartbeat_mock = AsyncMock(side_effect=[RuntimeError("db hiccup"), None])
+        monkeypatch.setattr(pe, "heartbeat_once", heartbeat_mock)
+        monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock(side_effect=[None, None, KeyboardInterrupt()]))
+
+        with pytest.raises(KeyboardInterrupt):
+            await pe.heartbeat_loop(MagicMock(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a")
+
+        assert heartbeat_mock.await_count == 2
+        # The second heartbeat (after the transient) ran — the loop continued.
+        assert heartbeat_mock.await_args_list[1].kwargs["claim_token"] == "tok-a"
+        # Third iteration's lead-in sleep fired before KeyboardInterrupt broke out.
+        assert pe.asyncio.sleep.await_count == 3
+
+    async def test_heartbeat_loop_atomic_lease_rowcount_zero_breaks_and_sets_superseded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end: ``heartbeat_once``'s atomic fenced UPDATE matching ZERO
+        rows (the run's claim token was rotated by a successor — superseded
+        lease) surfaces as ClaimSupersededError; the loop sets the superseded
+        Event and breaks with NO further heartbeats."""
+        executed: list[str] = []
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _FakeResult:
+                executed.append(str(stmt))
+                return _FakeResult(None)  # rowcount 0 — no RETURNING row
+
+            async def commit(self) -> None:
+                return None
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        monkeypatch.setattr(pe.asyncio, "sleep", AsyncMock())
+        superseded = asyncio.Event()
+        await pe.heartbeat_loop(  # type: ignore[arg-type]
+            _AsyncEngine(), "run-1", "org-1", interval_seconds=1, claim_token="tok-a", superseded=superseded
+        )
+        assert superseded.is_set()
+        # Exactly one lead-in sleep, then the rowcount-0 fenced UPDATE raises and breaks.
+        assert pe.asyncio.sleep.await_count == 1
+        assert any("claim_token=:tok" in s for s in executed)
+
 
 # ---------------------------------------------------------------------------
 # Stale-run recovery sweep — legacy windows match today's beat-sweep values

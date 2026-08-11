@@ -11,6 +11,7 @@ NULL) are re-dispatched when capacity frees.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -269,3 +270,95 @@ async def test_live_job_not_repaired(
     # untouched (fresh heartbeat + live job = not staled).
     await ch.dispatcher_reconcile()
     assert await _job_exists(saq_settings_env, f"run:{run_id}")
+
+
+@pytest.mark.asyncio
+async def test_two_connections_no_double_redispatch(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two concurrent dispatcher_reconcile() passes (separate NullPool engines,
+    real Redis) must not double-execute the same staled run.
+
+    Reconcile re-dispatch never evicts SAQ internals (B2) — the worker's
+    ATOMIC claim UPDATE is the real at-most-once dedupe. Even when both passes
+    select the same stale row, exactly one subsequent claim wins, so the run is
+    re-dispatched (dispatcher='saq', a job exists) and executed exactly once.
+    """
+    from sqlalchemy import event as sa_event
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from modulo.core import pipeline_execution as pe
+
+    run_id, _ = await _seed_saq_run(
+        db_engine,
+        test_org,
+        test_user,
+        status="pending",
+        dispatched=True,
+        dispatcher=None,
+        claim_token="seed-token",
+    )
+    # B3 enqueue-failed branch: pending + dispatched_at set + dispatcher NULL +
+    # enqueue_failed_at set + stale heartbeat (the seed's heartbeat is already
+    # 30min stale; the enqueue-failure marker must be < the 60m TTL backstop).
+    eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
+    try:
+        async with eng.connect() as conn, conn.begin():
+            await conn.execute(
+                text("UPDATE runs SET enqueue_failed_at = now() - interval '10 minutes' WHERE id=:rid"),
+                {"rid": str(run_id)},
+            )
+    finally:
+        await eng.dispose()
+
+    engines: list[Any] = []
+
+    def _make_rls_engine() -> Any:
+        e = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
+
+        @sa_event.listens_for(e.sync_engine, "checkout")
+        def _set_role(dbapi_connection: object, _connection_record: object, _connection_proxy: object) -> None:
+            cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+            try:
+                cursor.execute('SET ROLE "modulo_integration_app"')
+            finally:
+                cursor.close()
+
+        engines.append(e)
+        return e
+
+    # Per-connection engines: each reconcile pass gets a FRESH NullPool engine
+    # running as the NOBYPASSRLS role (RLS applies, mirroring production).
+    monkeypatch.setattr(ch, "_get_engine", _make_rls_engine)
+
+    try:
+        summary_a, summary_b = await asyncio.gather(ch.dispatcher_reconcile(), ch.dispatcher_reconcile())
+    finally:
+        for e in engines:
+            await e.dispose()
+
+    assert summary_a["redis_errors"] + summary_b["redis_errors"] == 0
+    assert summary_a["repaired"] + summary_b["repaired"] >= 1, f"{summary_a} {summary_b}"
+
+    # The run was re-dispatched (dispatcher='saq') and a SAQ job now exists.
+    assert await _job_exists(saq_settings_env, f"run:{run_id}")
+    eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
+    try:
+        async with eng.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT dispatcher, status FROM runs WHERE id=:rid"),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+    finally:
+        await eng.dispose()
+    assert row[0] == "saq"
+    assert row[1] == "pending"
+
+    # Exactly-once EXECUTION: two claims on the re-dispatched run → exactly one
+    # wins (the atomic claim UPDATE dedupes any concurrent re-dispatch).
+    token_1 = await pe.claim_run_async(db_engine, str(run_id), str(test_org))
+    token_2 = await pe.claim_run_async(db_engine, str(run_id), str(test_org))
+    assert len([t for t in (token_1, token_2) if t is not None]) == 1
