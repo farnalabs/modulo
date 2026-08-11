@@ -151,6 +151,46 @@ class TestListFeatureFlags:
         assert "error" in body
         assert body["error"]["code"] == "INTERNAL_ERROR"
 
+    def test_org_override_reflected_in_flags_payload(self, client: TestClient) -> None:
+        """An org-level feature_overrides entry must win over the registry default
+        in the /feature-flags payload the whole app (plan store) reads.
+
+        Regression: without the override overlay, the admin UI's "Override →
+        Enabled" only affected the admin view's own session, so an org-level
+        enable never took effect app-wide.
+        """
+        org = MagicMock()
+        org.settings_json = {"feature_overrides": {"sso": True}}
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags._build_registry",
+                return_value=_mock_registry(),
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new=AsyncMock(return_value=org),
+            ),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
+        body = resp.json()
+        # sso is a team-tier flag, inactive on the community mock registry — the
+        # org override flips it to True in the payload.
+        sso = next(f for f in body["flags"] if f["name"] == "sso")
+        assert sso["currently_active"] is True
+
+    def test_org_override_read_failure_falls_back_to_defaults(self, client: TestClient) -> None:
+        """A failed org-override read (e.g. mock/DB session without org data) must
+        fall back to the registry defaults instead of failing the request."""
+        with patch(
+            "modulo.api.routes.admin_feature_flags._build_registry",
+            return_value=_mock_registry(),
+        ):
+            resp = client.get("/api/v1/admin/feature-flags")
+        assert resp.status_code == 200
+        body = resp.json()
+        sso = next(f for f in body["flags"] if f["name"] == "sso")
+        assert sso["currently_active"] is False
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/admin/feature-flags/{flag_name}
@@ -281,6 +321,86 @@ class TestToggleFeatureFlag:
         assert resp.status_code == 500
         body = resp.json()
         assert body["error"]["code"] == "INTERNAL_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/v1/admin/feature-flags/{flag_name}/org-override — Redis cache
+# invalidation on set/clear
+# ---------------------------------------------------------------------------
+# The /feature-flags list endpoint caches its payload (60s TTL) per org. An
+# admin toggling an org override must invalidate that cache so the change takes
+# effect app-wide immediately — otherwise the plan store reads a stale payload
+# for up to 60s. The invalidation is best-effort: a Redis failure must not fail
+# the already-committed DB mutation.
+
+
+def _org_with_overrides(**overrides: bool) -> MagicMock:
+    org = MagicMock()
+    org.settings_json = {"feature_overrides": overrides} if overrides else {}
+    return org
+
+
+class TestOrgOverrideCacheInvalidation:
+    _ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+    def test_set_org_override_invalidates_redis_cache(self, client: TestClient) -> None:
+        org = _org_with_overrides()
+        redis_mock = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["override"] is True
+        redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
+
+    def test_clear_org_override_invalidates_redis_cache(self, client: TestClient) -> None:
+        org = _org_with_overrides(sso=True)
+        redis_mock = AsyncMock()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                new_callable=MagicMock,
+                return_value=redis_mock,
+            ),
+        ):
+            resp = client.delete("/api/v1/admin/feature-flags/sso/org-override")
+        assert resp.status_code == 200
+        assert resp.json()["override"] is None
+        redis_mock.delete.assert_awaited_once_with(f"feature-flags:{self._ORG_ID}")
+
+    def test_set_org_override_survives_cache_invalidation_failure(self, client: TestClient) -> None:
+        """The best-effort cache delete must never fail an already-committed
+        org-override mutation (the DB write is the source of truth)."""
+        org = _org_with_overrides()
+        with (
+            patch(
+                "modulo.api.routes.admin_feature_flags.get_organisation",
+                new_callable=AsyncMock,
+                return_value=org,
+            ),
+            patch(
+                "modulo.api.routes.admin_feature_flags.Redis.from_url",
+                side_effect=RuntimeError("redis down"),
+            ),
+        ):
+            resp = client.put("/api/v1/admin/feature-flags/sso/org-override", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["override"] is True
 
 
 # ---------------------------------------------------------------------------

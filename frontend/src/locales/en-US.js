@@ -2235,6 +2235,8 @@ export default {
       "modulo": "Modulo",
       "search_pages": "Search pages",
       "toggle_theme": "Toggle theme",
+      "close_navigation": "Close navigation",
+      "open_navigation": "Open navigation",
       "collapse_sidebar": "Collapse sidebar",
       "expand_sidebar": "Expand sidebar",
       "user_profile": "User profile",
