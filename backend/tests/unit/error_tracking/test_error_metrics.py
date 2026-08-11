@@ -376,17 +376,22 @@ class TestSampleRunRuntimeMetrics:
     async def test_updates_gauges_and_histogram(self) -> None:
         """The sampler reads the runs table (running count, oldest age,
         per-run claim counts) and pushes them into the instruments."""
+        from datetime import UTC, datetime
+
         from sqlalchemy.ext.asyncio import AsyncSession
 
         count_result = MagicMock()
         count_result.scalar_one.return_value = 2
-        oldest_result = MagicMock()
-        oldest_result.scalar_one.return_value = 60.0
+        now_and_max_result = MagicMock()
+        now_and_max_result.one.return_value = (
+            datetime(2026, 1, 1, 0, 0, 30, tzinfo=UTC),
+            datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+        )
         claim_rows = MagicMock()
         claim_rows.scalars.return_value = iter([1, 3])
 
         session = MagicMock(spec=AsyncSession)
-        _results = [count_result, oldest_result, claim_rows]
+        _results = [count_result, now_and_max_result, claim_rows]
         session.execute = AsyncMock(side_effect=lambda stmt, *a, **k: _results.pop(0))
         factory = MagicMock()
         factory.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -402,7 +407,7 @@ class TestSampleRunRuntimeMetrics:
         await metrics_mod.sample_run_runtime_metrics(factory)
 
         running_gauge.set.assert_called_once_with(2)
-        oldest_gauge.set.assert_called_once_with(60.0)
+        oldest_gauge.set.assert_called_once_with(30.0)
         assert histogram.record.call_count == 2
 
     @pytest.mark.asyncio
@@ -415,3 +420,77 @@ class TestSampleRunRuntimeMetrics:
 
         await metrics_mod.sample_run_runtime_metrics(factory)
         assert "metrics.sample_run_runtime_failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_runs_against_sqlite_in_memory(self) -> None:
+        """The sampler's queries must compile and execute on SQLite — the old
+        Postgres-only ``extract(epoch from (now() - MAX(started_at)))`` raw
+        text query threw on every 60s dispatcher tick (only the broad except
+        kept the tick alive). Exercises the real ORM path end-to-end."""
+        import uuid
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from modulo.db.models.base import Base
+        from modulo.db.models.run import Run
+
+        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__]))
+
+            org_id = uuid.uuid4()
+            now = datetime.now(UTC)
+            async with async_sessionmaker(engine, expire_on_commit=False)() as session, session.begin():
+                for idx, started in enumerate((now - timedelta(seconds=30), now - timedelta(seconds=10))):
+                    session.add(
+                        Run(
+                            id=uuid.uuid4(),
+                            organisation_id=org_id,
+                            pipeline_id=uuid.uuid4(),
+                            snapshot_id=uuid.uuid4(),
+                            trigger_type="manual",
+                            status="running",
+                            run_number=idx + 1,
+                            input_hash="a" * 64,
+                            langgraph_thread_id=f"thread-{uuid.uuid4()}",
+                            started_at=started,
+                            claim_count=idx + 1,
+                        )
+                    )
+                # A terminal run must not contribute to running count / liveness.
+                session.add(
+                    Run(
+                        id=uuid.uuid4(),
+                        organisation_id=org_id,
+                        pipeline_id=uuid.uuid4(),
+                        snapshot_id=uuid.uuid4(),
+                        trigger_type="manual",
+                        status="complete",
+                        run_number=3,
+                        input_hash="a" * 64,
+                        langgraph_thread_id=f"thread-{uuid.uuid4()}",
+                        started_at=now - timedelta(hours=1),
+                    )
+                )
+
+            running_gauge = MagicMock()
+            oldest_gauge = MagicMock()
+            histogram = MagicMock()
+            metrics_mod._runs_running_gauge = running_gauge
+            metrics_mod._runs_oldest_running_gauge = oldest_gauge
+            metrics_mod._runs_claim_count_histogram = histogram
+
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            await metrics_mod.sample_run_runtime_metrics(factory)
+
+            running_gauge.set.assert_called_once_with(2)
+            age = oldest_gauge.set.call_args[0][0]
+            # The sampler computes ``current_timestamp - MAX(started_at)`` (the
+            # age of the most recently started running run) — here ~10s since
+            # the newest running run started 10s before ``now``.
+            assert 0 < age < 40
+            assert histogram.record.call_count == 2
+        finally:
+            await engine.dispose()

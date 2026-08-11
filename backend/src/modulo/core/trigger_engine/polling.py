@@ -22,13 +22,13 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors.base import ConnectorBase, ConnectorResult
-from modulo.db.models.run import Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 
 _log = logging.getLogger(__name__)
 
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 # ---------------------------------------------------------------------------

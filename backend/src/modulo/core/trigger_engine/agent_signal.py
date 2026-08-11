@@ -23,14 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import TriggersPausedError
 from modulo.db.crud.run import create_run
-from modulo.db.models.run import Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused
 
 _log = logging.getLogger(__name__)
 
-_ACTIVE_STATUSES = ("running", "pending", "awaiting_human", "claimed", "waiting_for_lock")
+_ACTIVE_STATUSES = ACTIVE_RUN_STATUSES
 
 
 async def fire_agent_signal(

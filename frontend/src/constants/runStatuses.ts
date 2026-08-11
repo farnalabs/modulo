@@ -6,7 +6,7 @@
  */
 export const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed', 'stalled'] as const
 
-export const NON_TERMINAL_STATUSES = ['pending', 'running', 'awaiting_human', 'claimed', 'waiting_for_lock'] as const
+export const NON_TERMINAL_STATUSES = ['pending', 'running', 'awaiting_human', 'claimed'] as const
 
 export function isTerminalStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status)
