@@ -48,7 +48,6 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { useMediaQuery } from "@vueuse/core";
 import { getAccessToken, clearAccessToken } from "../lib/api/client";
 import { usePlanStore } from "../stores/planStore";
 import Breadcrumb from "./Breadcrumb.vue";
@@ -56,6 +55,7 @@ import RemyPanel from "./remy/RemyPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
 import { TooltipProvider } from "./ui/tooltip";
 import { useRemyStore } from "../composables/useRemyStore";
+import { useSidebarMode } from "../composables/useSidebarMode";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
@@ -71,12 +71,9 @@ const isLight = ref(document.documentElement.classList.contains("light"));
 // The mobile hamburger header (drawn by AppSidebar when the mobile rail flag is
 // OFF) is a fixed h-14 overlay, so main content needs a pt-14 offset on mobile
 // only when that header is shown. When the mobile rail flag is ON there is no
-// fixed header — the rail is in-flow — so no offset. Mirrors AppSidebar's mode
-// decision exactly (same breakpoint + same flag).
-const isDesktop = useMediaQuery("(min-width: 768px)");
-const showMobileHeader = computed(
-  () => !isDesktop.value && !planStore.featureEnabled("mobile_sidebar_rail"),
-);
+// fixed header — the rail is in-flow — so no offset. Shared with AppSidebar via
+// useSidebarMode so the two can't drift.
+const { showMobileHeader } = useSidebarMode();
 
 const remyDockedStyle = computed(() =>
   remyStore.panelState === "docked" ? { paddingRight: `${remyStore.panelSize.width}px` } : undefined,

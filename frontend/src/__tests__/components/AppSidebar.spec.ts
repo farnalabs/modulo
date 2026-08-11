@@ -178,6 +178,58 @@ describe('AppSidebar', () => {
       const avatar = wrapper.find('#mobile-sidebar .avatar-ring')
       expect(avatar.exists()).toBe(true)
     })
+
+    it('traps focus within the mobile drawer while it is open', async () => {
+      const wrapper = mountSidebar({}, { attachTo: document.body })
+      await flushPromises()
+      await wrapper.find('[aria-controls="mobile-sidebar"]').trigger('click')
+      await flushPromises()
+
+      const drawer = wrapper.find('#mobile-sidebar')
+      const focusables = drawer.findAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )
+      expect(focusables.length).toBeGreaterThan(0)
+      const first = focusables[0].element as HTMLElement
+      const last = focusables[focusables.length - 1].element as HTMLElement
+
+      last.focus()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
+      await flushPromises()
+      expect(document.activeElement).toBe(first)
+
+      first.focus()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))
+      await flushPromises()
+      expect(document.activeElement).toBe(last)
+
+      wrapper.unmount()
+    })
+
+    it('marks the closed drawer inert and hidden from the a11y tree', async () => {
+      // jsdom reflects the inert IDL property inconsistently (reading `.inert`
+      // returns undefined, and an open drawer serialises `inert="false"`), so
+      // assert the effective inert state from the attribute instead. In a real
+      // browser `:inert="false"` removes the attribute entirely.
+      const isInert = (el: Element) => {
+        const attr = el.getAttribute('inert')
+        return attr !== null && attr !== 'false'
+      }
+
+      const wrapper = mountSidebar()
+      await flushPromises()
+      const closedDrawer = wrapper.find('#mobile-sidebar')
+      expect(isInert(closedDrawer.element)).toBe(true)
+      expect(closedDrawer.attributes('aria-hidden')).toBe('true')
+      expect(closedDrawer.classes()).toContain('invisible')
+
+      await wrapper.find('[aria-controls="mobile-sidebar"]').trigger('click')
+      await flushPromises()
+      const openDrawer = wrapper.find('#mobile-sidebar')
+      expect(isInert(openDrawer.element)).toBe(false)
+      expect(openDrawer.attributes('aria-hidden')).toBeUndefined()
+      expect(openDrawer.classes()).not.toContain('invisible')
+    })
   })
 
   describe('mobile — icon rail + overlay panel (flag ON, experimental)', () => {

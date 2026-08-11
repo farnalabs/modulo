@@ -373,3 +373,41 @@ class TestInactiveCatalogFlags:
         finally:
             registry.clear_override("mobile_sidebar_rail")
         assert flag.currently_active is False
+
+
+class TestMobileRailFallbackOff:
+    """The ``mobile_sidebar_rail`` experiment must stay default-OFF in the
+    hardcoded fallback (no DB catalog loaded).
+
+    Regression (PR #1062 review): ``_refresh`` seeded ``_inactive_flags`` only
+    from the DB catalog, so a registry built WITHOUT ``load_from_db()`` treated
+    the community-tier flag as active via the tier-rank comparison — leaking the
+    experimental rail on community tier until the catalog was read.
+    """
+
+    def _registry(self, tier: str = "community", has_license_key: bool = False) -> FeatureFlagRegistry:
+        FeatureFlagRegistry._overrides.clear()
+        return FeatureFlagRegistry(current_tier=tier, has_license_key=has_license_key)
+
+    def test_mobile_sidebar_rail_inactive_in_fallback_on_community(self) -> None:
+        registry = self._registry("community")
+        flag = registry.get_flag("mobile_sidebar_rail")
+        assert flag is not None
+        assert flag.currently_active is False
+
+    def test_mobile_sidebar_rail_inactive_in_fallback_on_team(self) -> None:
+        registry = self._registry("team", has_license_key=True)
+        flag = registry.get_flag("mobile_sidebar_rail")
+        assert flag is not None
+        assert flag.currently_active is False
+
+    def test_mobile_sidebar_rail_can_be_enabled_via_override_in_fallback(self) -> None:
+        registry = self._registry("community")
+        flag = registry.get_flag("mobile_sidebar_rail")
+        assert flag is not None
+        try:
+            registry.set_override("mobile_sidebar_rail", True)
+            assert flag.currently_active is True
+        finally:
+            registry.clear_override("mobile_sidebar_rail")
+        assert flag.currently_active is False

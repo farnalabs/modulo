@@ -98,7 +98,7 @@
         ref="mobileButtonRef"
         @click="mobileOpen = !mobileOpen"
         class="rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        :aria-label="$t('components.AppLayout.mobileopen_close_navigation_open_navigation')"
+        :aria-label="mobileOpen ? $t('components.AppLayout.close_navigation') : $t('components.AppLayout.open_navigation')"
         :aria-expanded="mobileOpen"
         aria-controls="mobile-sidebar"
       >
@@ -150,8 +150,10 @@
     <aside
       id="mobile-sidebar"
       ref="mobileSidebarRef"
-      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-transform overflow-y-auto"
-      :class="mobileOpen ? 'translate-x-0' : '-translate-x-full'"
+      class="md:hidden fixed top-14 left-0 z-40 h-[calc(100vh-3.5rem)] w-64 border-r bg-background p-4 flex flex-col transition-[transform,visibility] overflow-y-auto"
+      :class="mobileOpen ? 'translate-x-0' : '-translate-x-full invisible'"
+      :inert="!mobileOpen"
+      :aria-hidden="!mobileOpen || undefined"
     >
       <div class="flex items-center gap-2 pt-2 pb-2 border-b mb-2">
         <div class="avatar-ring">
@@ -186,7 +188,6 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
-import { useMediaQuery } from "@vueuse/core";
 import { useRoute } from "vue-router";
 import { usePlanStore } from "../stores/planStore";
 import Badge from "./ui/badge/Badge.vue";
@@ -197,6 +198,7 @@ import SidebarFull from "./SidebarFull.vue";
 import SidebarNav from "./SidebarNav.vue";
 import SidebarRail from "./SidebarRail.vue";
 import { useSidebar } from "../composables/useSidebar";
+import { useSidebarMode } from "../composables/useSidebarMode";
 import { Menu, Search, X } from "@lucide/vue";
 
 const props = defineProps<{
@@ -214,8 +216,8 @@ defineEmits<{
   "open-command-palette": [];
 }>();
 
-const isDesktop = useMediaQuery("(min-width: 768px)");
 const planStore = usePlanStore();
+const { isDesktop, mobileRailFlag } = useSidebarMode();
 const { collapsed, setCollapsed } = useSidebar();
 
 const route = useRoute();
@@ -237,31 +239,21 @@ const isMac = computed(() =>
   typeof navigator !== "undefined" && navigator.platform.includes("Mac"),
 );
 
-const mobileRailFlag = computed(() => planStore.featureEnabled("mobile_sidebar_rail"));
 const showMobilePanel = computed(
   () => !isDesktop.value && mobileExpanded.value && mobileRailFlag.value,
 );
 
-function handleMobileKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    mobileExpanded.value = false;
-    return;
-  }
-  if (e.key !== "Tab") return;
-
-  const dialog = mobilePanelRef.value;
-  if (!dialog) return;
-
-  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+function trapTabInElement(e: KeyboardEvent, root: HTMLElement | null) {
+  if (!root) return;
+  const focusable = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
   if (focusable.length === 0) {
     e.preventDefault();
     return;
   }
-
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
   const active = document.activeElement;
-  const focusInside = active instanceof HTMLElement && dialog.contains(active);
+  const focusInside = active instanceof HTMLElement && root.contains(active);
 
   if (e.shiftKey) {
     if (active === first || !focusInside) {
@@ -274,10 +266,22 @@ function handleMobileKeydown(e: KeyboardEvent) {
   }
 }
 
-function handleMobileEscape(e: KeyboardEvent) {
+function handleMobileKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    mobileExpanded.value = false;
+    return;
+  }
+  if (e.key !== "Tab") return;
+  trapTabInElement(e, mobilePanelRef.value);
+}
+
+function handleDrawerKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     mobileOpen.value = false;
+    return;
   }
+  if (e.key !== "Tab") return;
+  trapTabInElement(e, mobileSidebarRef.value);
 }
 
 function focusRailExpandButton() {
@@ -309,10 +313,10 @@ watch(mobileOpen, (open) => {
         FOCUSABLE_SELECTOR,
       );
       firstFocusable?.focus();
-      document.addEventListener("keydown", handleMobileEscape);
+      document.addEventListener("keydown", handleDrawerKeydown);
     } else if (!open && mobileButtonRef.value) {
       mobileButtonRef.value.focus();
-      document.removeEventListener("keydown", handleMobileEscape);
+      document.removeEventListener("keydown", handleDrawerKeydown);
     }
   });
 });
@@ -328,6 +332,6 @@ watch(
 
 onUnmounted(() => {
   document.removeEventListener("keydown", handleMobileKeydown);
-  document.removeEventListener("keydown", handleMobileEscape);
+  document.removeEventListener("keydown", handleDrawerKeydown);
 });
 </script>

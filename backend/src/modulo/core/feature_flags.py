@@ -537,8 +537,11 @@ class FeatureFlagRegistry:
         current_rank = tier_rank.get(self._current_tier, 0)
         # Flags seeded ``is_active=false`` in the DB catalog (experiments that
         # must ship default-OFF everywhere). ``__init__`` runs ``_refresh()``
-        # before ``_load_catalog``, so guard with getattr.
-        inactive: set[str] = getattr(self, "_inactive_flags", set())
+        # before ``_load_catalog``, so guard with getattr. ``mobile_sidebar_rail``
+        # is always in the inactive set — it is default-OFF by definition, so it
+        # must not come active via the tier-rank fallback when the DB catalog is
+        # empty; only an explicit ``_overrides`` entry can turn it on.
+        inactive: set[str] = getattr(self, "_inactive_flags", set()) | {"mobile_sidebar_rail"}
 
         for flag in self._flags:
             if flag.name in inactive:

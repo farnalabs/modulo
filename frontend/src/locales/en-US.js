@@ -2237,7 +2237,6 @@ export default {
       "toggle_theme": "Toggle theme",
       "close_navigation": "Close navigation",
       "open_navigation": "Open navigation",
-      "mobileopen_close_navigation_open_navigation": "mobileOpen ? 'Close navigation' : 'Open navigation'",
       "collapse_sidebar": "Collapse sidebar",
       "expand_sidebar": "Expand sidebar",
       "user_profile": "User profile",
