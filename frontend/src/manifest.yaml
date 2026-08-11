@@ -660,7 +660,7 @@ routes:
         breadcrumb: Lifecycle Maps
         parent: /
         product_map:
-        sidebar_group:
+        sidebar_group: core
         sidebar_order: 9
         type: list_page
         <<: *community

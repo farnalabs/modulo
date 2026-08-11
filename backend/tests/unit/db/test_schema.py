@@ -25,6 +25,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "hitl_claims",
         "library_primitives",
         "lifecycle_maps",
+        "lifecycle_map_stages",
         "mcp_setup_tokens",
         "model_backends",
         "node_categories",

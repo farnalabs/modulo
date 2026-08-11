@@ -4435,6 +4435,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Lifecycle Map Versions Endpoint */
+        get: operations["list_lifecycle_map_versions_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions_get"];
+        put?: never;
+        /** Save Lifecycle Map Version Endpoint */
+        post: operations["save_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Lifecycle Map Version Endpoint
+         * @description Update a version. v1 semantics: the active map state is the only version,
+         *     so this behaves identically to save — ``version_id`` is validated as a UUID
+         *     for contract compatibility but the save targets the map itself.
+         */
+        put: operations["update_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Lifecycle Map Version Endpoint */
+        get: operations["get_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/versions/{version_id}/stages/{stage_id}/graduate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Graduate Lifecycle Map Stage Endpoint */
+        patch: operations["graduate_lifecycle_map_stage_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__stages__stage_id__graduate_patch"];
+        trace?: never;
+    };
     "/api/v1/mcp/oauth/clients": {
         parameters: {
             query?: never;
@@ -9283,6 +9357,11 @@ export interface components {
             /** Decision At */
             decision_at?: string | null;
         };
+        /** GraduateStageRequest */
+        GraduateStageRequest: {
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+        };
         /** GraphPosition */
         GraphPosition: {
             /** X */
@@ -9645,6 +9724,77 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** LifecycleMapDetailResponse */
+        LifecycleMapDetailResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organisation Id
+             * Format: uuid
+             */
+            organisation_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Owner */
+            owner?: string | null;
+            /** Owner Team Id */
+            owner_team_id: string | null;
+            /** Visibility */
+            visibility: string;
+            /** Version */
+            version: number;
+            /** Current Version */
+            current_version: number;
+            /** Stages */
+            stages: components["schemas"]["LifecycleMapStageItem"][];
+            /** Transitions */
+            transitions: components["schemas"]["LifecycleMapTransitionItem"][];
+            /** Versions */
+            versions: components["schemas"]["LifecycleMapVersionMeta"][];
+            /** Content Json */
+            content_json: {
+                [key: string]: unknown;
+            };
+            /** Archived At */
+            archived_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * LifecycleMapEdgeEditorItem
+         * @description A transition edge in the editor wire shape.
+         */
+        LifecycleMapEdgeEditorItem: {
+            /** Id */
+            id: string;
+            /** Source Stage Id */
+            source_stage_id: string;
+            /** Target Stage Id */
+            target_stage_id: string;
+            /** Trigger Type */
+            trigger_type?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Condition Expression */
+            condition_expression?: string | null;
+            /** Estimated Frequency */
+            estimated_frequency?: string | null;
+            /** Trigger Link */
+            trigger_link?: string | null;
+        };
         /** LifecycleMapListResponse */
         LifecycleMapListResponse: {
             /** Items */
@@ -9695,6 +9845,69 @@ export interface components {
              */
             updated_at: string;
         };
+        /**
+         * LifecycleMapStageEditorItem
+         * @description A journey/map-stage in the editor wire shape.
+         */
+        LifecycleMapStageEditorItem: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Stage Type */
+            stage_type: string;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** External Url */
+            external_url?: string | null;
+            /** Owner */
+            owner?: string | null;
+            /**
+             * Graduated
+             * @default false
+             */
+            graduated: boolean;
+        };
+        /**
+         * LifecycleMapStageItem
+         * @description A journey/map-stage in the map-detail wire shape (store/read path).
+         */
+        LifecycleMapStageItem: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Type */
+            type: string;
+            /** Owner Badge */
+            owner_badge?: string | null;
+            /**
+             * Graduated
+             * @default false
+             */
+            graduated: boolean;
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+            /** External Url */
+            external_url?: string | null;
+        };
+        /** LifecycleMapTransitionItem */
+        LifecycleMapTransitionItem: {
+            /** Id */
+            id: string;
+            /** Source Stage Id */
+            source_stage_id: string;
+            /** Target Stage Id */
+            target_stage_id: string;
+            /** Trigger Type */
+            trigger_type?: string | null;
+            /** Description */
+            description?: string | null;
+        };
         /** LifecycleMapUpdate */
         LifecycleMapUpdate: {
             /** Name */
@@ -9709,6 +9922,51 @@ export interface components {
             content_json?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** LifecycleMapVersionMeta */
+        LifecycleMapVersionMeta: {
+            /** Version */
+            version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by?: string | null;
+        };
+        /** LifecycleMapVersionResponse */
+        LifecycleMapVersionResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Lifecycle Map Id
+             * Format: uuid
+             */
+            lifecycle_map_id: string;
+            /** Version */
+            version: number;
+            /** Version Number */
+            version_number: number;
+            /** Stages */
+            stages: components["schemas"]["LifecycleMapStageEditorItem"][];
+            /** Edges */
+            edges: components["schemas"]["LifecycleMapEdgeEditorItem"][];
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
         };
         /** ListOrgItem */
         ListOrgItem: {
@@ -13446,6 +13704,28 @@ export interface components {
             slug: string;
             /** Created By */
             created_by?: string | null;
+        };
+        /**
+         * VersionSaveRequest
+         * @description Stage/edge canvas payload POSTed by the visual editor.
+         *
+         *     Stages/edges are opaque dicts so editor fields survive round-trips; the
+         *     shape is validated and canonicalised by ``normalize_content``.
+         */
+        VersionSaveRequest: {
+            /** Stages */
+            stages?: {
+                [key: string]: unknown;
+            }[];
+            /** Edges */
+            edges?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
         };
         /** ViewCreate */
         ViewCreate: {
@@ -24827,7 +25107,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LifecycleMapResponse"];
+                    "application/json": components["schemas"]["LifecycleMapDetailResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24929,6 +25209,187 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LifecycleMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_lifecycle_map_versions_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapVersionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__put: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    graduate_lifecycle_map_stage_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__stages__stage_id__graduate_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+                version_id: string;
+                stage_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GraduateStageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapVersionResponse"];
                 };
             };
             /** @description Validation Error */
