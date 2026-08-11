@@ -642,10 +642,11 @@ class TestRetentionCleanup:
 
 
 class TestGetAsyncEngine:
-    """``_get_async_engine`` builds a per-worker engine with Postgres-specific
-    pool knobs and caches it for the process lifetime (plan F4)."""
+    """``_get_async_engine`` delegates to the SHARED per-process engine factory
+    (db.session.get_shared_engine), passing the per-worker pool budget for
+    Postgres (D4)."""
 
-    def test_creates_postgres_engine_with_pool_knobs(self) -> None:
+    def test_uses_shared_engine_with_per_worker_pool_override(self) -> None:
         with (
             patch.object(
                 sw,
@@ -653,19 +654,14 @@ class TestGetAsyncEngine:
                 return_value=_settings(database_url="postgresql+asyncpg://localhost/test", saq_worker_db_pool_size=3),
             ),
             patch.object(sw, "_ASYNC_ENGINE", None),
-            patch("modulo.core.saq_worker.create_async_engine") as create,
+            patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
         ):
             engine = sw._get_async_engine()
 
-        assert engine is create.return_value
-        create.assert_called_once_with(
-            url="postgresql+asyncpg://localhost/test",
-            connect_args={"timeout": 10, "ssl": False},
-            pool_size=3,
-            max_overflow=0,
-        )
+        assert engine is shared.return_value
+        shared.assert_called_once_with(pool_size=3, max_overflow=0)
 
-    def test_uses_plain_url_for_non_postgres_backend(self) -> None:
+    def test_uses_plain_shared_engine_for_non_postgres_backend(self) -> None:
         with (
             patch.object(
                 sw,
@@ -673,70 +669,82 @@ class TestGetAsyncEngine:
                 return_value=_settings(database_url="sqlite+aiosqlite:///./test.db", modulo_db="sqlite"),
             ),
             patch.object(sw, "_ASYNC_ENGINE", None),
-            patch("modulo.core.saq_worker.create_async_engine") as create,
+            patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
         ):
             sw._get_async_engine()
 
-        create.assert_called_once_with(url="sqlite+aiosqlite:///./test.db")
+        shared.assert_called_once_with()
 
     def test_caches_engine_across_calls(self) -> None:
         with (
             patch.object(sw, "get_settings", return_value=_settings()),
             patch.object(sw, "_ASYNC_ENGINE", None),
-            patch("modulo.core.saq_worker.create_async_engine") as create,
+            patch("modulo.db.session.get_shared_engine", return_value=MagicMock()) as shared,
         ):
             first = sw._get_async_engine()
             second = sw._get_async_engine()
 
         assert first is second
-        create.assert_called_once()
+        shared.assert_called_once()
 
 
 class TestRedisConnectionCheck:
-    """``_check_redis_connection`` pings Redis with exponential backoff and
-    FAILS OPEN after ``max_retries`` — the worker boots even if Redis is down
-    (recovery is possible before the first job)."""
+    """``_check_redis_connection`` pings a SEPARATE SYNC client (never the async
+    SAQ client — redis.asyncio pools are loop-affine) with exponential backoff
+    and FAILS OPEN after ``max_retries`` — the worker boots even if Redis is
+    down (recovery is possible before the first job)."""
 
     def test_ping_success_returns_immediately(self, caplog: pytest.LogCaptureFixture) -> None:
-        client = MagicMock()
+        sync_client = MagicMock()
 
         with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("redis.Redis.from_url", return_value=sync_client) as from_url,
             patch("modulo.core.saq_worker.time.sleep", return_value=None) as mock_sleep,
             caplog.at_level(logging.INFO, logger="modulo.core.saq_worker"),
         ):
-            sw._check_redis_connection(client)
+            sw._check_redis_connection(MagicMock())
 
-        client.ping.assert_called_once()
+        sync_client.ping.assert_called_once()
+        assert from_url.call_args.kwargs["socket_connect_timeout"] == 5
         mock_sleep.assert_not_called()
         assert "Redis connection validated" in caplog.text
 
     def test_retries_with_exponential_backoff_then_succeeds(self, caplog: pytest.LogCaptureFixture) -> None:
-        client = MagicMock()
-        client.ping.side_effect = [redis.exceptions.ConnectionError("down"), redis.exceptions.TimeoutError("t"), True]
+        sync_client = MagicMock()
+        sync_client.ping.side_effect = [
+            redis.exceptions.ConnectionError("down"),
+            redis.exceptions.TimeoutError("t"),
+            True,
+        ]
 
         with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("redis.Redis.from_url", return_value=sync_client),
             patch("modulo.core.saq_worker.time.sleep", return_value=None) as mock_sleep,
             caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
         ):
-            sw._check_redis_connection(client)
+            sw._check_redis_connection(MagicMock())
 
-        assert client.ping.call_count == 3
+        assert sync_client.ping.call_count == 3
         assert mock_sleep.call_count == 2
         assert mock_sleep.call_args_list[0].args == (2,)
         assert mock_sleep.call_args_list[1].args == (4,)
         assert "retrying in 2s" in caplog.text
 
     def test_gives_up_after_max_retries_fail_open(self, caplog: pytest.LogCaptureFixture) -> None:
-        client = MagicMock()
-        client.ping.side_effect = OSError("connection refused")
+        sync_client = MagicMock()
+        sync_client.ping.side_effect = OSError("connection refused")
 
         with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch("redis.Redis.from_url", return_value=sync_client),
             patch("modulo.core.saq_worker.time.sleep", return_value=None) as mock_sleep,
             caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
         ):
-            sw._check_redis_connection(client)
+            sw._check_redis_connection(MagicMock())
 
-        assert client.ping.call_count == 3
+        assert sync_client.ping.call_count == 3
         assert mock_sleep.call_count == 2
         assert "Redis unreachable after 3 attempts" in caplog.text
 
@@ -758,7 +766,7 @@ class TestProbeDatabase:
         ):
             sw._probe_database()
 
-        assert create.call_args.args[0] == "postgresql+psycopg2://localhost/test"
+        assert create.call_args.args[0] == "postgresql+psycopg://localhost/test"
         assert create.call_args.kwargs["pool_pre_ping"] is True
         conn.execute.assert_called_once()
         assert "Database connection probe passed" in caplog.text
@@ -960,18 +968,55 @@ class TestSystemJobDelegates:
 
     @pytest.mark.asyncio
     async def test_stale_run_recovery_delegates(self) -> None:
+        redis_client = AsyncMock()
         with (
             patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
             patch(
                 "modulo.core.pipeline_execution.stale_run_recovery_sweep",
                 new_callable=AsyncMock,
                 return_value=3,
             ) as sweep,
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client) as from_url,
         ):
             result = await sw.stale_run_recovery({})
 
         assert result == 3
         sweep.assert_awaited_once()
+        # The wrapper persists a stats dict to the shared Redis key (D1) so
+        # /healthz/ready can detect a silently dead sweep.
+        from_url.assert_called_once()
+        redis_client.set.assert_awaited_once()
+        assert redis_client.set.await_args.args[0] == sw.STALE_RUN_RECOVERY_STATS_KEY
+        import json as _json
+
+        stats = _json.loads(redis_client.set.await_args.args[1])
+        assert stats["recovered"] == 3
+        assert stats["last_run_at"]
+
+    @pytest.mark.asyncio
+    async def test_stale_run_recovery_persist_failure_does_not_break_sweep(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A stats-persistence failure must never fail the sweep itself."""
+        redis_client = AsyncMock()
+        redis_client.set.side_effect = RuntimeError("redis down")
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch(
+                "modulo.core.pipeline_execution.stale_run_recovery_sweep",
+                new_callable=AsyncMock,
+                return_value=5,
+            ) as sweep,
+            patch("redis.asyncio.Redis.from_url", return_value=redis_client),
+            caplog.at_level(logging.WARNING, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.stale_run_recovery({})
+
+        assert result == 5
+        sweep.assert_awaited_once()
+        assert "stale_run_recovery_stats_persist_failed" in caplog.text
 
     @pytest.mark.asyncio
     async def test_cost_probe_delegates(self) -> None:
@@ -1197,4 +1242,4 @@ class TestMakeSessionFactory:
             result = sw._make_session_factory()
 
         assert result is sessionmaker.return_value
-        sessionmaker.assert_called_once_with(engine, expire_on_commit=False, autobegin=True)
+        sessionmaker.assert_called_once_with(engine, expire_on_commit=False, autobegin=False)

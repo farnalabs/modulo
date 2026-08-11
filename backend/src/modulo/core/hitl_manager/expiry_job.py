@@ -192,7 +192,11 @@ class ClaimExpiryJob:
 
     def __init__(self, db_engine: AsyncEngine, notifier: Any | None = None) -> None:
         self._engine = db_engine
-        self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False)
+        # autobegin=False matches the DI default (dependencies.py): a session
+        # with autobegin=True auto-starts an implicit transaction on first
+        # execute, so a subsequent `async with session.begin():` raises
+        # InvalidRequestError ("A transaction is already begun").
+        self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._notifier = notifier

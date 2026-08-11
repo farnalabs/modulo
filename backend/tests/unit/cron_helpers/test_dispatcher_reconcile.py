@@ -128,6 +128,7 @@ def _settings(**overrides: object) -> MagicMock:
         "redis_url": "redis://localhost:6379/0",
         "saq_redis_pool_size": 5,
         "saq_run_claim_cap": 20,
+        "modulo_telemetry_enabled": False,
     }
     base.update(overrides)
     return MagicMock(**base)
@@ -477,6 +478,7 @@ class TestEnqueueFailedRecovery:
         is re-dispatched as execute_run with a fresh key_suffix."""
         summary, reenqueue, ingest, _, _, _ = await _run_reconcile(monkeypatch, [self._enqueue_failed_row(RUN_EVICTED)])
         assert summary["repaired"] == 1
+        assert summary["enqueue_failed_redispatched"] == 1
         reenqueue.assert_awaited_once()
         assert reenqueue.await_args.args[3] == "execute_run"
         assert reenqueue.await_args.kwargs["key_suffix"]
@@ -492,6 +494,7 @@ class TestEnqueueFailedRecovery:
             monkeypatch, [self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)]
         )
         assert summary["dispatch_failed_terminalized"] == 1
+        assert summary["enqueue_failed_ttl_terminalized"] == 1
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
@@ -566,6 +569,7 @@ class TestMidGraphWedgeTerminalizer:
             terminalizer_ids={"executor_superseded": [row.id]},
         )
         assert summary["mid_graph_wedge_terminalized"] == 1
+        assert summary["age_terminalized"] == 1
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()

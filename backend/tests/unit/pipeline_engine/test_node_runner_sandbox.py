@@ -541,6 +541,142 @@ async def test_drain_captures_pipe_buffer_size_output():
     assert output["stdout_length"] == len(big)
 
 
+async def test_drain_no_double_emit_when_log_grows_between_probe_and_read():
+    """The agent appending between get_info and the read must not double-emit.
+
+    get_info reports the file size at probe time; the read returns the FULL
+    file, which can be longer if the agent appended in between. The drain
+    offset must advance to len(text) (not the stale get_info size) so the next
+    tick starts after the bytes that were actually emitted — otherwise bytes
+    [size, len(text)) are re-emitted on the following tick (D3 no-double-emit
+    invariant).
+
+    Scenario: tick 1 reads 50 bytes; on tick 2 the probe reports 100 but the
+    read returns 150 (50 bytes appended after the probe). The correct final
+    artifact is exactly 150 bytes; a stale offset re-emits the last 50.
+    """
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    probe_sizes = iter([50, 100, 150, 150])
+    read_contents = iter(["x" * 50, "x" * 150, "x" * 150, "x" * 150])
+
+    def _get_info(path, **kwargs):
+        return MagicMock(size=next(probe_sizes))
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return next(read_contents)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    wait_calls = {"n": 0}
+
+    async def _wait():
+        wait_calls["n"] += 1
+        if wait_calls["n"] < 3:
+            raise TimeoutError
+        return cmd_result
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == "x" * 150
+    assert output["stdout_length"] == 150
+
+
+async def test_drain_window_lossless_when_truncation_and_probe_lag_race():
+    """D3 trailing-window truncation must not drop bytes when the probe lags the read.
+
+    The drain window retains only the last _MAX_DRAIN_WINDOW bytes of the log,
+    but the retained slice's absolute start was derived from the STALE get_info
+    probe ``size`` instead of the content length the read actually returned.
+    When the log exceeds the window AND the agent appends between the probe and
+    the read, the true window spans [len(content)-WINDOW, len(content)) but the
+    slice started at [size-WINDOW, ...) — shifted left — so the emitted chunk
+    skipped the first (len - size) bytes of new in-window content, which were
+    marked drained and permanently lost (live stream and node artifact).
+
+    Scenario (WINDOW patched to 100): tick 1 probe 50 / read 50 emits [0,50).
+    On tick 2 the probe reports 100 but the read returns 150 bytes; truncation
+    keeps the last 100 = absolute bytes [50,150). The correct emitted chunk is
+    the FULL window [50,150); the buggy slice emitted [100,150) and dropped
+    [50,100), then a third tick (probe 150) re-emitted [100,150) — a double-emit.
+    The final artifact must be byte-for-byte the in-window content [50,150) =
+    "n"*50+"p"*50 with NO lost and NO doubled bytes.
+    """
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+
+    tick2_content = ("m" * 50) + ("n" * 50) + ("p" * 50)  # absolute bytes [0,150)
+    probe_sizes = iter([50, 100, 150, 150])
+    read_contents = iter(["m" * 50, tick2_content, tick2_content, tick2_content])
+
+    def _get_info(path, **kwargs):
+        return MagicMock(size=next(probe_sizes))
+
+    def _read(path, format="text", **kwargs):
+        if str(path).endswith("output.json"):
+            return '{"summary": "done"}'
+        return next(read_contents)
+
+    cmd_result = MagicMock()
+    cmd_result.exit_code = 0
+    cmd_result.stdout = ""
+    cmd_result.stderr = ""
+
+    wait_calls = {"n": 0}
+
+    async def _wait():
+        wait_calls["n"] += 1
+        if wait_calls["n"] < 3:
+            raise TimeoutError
+        return cmd_result
+
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=_wait)
+    handle.kill = AsyncMock()
+
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(side_effect=_get_info)
+    sandbox.files.read = AsyncMock(side_effect=_read)
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch("modulo.core.pipeline_engine.node_runner._MAX_DRAIN_WINDOW", 100),
+        patch("modulo.core.pipeline_engine.node_runner._SANDBOX_TAIL_INTERVAL", 0.05),
+    ):
+        result = await fn(_run_state())
+
+    output = result["output"]
+    assert output["status"] == "completed"
+    assert output["agent_stdout"] == ("n" * 50) + ("p" * 50)
+    assert output["stdout_length"] == 100
+
+
 # ---------------------------------------------------------------------------
 # FAR-98: first-class stall detection — stall_timeout_seconds + stall_reason
 # ---------------------------------------------------------------------------
