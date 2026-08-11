@@ -461,6 +461,7 @@ class TestBackfillBatches:
         today = datetime.now(UTC).date()
         monkeypatch.setattr(maintenance_mod, "_subtract_months", lambda *a, **k: today - timedelta(days=10))
         monkeypatch.setattr(maintenance_mod, "backfill_facts", AsyncMock(return_value=4))
+        monkeypatch.setattr(maintenance_mod, "backfill_ledger", AsyncMock(return_value=1))
         set_rows = MagicMock()
         set_ts = MagicMock()
         monkeypatch.setattr(maintenance_mod, "set_backfill_rows", set_rows)
@@ -472,6 +473,18 @@ class TestBackfillBatches:
 
         assert result == {"backfill_rows": 12, "backfill_batches": 3}
         assert maintenance_mod.backfill_facts.await_count == 3
+        # NEWEST-first ordering — the recent window the dashboard reads is
+        # filled before any older day: today, today-1, today-2.
+        assert maintenance_mod.backfill_facts.await_args_list[0].args[1] == today
+        assert maintenance_mod.backfill_facts.await_args_list[1].args[1] == today - timedelta(days=1)
+        assert maintenance_mod.backfill_facts.await_args_list[2].args[1] == today - timedelta(days=2)
+        # One ledger upsert per batch, same day as the facts backfill.
+        assert maintenance_mod.backfill_ledger.await_count == 3
+        for i in range(3):
+            assert (
+                maintenance_mod.backfill_ledger.await_args_list[i].args[1]
+                == maintenance_mod.backfill_facts.await_args_list[i].args[1]
+            )
         set_rows.assert_called_once_with(12)
         set_ts.assert_called_once()
 
@@ -479,6 +492,7 @@ class TestBackfillBatches:
         today = datetime.now(UTC).date()
         monkeypatch.setattr(maintenance_mod, "_subtract_months", lambda *a, **k: today - timedelta(days=1))
         monkeypatch.setattr(maintenance_mod, "backfill_facts", AsyncMock(return_value=1))
+        monkeypatch.setattr(maintenance_mod, "backfill_ledger", AsyncMock(return_value=1))
         set_rows = MagicMock()
         monkeypatch.setattr(maintenance_mod, "set_backfill_rows", set_rows)
 
@@ -486,7 +500,103 @@ class TestBackfillBatches:
         result = await maintenance_mod.backfill_batches(session, max_batches=30)
 
         assert result == {"backfill_rows": 2, "backfill_batches": 2}
+        assert maintenance_mod.backfill_facts.await_count == 2
+        assert maintenance_mod.backfill_ledger.await_count == 2
+        # Newest-first over the 2-day range: today then today-1.
+        assert maintenance_mod.backfill_facts.await_args_list[0].args[1] == today
+        assert maintenance_mod.backfill_facts.await_args_list[1].args[1] == today - timedelta(days=1)
+        for i in range(2):
+            assert (
+                maintenance_mod.backfill_ledger.await_args_list[i].args[1]
+                == maintenance_mod.backfill_facts.await_args_list[i].args[1]
+            )
         set_rows.assert_called_once_with(2)
+
+
+class TestBackfillLedger:
+    @staticmethod
+    def _capturing_insert(monkeypatch: pytest.MonkeyPatch) -> dict:
+        captured: dict = {}
+
+        class _FakeInsert:
+            def __init__(self, model) -> None:
+                captured["model"] = model
+                self.excluded = SimpleNamespace(
+                    run_count="excluded.run_count", total_spend_usd="excluded.total_spend_usd"
+                )
+
+            def values(self, rows) -> _FakeInsert:
+                captured["values"] = rows
+                return self
+
+            def on_conflict_do_update(self, index_elements=None, set_=None) -> _FakeInsert:
+                captured["index_elements"] = index_elements
+                captured["set_"] = set_
+                return self
+
+        monkeypatch.setattr(maintenance_mod, "pg_insert", _FakeInsert)
+        return captured
+
+    async def test_backfills_ledger_per_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        day = date(2026, 8, 6)
+        org_a = "22222222-2222-4222-8222-222222222222"
+        org_b = "33333333-3333-4333-8333-333333333333"
+        captured = self._capturing_insert(monkeypatch)
+        session = _session(
+            execute_side_effect=[
+                SimpleNamespace(all=lambda: [(org_a, 3, Decimal("1.25")), (org_b, 1, Decimal("0.50"))]),
+                SimpleNamespace(rowcount=2),
+            ]
+        )
+
+        result = await maintenance_mod.backfill_ledger(session, day)
+
+        assert result == 2
+        assert captured["model"] is maintenance_mod.OrgDailyRunCount
+        assert len(captured["values"]) == 2
+        assert captured["values"][0]["organisation_id"] == org_a
+        assert captured["values"][0]["team_id"] is None  # org-level row
+        assert captured["values"][0]["run_date"] == day
+        assert captured["values"][0]["run_count"] == 3
+        assert captured["values"][0]["total_spend_usd"] == Decimal("1.25")
+        assert captured["values"][1]["organisation_id"] == org_b
+        assert captured["values"][1]["team_id"] is None
+        # ON CONFLICT target (the unique index incl. NULLS NOT DISTINCT) and
+        # the DO UPDATE refresh set — re-running the same day reconciles, never
+        # duplicates.
+        assert [c.key for c in captured["index_elements"]] == ["organisation_id", "team_id", "run_date"]
+        assert set(captured["set_"]) == {"run_count", "total_spend_usd"}
+        # Aggregate query: terminal-status + UTC-day predicate, grouped by org.
+        agg_stmt = session.execute.await_args_list[0].args[0]
+        agg_sql = str(agg_stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "GROUP BY runs.organisation_id" in agg_sql
+        assert "runs.status IN" in agg_sql
+        assert "date_trunc('day', coalesce(runs.started_at, runs.created_at))" in agg_sql
+        assert "'2026-08-06'" in agg_sql
+
+    async def test_returns_zero_when_no_terminal_runs_for_the_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        session = _session(execute_side_effect=[SimpleNamespace(all=lambda: [])])
+        result = await maintenance_mod.backfill_ledger(session, date(2026, 8, 6))
+        assert result == 0
+        # No orgs to upsert -> the insert statement is never built/executed.
+        assert session.execute.await_count == 1
+
+    async def test_idempotent_upsert_same_day_twice(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        day = date(2026, 8, 6)
+        org_a = "22222222-2222-4222-8222-222222222222"
+        captured = self._capturing_insert(monkeypatch)
+        for _ in range(2):
+            session = _session(
+                execute_side_effect=[
+                    SimpleNamespace(all=lambda: [(org_a, 3, Decimal("1.25"))]),
+                    SimpleNamespace(rowcount=1),
+                ]
+            )
+            assert await maintenance_mod.backfill_ledger(session, day) == 1
+        # Both invocations upsert via ON CONFLICT DO UPDATE (no duplicates by
+        # construction) — the refresh set targets exactly the aggregated cols.
+        assert captured["set_"]["run_count"] == "excluded.run_count"
+        assert captured["set_"]["total_spend_usd"] == "excluded.total_spend_usd"
 
 
 class TestReconcileFacts:

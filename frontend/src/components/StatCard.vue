@@ -28,6 +28,13 @@
           >
             <span aria-hidden="true">{{ deltaArrow }}</span>{{ deltaPctText }}
           </span>
+          <span
+            v-else-if="delta != null && noBaselineLabel"
+            class="inline-flex items-center text-xs font-medium text-muted-foreground"
+            data-testid="stat-no-baseline"
+            :title="noBaselineLabel"
+            >—</span
+          >
         </div>
       </div>
     </div>
@@ -49,6 +56,7 @@ const props = defineProps<{
   color?: "primary" | "success" | "warning" | "destructive" | "muted";
   to?: string;
   delta?: StatDelta | null;
+  noBaselineLabel?: string;
 }>();
 
 const iconBgClass = computed(() => {
