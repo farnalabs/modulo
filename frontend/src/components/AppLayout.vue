@@ -15,7 +15,7 @@
 
     <main
       class="flex-1 min-w-0 overflow-auto bg-background relative"
-      :class="onboardingActive ? 'pt-[8.25rem] md:pt-20' : 'pt-0 md:pt-0'"
+      :class="[showMobileHeader ? 'pt-14 md:pt-0' : '', onboardingActive ? 'pt-[8.25rem] md:pt-20' : '']"
       :style="remyDockedStyle"
     >
       <div class="relative z-10">
@@ -52,6 +52,7 @@ import RemyPanel from "./remy/RemyPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
 import { TooltipProvider } from "./ui/tooltip";
 import { useRemyStore } from "../composables/useRemyStore";
+import { useSidebarMode } from "../composables/useSidebarMode";
 import { useOnboardingStore } from "../composables/useOnboarding";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
@@ -67,6 +68,13 @@ const onboardingActive = computed(() => onboardingStore.isActive);
 const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
 const isLight = ref(document.documentElement.classList.contains("light"));
+
+// The mobile hamburger header (drawn by AppSidebar when the mobile rail flag is
+// OFF) is a fixed h-14 overlay, so main content needs a pt-14 offset on mobile
+// only when that header is shown. When the mobile rail flag is ON there is no
+// fixed header — the rail is in-flow — so no offset. Shared with AppSidebar via
+// useSidebarMode so the two can't drift.
+const { showMobileHeader } = useSidebarMode();
 
 const remyDockedStyle = computed(() =>
   remyStore.panelState === "docked" ? { paddingRight: `${remyStore.panelSize.width}px` } : undefined,

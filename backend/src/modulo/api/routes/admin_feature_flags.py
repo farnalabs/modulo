@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -67,6 +68,28 @@ async def _build_registry(
         )
 
 
+async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None:
+    """Best-effort delete of the ``list_feature_flags`` Redis cache for an org.
+
+    The cache stores a 60s-TTL payload that overlays the org's
+    ``feature_overrides``. An admin toggling an org override must see it take
+    effect app-wide immediately; a stale cached payload would mask the change
+    for up to 60s. Failures are swallowed and logged — the cache expires on its
+    own, so invalidation is best-effort.
+    """
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        await redis.delete(f"feature-flags:{org_id}")
+    except Exception:
+        logger.warning("feature-flags.cache_invalidate_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
+
+
 @handle_db_errors("admin.feature_flags.list_feature_flags")
 @router.get("", response_model=None)
 async def list_feature_flags(
@@ -92,6 +115,28 @@ async def list_feature_flags(
 
     try:
         registry = await _build_registry(settings, session, current_user)
+
+        # Apply the org's per-flag overrides to the payload so an org-level
+        # enable (admin Feature Flags UI) takes effect app-wide — the whole app
+        # (plan store) reads ``currently_active`` from this endpoint. The admin
+        # UI's org-override toggle persists into
+        # ``org.settings_json.feature_overrides``; overlay that here on the
+        # registry's computed default. Best-effort: a failed org read falls back
+        # to the registry's defaults rather than failing the request.
+        org_overrides: dict[str, bool] = {}
+        if current_user.organisation_id is not None:
+            try:
+                async with session.begin():
+                    org = await get_organisation(session, current_user.organisation_id)
+                if org is not None and isinstance(getattr(org, "settings_json", None), dict):
+                    org_overrides = {
+                        key: bool(value)
+                        for key, value in org.settings_json.get("feature_overrides", {}).items()
+                        if isinstance(value, bool)
+                    }
+            except Exception:
+                logger.warning("feature-flags.org_override_read_failed", exc_info=True)
+
         response_data = {
             "license": {
                 "tier": registry.current_tier,
@@ -104,7 +149,7 @@ async def list_feature_flags(
                     "name": f.name,
                     "description": f.description,
                     "tier": f.tier,
-                    "currently_active": f.currently_active,
+                    "currently_active": org_overrides.get(f.name, f.currently_active),
                     "depends_on": f.depends_on,
                 }
                 for f in registry.list_flags()
@@ -355,6 +400,7 @@ async def get_org_flag_override(
 async def set_org_flag_override(
     flag_name: str,
     req: ToggleFlagRequest,
+    settings: Settings = Depends(get_settings),
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
@@ -370,6 +416,7 @@ async def set_org_flag_override(
             settings_dict["feature_overrides"] = overrides
             org.settings_json = settings_dict
             session.add(org)
+        await _invalidate_cache(settings, current_user.organisation_id)
         return {"override": req.enabled}
     except HTTPException:
         raise
@@ -412,6 +459,7 @@ async def set_org_flag_override(
 @router.delete("/{flag_name}/org-override", response_model=None)
 async def clear_org_flag_override(
     flag_name: str,
+    settings: Settings = Depends(get_settings),
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
 ) -> Response | dict[str, Any]:
@@ -427,6 +475,7 @@ async def clear_org_flag_override(
             settings_dict["feature_overrides"] = overrides
             org.settings_json = settings_dict
             session.add(org)
+        await _invalidate_cache(settings, current_user.organisation_id)
         return {"override": None}
     except HTTPException:
         raise
