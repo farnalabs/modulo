@@ -35,7 +35,7 @@ async def _folder_is_ancestor(
     ancestor_id: uuid.UUID,
 ) -> bool:
     """Return True if ancestor_id appears in folder_id's parent chain (or equals it)."""
-    current_id = folder_id
+    current_id: uuid.UUID | None = folder_id
     steps = 0
     while current_id is not None and steps <= _MAX_FOLDER_DEPTH:
         if current_id == ancestor_id:
