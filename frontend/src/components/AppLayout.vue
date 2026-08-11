@@ -15,6 +15,7 @@
 
     <main
       class="flex-1 min-w-0 overflow-auto bg-background relative"
+      :class="onboardingActive ? 'pt-[8.25rem] md:pt-20' : 'pt-0 md:pt-0'"
       :style="remyDockedStyle"
     >
       <div class="absolute top-0 left-0 right-0 z-10">
@@ -51,6 +52,7 @@ import RemyPanel from "./remy/RemyPanel.vue";
 import AppSidebar from "./AppSidebar.vue";
 import { TooltipProvider } from "./ui/tooltip";
 import { useRemyStore } from "../composables/useRemyStore";
+import { useOnboardingStore } from "../composables/useOnboarding";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
@@ -58,6 +60,9 @@ import SpotlightOverlay from "./onboarding/SpotlightOverlay.vue";
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();
+const onboardingStore = useOnboardingStore();
+
+const onboardingActive = computed(() => onboardingStore.isActive);
 
 const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 
