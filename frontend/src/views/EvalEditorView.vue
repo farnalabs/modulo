@@ -16,7 +16,7 @@
     <ErrorAlert v-else-if="pageError" :message="pageError" :on-retry="loadAll" />
 
     <template v-else>
-      <div class="grid gap-6 lg:grid-cols-2 xl:max-w-[1400px] mx-auto">
+      <div class="grid gap-6 lg:grid-cols-2">
         <div>
           <label for="evaleditorview-field-8" class="mb-1.5 block text-sm font-medium">{{ $t('views.EvalEditorView.pipeline') }}</label>
           <Select :aria-label="$t('views.EvalEditorView.pipeline_aria')" v-model="selectedPipelineId" @update:model-value="onPipelineChange">
@@ -46,7 +46,7 @@
         </div>
       </div>
 
-      <div class="grid gap-8 lg:grid-cols-5 xl:max-w-[1400px] mx-auto">
+      <div class="grid gap-8 lg:grid-cols-5">
         <div class="lg:col-span-3">
           <div class="rounded-lg border bg-card p-6 shadow-sm">
             <h2 class="mb-4 text-base font-semibold">{{ editingEvalId ? $t('views.EvalEditorView.edit_eval') : $t('views.EvalEditorView.new_eval') }}</h2>

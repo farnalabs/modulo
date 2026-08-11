@@ -44,7 +44,17 @@ CAPACITY_MARKERS = frozenset({ERROR_CODE_ORG_CAPACITY_LIMITED, ERROR_CODE_PIPELI
 # constraint at commit time, or worse write an unknown status on backends
 # without the constraint).
 RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
-    {"pending", "running", "awaiting_human", "claimed", "complete", "failed", "cancelled", "eval_failed", "stalled"}
+    {
+        "pending",
+        "running",
+        "awaiting_human",
+        "claimed",
+        "complete",
+        "failed",
+        "cancelled",
+        "eval_failed",
+        "stalled",
+    }
 )
 
 # Claimed-but-nodeless zombie repair code (shared). Another worker owns the
@@ -315,6 +325,24 @@ async def get_child_run_rollup(
 _COST_BREAKDOWN_SENTINEL: Any = object()
 
 
+def _json_bind(value: Any) -> str | bytes | None:
+    """Serialize a JSON-typed fenced-write param for asyncpg binding.
+
+    asyncpg's default ``json`` codec accepts only ``str``/``bytes`` — a raw
+    dict/list bound to ``CAST(:p AS json)`` raises ``DataError``. The fenced
+    statement casts the serialized string to json, so dicts/lists are encoded
+    here (mirroring SQLAlchemy's ORM ``JSON`` type serialization) while
+    already-serialized strings pass through unchanged.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode()
+    return json.dumps(value)
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -347,6 +375,7 @@ async def update_run_status(
             cost_breakdown=cost_breakdown,
             node_token_usage=node_token_usage,
             outputs_json=outputs_json,
+            node_telemetry_json=node_telemetry_json,
             claimed_by=claimed_by,
             clear_error_code=clear_error_code,
             claim_token=claim_token,
@@ -418,7 +447,9 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "node_token_usage = CASE WHEN CAST(:node_token_usage AS json) IS NOT NULL "
     "  THEN CAST(:node_token_usage AS json) ELSE node_token_usage END, "
     "outputs_json = CASE WHEN CAST(:outputs_json AS json) IS NOT NULL "
-    "  THEN CAST(:outputs_json AS json) ELSE outputs_json END "
+    "  THEN CAST(:outputs_json AS json) ELSE outputs_json END, "
+    "node_telemetry_json = CASE WHEN CAST(:node_telemetry_json AS json) IS NOT NULL "
+    "  THEN CAST(:node_telemetry_json AS json) ELSE node_telemetry_json END "
     "WHERE id=:rid "
     "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
     "AND (CAST(:from_status AS text) IS NULL OR status = CAST(:from_status AS text)) "
@@ -439,6 +470,7 @@ async def _update_run_status_fenced(
     cost_breakdown: Any,
     node_token_usage: dict[str, Any] | None,
     outputs_json: dict[str, Any] | None,
+    node_telemetry_json: dict[str, Any] | None,
     claimed_by: str | None,
     clear_error_code: bool,
     claim_token: str,
@@ -470,10 +502,13 @@ async def _update_run_status_fenced(
             "cost_breakdown_sentinel": cost_breakdown is _COST_BREAKDOWN_SENTINEL,
             # When the sentinel is used the ELSE branch is never taken, but the
             # parameter still must be bindable (NULL json) — never the sentinel
-            # object itself.
-            "cost_breakdown": None if cost_breakdown is _COST_BREAKDOWN_SENTINEL else cost_breakdown,
-            "node_token_usage": node_token_usage,
-            "outputs_json": outputs_json,
+            # object itself. JSON-typed params are serialized via ``_json_bind``:
+            # asyncpg's json codec rejects raw dict/list (DataError), so the
+            # fenced terminal write must encode them exactly like the ORM path.
+            "cost_breakdown": None if cost_breakdown is _COST_BREAKDOWN_SENTINEL else _json_bind(cost_breakdown),
+            "node_token_usage": _json_bind(node_token_usage),
+            "outputs_json": _json_bind(outputs_json),
+            "node_telemetry_json": _json_bind(node_telemetry_json),
             "claimed_by": claimed_by,
             "clear_error_code": clear_error_code,
         },

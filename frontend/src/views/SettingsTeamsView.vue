@@ -1,6 +1,6 @@
 <template>
   <FeatureGate feature-name="team_rbac" required-tier="team" show-disabled>
-    <div class="page-narrow">
+    <div class="page-wide">
     <header class="flex items-center justify-between">
       <PageHeader title="Teams" subtitle="Manage teams and team membership" />
       <Button
@@ -17,7 +17,7 @@
     <ErrorAlert v-else-if="error" :message="error" />
 
     <div v-if="!loading && !error">
-      <div v-if="showCreateForm" class="card p-6">
+      <div v-if="showCreateForm" class="card max-w-3xl p-6">
         <h2 class="mb-4 text-base font-semibold">{{ $t('views.SettingsTeamsView.new_team') }}</h2>
         <div class="space-y-4">
           <div>

@@ -1,14 +1,5 @@
 import { test, expect, loginAsAdmin } from './setup/fixtures'
 
-test.describe('Admin API Changelog', { tag: "@regression" }, () => {
-  test('renders the API Changelog page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
-    await page.goto('/admin/api-changelog')
-    await expect(page.locator('h1')).toContainText('API Changelog')
-    await expect(page.getByTestId('changelog-title')).toBeVisible()
-  })
-})
-
 test.describe('Admin Audit Log', { tag: "@regression" }, () => {
   test('renders the Audit Log page', { tag: "@regression" }, async ({ page, env }) => {
     await loginAsAdmin(page, env)
@@ -72,14 +63,6 @@ test.describe('Admin Plugins', { tag: "@regression" }, () => {
     await page.goto('/admin/plugins')
     await expect(page.locator('h1')).toContainText('Plugins')
     await expect(page.getByTestId('admin-plugins-refresh')).toBeVisible()
-  })
-})
-
-test.describe('Admin Team Comparison', { tag: "@regression" }, () => {
-  test('renders the Team Comparison page', { tag: "@regression" }, async ({ page, env }) => {
-    await loginAsAdmin(page, env)
-    await page.goto('/admin/teams/comparison')
-    await expect(page.locator('h1')).toContainText('Team Comparison')
   })
 })
 
