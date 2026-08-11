@@ -689,6 +689,21 @@ class TestToUtcAware:
         assert to_utc_aware(date(2026, 8, 6)) == datetime(2026, 8, 6, 0, 0, tzinfo=UTC)
         assert to_utc_aware(date(2026, 8, 6), end_of_day=True) == datetime(2026, 8, 6, 23, 59, 59, tzinfo=UTC)
 
+    def test_midnight_datetime_expands_to_end_of_day(self) -> None:
+        # FastAPI parses a date-only query param like ``?date_to=2026-08-06``
+        # into a midnight datetime. With end_of_day it must expand to 23:59:59 —
+        # otherwise a single-day hour query produces zero buckets.
+        out = to_utc_aware(datetime(2026, 8, 6, 0, 0, 0), end_of_day=True)
+        assert out == datetime(2026, 8, 6, 23, 59, 59, tzinfo=UTC)
+        assert out.utcoffset() == timedelta(0)
+
+    def test_non_midnight_datetime_not_expanded(self) -> None:
+        # A datetime carrying a real time-of-day must be left unchanged even
+        # with end_of_day=True — it is an explicit instant, not a bare date.
+        assert to_utc_aware(datetime(2026, 8, 6, 14, 0, 0), end_of_day=True) == datetime(
+            2026, 8, 6, 14, 0, 0, tzinfo=UTC
+        )
+
     def test_mixed_naive_aware_compare_safely(self) -> None:
         # A naive date_from and an aware date_to must normalise so the range
         # checks never hit TypeError (the pre-fix 500 path).

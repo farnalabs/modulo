@@ -1194,6 +1194,16 @@ class TestConcurrencyEndpoint:
         user_a: uuid.UUID,
     ) -> None:
         today = datetime.now(UTC).date()
+        # Hermetic scope: the module-scoped org_a/org_b are shared with earlier
+        # tests in this module that also insert same-day facts. Clear the
+        # queried day's rows for BOTH orgs first so the bucket assertions below
+        # are exact, regardless of test order (the deploy gate runs the whole
+        # integration suite in one session).
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(
+                text("DELETE FROM run_daily_facts WHERE organisation_id = ANY(:oids) AND run_date = :day"),
+                {"oids": [str(org_a), str(org_b)], "day": today},
+            )
         # Org A: one run spanning 09:30..10:30 (overlaps the 09:00 and 10:00
         # hour buckets) + one queued-only run (created 23:00, never started).
         await _insert_fact(
