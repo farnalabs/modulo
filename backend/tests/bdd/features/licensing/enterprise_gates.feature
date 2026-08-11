@@ -20,7 +20,7 @@ Feature: Team Gate Enforcement
 
   Scenario: Audit viewer blocked without Team license
     Given I do not have a Team license
-    When I GET /api/v1/admin/audit
+    When I GET /api/v1/admin/audit/export
     Then the response status is 402
     And the error detail mentions "audit_viewer"
 
