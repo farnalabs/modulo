@@ -1734,6 +1734,8 @@ export default {
       "smtp_password_placeholder": "your-smtp-password",
       "email_from": "From Address",
       "email_from_placeholder": "noreply at example.com",
+      "smtp_timeout": "SMTP Timeout (seconds)",
+      "smtp_timeout_placeholder": "30",
       "save": "Save",
       "saving": "Saving...",
       "test_email": "Send Test Email",
