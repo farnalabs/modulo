@@ -9,6 +9,10 @@
       <div class="page-wide">
         <PageHeader :title="$t('views.SettingsMonitorConfigView.browser_monitoring')" :subtitle="$t('views.SettingsMonitorConfigView.description')" />
 
+        <div class="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+          {{ $t('views.SettingsMonitorConfigView.explainer') }}
+        </div>
+
         <div v-if="loading" class="flex items-center justify-center h-32">
           <span class="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full" />
         </div>
