@@ -163,7 +163,8 @@
     </aside>
 
     <main
-      class="flex-1 overflow-auto bg-background pt-14 md:pt-0 relative"
+      class="flex-1 overflow-auto bg-background relative"
+      :class="onboardingActive ? 'pt-[8.25rem] md:pt-20' : 'pt-14 md:pt-0'"
       :style="remyDockedStyle"
     >
       <div class="absolute top-14 md:top-0 left-0 right-0 z-10">
@@ -204,6 +205,7 @@ import SidebarFooter from "./SidebarFooter.vue";
 import SidebarNav from "./SidebarNav.vue";
 import { TooltipProvider } from "./ui/tooltip";
 import { useRemyStore } from "../composables/useRemyStore";
+import { useOnboardingStore } from "../composables/useOnboarding";
 import { abortUiCommands } from "../composables/useUiCommandExecutor";
 import OnboardingBanner from "./onboarding/OnboardingBanner.vue";
 import CommandPalette from "./CommandPalette.vue";
@@ -216,6 +218,9 @@ import { Search } from "@lucide/vue";
 
 const planStore = usePlanStore();
 const remyStore = useRemyStore();
+const onboardingStore = useOnboardingStore();
+
+const onboardingActive = computed(() => onboardingStore.isActive);
 
 const mobileOpen = ref(false);
 const mobileSidebarRef = ref<HTMLElement | null>(null);
