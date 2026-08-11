@@ -5,17 +5,25 @@ Covers the per-row split decision (lockstep columns), the whole-row skip rule
 date/limit filters, and the verify tool's legacy-pattern detection (::jsonb
 cast) + exit codes. The DB is mocked with SimpleNamespace rows and a fake
 connection that records every SQL statement, matching the analytics-facts unit
-test style.
+test style. Regression coverage pins the two reviewer findings: jsonb-adapted
+(Jsonb-wrapped) UPDATE binds on Postgres and a per-batch commit so --apply
+actually persists (plus rollback on DB error), including a real-driver SQLite
+persistence test.
 """
 
 from __future__ import annotations
 
 import io
+import json
 from datetime import datetime
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+from psycopg.types.json import Jsonb
+from sqlalchemy import create_engine, text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -62,11 +70,19 @@ class _FakeConn:
         self.runs = []
         self.graph_json: dict = {}
         self.total = 0
+        # Default to the production dialect so --apply exercises the Jsonb
+        # binding path; tests for other dialects override this.
+        self.dialect = SimpleNamespace(name="postgresql")
+        self.commits = 0
+        self.rollbacks = 0
+        self.raise_on_update = False
 
     def execute(self, stmt, params=None):
         params = dict(params or {})
         self.executed.append((str(stmt), params))
         s = str(stmt)
+        if self.raise_on_update and s.startswith("UPDATE"):
+            raise RuntimeError("boom")
         if s.startswith("SELECT count(*) FROM runs"):
             return _FakeResult(scalar=self.total)
         if "FROM pipeline_snapshots" in s:
@@ -83,6 +99,34 @@ class _FakeConn:
                 rows = rows[:batch_size]
             return _FakeResult(rows=rows)
         return _FakeResult(rows=[])
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+class _FakeConnCM:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        return self._conn
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeEngine:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connect(self):
+        return _FakeConnCM(self._conn)
+
+    def dispose(self):
+        pass
 
 
 def _sandbox_envelope() -> dict:
@@ -219,8 +263,12 @@ def test_loop_apply_issues_conditional_parameterised_update():
     assert ":new" in sql and ":tel" in sql and ":rid" in sql
     assert "node_telemetry_json IS NULL" in sql
     assert params["rid"] == "r1"
-    assert params["new"]["n1"] == {"answer": 42}
-    assert params["tel"]["n1"]["tokens"] == 3
+    # Postgres dialect -> the JSON dicts are Jsonb-wrapped at the bind site.
+    assert isinstance(params["new"], Jsonb) and isinstance(params["tel"], Jsonb)
+    assert params["new"].obj["n1"] == {"answer": 42}
+    assert params["tel"].obj["n1"]["tokens"] == 3
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
 
 
 def test_loop_skips_unsplittable_row_whole_and_counts():
@@ -289,6 +337,122 @@ def test_loop_processes_multiple_batches_via_keyset():
     assert len(scans) == 2
     assert "id > :after_id" in scans[1][0]
     assert scans[1][1]["after_id"] == "r2"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests -- Jsonb binding + commit persistence (reviewer findings)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_wraps_jsonb_params_on_postgres():
+    """psycopg3 cannot adapt a raw dict; the UPDATE must receive Jsonb wraps."""
+    conn = _FakeConn()
+    conn.runs = [_run_row("r1", {"n1": _sandbox_envelope()})]
+    conn.graph_json = {"s1": {"nodes": [{"id": "n1", "node_type": "sandbox_agent"}]}}
+    backfill._run_backfill(conn, apply=True, batch_size=10, limit=None, since=None, until=None)
+    updates = [item for item in conn.executed if item[0].startswith("UPDATE runs")]
+    assert len(updates) == 1
+    params = updates[0][1]
+    assert isinstance(params["new"], Jsonb)
+    assert isinstance(params["tel"], Jsonb)
+    assert params["new"].obj["n1"] == {"answer": 42}
+    assert params["tel"].obj["n1"]["tokens"] == 3
+
+
+def test_apply_commits_after_each_batch():
+    """engine.connect() autobegins a tx that rolls back on close -- commit per batch."""
+    conn = _FakeConn()
+    conn.runs = [
+        _run_row("r1", {"n1": _sandbox_envelope()}),
+        _run_row("r2", {"n1": _sandbox_envelope()}),
+        _run_row("r3", {"n1": _sandbox_envelope()}),
+    ]
+    conn.graph_json = {"s1": {"nodes": [{"id": "n1", "node_type": "sandbox_agent"}]}}
+    summary = backfill._run_backfill(conn, apply=True, batch_size=2, limit=None, since=None, until=None)
+    assert summary["batches"] == 2
+    assert conn.commits == 2
+    assert conn.rollbacks == 0
+
+
+def test_dry_run_never_commits():
+    conn = _FakeConn()
+    conn.runs = [_run_row("r1", {"n1": _sandbox_envelope()})]
+    conn.graph_json = {"s1": {"nodes": [{"id": "n1", "node_type": "sandbox_agent"}]}}
+    backfill._run_backfill(conn, apply=False, batch_size=10, limit=None, since=None, until=None)
+    assert conn.commits == 0
+    assert conn.rollbacks == 0
+
+
+def test_apply_rolls_back_on_db_error():
+    """A DB failure must roll back the in-flight batch (no autocommit exists)."""
+    conn = _FakeConn()
+    conn.raise_on_update = True
+    conn.runs = [_run_row("r1", {"n1": _sandbox_envelope()})]
+    conn.graph_json = {"s1": {"nodes": [{"id": "n1", "node_type": "sandbox_agent"}]}}
+    engine = _FakeEngine(conn)
+    with pytest.raises(RuntimeError, match="boom"):
+        backfill._backfill_with_engine(engine, apply=True, batch_size=10, limit=None, since=None, until=None)
+    assert conn.rollbacks == 1
+
+
+def test_apply_persists_on_real_sqlite_engine(monkeypatch):
+    """Strongest regression: --apply must actually persist through a real driver.
+
+    Uses a real in-memory SQLite engine so the UPDATE + per-batch commit + the
+    read-back are executed by the driver, not a mock. SQLite returns the stored
+    JSON as TEXT (not a dict) for raw ``text()`` scans, so the scan and the
+    snapshot type-map are stubbed to feed dicts exactly as Postgres' jsonb
+    columns do -- the persistence path under test (bind -> commit -> visible to
+    another connection) stays fully real.
+    """
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE pipeline_snapshots (id VARCHAR(36) PRIMARY KEY, graph_json JSON)"))
+        conn.execute(
+            text(
+                "CREATE TABLE runs (id VARCHAR(36) PRIMARY KEY, snapshot_id VARCHAR(36), "
+                "created_at DATETIME, outputs_json JSON, node_telemetry_json JSON)"
+            )
+        )
+        conn.execute(
+            text("INSERT INTO pipeline_snapshots (id, graph_json) VALUES (:id, :g)"),
+            {"id": "s1", "g": json.dumps({"nodes": [{"id": "n1", "node_type": "sandbox_agent"}]})},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO runs (id, snapshot_id, created_at, outputs_json, node_telemetry_json) "
+                "VALUES (:id, :sid, :c, :o, NULL)"
+            ),
+            {
+                "id": "r1",
+                "sid": "s1",
+                # ISO string, not a datetime: sqlite3's datetime adapter raises a
+                # DeprecationWarning under Python 3.12, which pytest escalates.
+                "c": "2026-08-11T00:00:00Z",
+                "o": json.dumps({"n1": _sandbox_envelope()}),
+            },
+        )
+
+    def _scan(conn, *, after_id, batch_size, since, until):
+        # Emulate the real predicate + keyset: the first batch consumes the
+        # legacy row, so no further batch ever returns it.
+        if after_id is not None:
+            return []
+        return [_run_row("r1", {"n1": _sandbox_envelope()})]
+
+    monkeypatch.setattr(backfill, "_scan_batch", _scan)
+    monkeypatch.setattr(backfill, "_node_type_map", lambda conn, cache, snapshot_id: {"n1": "sandbox_agent"})
+
+    with engine.connect() as conn:
+        summary = backfill._run_backfill(conn, apply=True, batch_size=1, limit=None, since=None, until=None)
+        assert summary["rows_split"] == 1
+
+    # A separate connection must see the committed write (the missing-commit
+    # bug left it NULL here).
+    with engine.connect() as conn:
+        tel = conn.execute(text("SELECT node_telemetry_json FROM runs WHERE id = 'r1'")).scalar_one_or_none()
+        assert tel is not None
+        assert json.loads(tel)["n1"]["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------

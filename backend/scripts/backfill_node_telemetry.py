@@ -27,9 +27,12 @@ Usage::
         --since 2026-01-01 --until 2026-08-01
 
 Dry-run by default: prints counts + a sample of would-be rows. ``--apply``
-issues the per-row conditional UPDATE. ANY skipped row makes the tool exit 1:
-a nonzero skip during a quiesced backfill means something is wrong (an
-unsplittable legacy shape that must be inspected by hand).
+issues the per-row conditional UPDATE with jsonb-adapted bind params and
+COMMITS AFTER EVERY BATCH, so a crash never rolls back completed work; a DB
+failure rolls back only the in-flight batch (via ``_backfill_with_engine``)
+and exits 1. ANY skipped row makes the tool exit 1: a nonzero skip during a
+quiesced backfill means something is wrong (an unsplittable legacy shape that
+must be inspected by hand).
 
 This is a version-controlled maintenance tool (see ``repair_accounts_fks.py``);
 it uses a SYNC SQLAlchemy engine (psycopg) and is never invoked from the async
@@ -39,6 +42,7 @@ application path.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -48,6 +52,7 @@ from typing import Any, TextIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from psycopg.types.json import Jsonb
 from sqlalchemy import create_engine, text
 
 from modulo.core.cost_controller.finalize import derive_node_type_map
@@ -68,6 +73,24 @@ _LOSSLESS_NODE_TYPES = frozenset({"sandbox_agent", "agent", "connector", "manual
 _UPDATE_SQL = text(
     "UPDATE runs SET outputs_json = :new, node_telemetry_json = :tel WHERE id = :rid AND node_telemetry_json IS NULL"
 )
+
+
+def _bind_json_param(value: Any, dialect_name: str) -> Any:
+    """Adapt a JSON dict for a bound parameter on the target dialect.
+
+    psycopg3 (Postgres) cannot adapt a raw ``dict`` to ``%s`` -- wrap it in
+    ``psycopg.types.json.Jsonb`` so the driver serialises it as jsonb. SQLite
+    (used only by tests) cannot bind a dict either; its JSON columns store the
+    serialised TEXT, so dump to a JSON string there. Other dialects bind dicts
+    natively and are passed through.
+    """
+    if value is None:
+        return None
+    if dialect_name == "postgresql":
+        return Jsonb(value)
+    if dialect_name == "sqlite":
+        return json.dumps(value)
+    return value
 
 
 def _resolve_db_url(raw: str) -> str:
@@ -206,6 +229,7 @@ def _run_backfill(
     rows_split = 0
     skips: list[tuple[str, str]] = []
     sample: list[str] = []
+    dialect_name = getattr(getattr(conn, "dialect", None), "name", "")
 
     while True:
         if limit is not None and processed_total >= limit:
@@ -234,9 +258,21 @@ def _run_backfill(
                 continue
             rows_split += 1
             if apply:
-                conn.execute(_UPDATE_SQL, {"new": new_outputs, "tel": new_telemetry, "rid": row.id})
+                conn.execute(
+                    _UPDATE_SQL,
+                    {
+                        "new": _bind_json_param(new_outputs, dialect_name),
+                        "tel": _bind_json_param(new_telemetry, dialect_name),
+                        "rid": row.id,
+                    },
+                )
             elif len(sample) < 5:
                 sample.append(run_id)
+        # Commit each batch so a crash never rolls back already-backfilled rows
+        # (engine.connect() autobegins a transaction that would otherwise roll
+        # back silently on close).
+        if apply:
+            conn.commit()
         after_id = rows[-1].id
         if len(rows) < batch_limit:
             break
@@ -249,6 +285,40 @@ def _run_backfill(
         "skips": skips,
         "sample": sample,
     }
+
+
+def _backfill_with_engine(
+    engine: Any,
+    *,
+    apply: bool,
+    batch_size: int,
+    limit: int | None,
+    since: datetime | None,
+    until: datetime | None,
+) -> dict[str, Any]:
+    """Run the backfill on a single connection, rolling back on failure.
+
+    ``engine.connect()`` autobegins a transaction; without an explicit
+    ``rollback()`` here the failed connection would be closed mid-transaction.
+    Commits are per-batch inside ``_run_backfill``, so a mid-run failure keeps
+    every completed batch while discarding the in-flight one.
+    """
+    conn: Any = None
+    try:
+        with engine.connect() as connection:
+            conn = connection
+            return _run_backfill(
+                connection,
+                apply=apply,
+                batch_size=batch_size,
+                limit=limit,
+                since=since,
+                until=until,
+            )
+    except Exception:
+        if conn is not None:
+            conn.rollback()
+        raise
 
 
 def _print_summary(summary: dict[str, Any], out: TextIO) -> None:
@@ -317,15 +387,14 @@ def main() -> None:
         sys.exit(1)
     engine = create_engine(_resolve_db_url(raw))
     try:
-        with engine.connect() as conn:
-            summary = _run_backfill(
-                conn,
-                apply=args.apply,
-                batch_size=args.batch_size,
-                limit=args.limit,
-                since=args.since,
-                until=args.until,
-            )
+        summary = _backfill_with_engine(
+            engine,
+            apply=args.apply,
+            batch_size=args.batch_size,
+            limit=args.limit,
+            since=args.since,
+            until=args.until,
+        )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
