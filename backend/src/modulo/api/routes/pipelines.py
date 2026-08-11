@@ -155,6 +155,39 @@ async def _deny_hitl_gate(
     ) from None
 
 
+_RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
+_RETRY_POLICY_MAX_RETRIES = 5
+
+
+def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Validate a ``retry_policy`` payload, returning it unchanged.
+
+    ``None`` is accepted (treated as "no retry policy"). Raises ValueError with
+    a clear message when the policy shape is malformed.
+    """
+    if value is None:
+        return value
+    if not isinstance(value, dict):
+        raise ValueError(
+            "retry_policy must be an object like {'on': ['stall','timeout','failure'], 'max_retries': 0-5}"
+        )
+    on = value.get("on", [])
+    if not isinstance(on, list) or any(not isinstance(e, str) for e in on):
+        raise ValueError("retry_policy 'on' must be a list of strings from ['stall','timeout','failure']")
+    unknown = set(on) - _RETRY_POLICY_EVENTS
+    if unknown:
+        raise ValueError(
+            f"retry_policy 'on' contains unknown values {sorted(unknown)}; "
+            "allowed values are ['stall','timeout','failure']"
+        )
+    max_retries = value.get("max_retries", 0)
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int):
+        raise ValueError("retry_policy 'max_retries' must be an integer between 0 and 5")
+    if not 0 <= max_retries <= _RETRY_POLICY_MAX_RETRIES:
+        raise ValueError("retry_policy 'max_retries' must be an integer between 0 and 5")
+    return value
+
+
 class PipelineCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -178,6 +211,19 @@ class PipelineCreate(BaseModel):
             "Rate limit: {max_triggers: int, window_seconds: int, key_fields: [str], match_mode: 'exact'|'presence'}"
         ),
     )
+    retry_policy: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. "
+            "When a run ends in a configured state and retries remain, the run is "
+            "re-dispatched automatically instead of terminal-failing."
+        ),
+    )
+
+    @field_validator("retry_policy")
+    @classmethod
+    def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_retry_policy(value)
 
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> PipelineCreate:
@@ -218,10 +264,20 @@ class PipelineUpdate(BaseModel):
         None,
         description="Rate limit config. Set to {} to clear.",
     )
+    retry_policy: dict[str, Any] | None = Field(
+        None,
+        description="Retry policy: {on: [stall|timeout|failure], max_retries: 0-5}. Set to {} to clear.",
+    )
     graph_json: PipelineGraphUpdate | None = Field(
         None,
         description="Replace the pipeline graph (nodes + edges). Creates a new snapshot.",
     )
+
+    @field_validator("retry_policy", mode="before")
+    @classmethod
+    def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any]:
+        # None clears the policy (empty dict) — the column is non-nullable.
+        return _validate_retry_policy(value) or {}
 
     @field_validator("max_duration_seconds", mode="before")
     @classmethod
@@ -268,6 +324,7 @@ class PipelineResponse(BaseModel):
     max_duration_seconds: int | None = None
     stale_run_timeout_minutes: int = 30
     rate_limit_config: dict[str, Any] | None = None
+    retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     snapshot_count: int = 0
     archived_at: datetime | None = None
     owner_team_id: uuid.UUID | None = None
@@ -275,6 +332,13 @@ class PipelineResponse(BaseModel):
     created_by: uuid.UUID = Field(validation_alias="account_id")
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("retry_policy", mode="before")
+    @classmethod
+    def _coerce_retry_policy(cls, value: Any) -> dict[str, Any]:
+        # The column is non-nullable with a {} default, but legacy rows and
+        # partial ORM objects may expose None — the no-policy default is {}.
+        return value if isinstance(value, dict) else {}
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 
@@ -737,6 +801,10 @@ async def create_pipeline_endpoint(
                 stale_run_timeout_minutes=req.stale_run_timeout_minutes,
                 folder_id=req.folder_id,
             )
+            if req.retry_policy is not None:
+                # The model default ({}) applies when omitted; an explicit value
+                # is persisted on the returned ORM row within this transaction.
+                pipeline.retry_policy = req.retry_policy
     except ProgrammingError:
         logger.exception("routes.pipelines")
 

@@ -115,6 +115,98 @@
             />
           </div>
           <span class="mx-2 h-4 w-px bg-border" />
+          <div class="relative">
+            <button
+              ref="retryPolicyToggleRef"
+              :id="retryPolicyToggleId"
+              class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
+              @click="toggleRetryPolicy"
+              :aria-expanded="retryPolicyOpen"
+              aria-haspopup="dialog"
+              :aria-controls="retryPolicyPanelId"
+              data-testid="pipeline-editor-retry-policy-toggle"
+            >
+              {{ $t('views.PipelineEditorView.retry_policy') }}
+            </button>
+            <div
+              v-if="retryPolicyOpen"
+              :id="retryPolicyPanelId"
+              ref="retryPolicyPanelRef"
+              class="absolute right-0 top-full z-50 mt-1 w-72 rounded-lg border border-border bg-card p-3 shadow-lg"
+              role="dialog"
+              tabindex="-1"
+              :aria-label="$t('views.PipelineEditorView.retry_policy')"
+              data-testid="pipeline-editor-retry-policy-panel"
+            >
+              <div class="mb-1 text-xs font-medium text-foreground">{{ $t('views.PipelineEditorView.retry_policy') }}</div>
+              <div class="mb-2 text-[10px] text-muted-foreground">
+                {{ $t('views.PipelineEditorView.retry_policy_description') }}
+              </div>
+              <div class="space-y-1">
+                <label
+                  v-for="opt in retryPolicyOptions"
+                  :key="opt.value"
+                  class="flex min-h-6 items-center gap-2 text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    :value="opt.value"
+                    v-model="retryPolicyEvents"
+                    class="h-4 w-4"
+                    :data-testid="`pipeline-editor-retry-event-${opt.value}`"
+                  />
+                  {{ $t(opt.labelKey) }}
+                </label>
+              </div>
+              <div class="mt-3 flex items-center gap-2">
+                <label for="retry-policy-max" class="text-[10px] text-muted-foreground whitespace-nowrap">
+                  {{ $t('views.PipelineEditorView.max_retries') }}
+                </label>
+                <input
+                  id="retry-policy-max"
+                  v-model.number="retryPolicyMaxRetries"
+                  type="number"
+                  min="0"
+                  max="5"
+                  class="w-14 rounded border border-input bg-background px-1.5 py-1 text-xs"
+                  data-testid="pipeline-editor-retry-policy-max"
+                />
+              </div>
+              <div
+                v-if="retryPolicyNoRetriesWarning"
+                class="mt-2 text-xs text-warning"
+                role="alert"
+                data-testid="pipeline-editor-retry-policy-warning"
+              >
+                {{ retryPolicyNoRetriesWarning }}
+              </div>
+              <div
+                v-if="retryPolicyError"
+                class="mt-2 text-xs text-destructive"
+                role="alert"
+                data-testid="pipeline-editor-retry-policy-error"
+              >
+                {{ retryPolicyError }}
+              </div>
+              <div class="mt-3 flex justify-end gap-2">
+                <button
+                  class="rounded border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                  @click="closeRetryPolicy"
+                >
+                  {{ $t('views.PipelineEditorView.cancel') }}
+                </button>
+                <button
+                  class="rounded border border-input bg-primary px-2 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="retryPolicySaving"
+                  @click="saveRetryPolicy"
+                  data-testid="pipeline-editor-retry-policy-save"
+                >
+                  {{ retryPolicySaving ? $t('views.PipelineEditorView.saving') : $t('views.PipelineEditorView.save') }}
+                </button>
+              </div>
+            </div>
+          </div>
+          <span class="mx-2 h-4 w-px bg-border" />
           <button
             class="rounded-md border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent flex items-center gap-1"
             @click="addNode"
@@ -928,7 +1020,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, watch } from 'vue'
+import { ref, computed, reactive, watch, nextTick, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -953,6 +1046,7 @@ function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000
   return factory(ctrl.signal).finally(() => clearTimeout(timeout))
 }
 
+const { t } = useI18n()
 const planStore = usePlanStore()
 const route = useRoute()
 const router = useRouter()
@@ -1020,6 +1114,120 @@ watch(runPrompt, () => {
 })
 
 const maxDurationInput = ref<number | undefined>(undefined)
+
+const retryPolicyOpen = ref(false)
+const retryPolicySaving = ref(false)
+const retryPolicyEvents = ref<string[]>([])
+const retryPolicyMaxRetries = ref(0)
+const retryPolicyError = ref<string | null>(null)
+const retryPolicyToggleRef = ref<HTMLButtonElement | null>(null)
+const retryPolicyPanelRef = ref<HTMLElement | null>(null)
+const retryPolicyToggleId = 'pipeline-editor-retry-policy-toggle'
+const retryPolicyPanelId = 'pipeline-editor-retry-policy-panel'
+const retryPolicyOptions = [
+  { value: 'stall', labelKey: 'views.PipelineEditorView.retry_policy_stall' },
+  { value: 'timeout', labelKey: 'views.PipelineEditorView.retry_policy_timeout' },
+  { value: 'failure', labelKey: 'views.PipelineEditorView.retry_policy_failure' },
+]
+
+interface RetryPolicy {
+  on?: string[]
+  max_retries?: number
+  [key: string]: unknown
+}
+
+type PipelineRetryPolicySource = {
+  retry_policy?: RetryPolicy | null
+}
+
+const retryPolicyNoRetriesWarning = computed(() => {
+  if (retryPolicyEvents.value.length > 0 && (Number(retryPolicyMaxRetries.value) || 0) === 0) {
+    return t('views.PipelineEditorView.retry_policy_warning_no_max')
+  }
+  return null
+})
+
+function syncRetryPolicyFromPipeline() {
+  const rp = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
+  if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
+    const events = Array.isArray(rp.on)
+      ? rp.on.filter((e: string): e is string => ['stall', 'timeout', 'failure'].includes(e))
+      : []
+    retryPolicyEvents.value = events
+    const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
+    retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
+  } else {
+    retryPolicyEvents.value = []
+    retryPolicyMaxRetries.value = 0
+  }
+  retryPolicyError.value = null
+}
+
+function toggleRetryPolicy() {
+  retryPolicyOpen.value = !retryPolicyOpen.value
+  if (retryPolicyOpen.value) {
+    syncRetryPolicyFromPipeline()
+    nextTick(() => {
+      retryPolicyPanelRef.value?.focus()
+    })
+  } else {
+    retryPolicyToggleRef.value?.focus()
+  }
+}
+
+function closeRetryPolicy() {
+  retryPolicyOpen.value = false
+  retryPolicyToggleRef.value?.focus()
+}
+
+function onRetryPolicyKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && retryPolicyOpen.value) {
+    event.preventDefault()
+    closeRetryPolicy()
+  }
+}
+
+watch(retryPolicyOpen, (open) => {
+  if (open) {
+    document.addEventListener('keydown', onRetryPolicyKeydown)
+  } else {
+    document.removeEventListener('keydown', onRetryPolicyKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onRetryPolicyKeydown)
+})
+
+async function saveRetryPolicy() {
+  if (retryPolicySaving.value) return
+  retryPolicyError.value = null
+  const max = Math.min(5, Math.max(0, Number(retryPolicyMaxRetries.value) || 0))
+  const on = [...retryPolicyEvents.value]
+  if (on.length > 0 && max === 0) {
+    retryPolicyError.value = t('views.PipelineEditorView.retry_policy_warning_no_max')
+    return
+  }
+  const body: { retry_policy: RetryPolicy } = {
+    retry_policy: on.length > 0 ? { on, max_retries: max } : {},
+  }
+  retryPolicySaving.value = true
+  try {
+    await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body,
+      signal,
+    }))
+    await loadPipeline()
+    retryPolicyOpen.value = false
+    retryPolicyToggleRef.value?.focus()
+    saveGraphError.value = null
+  } catch (e) {
+    retryPolicyError.value = `${t('views.PipelineEditorView.retry_policy_update_failed')}${formatApiError(e)}`
+  } finally {
+    retryPolicySaving.value = false
+  }
+}
 
 const folders = ref<any[]>([])
 const linkedLifecycleMaps = ref<any[]>([])
@@ -1579,6 +1787,7 @@ async function loadPipeline() {
     }))
     pipeline.value = data as any
     maxDurationInput.value = (data as any)?.max_duration_seconds ?? undefined
+    syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = `Failed to load pipeline: ${formatApiError(e)}`
   }
