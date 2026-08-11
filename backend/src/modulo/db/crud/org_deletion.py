@@ -335,8 +335,8 @@ async def batch_delete_langgraph_checkpoints(
     Ages out checkpoint rows older than the run retention window (30 days),
     but ONLY for threads whose owning ``runs`` row is terminal — or whose run
     row is already gone (purged by the runs sweep, an orphaned thread). A live
-    run (``pending``/``running``/``awaiting_human``/``claimed``/
-    ``waiting_for_lock``) ALWAYS has a ``runs`` row (created at run creation),
+    run (``pending``/``running``/``awaiting_human``/``claimed``) ALWAYS has a
+    ``runs`` row (created at run creation),
     so the orphan branch never matches a live run. This is the load-bearing
     guard: an ``awaiting_human`` run paused >30 days at a HITL gate keeps its
     interrupt checkpoint, so ``resume_run`` on later approval resumes the graph

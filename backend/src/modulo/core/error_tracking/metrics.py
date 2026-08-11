@@ -173,7 +173,7 @@ async def sample_run_runtime_metrics(factory: Any) -> None:
     if _runs_running_gauge is None and _runs_stall_reason_total is None:
         init_runtime_metrics()
     try:
-        from sqlalchemy import func, select, text
+        from sqlalchemy import func, select
 
         from modulo.db.models.run import Run
 
@@ -181,14 +181,25 @@ async def sample_run_runtime_metrics(factory: Any) -> None:
             count_result = await session.execute(select(func.count()).select_from(Run).where(Run.status == "running"))
             running_count = int(count_result.scalar_one() or 0)
 
-            oldest_result = await session.execute(
-                text(
-                    "SELECT extract(epoch from (now() - MAX(started_at))) "
-                    "FROM runs WHERE status = 'running' AND started_at IS NOT NULL"
+            # Oldest-running age is computed in Python so the query compiles on
+            # both Postgres and SQLite. The former raw ``extract(epoch from
+            # (now() - MAX(started_at)))`` text query is Postgres-only and threw
+            # on SQLite every 60s dispatcher tick — only the broad except
+            # swallowed it. ``func.current_timestamp()`` returns a tz-aware
+            # value on Postgres and a naive value on SQLite, matching
+            # ``started_at`` on each dialect, so the subtraction never mixes
+            # aware/naive datetimes (see backend AGENTS.md lesson).
+            now_and_max = (
+                await session.execute(
+                    select(func.current_timestamp(), func.max(Run.started_at)).where(
+                        Run.status == "running", Run.started_at.isnot(None)
+                    )
                 )
-            )
-            oldest = oldest_result.scalar_one()
-            oldest_age: float | None = float(oldest) if oldest is not None else None
+            ).one()
+            now_value, max_started = now_and_max
+            oldest_age: float | None = None
+            if now_value is not None and max_started is not None:
+                oldest_age = (now_value - max_started).total_seconds()
 
             claim_rows = (await session.execute(select(Run.claim_count).where(Run.status == "running"))).scalars()
             claim_counts = list(claim_rows)

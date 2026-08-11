@@ -112,7 +112,6 @@ class AnalyticsStatus(StrEnum):
     RUNNING = "running"
     AWAITING_HUMAN = "awaiting_human"
     CLAIMED = "claimed"
-    WAITING_FOR_LOCK = "waiting_for_lock"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
