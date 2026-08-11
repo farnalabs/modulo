@@ -62,3 +62,9 @@ Feature: Team Gate Enforcement
     When I GET /api/v1/admin/costs
     Then the response status is 200
     And the response does not contain 402 error
+
+  Scenario: Anomalies accessible with cost breakdown but no spend limits
+    Given I have a license with cost breakdown but no spend limits
+    When I GET /api/v1/admin/costs/anomalies
+    Then the response status is 200
+    And the response does not contain 402 error
