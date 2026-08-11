@@ -17,7 +17,7 @@
       class="flex-1 min-w-0 overflow-auto bg-background relative"
       :style="remyDockedStyle"
     >
-      <div class="absolute top-0 left-0 right-0 z-10">
+      <div class="relative z-10">
         <OnboardingBanner />
       </div>
       <Breadcrumb class="px-6 pt-4 pb-3" />

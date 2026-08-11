@@ -167,5 +167,9 @@ onMounted(() => {
 
 <style scoped>
 .onboarding-banner {
+  /* In normal flow so it reserves vertical space instead of overlaying
+     the content below it (WCAG 2.5.8: interactive targets underneath must
+     not be partially obscured). Takes no space when inactive (v-if on root). */
+  position: relative;
 }
 </style>
