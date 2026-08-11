@@ -5,7 +5,8 @@ delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/admin_email.py
   - backend/src/modulo/core/email_service.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/admin/email-settings.feature
 unit-tests:
   - backend/tests/unit/api/test_admin_email.py
   - backend/tests/unit/core/test_email_service.py
@@ -32,6 +33,8 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 - [x] Test-send unexpected exception returns generic message (never leaks internals)
 - [x] Network failures (connection refused, timeout, DNS) retried then wrapped as `EmailSendingError`
 - [x] SMTP credentials redacted from error messages and logs (`********` replaces username/password)
+- [x] Configurable SMTP timeout — org-level `smtp_timeout` (default 30s, validated 1–120s, 422 outside range) used for SMTP connect/send; malformed values fall back to 30s
+- [x] SMTP password length limit — `smtp_password` max 256 chars enforced at the API (422 on exceed)
 - [ ] Email templates configuration
 - [ ] Per-organisation email branding
 
@@ -52,8 +55,8 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 - [x] Missing email settings returns 501 (ProgrammingError for missing DB table)
 - [x] SMTP auth failure redacts the configured username/password from the returned message (was leaking credentials in error message)
 - [x] Network-level failures (connection refused, timeout) are retried up to 3 attempts before raising `EmailSendingError` (was escaping uncaught as raw `OSError`)
-- [ ] SMTP server unreachable during test — timeout not configurable (fixed value 30s)
-- [ ] Large SMTP password — no length limit enforced
+- [x] SMTP timeout configurable per org (default 30s) — non-numeric/zero/oversized values clamped to the safe 30–120s range instead of crashing send
+- [x] Oversized SMTP password (>256 chars) rejected with 422 before any DB write
 - [ ] Concurrent PUT of email settings — last-write-wins on `settings_json`
 
 ## Security
@@ -66,13 +69,12 @@ Organisation-level SMTP email configuration for sending transactional emails. Se
 
 ## Known Gaps
 
-- **No BDD coverage** — no `.feature` file for the email settings endpoints.
-- **Timeout not configurable** — `send_email` hardcodes a 30-second SMTP timeout; no setting to override it.
-- **No password length limit** — large SMTP passwords are stored as-is without validation.
 - **Concurrent PUT is last-write-wins** — no optimistic locking on `settings_json` for email settings.
 - **SMTP password at rest** — stored in the plain `settings_json` JSON column; no encryption.
 - **Test-send relay abuse** — the endpoint sends mail to an arbitrary recipient address; no rate limiting or recipient allowlisting.
 
 ## QA History
+
+- 2026-08-11: improve-architecture: **RESOLVED 3 known gaps + added BDD coverage** (`core/email_service.py`, `api/routes/admin_email.py`, `settings.py`). (1) **Configurable SMTP timeout** — `send_email` no longer hardcodes 30s; it reads `settings.smtp_timeout` via a new `_effective_timeout()` helper (missing/non-numeric/zero/oversized values clamped to the safe 1–120s range, default 30). App-level `Settings.smtp_timeout` (env-configurable, `ge=1 le=120`) added, and the admin email-settings API now accepts/echoes a per-org `smtp_timeout` (stored in `settings_json.email.smtp_timeout`, validated 1–120 → 422 outside range), wired through the test-send path so a test email honours the configured timeout. (2) **SMTP password length limit** — `smtp_password` in `EmailSettingsUpdate` is capped at 256 chars (`max_length`); oversized passwords rejected with 422 before any DB write. (3) **BDD coverage** — new `email-settings.feature` (8 scenarios: get/put with timeout, timeout 0/121 → 422, 300-char password → 422, test-send success, test-send failure with descriptive message, viewer → 403) + `test_email_settings.py` step definitions (dedicated app wired to the router with ctx-driven mocked session + `get_organisation`/`update_organisation`/`send_email` patches). **Tests:** 4 new `test_email_service.py` (custom timeout forwarded to SMTP, missing-attr/invalid/zero/huge fallback+clamp) + 5 new `test_admin_email.py` (GET timeout default + stored echo, PUT timeout persisted, timeout 0/121 → 422, password >256 → 422, test-send passes configured timeout). 22/22 `test_email_service.py` + 18/18 `test_admin_email.py` + 8/8 email BDD scenarios + settings/worker-liveness/cost-report suites pass; ruff check + format clean, mypy --strict clean. Status: partial (no email templates/branding, concurrent PUT last-write-wins, password at rest unencrypted, test-send relay abuse remain).
 
 - 2026-08-10: improve-architecture: **RESOLVED 2 known gaps + hardened test-send route** (`core/email_service.py`, `api/routes/admin_email.py`). (1) `send_email` only caught `smtplib.SMTPException`, so network-level failures (connection refused, DNS, timeouts — all `OSError` subclasses) escaped uncaught: never retried, never wrapped in `EmailSendingError`, and the test-send route echoed the raw exception text to the client. The retry loop now catches `(smtplib.SMTPException, OSError)`, so transient network failures get up to 3 attempts and are always surfaced as `EmailSendingError`. (2) SMTP servers can echo the configured username/password in error responses; new `_redact_credentials()` scrubs both from the `EmailSendingError` message and all log extras (`email.send_retry`/`email.send_failed`). (3) The test-send route now returns a generic message for unexpected exceptions instead of echoing internal detail, and re-raises `asyncio.CancelledError`. **Tests:** 6 new unit tests in `test_email_service.py` (OSError retried+wrapped ×3 attempts, timeout retried+wrapped, transient-then-success, auth failure redacts username/password, password redacted in error message) + 3 new API tests in `test_admin_email.py` (test-send success, SMTP failure descriptive message, unexpected exception does not leak internals). 16/16 `test_email_service.py` + 13/13 `test_admin_email.py` + full error_tracking / worker_liveness / cost_report_scheduler suites pass; ruff check + format clean, mypy --strict clean. Status: partial (no BDD, timeout not configurable, no password length limit, concurrent PUT last-write-wins, password at rest unencrypted, test-send relay abuse remain).
