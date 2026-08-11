@@ -324,6 +324,55 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('11.4%') // spend up
   })
 
+  it('shows the no-prior-data fallback on stat cards whose delta_pct is null when a window is selected', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            period: {
+              days: 7,
+              metrics: {
+                total_runs: { current: 50, previous: 40, delta_pct: 25.0 },
+                active_pipelines: { current: 8, previous: 9, delta_pct: -11.1 },
+                run_counts_by_status: {
+                  running: { current: 0, previous: 0, delta_pct: null },
+                  awaiting_human: { current: 0, previous: 0, delta_pct: null },
+                  failed: { current: 5, previous: 3, delta_pct: 66.7 },
+                  idle: { current: 0, previous: 0, delta_pct: null },
+                },
+                eval_pass_rate: { current: 82.5, previous: 80.0, delta_pct: 3.1 },
+                spend: { current: 100.25, previous: 90.0, delta_pct: 11.4 },
+                tokens: { current: 15000, previous: 12000, delta_pct: 25.0 },
+                success_rate: { current: 85.0, previous: 80.0, delta_pct: 6.2 },
+                avg_duration_ms: { current: 1250.5, previous: 1300.0, delta_pct: -3.8 },
+              },
+            },
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    await wrapper.find('[data-testid="trend-toggle-7"]').trigger('click')
+    await flushPromises()
+    // running / awaiting_human / idle have delta_pct null -> muted em-dash
+    // fallback with the "no prior period data" tooltip; the rest keep arrows.
+    const fallbacks = wrapper.findAll('[data-testid="stat-no-baseline"]')
+    expect(fallbacks.length).toBe(3)
+    expect(fallbacks[0].attributes('title')).toBe('No prior period data')
+  })
+
+  it('does not render the no-prior-data fallback when no period data is present', async () => {
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="stat-no-baseline"]').exists()).toBe(false)
+  })
+
   it('shows error alert when fetch fails', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/dashboard/summary') return Promise.reject(new Error('Network error'))
@@ -439,6 +488,7 @@ describe('StatCard delta arrow', () => {
       },
     })
     expect(wrapper.text()).toContain('▼')
+    expect(wrapper.text()).toContain('-4')
     expect(wrapper.text()).toContain('50.0%')
   })
 
@@ -451,6 +501,7 @@ describe('StatCard delta arrow', () => {
       },
     })
     expect(wrapper.text()).toContain('▲')
+    expect(wrapper.text()).toContain('+4')
     expect(wrapper.text()).toContain('100.0%')
   })
 
@@ -463,6 +514,7 @@ describe('StatCard delta arrow', () => {
       },
     })
     expect(wrapper.text()).toContain('→')
+    expect(wrapper.text()).toContain('0')
     expect(wrapper.text()).toContain('0.0%')
   })
 
@@ -473,5 +525,70 @@ describe('StatCard delta arrow', () => {
     expect(wrapper.text()).not.toContain('%')
     expect(wrapper.text()).toContain('Total Runs')
     expect(wrapper.text()).toContain('8')
+  })
+
+  it('renders the muted no-baseline fallback when delta_pct is null and a label is provided', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Running',
+        value: 0,
+        delta: { current: 0, previous: 0, delta_pct: null },
+        noBaselineLabel: 'No prior period data',
+      },
+    })
+    const fallback = wrapper.find('[data-testid="stat-no-baseline"]')
+    expect(fallback.exists()).toBe(true)
+    // Flat arrow + absolute 0 — no relative % (there is no baseline to diff).
+    expect(fallback.text()).toContain('→')
+    expect(fallback.text()).toContain('0')
+    expect(fallback.attributes('title')).toBe('No prior period data')
+    expect(fallback.attributes('aria-label')).toBe('No prior period data')
+    expect(wrapper.text()).not.toContain('%')
+    expect(wrapper.text()).not.toContain('▲')
+    expect(wrapper.text()).not.toContain('▼')
+  })
+
+  it('renders the absolute delta with an accessible name when there is no prior-period baseline', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 788,
+        delta: { current: 788, previous: 0, delta_pct: null },
+        noBaselineLabel: 'No prior period data',
+      },
+    })
+    const fallback = wrapper.find('[data-testid="stat-no-baseline"]')
+    expect(fallback.exists()).toBe(true)
+    // Absolute change shown despite the % being a hyphen (no baseline).
+    expect(fallback.text()).toContain('▲')
+    expect(fallback.text()).toContain('+788')
+    // A11y: the em-dash/arrow alone is not a name — role=img + aria-label.
+    expect(fallback.attributes('role')).toBe('img')
+    expect(fallback.attributes('aria-label')).toBe('No prior period data')
+    expect(fallback.attributes('title')).toBe('No prior period data')
+    expect(wrapper.text()).not.toContain('%')
+  })
+
+  it('does not render a no-baseline fallback when only one of current/previous is a number', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Total Runs',
+        value: 788,
+        delta: { current: 788, previous: null, delta_pct: null },
+        noBaselineLabel: 'No prior period data',
+      },
+    })
+    expect(wrapper.find('[data-testid="stat-no-baseline"]').exists()).toBe(false)
+  })
+
+  it('does not render the no-baseline fallback when noBaselineLabel is undefined', () => {
+    const wrapper = mount(StatCard, {
+      props: {
+        label: 'Running',
+        value: 0,
+        delta: { current: 0, previous: 0, delta_pct: null },
+      },
+    })
+    expect(wrapper.find('[data-testid="stat-no-baseline"]').exists()).toBe(false)
   })
 })
