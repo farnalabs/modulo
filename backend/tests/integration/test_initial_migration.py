@@ -45,6 +45,15 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
         reads/writes, so the parity check ignores ``remove_index``/``add_index``.
       - column/table comments declared on ORM models but not mirrored in every
         migration — cosmetic, ignored via ``modify_comment``/``add_table_comment``.
+      - the LangGraph checkpoint tables (``checkpoints``, ``checkpoint_blobs``,
+        ``checkpoint_writes``, ``checkpoint_migrations``) — created and managed
+        entirely by ``ModuloPostgresSaver.setup()`` at runtime (raw SQL in
+        ``_MIGRATION_SQL``), deliberately NOT ORM models and NOT Alembic
+        migrations. ``compare_metadata`` always reports them as
+        ``remove_table``; ignored here.
+      - ``hitl_claims.decision_payload`` declared as generic ``JSON`` in the
+        ORM for SQLite/MariaDB parity while migration 0075 creates it as
+        ``JSONB`` on Postgres — a documented, deliberate divergence, ignored.
 
     Everything else (tables, columns, constraints, nullability, types, server
     defaults) must match exactly; a genuine drift item there fails the test.
@@ -60,7 +69,16 @@ async def test_migrated_schema_matches_orm_metadata(db_engine: AsyncEngine) -> N
         # kind at index 0. Normalise both before matching.
         inner = diff[0] if isinstance(diff, list) and diff else diff
         kind = inner[0] if isinstance(inner, (tuple, list)) and inner else None
-        return kind in ("remove_index", "add_index", "modify_comment", "add_table_comment")
+        if kind in ("remove_index", "add_index", "modify_comment", "add_table_comment"):
+            return True
+        if kind == "remove_table":
+            # Runtime-managed LangGraph checkpoint tables (ModuloPostgresSaver
+            # setup) — outside ORM metadata by design.
+            return inner[1].name in ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations")
+        if kind == "modify_type":
+            # ORM generic JSON for multi-backend parity vs migration JSONB.
+            return inner[2] == "hitl_claims" and inner[3] == "decision_payload"
+        return False
 
     real_drift = [d for d in differences if not _is_benign_migration_managed(d)]
     assert real_drift == [], (

@@ -41,6 +41,14 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_license_key="test-license-key",
+        # No real Redis in unit tests: the route caches the license status under
+        # ``license:{org_id}`` (60s TTL) and reads it back before touching the DB.
+        # With a live Redis the whole module shares one cache key, so a GET from
+        # one test short-circuits a later test's DB path (the in-process
+        # ``_current_license`` reset is not enough). An empty URL makes every
+        # cache read/write fail fast inside the route's ``except Exception``,
+        # keeping each test hermetic.
+        redis_url="",
     )
 
 
