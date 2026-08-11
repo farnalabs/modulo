@@ -82,7 +82,7 @@
               </span>
               <span class="text-xs text-muted-foreground">{{ summary.eval_pass_rate.total_evals }} {{ $t('views.DashboardView.total_evals') }}</span>
             </div>
-            <Sparkline class="mt-2 h-10 w-full" :data="evalSparklineData" color="var(--color-primary)" />
+            <Sparkline class="mt-2 h-10 w-full" :data="evalSparklineData" :labels="summaryTrendLabels" unit="%" color="var(--color-primary)" />
           </div>
           <div v-else class="flex items-center justify-center py-6 text-sm text-muted-foreground">{{ $t('views.DashboardView.no_eval_data_yet') }}</div>
         </router-link>
@@ -97,7 +97,7 @@
             </span>
           </div>
           <p class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
-          <Sparkline class="mt-2 h-10 w-full" :data="spendSparklineData" color="var(--color-warning)" />
+          <Sparkline class="mt-2 h-10 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="var(--color-warning)" />
         </router-link>
       </div>
 
@@ -177,15 +177,15 @@
         <div v-if="trendData.length > 1" class="space-y-4">
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.run_count') }}</p>
-            <Sparkline class="h-12 w-full" :data="trendRunCounts" color="var(--color-primary)" />
+            <Sparkline class="h-12 w-full" :data="trendRunCounts" :labels="trendLabels" :unit="$t('views.DashboardView.runs')" color="var(--color-primary)" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.eval_pass_rate_label') }}</p>
-            <Sparkline class="h-12 w-full" :data="trendEvalRates" color="var(--color-success)" />
+            <Sparkline class="h-12 w-full" :data="trendEvalRates" :labels="trendLabels" unit="%" color="var(--color-success)" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
-            <Sparkline class="h-12 w-full" :data="trendSpendData" color="var(--color-warning)" />
+            <Sparkline class="h-12 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="var(--color-warning)" />
           </div>
         </div>
         <div v-else class="flex items-center justify-center py-12">
@@ -314,6 +314,8 @@ const spendSparklineData = computed(() => {
   if (!summary.value?.trend) return []
   return summary.value.trend.map(d => d.token_spend_usd)
 })
+
+const summaryTrendLabels = computed(() => summary.value?.trend?.map(d => d.date) ?? [])
 
 // --- Rolling-window toggle (FAR-92 / FAR-115) ---
 const trendWindows: Array<{ labelKey: string; value: number | null }> = [
@@ -455,6 +457,7 @@ const trendData = computed(() => {
 const trendRunCounts = computed(() => trendData.value.map(d => d.run_count))
 const trendEvalRates = computed(() => trendData.value.map(d => d.eval_pass_rate ?? 0))
 const trendSpendData = computed(() => trendData.value.map(d => d.token_spend_usd))
+const trendLabels = computed(() => trendData.value.map(d => d.date))
 
 onMounted(async () => {
   // Restore the persisted window (FAR-115); default to 3d when nothing is stored.

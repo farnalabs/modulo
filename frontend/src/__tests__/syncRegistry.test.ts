@@ -54,4 +54,30 @@ describe('syncRegistry', () => {
     for (const h of getHandlers('run')) h(event)
     expect(handler).not.toHaveBeenCalled()
   })
+
+  it('deduplicates identical handler registrations', () => {
+    const handler = vi.fn()
+    registerHandler('run', handler)
+    registerHandler('run', handler)
+    expect(getHandlers('run').size).toBe(1)
+  })
+
+  it('returns a defensive copy from getHandlers', () => {
+    const handler = vi.fn()
+    registerHandler('run', handler)
+    const copy = getHandlers('run')
+    copy.delete(handler)
+    expect(getHandlers('run').size).toBe(1)
+  })
+
+  it('allows re-registration after unregister', () => {
+    const handler = vi.fn()
+    const unsub = registerHandler('run', handler)
+    unsub()
+    expect(getHandlers('run').size).toBe(0)
+    registerHandler('run', handler)
+    const event = makeEvent()
+    for (const h of getHandlers('run')) h(event)
+    expect(handler).toHaveBeenCalledWith(event)
+  })
 })

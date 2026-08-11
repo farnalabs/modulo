@@ -5,8 +5,8 @@ The migration upserts flags into ``feature_flag_catalog`` that the seed catalog
 to ``_KNOWN_FLAGS`` (or to ``catalog.FLAGS``) without updating the migration's
 ``_FLAGS`` dict, existing deployments seeded with ``ON CONFLICT DO NOTHING``
 never pick it up. This test keeps the migration's flag list in sync with the
-current head of the chain (0078_schema_folders, on top of
-0077_add_stalled_status) — so the head property holds against the
+current head of the chain (0079_schema_folders, on top of
+0078_run_daily_facts_telemetry_bytes) — so the head property holds against the
 current chain.
 """
 
@@ -25,8 +25,8 @@ _MIGRATION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / f"{_MIGRATION_NAME}.py"
 )
 
-_HEAD_MIGRATION_NAME = "0078_schema_folders"
 # The migration this branch introduces — the current head of the chain.
+_HEAD_MIGRATION_NAME = "0079_schema_folders"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
