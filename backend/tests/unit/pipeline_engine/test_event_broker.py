@@ -227,6 +227,33 @@ async def test_redis_publish_failure_is_logged(caplog: pytest.LogCaptureFixture)
     assert any("redis.publish_failed" in record.message for record in caplog.records)
 
 
+def test_publish_with_redis_broker_without_running_loop_skips_broadcast(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sync publish with a Redis broker must not raise RuntimeError when no
+    event loop is running — the fire-and-forget broadcast fails open with a log."""
+    redis = _FakeRedisBroker()
+    broker = RunEventBroker(uuid.uuid4(), redis_broker=redis)
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.event_broker"):
+        event = broker.publish("node_started", {"node_id": "a"})
+    assert event.seq == 1
+    assert redis.published == []
+    assert any("redis_broadcast_skipped" in record.message for record in caplog.records)
+
+
+def test_close_with_redis_broker_without_running_loop_skips_close(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sync close with a Redis broker must not raise RuntimeError when no
+    event loop is running."""
+    redis = _FakeRedisBroker()
+    broker = RunEventBroker(uuid.uuid4(), redis_broker=redis)
+    with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.event_broker"):
+        broker.close()
+    assert redis.close_count == 0
+    assert any("redis_close_skipped" in record.message for record in caplog.records)
+
+
 async def test_log_redis_error_noop_on_successful_task(caplog: pytest.LogCaptureFixture) -> None:
     async def _ok() -> int:
         return 1

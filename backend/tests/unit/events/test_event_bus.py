@@ -8,6 +8,7 @@ singleton, and configure_event_bus broker swapping — all without a DB or Redis
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -191,6 +192,18 @@ async def test_redis_broadcast_propagates_cancellation() -> None:
 async def test_redis_broadcast_if_configured_noop_without_broker(bus: EventBus) -> None:
     bus._redis_broadcast_if_configured("org-1", {"type": "run"})
     assert not eb._background_tasks
+
+
+def test_redis_broadcast_without_running_loop_skips_broadcast(caplog: pytest.LogCaptureFixture) -> None:
+    """A sync call site with no running loop must not raise RuntimeError —
+    the best-effort Redis broadcast fails open with a log."""
+    broker = AsyncMock()
+    bus = EventBus(redis_broker=broker)
+    with caplog.at_level(logging.WARNING, logger="modulo.core.events.event_bus"):
+        bus._redis_broadcast_if_configured("org-1", {"type": "run"})
+    broker.publish.assert_not_awaited()
+    assert not eb._background_tasks
+    assert any("event_bus.redis_broadcast_skipped" in record.message for record in caplog.records)
 
 
 async def test_publish_broadcasts_to_redis_when_configured() -> None:
