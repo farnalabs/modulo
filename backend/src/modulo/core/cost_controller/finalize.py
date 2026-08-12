@@ -39,6 +39,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,6 +65,13 @@ from modulo.core.cost_controller.breakdown.params import (
     build_telemetry,
 )
 from modulo.core.lifecycle_map.advancement import advance_journeys
+from modulo.core.lifecycle_map.reconcile import (
+    record_journey_advance,
+    record_journey_finalise_attempt,
+    record_journey_parse_failure,
+    record_self_report_refs_capped,
+    record_unmatched_self_report_refs,
+)
 from modulo.core.lifecycle_map.self_report import (
     parse_self_report_refs,
     validate_and_normalise_reported_refs,
@@ -78,6 +86,7 @@ from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
+from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -93,6 +102,13 @@ __all__ = [
 _UNION_SIZE_GUARDRAIL_BYTES = 8 * 1024 * 1024
 
 _LEGACY_E2B_RATE_DEFAULT = Decimal("0.13")
+
+# FAR-143 journey-fact writer labels — the finalize write path that drove the
+# journey hook (persisted per (run, writer) in ``modulo_journey_facts`` and
+# carried as the ``writer`` metric label).
+_WRITER_LIVE = "live"
+_WRITER_FALLBACK = "fallback"
+_WRITER_EARLY_RETURN = "early_return"
 
 
 def _e2b_rate() -> Decimal:
@@ -574,7 +590,7 @@ async def _fallback_write(
             await record_run_facts(session, run)
             # FAR-143 — the LEGACY FALLBACK terminal also advances journeys
             # (fail-open, own savepoint).
-            await _advance_journeys_on_terminal(session, run, status, merged_outputs)
+            await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_FALLBACK)
 
 
 def _is_abort_error(exc: Exception) -> bool:
@@ -866,11 +882,56 @@ def _merge_effective_refs(
     return effective[:100]
 
 
+async def _record_journey_fact(
+    session: AsyncSession,
+    run: Run,
+    writer: str,
+    parse_failures: int,
+    finalise_attempts: int,
+) -> None:
+    """Persist the per-writer journey denominators (``modulo_journey_facts``).
+
+    FAIL-OPEN in its own savepoint: a fact-write failure must never fail the
+    journey advance (outer savepoint) or the terminal write. The upsert is
+    ``INSERT ... ON CONFLICT (run_id, writer) DO UPDATE`` — a re-finalization
+    corrects the fact in place (idempotent).
+    """
+    try:
+        async with session.begin_nested():
+            stmt = pg_insert(JourneyFact).values(
+                id=uuid.uuid4(),
+                organisation_id=run.organisation_id,
+                run_id=run.id,
+                writer=writer,
+                parse_failures=parse_failures,
+                finalise_attempts=finalise_attempts,
+            )
+            update_cols = {
+                "parse_failures": stmt.excluded.parse_failures,
+                "finalise_attempts": stmt.excluded.finalise_attempts,
+            }
+            await session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[JourneyFact.run_id, JourneyFact.writer],
+                    set_=update_cols,
+                )
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "cost_finalize.journey_fact_write_failed",
+            extra={"run_id": str(run.id), "writer": writer},
+            exc_info=True,
+        )
+
+
 async def _advance_journeys_on_terminal(
     session: AsyncSession,
     run: Run,
     status: str,
     merged_outputs: dict[str, Any],
+    writer: str = _WRITER_LIVE,
 ) -> None:
     """FAR-143 finalise hook — self-report confirm + journey advancement.
 
@@ -885,10 +946,20 @@ async def _advance_journeys_on_terminal(
     ``eval_failed`` / ``cancelled``); ``advance_journeys`` internally decides
     advancing vs mint-only from it. ``merged_outputs`` is the merged output set
     the finalize path is about to persist (or already persisted) — self-report
-    refs are parsed from it. The run row is refreshed first so the advance sees
-    the just-written terminal ``status`` / ``completed_at`` even when the
-    status write went through the raw fenced UPDATE (which bypasses the ORM
-    identity map).
+    refs are parsed from it. ``writer`` is the finalize write path that drove
+    this hook (``live`` / ``fallback`` / ``early_return``) — it labels the
+    per-writer parse-failure counters and the persisted
+    ``modulo_journey_facts`` denominator. The run row is refreshed first so the
+    advance sees the just-written terminal ``status`` / ``completed_at`` even
+    when the status write went through the raw fenced UPDATE (which bypasses
+    the ORM identity map).
+
+    Besides advancing, the hook records the FAR-143 observability counters and
+    the persisted denominators: the self-report entries attempted
+    (``finalise_attempts`` = ``len(raw)``), the malformed ones
+    (``parse_failures`` = ``counters["malformed"]``), the cap drops
+    (``counters["capped"]``) and the advisory refs that matched no existing
+    journey (``len(reported) - len(confirmed)``).
     """
     try:
         async with session.begin_nested():
@@ -900,7 +971,7 @@ async def _advance_journeys_on_terminal(
             if confirmed:
                 run.work_item_refs = effective
                 await session.flush()
-            await advance_journeys(
+            advanced = await advance_journeys(
                 session,
                 run.organisation_id,
                 run_id=run.id,
@@ -912,10 +983,21 @@ async def _advance_journeys_on_terminal(
                 is_replay=bool(run.is_replay),
                 variant_group_id=run.variant_group_id,
             )
+            record_journey_advance(advanced)
+            unmatched = max(len(reported) - len(confirmed), 0)
+            if counters["malformed"]:
+                record_journey_parse_failure(writer, counters["malformed"])
+            if counters["capped"]:
+                record_self_report_refs_capped(counters["capped"])
+            if unmatched:
+                record_unmatched_self_report_refs(unmatched)
+            record_journey_finalise_attempt(writer, len(raw))
+            await _record_journey_fact(session, run, writer, counters["malformed"], len(raw))
             _log.info(
                 "cost_finalize.journey_advanced",
                 extra={
                     "run_id": str(run.id),
+                    "writer": writer,
                     "parsed": counters["valid"],
                     "confirmed": len(confirmed),
                     "malformed": counters["malformed"],
@@ -998,7 +1080,7 @@ async def finalize_cost(
             await record_run_facts(session, run)
             # FAR-143 — even with empty outputs the run still advances from its
             # create-stamped refs (zero-cost terminal).
-            await _advance_journeys_on_terminal(session, run, status, merged_outputs)
+            await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_EARLY_RETURN)
         return
 
     # --- the never-fail envelope: component read + build + run write (§1.5) ---
@@ -1087,7 +1169,7 @@ async def finalize_cost(
         # FAR-143 — self-report confirm + journey advancement (fail-open, own
         # savepoint). Also covers the reduced-escape terminal (its fresh-tx
         # status write is committed before we get here).
-        await _advance_journeys_on_terminal(session, run, status, merged_outputs)
+        await _advance_journeys_on_terminal(session, run, status, merged_outputs, writer=_WRITER_LIVE)
 
 
 async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:

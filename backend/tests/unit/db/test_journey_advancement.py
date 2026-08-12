@@ -739,6 +739,73 @@ class TestFinalizeCostWiring:
         assert any("journey_advance_failed" in m for m in caplog.messages)
 
 
+class TestJourneyFactsDenominators:
+    """FAR-143 part 4 — the finalise hook records per-writer denominators + metrics."""
+
+    async def test_hook_records_per_writer_fact(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        await _seed_journey_by_kind(session, "github_pr", "456")
+        captured: dict[str, Any] = {}
+
+        async def _fake_fact(
+            session_: Any, run_: Any, writer: str, parse_failures: int, finalise_attempts: int
+        ) -> None:
+            captured.update(writer=writer, parse_failures=parse_failures, finalise_attempts=finalise_attempts)
+
+        monkeypatch.setattr(
+            "modulo.core.cost_controller.finalize._record_journey_fact",
+            _fake_fact,
+        )
+        merged = {
+            "node1": {
+                "work_item_refs": [
+                    {"kind": "github_pr", "ref": "#456", "status": "done"},
+                    {"kind": "", "ref": "broken"},
+                    "not-a-dict",
+                ]
+            }
+        }
+        await _advance_journeys_on_terminal(session, run, "complete", merged, writer="fallback")
+
+        # 3 raw self-report entries attempted; 2 malformed (bad kind + non-dict).
+        assert captured["writer"] == "fallback"
+        assert captured["parse_failures"] == 2
+        assert captured["finalise_attempts"] == 3
+
+    async def test_metric_counters_wired(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        await _seed_journey_by_kind(session, "github_pr", "456")
+        advance = MagicMock()
+        parse_failure = MagicMock()
+        finalise_attempt = MagicMock()
+        capped = MagicMock()
+        unmatched = MagicMock()
+        for name, mock in (
+            ("record_journey_advance", advance),
+            ("record_journey_parse_failure", parse_failure),
+            ("record_journey_finalise_attempt", finalise_attempt),
+            ("record_self_report_refs_capped", capped),
+            ("record_unmatched_self_report_refs", unmatched),
+        ):
+            monkeypatch.setattr(f"modulo.core.cost_controller.finalize.{name}", mock)
+        merged = {
+            "node1": {
+                "work_item_refs": [
+                    {"kind": "github_pr", "ref": "#456", "status": "done"},  # confirmed (journey exists)
+                    {"kind": "github_pr", "ref": "#789", "status": "done"},  # unmatched (no journey)
+                    {"kind": "", "ref": "broken"},  # malformed
+                ]
+            }
+        }
+        await _advance_journeys_on_terminal(session, run, "complete", merged, writer="live")
+
+        advance.assert_called_once_with(2)  # create-stamped #123 + confirmed #456
+        parse_failure.assert_called_once_with("live", 1)
+        finalise_attempt.assert_called_once_with("live", 3)
+        capped.assert_not_called()
+        unmatched.assert_called_once_with(1)
+
+
 class _FakeAsyncResult:
     def __init__(self, row: object | None = None) -> None:
         self._row = row

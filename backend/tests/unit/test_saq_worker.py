@@ -82,6 +82,7 @@ class TestFunctionsWiring:
         assert "retention_cleanup" in names
         assert "webhook_dedup_cleanup" in names
         assert "stale_run_recovery" in names
+        assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
 
     def test_system_cron_knobs_explicit(self) -> None:
@@ -95,6 +96,7 @@ class TestFunctionsWiring:
             "stale_run_recovery",
             "cost_probe",
             "analytics_facts_maintenance",
+            "journey_reconcile",
             "check_missed_fire_alerts_cron",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
@@ -120,6 +122,15 @@ class TestFunctionsWiring:
         assert mf.heartbeat == 30
         assert mf.ttl == 300
         assert mf.unique is True
+        # journey_reconcile: hourly (bounded + idempotent — overlapping ticks
+        # cannot double-advance), unique so ticks cannot interleave.
+        jr = jobs["journey_reconcile"]
+        assert jr.cron == "0 * * * *"
+        assert jr.timeout == 300
+        assert jr.retries == 2
+        assert jr.heartbeat == 30
+        assert jr.ttl == 300
+        assert jr.unique is True
 
     def test_settings_after_process_and_metadata(self) -> None:
         with patch.object(sw, "get_settings", return_value=_settings()):
@@ -1049,6 +1060,24 @@ class TestSystemJobDelegates:
 
         assert result == {"maintained": 4}
         maint.assert_awaited_once_with(factory)
+
+    @pytest.mark.asyncio
+    async def test_journey_reconcile_delegates(self) -> None:
+        """journey_reconcile opens a system session and runs the sweep."""
+        factory, session = _make_retention_factory()
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch(
+                "modulo.core.lifecycle_map.reconcile.reconcile_journeys",
+                new_callable=AsyncMock,
+                return_value=7,
+            ) as reconcile,
+        ):
+            result = await sw.journey_reconcile({})
+
+        assert result == {"advanced": 7}
+        reconcile.assert_awaited_once()
+        assert reconcile.await_args.args[0] is session
 
     @pytest.mark.asyncio
     async def test_check_missed_fire_alerts_cron_delegates_and_logs(self, caplog: pytest.LogCaptureFixture) -> None:
