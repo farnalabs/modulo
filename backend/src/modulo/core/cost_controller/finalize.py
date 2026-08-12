@@ -82,6 +82,7 @@ from modulo.core.node_output_split import (
     split_node_output,
 )
 from modulo.db.crud.run import update_run_status
+from modulo.db.models.agent import Agent
 from modulo.db.models.cost_component import CostComponent
 from modulo.db.models.journey import Journey
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -109,6 +110,11 @@ _LEGACY_E2B_RATE_DEFAULT = Decimal("0.13")
 _WRITER_LIVE = "live"
 _WRITER_FALLBACK = "fallback"
 _WRITER_EARLY_RETURN = "early_return"
+
+# FAR-104 — per-agent token budget enforcement (spec §4.9 / PRD error table).
+_BUDGET_EXCEEDED_STATUS = "budget_exceeded"
+_BUDGET_EXCEEDED_ERROR_CODE = "budget_exceeded"
+_BUDGET_EXCEEDED_MESSAGE = "This run exceeded its token budget."
 
 
 def _e2b_rate() -> Decimal:
@@ -434,6 +440,51 @@ def derive_node_type_map(graph_json: Any) -> dict[str, str]:
         if isinstance(node, dict) and node.get("id"):
             result[str(node["id"])] = node.get("node_type") or ""
     return result
+
+
+def derive_node_agent_map(graph_json: Any) -> dict[str, str]:
+    """Derive ``{node_id: agent_id}`` from a snapshot's ``graph_json``.
+
+    Edge-synthesized HITL gate nodes carry no ``agent_id`` and are simply
+    absent from the map (they never contribute agent-scoped token usage).
+    """
+    result: dict[str, str] = {}
+    if not isinstance(graph_json, dict):
+        return result
+    nodes = graph_json.get("nodes")
+    if not isinstance(nodes, list):
+        return result
+    for node in nodes:
+        if isinstance(node, dict) and node.get("id") and node.get("agent_id"):
+            result[str(node["id"])] = str(node["agent_id"])
+    return result
+
+
+def _accumulate_agent_tokens(
+    usage: dict[str, Any] | None,
+    node_agent_map: dict[str, str],
+) -> dict[str, int]:
+    """Sum per-agent accumulated tokens across the run's nodes (FAR-104).
+
+    Tokens are the SERVER-measured entries from the enriched union — the same
+    authority ``_derive_total_tokens`` uses. Each node's ``total_tokens`` is
+    attributed to its node's agent (nodes without an ``agent_id`` — HITL gates,
+    sandbox-only nodes — contribute nothing). Returns ``{agent_id: tokens}``.
+    """
+    per_agent: dict[str, int] = {}
+    for node_id, entry in (usage or {}).items():
+        agent_id = node_agent_map.get(str(node_id))
+        if agent_id is None:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        tt = entry.get("total_tokens")
+        if isinstance(tt, (int, float)) and not isinstance(tt, bool):
+            tokens = int(tt)
+        else:
+            tokens = int(entry.get("input_tokens") or 0) + int(entry.get("output_tokens") or 0)
+        per_agent[agent_id] = per_agent.get(agent_id, 0) + tokens
+    return per_agent
 
 
 async def load_live_components(session: AsyncSession, org_id: uuid.UUID) -> list[CostComponentConfig]:
@@ -1121,6 +1172,15 @@ async def finalize_cost(
         breakdown, total = build_cost_breakdown(telemetry, live_components, settings=get_settings())
         enriched = _write_back_node_cost(enriched, per_node_cost)
         total_tokens = _derive_total_tokens(enriched)
+        # FAR-104 — per-agent token budget enforcement (TERMINAL-ONLY, atomic).
+        # Runs AFTER the run's token usage is derived (SERVER-measured entries)
+        # and BEFORE the status write, so the ``budget_exceeded`` status +
+        # error message land in the SAME ``update_run_status`` call. Cancelled
+        # (CANCEL-WINS) and eval_failed (the eval gate outcome) are preserved.
+        if is_terminal and status not in ("cancelled", "eval_failed"):
+            budget_override = await _enforce_agent_token_budgets(session, run=run, usage=enriched)
+            if budget_override is not None:
+                status, error_code, error_detail = budget_override
         if len(str(enriched).encode("utf-8")) > _UNION_SIZE_GUARDRAIL_BYTES:
             _log.warning(
                 "cost_union.size_guardrail",
@@ -1145,6 +1205,13 @@ async def finalize_cost(
     except Exception:
         _log.exception("cost_component_finalize_failed", extra={"run_id": str(run_id)})
         record_fallback_legacy()
+        # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
+        # inside the never-fail fallback envelope: an agent-budget breach still
+        # terminalizes ``budget_exceeded`` even when the component build failed.
+        if is_terminal and status not in ("cancelled", "eval_failed"):
+            budget_override = await _enforce_agent_token_budgets(session, run=run, usage=merged_usage)
+            if budget_override is not None:
+                status, error_code, error_detail = budget_override
         await _fallback_write(
             session,
             run_id,
@@ -1204,6 +1271,78 @@ async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> 
     result = await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
     graph_json = result.scalar_one_or_none()
     return extend_node_type_map_from_edges(derive_node_type_map(graph_json), graph_json)
+
+
+async def _load_node_agent_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:
+    """Derive the run-frozen node→agent map from the snapshot's ``graph_json``.
+
+    FAR-104 per-agent token budget enforcement reads the run's snapshot graph
+    (immutable per snapshot) to attribute each node's SERVER-measured token
+    usage to its agent. Edge-synthesized HITL gate nodes carry no ``agent_id``
+    and are absent from the map.
+    """
+    result = await session.execute(select(PipelineSnapshot.graph_json).where(PipelineSnapshot.id == snapshot_id))
+    return derive_node_agent_map(result.scalar_one_or_none())
+
+
+async def _enforce_agent_token_budgets(
+    session: AsyncSession,
+    *,
+    run: Run,
+    usage: dict[str, Any] | None,
+) -> tuple[str, str, str] | None:
+    """FAR-104: per-agent token budget enforcement at finalization.
+
+    Returns an ``(status, error_code, error_detail)`` override tuple when ANY
+    agent referenced by the run's snapshot graph has accumulated more tokens
+    across its nodes than its ``token_budget``, else ``None``.
+
+    The check runs in the TERMINAL path AFTER the run's token usage has been
+    derived (from the enriched union / merged usage — the SERVER-measured
+    entries, the same authority ``_derive_total_tokens`` uses). The caller
+    writes the returned terminal override (``budget_exceeded`` + the PRD error
+    message) atomically in the SAME ``update_run_status`` call that persists
+    the finalization — never a second write.
+
+    FAIL-OPEN with a log: a budget-check DB failure (agent lookup / snapshot
+    read) returns ``None`` and does NOT fail the terminal path — finalization
+    must survive (the never-fail envelope, §1.5).
+    """
+    try:
+        node_agent_map = await _load_node_agent_map(session, run.snapshot_id)
+        agent_ids = {agent_id for agent_id in node_agent_map.values() if agent_id}
+        if not agent_ids:
+            return None
+        agent_result = await session.execute(select(Agent.id, Agent.token_budget).where(Agent.id.in_(agent_ids)))
+        budgets: dict[str, int] = {}
+        for agent_id, token_budget in agent_result.all():
+            if token_budget is not None:
+                budgets[str(agent_id)] = int(token_budget)
+        if not budgets:
+            return None
+        per_agent = _accumulate_agent_tokens(usage, node_agent_map)
+        for agent_id, budget in budgets.items():
+            if per_agent.get(agent_id, 0) > budget:
+                _log.warning(
+                    "cost_ledger.token_budget_exceeded",
+                    extra={
+                        "run_id": str(run.id),
+                        "agent_id": agent_id,
+                        "accumulated_tokens": per_agent.get(agent_id, 0),
+                        "token_budget": budget,
+                    },
+                )
+                return _BUDGET_EXCEEDED_STATUS, _BUDGET_EXCEEDED_ERROR_CODE, _BUDGET_EXCEEDED_MESSAGE
+        return None
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "cost_finalize.token_budget_check_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None
 
 
 async def finalize_cancelled_run(session: AsyncSession, *, run_id: uuid.UUID, org_id: uuid.UUID) -> None:

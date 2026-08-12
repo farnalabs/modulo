@@ -32,41 +32,93 @@ def _store_response(request: Any, ctx: dict[str, Any], resp: Any) -> None:
 
 
 # ===========================================================================
-# Token budget (not yet implemented — future scope)
+# Token budget (FAR-104 — per-agent hard stop via the cost controller)
 # ===========================================================================
+
+
+def _enforce_token_budget(tokens: int, ctx: dict[str, Any]) -> None:
+    """Drive ``_enforce_agent_token_budgets`` with a mocked session (the
+    established cost-controller BDD pattern: real enforcement, mocked DB).
+
+    The run's snapshot graph maps one node to the agent under test; the mocked
+    agent row carries the budget recorded by the ``Given`` step. The override
+    tuple (status, error_code, error_detail) is stored in ``ctx`` for the
+    ``Then`` assertions.
+    """
+    import asyncio
+
+    from modulo.core.cost_controller.finalize import _enforce_agent_token_budgets
+
+    agent_id = ctx["agent_id"]
+    node_id = ctx["node_id"]
+    budget = ctx["token_budget"]
+
+    graph_json = {"nodes": [{"id": node_id, "agent_id": str(agent_id)}]}
+    usage = {node_id: {"input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens}}
+
+    mock_session = AsyncMock()
+    graph_result = MagicMock()
+    graph_result.scalar_one_or_none.return_value = graph_json
+    agent_result = MagicMock()
+    agent_result.all.return_value = [(agent_id, budget)]
+
+    run = MagicMock()
+    run.id = uuid.uuid4()
+    run.snapshot_id = uuid.uuid4()
+
+    mock_session.execute = AsyncMock(side_effect=[graph_result, agent_result])
+
+    loop = asyncio.new_event_loop()
+    try:
+        override = loop.run_until_complete(_enforce_agent_token_budgets(mock_session, run=run, usage=usage))
+        if override is None:
+            ctx["token_override_status"] = None
+            ctx["token_override_error_code"] = None
+            ctx["token_override_error_detail"] = None
+        else:
+            ctx["token_override_status"], ctx["token_override_error_code"], ctx["token_override_error_detail"] = (
+                override
+            )
+    finally:
+        loop.close()
 
 
 @given(
     parsers.parse('agent "{agent_name}" has a token budget of {budget:d} tokens'),
 )
-def agent_has_token_budget(agent_name: str, budget: int) -> None:
-    pytest.skip("Per-agent token budget enforcement is not yet implemented")
+def agent_has_token_budget(agent_name: str, budget: int, ctx: dict[str, Any]) -> None:
+    ctx["agent_name"] = agent_name
+    ctx["agent_id"] = uuid.uuid4()
+    ctx["node_id"] = f"node-{agent_name}"
+    ctx["token_budget"] = budget
 
 
-@given('a run is in progress for agent "{agent_name}"')
-def run_in_progress_for_agent(agent_name: str) -> None:
-    pytest.skip("Per-agent token budget enforcement is not yet implemented")
+@given(parsers.parse('a run is in progress for agent "{agent_name}"'))
+def run_in_progress_for_agent(agent_name: str, ctx: dict[str, Any]) -> None:
+    assert ctx.get("agent_name") == agent_name, f"Expected agent {agent_name!r}, got {ctx.get('agent_name')!r}"
 
 
 @when(
     parsers.parse("the run accumulates {tokens:d} tokens"),
 )
-def run_accumulates_tokens(tokens: int) -> None:
-    pytest.skip("Per-agent token budget enforcement is not yet implemented")
+def run_accumulates_tokens(tokens: int, ctx: dict[str, Any]) -> None:
+    _enforce_token_budget(tokens, ctx)
 
 
 @then(
     parsers.parse('the run transitions to "{state}" terminal state'),
 )
-def run_transitions_to(state: str) -> None:
-    pytest.skip("Per-agent token budget enforcement is not yet implemented")
+def run_transitions_to(state: str, ctx: dict[str, Any]) -> None:
+    actual = ctx.get("token_override_status")
+    assert actual == state, f"Expected terminal state {state!r}, got {actual!r}"
 
 
 @then(
     parsers.parse('the error message is "{message}"'),
 )
-def error_message_is(message: str) -> None:
-    pytest.skip("Per-agent token budget enforcement is not yet implemented")
+def error_message_is(message: str, ctx: dict[str, Any]) -> None:
+    actual = ctx.get("token_override_error_detail")
+    assert actual == message, f"Expected error message {message!r}, got {actual!r}"
 
 
 # ===========================================================================

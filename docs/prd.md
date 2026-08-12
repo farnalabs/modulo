@@ -1304,7 +1304,7 @@ Token usage is captured via the LangGraph→OTel callback handler (§5.6). The `
 
 1. On `on_llm_end`: extract `prompt_tokens` + `completion_tokens` from usage metadata. Look up the model's per-token cost from `config/model_pricing.yaml` using the `model_id` stored in `PipelineSnapshot.model_backend_pins_json`. Compute incremental cost.
 2. Accumulate `total_tokens` and `total_cost_usd` in the run record (incremental DB update — not at run end).
-3. After each accumulation: check per-agent `token_budget`. If exceeded → abort the current LangGraph node via exception → run transitions to `budget_exceeded` terminal state.
+3. After each accumulation: check per-agent `token_budget`. If exceeded → the run transitions to `budget_exceeded` terminal state with error message "This run exceeded its token budget." (enforced in the cost controller's finalization path — the run's accumulated tokens across all of an agent's nodes are summed against the agent's `token_budget`).
 4. After each accumulation: check per-run `run_budget`. Same abort path.
 5. After each accumulation: check per-trigger `daily_spend_limit`. If exceeded → mark trigger as `daily_limit_reached` (no new runs today); notify admin; this run continues (the limit applies to future runs, not the in-flight run that pushed it over).
 
