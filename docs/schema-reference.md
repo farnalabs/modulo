@@ -40,11 +40,11 @@ and run-time.
 
 ## JSON Schema usage
 
-Schema definitions follow [JSON Schema draft-07](https://json-schema.org/):
+Schema definitions follow [JSON Schema Draft 2020-12](https://json-schema.org/):
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema#",
   "type": "object",
   "required": ["title", "description"],
   "properties": {
@@ -80,7 +80,7 @@ Modulo can auto-generate schemas from sample data via `POST /api/v1/schemas/infe
 ```json
 {
   "connector_instance_id": "<uuid>",
-  "sample_query": {"path": "/issues?limit=5"}
+  "sample_query": {"resource": "issues", "limit": 5}
 }
 ```
 
