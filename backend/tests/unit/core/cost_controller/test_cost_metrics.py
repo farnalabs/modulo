@@ -60,15 +60,29 @@ def fake_meter() -> _FakeMeter:
     return _FakeMeter()
 
 
+_ALL_HANDLE_NAMES = (
+    "_eval_errors_total",
+    "_clamped_total",
+    "_out_of_band_high_total",
+    "_settings_warning_total",
+    "_fallback_legacy_total",
+    "_ledger_clamped_total",
+    "_ledger_refused_clamped_total",
+    "_finalize_deferred_total",
+    "_limit_refused_total",
+    "_duplicate_terminal_total",
+    "_probe_mismatch_runs_total",
+    "_probe_total_eq_mismatch_total",
+    "_probe_clamped_skip_total",
+    "_probe_missing_ledger_row_total",
+    "_probe_last_success_ts",
+    "_schema_drift_total",
+)
+
+
 @pytest.fixture(autouse=True)
 def _reset_handles(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "_eval_errors_total",
-        "_clamped_total",
-        "_out_of_band_high_total",
-        "_settings_warning_total",
-        "_probe_last_success_ts",
-    ):
+    for name in _ALL_HANDLE_NAMES:
         monkeypatch.setattr(metrics, name, None)
 
 
@@ -185,3 +199,156 @@ def test_ensure_early_return_when_handles_initialised(monkeypatch: pytest.Monkey
     assert len(fake_meter.counters) == 15
     assert len(fake_meter.gauges) == 1
     assert metrics._eval_errors_total is fake_meter.counters[0]
+
+
+# ---------------------------------------------------------------------------
+# record_* ledger + probe counters and the gauge — with a live meter
+# ---------------------------------------------------------------------------
+
+
+def test_record_fallback_legacy_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_fallback_legacy()
+    counter = fake_meter.counter("modulo_cost_components_fallback_legacy_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._fallback_legacy_total is counter
+
+
+def test_record_ledger_clamped_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_ledger_clamped()
+    counter = fake_meter.counter("modulo_cost_ledger_clamped_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._ledger_clamped_total is counter
+
+
+def test_record_ledger_refused_clamped_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_ledger_refused_clamped()
+    counter = fake_meter.counter("modulo_cost_ledger_refused_clamped_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._ledger_refused_clamped_total is counter
+
+
+def test_record_finalize_deferred_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_finalize_deferred("write_failure", "team-a")
+    counter = fake_meter.counter("modulo_cost_ledger_finalize_deferred_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": {"reason": "write_failure", "team": "team-a"}}]
+    assert metrics._finalize_deferred_total is counter
+
+
+def test_record_limit_refused_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_limit_refused("team-a")
+    counter = fake_meter.counter("modulo_cost_ledger_limit_refused_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": {"team": "team-a"}}]
+    assert metrics._limit_refused_total is counter
+
+
+def test_record_duplicate_terminal_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_duplicate_terminal()
+    counter = fake_meter.counter("modulo_cost_ledger_duplicate_terminal_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._duplicate_terminal_total is counter
+
+
+def test_record_probe_mismatch_runs_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_mismatch_runs()
+    metrics.record_probe_mismatch_runs(3)
+    counter = fake_meter.counter("modulo_cost_probe_mismatch_runs_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}, {"value": 3, "attributes": None}]
+    assert metrics._probe_mismatch_runs_total is counter
+
+
+def test_record_probe_total_eq_mismatch_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_total_eq_mismatch()
+    counter = fake_meter.counter("modulo_cost_probe_total_eq_mismatch_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._probe_total_eq_mismatch_total is counter
+
+
+def test_record_probe_clamped_skip_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_clamped_skip()
+    metrics.record_probe_clamped_skip(2)
+    counter = fake_meter.counter("modulo_cost_probe_clamped_skip_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}, {"value": 2, "attributes": None}]
+    assert metrics._probe_clamped_skip_total is counter
+
+
+def test_record_probe_missing_ledger_row_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_probe_missing_ledger_row()
+    metrics.record_probe_missing_ledger_row(5)
+    counter = fake_meter.counter("modulo_cost_probe_missing_ledger_row_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}, {"value": 5, "attributes": None}]
+    assert metrics._probe_missing_ledger_row_total is counter
+
+
+def test_set_probe_last_success_ts_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.set_probe_last_success_ts(1712345678.5)
+    gauge = fake_meter.gauge("modulo_cost_probe_last_success_ts")
+    assert gauge is not None
+    assert gauge.values == [1712345678.5]
+    assert metrics._probe_last_success_ts is gauge
+
+
+def test_record_schema_drift_live(monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter) -> None:
+    _stub_meter(monkeypatch, fake_meter)
+    metrics.record_schema_drift()
+    counter = fake_meter.counter("modulo_cost_opencode_schema_drift_total")
+    assert counter is not None
+    assert counter.calls == [{"value": 1, "attributes": None}]
+    assert metrics._schema_drift_total is counter
+
+
+# ---------------------------------------------------------------------------
+# record_*/set_* ledger + probe with no meter — silent no-op
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_record_functions_noop_without_meter(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_meter(monkeypatch, None)
+    metrics.record_fallback_legacy()
+    metrics.record_ledger_clamped()
+    metrics.record_ledger_refused_clamped()
+    metrics.record_finalize_deferred("write_failure", "team-a")
+    metrics.record_limit_refused("team-a")
+    metrics.record_duplicate_terminal()
+    assert metrics._fallback_legacy_total is None
+    assert metrics._ledger_clamped_total is None
+    assert metrics._ledger_refused_clamped_total is None
+    assert metrics._finalize_deferred_total is None
+    assert metrics._limit_refused_total is None
+    assert metrics._duplicate_terminal_total is None
+
+
+def test_probe_record_functions_noop_without_meter(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_meter(monkeypatch, None)
+    metrics.record_probe_mismatch_runs()
+    metrics.record_probe_total_eq_mismatch()
+    metrics.record_probe_clamped_skip()
+    metrics.record_probe_missing_ledger_row()
+    metrics.set_probe_last_success_ts(1.0)
+    metrics.record_schema_drift()
+    assert metrics._probe_mismatch_runs_total is None
+    assert metrics._probe_total_eq_mismatch_total is None
+    assert metrics._probe_clamped_skip_total is None
+    assert metrics._probe_missing_ledger_row_total is None
+    assert metrics._probe_last_success_ts is None
+    assert metrics._schema_drift_total is None
