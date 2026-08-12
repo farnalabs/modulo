@@ -1,4 +1,9 @@
-"""Error ingestion service — fingerprinting, batch ingest, HMAC session key store."""
+"""Error ingestion service — fingerprinting, batch ingest, HMAC session key store.
+
+Also owns the FAR-151 per-signal ingestion writers, seeded default alert rules
+(§15.6), the fire-once retry-alert guard and ``alert_resolved`` lifecycle events
+(§15.5), all feeding the single AlertEngine evaluator (§15.8).
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ import logging
 import os
 import re
 import secrets
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -19,6 +25,7 @@ if TYPE_CHECKING:
 from redis.asyncio import Redis as AsyncRedis
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.error_tracking.alerting import AlertEngine
 from modulo.core.error_tracking.forwarders import get_forwarder
@@ -28,7 +35,12 @@ from modulo.db.crud.error_tracking import (
     get_error_group_by_fingerprint,
     upsert_error_group,
 )
+from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
+from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.system_config import SystemConfig
+from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -39,6 +51,105 @@ _HMAC_KEY_TTL = 3600
 # Module-level alert engine (lazy-initialised)
 _alert_engine: AlertEngine | None = None
 _alert_engine_lock = asyncio.Lock()
+
+
+async def _get_alert_engine(redis_client: Any = None) -> AlertEngine:
+    """Return the module-level singleton AlertEngine (lazy-init, lock-guarded).
+
+    The first caller's redis client wins — later callers share the same engine.
+    """
+    global _alert_engine
+    if _alert_engine is not None:
+        return _alert_engine
+    async with _alert_engine_lock:
+        if _alert_engine is None:
+            _alert_engine = AlertEngine(redis_client=redis_client)
+    return _alert_engine
+
+
+# ---------------------------------------------------------------------------
+# Per-signal ingestion (FAR-151 §15.8) + seeded default rules (§15.6)
+# ---------------------------------------------------------------------------
+
+SIGNAL_AGENT_FAILED = "agent.failed"
+SIGNAL_AGENT_NOOP = "agent.no_op"
+SIGNAL_AGENT_STALL = "agent.stall"
+SIGNAL_CONTRACT_SCHEMA = "contract.schema"
+
+# Harness/sandbox/connector transient error classes are ingested with
+# ``signal = error_code`` (fingerprint ``{error_code}:{pipeline_id}``), so their
+# signal set is dynamic — seeded rules cover the fixed signals below.
+DEFAULT_SIGNALS: tuple[str, ...] = (
+    SIGNAL_AGENT_FAILED,
+    SIGNAL_AGENT_NOOP,
+    SIGNAL_AGENT_STALL,
+    SIGNAL_CONTRACT_SCHEMA,
+)
+
+SEEDED_DEFAULTS_VERSION_KEY = "seeded_defaults_version"
+SEEDED_DEFAULTS_VERSION = 1
+
+# (signal, name, level, action_type) — seeded rows carry ``is_default=true`` and
+# are user-editable; a version-bump re-seed force-updates only never-edited rows.
+DEFAULT_ALERT_RULES: list[dict[str, str]] = [
+    {"signal": SIGNAL_AGENT_FAILED, "name": "Agent failed", "level": "critical", "action_type": "in_app"},
+    {
+        "signal": SIGNAL_AGENT_NOOP,
+        "name": "Agent produced no output",
+        "level": "warning",
+        "action_type": "in_app",
+    },
+    {"signal": SIGNAL_AGENT_STALL, "name": "Agent stalled", "level": "warning", "action_type": "in_app"},
+    {
+        "signal": SIGNAL_CONTRACT_SCHEMA,
+        "name": "Contract schema violation",
+        "level": "warning",
+        "action_type": "in_app",
+    },
+]
+
+_FIRE_ONCE_TTL_SECONDS = 7 * 24 * 3600  # superseder chain time-box is 24h; 7d is generous
+_FIRE_ONCE_KEY_PREFIX = "alert_fire_once"
+_fire_once_memory: dict[str, float] = {}
+
+
+def signal_fingerprint(signal: str, pipeline_id: uuid.UUID | None) -> str:
+    """STABLE per-signal fingerprint: SHA-256 of ``{signal}:{pipeline_id}``.
+
+    ``run_id`` never enters the fingerprint — it lives in the event context — so
+    windowed rules (``min_count > 1``) keep counting across retries of the same
+    signal+pipeline (FAR-151 §15.8).
+    """
+    raw = f"{signal}:{pipeline_id}" if pipeline_id is not None else signal
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def _create_signal_event(
+    session: Any,
+    *,
+    org_id: Any,
+    fingerprint: str,
+    level: str,
+    message: str,
+    signal: str,
+    context_json: dict[str, Any] | None,
+    environment: str | None,
+) -> ErrorEvent:
+    """Persist one per-signal ErrorEvent (the new signal writer)."""
+    event = ErrorEvent(
+        organisation_id=org_id,
+        fingerprint=fingerprint,
+        level=level,
+        message=message,
+        source="saq",
+        signal=signal,
+        context_json=context_json,
+        environment=environment,
+    )
+    session.add(event)
+    await session.flush()
+    return event
+
 
 # SAQ retry-storm detection (plan F1 probe 6 / F3a): claims beyond the FIRST are
 # re-claims; past this threshold a run is in a retry storm worth alerting on.
@@ -79,13 +190,7 @@ class ErrorIngestionService:
         return hashlib.sha256(raw.encode()).hexdigest()
 
     async def _ensure_alert_engine(self) -> AlertEngine:
-        global _alert_engine
-        if _alert_engine is not None:
-            return _alert_engine
-        async with _alert_engine_lock:
-            if _alert_engine is None:
-                _alert_engine = AlertEngine(redis_client=self._redis)
-        return _alert_engine
+        return await _get_alert_engine(self._redis)
 
     async def ingest(
         self,
@@ -295,6 +400,391 @@ async def _dispatch_forwarders(
                 "dispatch_forwarders.failed",
                 extra={"type": type_name, "org_id": str(org_id)},
             )
+
+
+# ---------------------------------------------------------------------------
+# Per-signal ingestion writers + retry-alert compensation (FAR-151 §15.5/15.8)
+#
+# * :func:`emit_signal_event` — the new per-signal writer. Creates an
+#   ErrorEvent with a STABLE fingerprint per (signal, pipeline_id) and feeds the
+#   single AlertEngine evaluator.
+# * :func:`emit_retry_deferred_alert` — fire-once-per-(run_group, signal)
+#   deferred critical for a retry cancelled by supersession.
+# * :func:`emit_alert_resolved` — ``alert_resolved`` lifecycle event when a
+#   superseding run terminalizes success (a moot critical never stays open).
+# ---------------------------------------------------------------------------
+
+
+async def emit_signal_event(
+    session: Any,
+    org_id: Any,
+    *,
+    signal: str,
+    pipeline_id: uuid.UUID | None,
+    message: str,
+    level: str,
+    environment: str | None = None,
+    run_id: str | None = None,
+    run_group_id: uuid.UUID | None = None,
+    attempt_n: int | None = None,
+    elevation_signal: str | None = None,
+    redis_client: Any = None,
+) -> dict[str, Any]:
+    """Ingest a per-signal run event (new writer) and evaluate alert rules.
+
+    The ErrorEvent carries ``signal`` and a STABLE fingerprint per
+    (signal, pipeline_id); ``run_id`` lives in the event context, never the
+    fingerprint, so windowed rules (``min_count > 1``) keep firing across
+    retries. Signal-keyed rules (``rule.signal`` set) fire only when their
+    signal matches; legacy level-based rules keep matching by level.
+    """
+    fp = signal_fingerprint(signal, pipeline_id)
+    event = await _create_signal_event(
+        session,
+        org_id=org_id,
+        fingerprint=fp,
+        level=level,
+        message=message,
+        signal=signal,
+        context_json={
+            "signal": signal,
+            "run_id": run_id,
+            "run_group_id": str(run_group_id) if run_group_id is not None else None,
+            "attempt_n": attempt_n,
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+        },
+        environment=environment,
+    )
+    existing = await get_error_group_by_fingerprint(session=session, org_id=org_id, fingerprint=fp)
+    group = await upsert_error_group(
+        session=session,
+        org_id=org_id,
+        fingerprint=fp,
+        level=level,
+        sample_event_id=event.id,
+    )
+    record_error_ingest(level, "saq", environment)
+
+    try:
+        engine = await _get_alert_engine(redis_client)
+        alerts = await engine.evaluate(
+            org_id=org_id,
+            session=session,
+            error_group_id=group.id,
+            fingerprint=fp,
+            level=level,
+            count=group.count,
+            environment=environment,
+            signal=signal,
+            run_id=run_id,
+            elevation_signal=elevation_signal,
+            attempt_n=attempt_n,
+            run_group_id=run_group_id,
+        )
+        if alerts:
+            await engine.dispatch_all(org_id=org_id, alerts=alerts, session=session, error_group=group)
+    except Exception:
+        _log.exception("error_tracking.signal_alert_evaluation_failed signal=%s", signal)
+
+    return {"group_id": str(group.id), "is_new": existing is None}
+
+
+async def _fire_once_allowed(redis_client: Any, org_id: Any, run_group_id: Any, signal: str) -> bool:
+    """Atomic check-and-mark: the deferred retry critical fires ONCE per (run_group, signal).
+
+    ``SET NX EX`` is both the check and the mark, so concurrent emitters in a
+    superseded chain cannot double-fire. On a Redis failure the guard FAILS OPEN
+    (returns True so the alert fires) — a fire-once guard must never suppress a
+    real alert because Redis is down. Without Redis, falls back to an in-memory
+    dict (debug mode).
+    """
+    key = f"{_FIRE_ONCE_KEY_PREFIX}:{org_id}:{run_group_id}:{signal}"
+    if redis_client is not None:
+        try:
+            return bool(await redis_client.set(key, "1", nx=True, ex=_FIRE_ONCE_TTL_SECONDS))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("error_tracking.fire_once_redis_failed signal=%s", signal)
+            return True
+    now = time.monotonic()
+    if key in _fire_once_memory and now - _fire_once_memory[key] < _FIRE_ONCE_TTL_SECONDS:
+        return False
+    _fire_once_memory[key] = now
+    return True
+
+
+async def emit_retry_deferred_alert(
+    session: Any,
+    org_id: Any,
+    *,
+    run_id: str,
+    run_group_id: Any,
+    signal: str,
+    pipeline_id: uuid.UUID | None,
+    message: str,
+    attempt_n: int,
+    reason: str,
+    environment: str | None = None,
+    redis_client: Any = None,
+) -> bool:
+    """Fire the deferred critical for a retry cancelled by supersession.
+
+    Fires ONCE per (run_group, signal) with ``attempt_n`` + ``reason`` — the
+    fire-once guard prevents re-fire across a superseded chain. Returns True
+    when the alert was emitted, False when a previous emission in the same
+    run_group+signal window already fired it.
+    """
+    if not await _fire_once_allowed(redis_client, org_id, run_group_id, signal):
+        _log.debug(
+            "error_tracking.retry_deferred_alert_suppressed",
+            extra={"signal": signal, "run_group_id": str(run_group_id)},
+        )
+        return False
+    fp = signal_fingerprint(signal, pipeline_id)
+    event = await _create_signal_event(
+        session,
+        org_id=org_id,
+        fingerprint=fp,
+        level="critical",
+        message=message,
+        signal=signal,
+        context_json={
+            "run_id": run_id,
+            "run_group_id": str(run_group_id),
+            "attempt_n": attempt_n,
+            "reason": reason,
+            "elevation_signal": signal,
+            "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+        },
+        environment=environment,
+    )
+    group = await upsert_error_group(
+        session=session,
+        org_id=org_id,
+        fingerprint=fp,
+        level="critical",
+        sample_event_id=event.id,
+    )
+    record_error_ingest("critical", "saq", environment)
+    try:
+        engine = await _get_alert_engine(redis_client)
+        alerts = await engine.evaluate(
+            org_id=org_id,
+            session=session,
+            error_group_id=group.id,
+            fingerprint=fp,
+            level="critical",
+            count=group.count,
+            environment=environment,
+            signal=signal,
+            run_id=run_id,
+            elevation_signal=signal,
+            attempt_n=attempt_n,
+            run_group_id=run_group_id,
+        )
+        if alerts:
+            await engine.dispatch_all(org_id=org_id, alerts=alerts, session=session, error_group=group)
+    except Exception:
+        _log.exception("error_tracking.retry_deferred_alert_evaluation_failed signal=%s", signal)
+    return True
+
+
+async def emit_alert_resolved(
+    session: Any,
+    org_id: Any,
+    *,
+    signal: str,
+    group_id: Any,
+    reason: str,
+) -> None:
+    """Emit an ``alert_resolved`` lifecycle event for an earlier critical now moot.
+
+    Looks up the org's rule for *signal* to find its delivery webhook (if any)
+    and records the resolution in-app. Best-effort: never propagates (the
+    superseding-run terminalization path must not fail on a notification).
+    """
+    from modulo.core.error_tracking.alert_dispatcher import dispatch_alert_resolved
+
+    webhook_url: str | None = None
+    try:
+        rule_result = await session.execute(
+            select(ErrorNotificationRule).where(
+                ErrorNotificationRule.organisation_id == org_id,
+                ErrorNotificationRule.signal == signal,
+            )
+        )
+        rule = rule_result.scalar_one_or_none()
+        if rule is not None:
+            webhook_url = rule.webhook_url
+    except Exception:
+        _log.exception("error_tracking.alert_resolved_rule_lookup_failed signal=%s", signal)
+    try:
+        await dispatch_alert_resolved(
+            org_id=org_id,
+            group_id=group_id,
+            signal=signal,
+            reason=reason,
+            session=session,
+            webhook_url=webhook_url,
+        )
+    except Exception:
+        _log.exception("error_tracking.alert_resolved_dispatch_failed signal=%s", signal)
+
+
+# ---------------------------------------------------------------------------
+# Seeded default alert rules + tombstones (FAR-151 §15.6)
+#
+# Settings row ``seeded_defaults_version`` (a SystemConfig key) triggers the
+# re-seed. The upsert is keyed by (org_id, signal): it adds missing signals and
+# never touches edited (``is_default=false``) or tombstoned rows. A version bump
+# force-updates only rows still ``is_default=true``. ``deleted_defaults`` is the
+# tombstone: restore-defaults skips tombstoned signals; a per-rule restore
+# clears the tombstone so a re-seed re-adds the rule.
+# ---------------------------------------------------------------------------
+
+
+async def seed_default_alert_rules_for_org(session: AsyncSession, org_id: Any) -> int:
+    """Upsert the default alert rules for *org_id* (idempotent).
+
+    Caller must be inside ``session.begin()`` — RLS context is set here.
+    Returns the number of rows seeded/force-updated.
+    """
+    await set_rls_org(session, org_id)
+    tomb_result = await session.execute(select(DeletedDefault.signal).where(DeletedDefault.organisation_id == org_id))
+    tombstoned = {row[0] for row in tomb_result.all()}
+
+    seeded = 0
+    for spec in DEFAULT_ALERT_RULES:
+        signal = spec["signal"]
+        if signal in tombstoned:
+            continue
+        rule_result = await session.execute(
+            select(ErrorNotificationRule).where(
+                ErrorNotificationRule.organisation_id == org_id,
+                ErrorNotificationRule.signal == signal,
+            )
+        )
+        rule = rule_result.scalar_one_or_none()
+        if rule is None:
+            session.add(
+                ErrorNotificationRule(
+                    organisation_id=org_id,
+                    name=spec["name"],
+                    enabled=True,
+                    condition_level=spec["level"],
+                    condition_min_count=1,
+                    condition_window_seconds=0,
+                    action_type=spec["action_type"],
+                    webhook_url=None,
+                    cooldown_seconds=300,
+                    signal=signal,
+                    is_default=True,
+                )
+            )
+            seeded += 1
+        elif rule.is_default:
+            # Version bump: force-update only never-edited default rows.
+            rule.name = spec["name"]
+            rule.condition_level = spec["level"]
+            rule.action_type = spec["action_type"]
+            seeded += 1
+    return seeded
+
+
+async def seed_default_alert_rules(factory: Any) -> int:
+    """Seed default alert rules for every org, gated on ``seeded_defaults_version``.
+
+    Org enumeration runs in SYSTEM CONTEXT (no RLS); ``set_rls_org`` applies
+    only inside each per-org transaction. The marker is bumped to the current
+    version only after every org has been visited, so a partial failure retries
+    on the next boot.
+    """
+    async with factory() as session, session.begin():
+        marker_result = await session.execute(
+            select(SystemConfig).where(SystemConfig.key == SEEDED_DEFAULTS_VERSION_KEY)
+        )
+        marker = marker_result.scalar_one_or_none()
+        if marker is not None:
+            try:
+                current_version = int(marker.value)
+            except (TypeError, ValueError):
+                current_version = 0
+            if current_version >= SEEDED_DEFAULTS_VERSION:
+                return 0
+        org_result = await session.execute(select(Organisation.id).order_by(Organisation.created_at))
+        org_ids = [row[0] for row in org_result.all()]
+
+    seeded = 0
+    for org_id in org_ids:
+        try:
+            async with factory() as session, session.begin():
+                seeded += await seed_default_alert_rules_for_org(session, org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("error_tracking.seed_defaults_org_failed org=%s", org_id)
+
+    async with factory() as session, session.begin():
+        marker_result = await session.execute(
+            select(SystemConfig).where(SystemConfig.key == SEEDED_DEFAULTS_VERSION_KEY)
+        )
+        marker = marker_result.scalar_one_or_none()
+        if marker is None:
+            session.add(SystemConfig(key=SEEDED_DEFAULTS_VERSION_KEY, value=SEEDED_DEFAULTS_VERSION))
+        else:
+            marker.value = SEEDED_DEFAULTS_VERSION
+
+    return seeded
+
+
+async def tombstone_default_rule(session: AsyncSession, org_id: Any, signal: str) -> None:
+    """Mark *signal*'s default rule as deleted so restore-defaults skips it.
+
+    Caller must be inside ``session.begin()``. Idempotent.
+    """
+    await set_rls_org(session, org_id)
+    existing = await session.execute(
+        select(DeletedDefault).where(
+            DeletedDefault.organisation_id == org_id,
+            DeletedDefault.signal == signal,
+        )
+    )
+    if existing.scalar_one_or_none() is None:
+        session.add(DeletedDefault(organisation_id=org_id, signal=signal))
+
+
+async def clear_default_rule_tombstone(session: AsyncSession, org_id: Any, signal: str) -> bool:
+    """Per-rule restore: clear *signal*'s tombstone so a re-seed re-adds the rule.
+
+    Caller must be inside ``session.begin()``. Returns True when a tombstone
+    was removed.
+    """
+    await set_rls_org(session, org_id)
+    existing = await session.execute(
+        select(DeletedDefault).where(
+            DeletedDefault.organisation_id == org_id,
+            DeletedDefault.signal == signal,
+        )
+    )
+    row = existing.scalar_one_or_none()
+    if row is None:
+        return False
+    session.delete(row)
+    return True
+
+
+async def restore_default_alert_rules_for_org(session: AsyncSession, org_id: Any) -> int:
+    """Restore deleted default rules: clear ALL tombstones, then re-seed.
+
+    Caller must be inside ``session.begin()``. Returns the number of rules
+    (re)seeded.
+    """
+    await set_rls_org(session, org_id)
+    tombstones = await session.execute(select(DeletedDefault).where(DeletedDefault.organisation_id == org_id))
+    for row in tombstones.scalars().all():
+        session.delete(row)
+    return await seed_default_alert_rules_for_org(session, org_id)
 
 
 # ---------------------------------------------------------------------------

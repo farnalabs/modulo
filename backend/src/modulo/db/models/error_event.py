@@ -27,3 +27,9 @@ class ErrorEvent(OrgScoped):
     version: Mapped[str | None] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="new")
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Per-signal ingestion marker (FAR-151, §15.8): ``agent.failed``,
+    # ``agent.no_op``, ``agent.stall``, ``contract.schema``, or a
+    # harness/sandbox/connector error class. NULL for legacy events. The
+    # fingerprint stays stable per (signal, pipeline_id); run_id lives in
+    # ``context_json``, never in the fingerprint.
+    signal: Mapped[str | None] = mapped_column(String(100))
