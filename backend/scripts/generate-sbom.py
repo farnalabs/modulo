@@ -1,6 +1,6 @@
 """CycloneDX SBOM generator for Modulo releases.
 
-Parses Python (uv.lock) and JavaScript (package-lock.json) dependency files
+Parses Python (uv.lock) and JavaScript (pnpm-lock.yaml) dependency files
 and produces a CycloneDX v1.5 JSON SBOM.
 
 Usage:
@@ -10,9 +10,12 @@ Usage:
 
 import argparse
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+
+import yaml
 
 try:
     import tomllib
@@ -54,22 +57,29 @@ def parse_uv_lock(lock_path: Path) -> list[dict]:
     return sorted(components, key=lambda c: c["name"].lower())
 
 
-def parse_package_lock(lock_path: Path) -> list[dict]:
+def parse_pnpm_lock(lock_path: Path) -> list[dict]:
     with lock_path.open(encoding="utf-8") as f:
-        data = json.load(f)
+        data = yaml.safe_load(f) or {}
 
     components = []
     for key, info in data.get("packages", {}).items():
-        if not key:
+        if not key or not isinstance(info, dict):
             continue
 
         version = info.get("version", "")
-        if not version:
-            continue
+        key_without_peers = key.split("(", 1)[0].strip()
 
-        segments = key.split("node_modules/")
-        name = segments[-1]
-        if not name:
+        if "node_modules/" in key_without_peers:
+            name = key_without_peers.split("node_modules/")[-1]
+        else:
+            match = re.match(r"^(.*?)@([^@]+)$", key_without_peers)
+            if match:
+                name, version_from_key = match.group(1), match.group(2)
+                name, version = name.strip(), version or version_from_key
+            else:
+                name = key_without_peers
+
+        if not name or not version:
             continue
 
         purl = f"pkg:npm/{name}@{version}"
@@ -84,9 +94,7 @@ def parse_package_lock(lock_path: Path) -> list[dict]:
                     "identity": {
                         "field": "purl",
                         "confidence": 1.0,
-                        "methods": [
-                            {"technique": "manifest-analysis", "confidence": 1.0, "value": "package-lock.json"}
-                        ],
+                        "methods": [{"technique": "manifest-analysis", "confidence": 1.0, "value": "pnpm-lock.yaml"}],
                     }
                 },
             }
@@ -151,10 +159,10 @@ def main():
         python_components = parse_uv_lock(uv_lock_path)
 
     # Parse JavaScript dependencies
-    package_lock_path = repo_root / "frontend" / "package-lock.json"
+    pnpm_lock_path = repo_root / "frontend" / "pnpm-lock.yaml"
     js_components = []
-    if package_lock_path.exists():
-        js_components = parse_package_lock(package_lock_path)
+    if pnpm_lock_path.exists():
+        js_components = parse_pnpm_lock(pnpm_lock_path)
 
     all_components = python_components + js_components
     timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
