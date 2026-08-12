@@ -132,7 +132,7 @@ class NpmConnector(ConnectorBase):
         resp.raise_for_status()
         body = resp.json()
         objects = body.get("objects", [])
-        records = [o.get("package", o) for o in objects]
+        records = [o.get("package", {}) for o in objects]
 
         total = body.get("total", len(records))
         next_cursor = None

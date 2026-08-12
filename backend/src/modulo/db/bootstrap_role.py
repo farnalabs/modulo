@@ -34,7 +34,7 @@ import logging
 import os
 import secrets
 import sys
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 import asyncpg  # type: ignore[import-untyped]  # asyncpg does not publish a py.typed marker
 
@@ -231,8 +231,26 @@ async def _assert_role_posture(conn: asyncpg.Connection, app_user: str) -> None:
         raise RuntimeError("Break-glass role posture assertion FAILED:\n  " + "\n  ".join(violations))
 
 
+def _asyncpg_admin_connect(admin_url: str) -> tuple[str, bool | str]:
+    """Build the asyncpg DSN + ssl arg from the SQLAlchemy admin URL.
+
+    asyncpg.connect() rejects SQLAlchemy-only query params (e.g. ``sslmode``)
+    in the DSN, but stripping the query string wholesale drops TLS
+    requirements — extract ``sslmode`` and hand it to connect() via ``ssl``.
+    """
+    dsn = admin_url.replace("postgresql+asyncpg://", "postgres://")
+    parts = urlparse(dsn)
+    ssl: bool | str = False
+    if parts.query:
+        for item in parts.query.split("&"):
+            key, _, value = item.partition("=")
+            if key == "sslmode" and value in {"require", "verify-ca", "verify-full"}:
+                ssl = value
+    return urlunparse((parts.scheme, parts.netloc, parts.path, "", "", "")), ssl
+
+
 async def _bootstrap(admin_url: str, app_url: str) -> None:
-    admin_conn_str = admin_url.replace("postgresql+asyncpg://", "postgres://").split("?")[0]
+    admin_conn_str, admin_ssl = _asyncpg_admin_connect(admin_url)
     app_user = _parse_role(app_url)
     app_pass = _parse_password(app_url)
 
@@ -240,7 +258,7 @@ async def _bootstrap(admin_url: str, app_url: str) -> None:
     bg_user = _parse_role(bg_url) or _BREAK_GLASS_ROLE
     bg_pass = _parse_password(bg_url) or secrets.token_urlsafe(24)
 
-    conn = await asyncpg.connect(admin_conn_str, ssl=False)
+    conn = await asyncpg.connect(admin_conn_str, ssl=admin_ssl)
     try:
         # Idempotent role creation — skips if already exists.
         await _create_or_update_role(conn, app_user, login=True, password=app_pass)
