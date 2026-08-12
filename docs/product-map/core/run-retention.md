@@ -20,11 +20,17 @@ status: partial
 Automatic cleanup of terminal-state runs after a configurable retention period (default 90 days).
 Routes live in `backend/src/modulo/api/routes/admin.py` (not `admin_run_retention.py`).
 
+The purge deletes `runs` rows only. **`run_daily_facts` is exempt** (no FK from
+`run_daily_facts.run_id` to `runs`, ADR 020): the facts table is retained **13 months**
+(config-driven via `analytics_facts_retention_months`), deleted in **chunked day-slices**
+(7-day chunks) by the analytics maintenance cron's `retention_facts` step — see
+`docs/product-map/core/analytics.md` and PRD §8.32.
+
 ## Behaviours
 
 ### Cleanup Job
 
-- [x] Deletes runs in terminal states (complete, failed, eval_failed, cancelled)
+- [x] Deletes runs in terminal states (complete, failed, eval_failed, cancelled, stalled — the `TERMINAL_STATUSES` set)
 - [x] Batch deletion (500 at a time)
 - [x] Configurable retention period (org-level config)
 - [x] Active runs are preserved
