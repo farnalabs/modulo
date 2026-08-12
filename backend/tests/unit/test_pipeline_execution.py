@@ -1116,6 +1116,7 @@ class TestSaqWorkerSettings:
             "stale_run_recovery",
             "cost_probe",
             "check_missed_fire_alerts_cron",
+            "journey_reconcile",
         }
         assert settings["after_process"] is not None
 
