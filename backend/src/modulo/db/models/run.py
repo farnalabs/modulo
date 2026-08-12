@@ -169,7 +169,7 @@ class Run(OrgScoped):
     # hitl_claims.decision_payload precedent). ``is_replay`` is set by
     # replay_event; ``variant_group_id`` by run_variant_weighted.
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
-    work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     is_replay: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     variant_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     organisation: Mapped["Organisation"] = relationship()
