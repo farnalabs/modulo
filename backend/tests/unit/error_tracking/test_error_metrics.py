@@ -211,6 +211,141 @@ class TestSetActiveGroups:
 
 
 # =========================================================================
+# sample_error_group_metrics
+# =========================================================================
+
+
+class TestSampleErrorGroupMetrics:
+    @pytest.mark.asyncio
+    async def test_updates_gauge_per_level(self) -> None:
+        """Active groups (new/acknowledged) are counted per level_peak and
+        pushed into the gauge — resolved/archived groups never contribute."""
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        result = MagicMock()
+        result.all.return_value = [("error", 4), ("critical", 1), ("warning", 0)]
+        session = MagicMock(spec=AsyncSession)
+        session.execute = AsyncMock(return_value=result)
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        gauge = MagicMock()
+        metrics_mod._error_groups_active = gauge
+
+        await metrics_mod.sample_error_group_metrics(factory)
+
+        assert gauge.set.call_count == 3
+        gauge.set.assert_any_call(4, attributes={"level": "error"})
+        gauge.set.assert_any_call(1, attributes={"level": "critical"})
+        gauge.set.assert_any_call(0, attributes={"level": "warning"})
+        # The query must restrict to active statuses.
+        stmt = session.execute.call_args.args[0]
+        assert "IN" in str(stmt)
+
+    @pytest.mark.asyncio
+    async def test_zero_levels_explicitly_zeroed(self) -> None:
+        """Levels with no active groups are set to 0 so a drained level doesn't
+        leave a stale gauge reading."""
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        result = MagicMock()
+        result.all.return_value = []
+        session = MagicMock(spec=AsyncSession)
+        session.execute = AsyncMock(return_value=result)
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        gauge = MagicMock()
+        metrics_mod._error_groups_active = gauge
+
+        await metrics_mod.sample_error_group_metrics(factory)
+
+        assert gauge.set.call_count == 3
+        gauge.set.assert_any_call(0, attributes={"level": "warning"})
+        gauge.set.assert_any_call(0, attributes={"level": "error"})
+        gauge.set.assert_any_call(0, attributes={"level": "critical"})
+
+    @pytest.mark.asyncio
+    async def test_failure_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        session = MagicMock()
+        session.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        metrics_mod._error_groups_active = MagicMock()
+
+        await metrics_mod.sample_error_group_metrics(factory)
+        assert "metrics.sample_error_groups_failed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_noop_when_gauge_uninitialized(self) -> None:
+        """Without a gauge handle the sampler must not touch the DB at all."""
+        with patch.object(metrics_mod, "init_metrics") as init:
+            await metrics_mod.sample_error_group_metrics(MagicMock())
+        init.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_runs_against_sqlite_in_memory(self) -> None:
+        """The sampler's query must compile and execute on SQLite — the same
+        dialect used for unit-level DB tests. Exercises the real ORM path
+        end-to-end, including the status filter and GROUP BY."""
+        import uuid
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from modulo.db.models.base import Base
+        from modulo.db.models.error_event import ErrorEvent
+        from modulo.db.models.error_group import ErrorGroup
+
+        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(
+                    lambda sync_conn: Base.metadata.create_all(
+                        sync_conn, tables=[ErrorEvent.__table__, ErrorGroup.__table__]
+                    )
+                )
+
+            org_id = uuid.uuid4()
+            async with async_sessionmaker(engine, expire_on_commit=False)() as session, session.begin():
+                for level, status in (("error", "new"), ("error", "acknowledged"), ("critical", "new")):
+                    session.add(
+                        ErrorGroup(
+                            organisation_id=org_id,
+                            fingerprint=uuid.uuid4().hex,
+                            level_peak=level,
+                            status=status,
+                        )
+                    )
+                # Resolved/archived groups must not contribute to the active count.
+                for status in ("resolved", "archived"):
+                    session.add(
+                        ErrorGroup(
+                            organisation_id=org_id,
+                            fingerprint=uuid.uuid4().hex,
+                            level_peak="error",
+                            status=status,
+                        )
+                    )
+
+            gauge = MagicMock()
+            metrics_mod._error_groups_active = gauge
+
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            await metrics_mod.sample_error_group_metrics(factory)
+
+            assert gauge.set.call_count == 3
+            gauge.set.assert_any_call(2, attributes={"level": "error"})
+            gauge.set.assert_any_call(1, attributes={"level": "critical"})
+            gauge.set.assert_any_call(0, attributes={"level": "warning"})
+        finally:
+            await engine.dispose()
+
+
+# =========================================================================
 # _init_alert_counter
 # =========================================================================
 

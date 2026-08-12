@@ -37,6 +37,7 @@ unit-tests:
   - backend/tests/unit/error_tracking/test_backend_hooks.py
   - backend/tests/unit/error_tracking/test_error_dashboard.py
   - backend/tests/unit/error_tracking/test_error_alerting.py
+  - backend/tests/unit/error_tracking/test_error_metrics.py
   - backend/tests/bdd/steps/test_error_tracking.py
   - frontend/src/__tests__/error-tracking.spec.ts
 status: partial
@@ -180,7 +181,10 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] Counter `modulo_errors_total` per level/source/environment
 - [x] Counter `modulo_error_alerts_total` on each alert dispatch
 - [x] Graceful degradation: metrics silently disabled if OTel meter not configured
-- [ ] `modulo_error_groups_active` gauge exists but is never updated
+- [x] `modulo_error_groups_active` gauge — updated by `sample_error_group_metrics()`
+  on the dispatcher_reconcile tick (every 60s, telemetry-enabled): counts
+  non-terminal groups (`new`/`acknowledged`) per `level_peak`, explicitly zeroing
+  levels with no active groups so a drained level never leaves a stale reading
 
 ### BDD Coverage
 
@@ -244,7 +248,13 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   (`test_error_alerting.py::TestConditionWindow`) + 3 BDD scenarios
   (`error_notifications.feature`).~~
 - **`modulo_error_groups_active` gauge never updated:** Metric function exists but
-  is never called
+  is never called — ~~**RESOLVED 2026-08-12**: `sample_error_group_metrics()`
+  counts non-terminal groups per `level_peak` and pushes the gauge on the
+  dispatcher_reconcile tick (every 60s, telemetry-only); levels with zero active
+  groups are set to 0 explicitly. 5 unit tests in `test_error_metrics.py`
+  (`TestSampleErrorGroupMetrics`: per-level counts incl. resolved/archived
+  exclusion, zero-level zeroing, failure swallowed, no-op without gauge, real
+  SQLite end-to-end).~~
 - **`ErrorEvent.resolved_at` never set when group resolved:** The column exists but no code populates
   it when a group's status changes to `"resolved"`. Only `ErrorGroup.resolved_at` is set.
 - **Breadcrumbs not persisted:** Frontend sends breadcrumbs (validated max 50) but
@@ -261,7 +271,29 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 
 ## QA History
 
-### 2026-07-31 — improve-architecture (condition window gap→implemented)
+### 2026-08-12 — improve-architecture (active-groups gauge gap→implemented)
+
+- **Fixed feature gap:** `modulo_error_groups_active` was registered by
+  `init_metrics()` and had a `set_active_groups()` helper, but nothing ever
+  called it — the gauge stayed at its initial value forever. Implemented
+  `sample_error_group_metrics(factory)` in `core/error_tracking/metrics.py`,
+  mirroring the D1 run-runtime liveness sampler: it counts non-terminal error
+  groups (`status IN ('new','acknowledged')`) per `level_peak` via a
+  system-scoped session and pushes the gauge with a `level` label. Levels with
+  zero active groups are explicitly set to 0 (a drained level can't leave a
+  stale reading). Wired into the `dispatcher_reconcile` tick's telemetry block
+  in `core/cron_helpers.py` (runs every 60s when `modulo_telemetry_enabled`),
+  alongside `sample_run_runtime_metrics`.
+- **Fail-safe semantics:** the sampler re-raises `asyncio.CancelledError` and
+  swallows everything else (`metrics.sample_error_groups_failed`) — metrics can
+  never break the reconcile tick.
+- **Test coverage:** added 5 unit tests (`TestSampleErrorGroupMetrics` in
+  `test_error_metrics.py`): per-level counts (resolved/archived excluded),
+  zero-level zeroing, query-failure swallowed, no-op when the gauge handle is
+  unset (no DB touch), and a real in-memory SQLite end-to-end test exercising
+  the ORM query (status filter + GROUP BY). 37/37 `test_error_metrics.py` +
+  281/281 error_tracking unit tests pass; ruff check + format clean; mypy
+  --strict clean on src. Updated product map behaviour checkbox and known gaps.
 
 - **Fixed feature gap:** `condition_window_seconds` on `ErrorNotificationRule` was stored,
   validated, and exposed by the API but never evaluated. Alert rules with
