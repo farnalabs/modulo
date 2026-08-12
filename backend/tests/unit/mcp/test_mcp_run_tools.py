@@ -30,6 +30,7 @@ def _make_mock_run(
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
     error_code: str | None = None,
+    error_detail: str | None = None,
     node_token_usage: dict | None = None,
     outputs_json: dict | None = None,
     node_telemetry_json: dict | None = None,
@@ -44,6 +45,7 @@ def _make_mock_run(
     run.started_at = started_at
     run.completed_at = completed_at
     run.error_code = error_code
+    run.error_detail = error_detail
     run.node_token_usage = node_token_usage
     run.outputs_json = outputs_json
     run.node_telemetry_json = node_telemetry_json
@@ -176,6 +178,68 @@ class TestGetRunStatus(_AuthContext):
         assert result["completed_at"] == run.completed_at.isoformat()
         assert result["error_code"] == "timeout"
         assert "nodes" not in result
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_failed_run_includes_error_detail(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_mock_run(status="failed", error_code="task_failure", error_detail="boom: worker crashed")
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = run
+
+        result = await get_run_status(run_id=str(run.id))
+
+        assert result["error_code"] == "task_failure"
+        assert result["error_detail"] == "boom: worker crashed"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_error_detail_absent_when_none(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_mock_run(status="complete", error_code=None, error_detail=None)
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = run
+
+        result = await get_run_status(run_id=str(run.id))
+
+        assert "error_detail" not in result
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server.get_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_error_detail_redacts_secrets(
+        self,
+        mock_session: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_mock_run(
+            status="failed",
+            error_code="task_failure",
+            error_detail="openai call failed: sk-abcdefghijkl1234, auth Bearer xyz123abc",
+        )
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = run
+
+        result = await get_run_status(run_id=str(run.id))
+
+        assert result["error_code"] == "task_failure"
+        assert "sk-abcdefghijkl1234" not in json.dumps(result)
+        assert "Bearer xyz123abc" not in json.dumps(result)
+        assert "<redacted>" in result["error_detail"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_run")

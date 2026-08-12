@@ -32,6 +32,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError
 from modulo.core.node_output_split import node_return, node_telemetry
+from modulo.core.pipeline_engine.error_codes import present_error
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -166,6 +167,7 @@ async def _do_list_runs(
             child_cost, child_count = child_rollup.get(run.id, (_COST_ROLLUP_ZERO, 0))
             child_cost = _quantize_cost_rollup(child_cost)
             own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
+            _error_code, error_detail = present_error(run.error_code, run.error_detail, limit=200)
             items.append(
                 {
                     "run_id": str(run.id),
@@ -178,6 +180,7 @@ async def _do_list_runs(
                     "started_at": run.started_at.isoformat() if run.started_at else None,
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
                     "error_code": run.error_code,
+                    "error_detail": error_detail,
                     "total_cost_usd": run.total_cost_usd,
                     "child_runs_cost_usd": child_cost,
                     "child_runs_count": child_count,
@@ -349,6 +352,8 @@ def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count
     child_runs_cost_usd = _quantize_cost_rollup(child_cost if child_cost is not None else _COST_ROLLUP_ZERO)
     own_cost = run.total_cost_usd if run.total_cost_usd is not None else _COST_ROLLUP_ZERO
 
+    error_code, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
+
     return RunResponse(
         run_id=run.id,
         status=run.status,
@@ -356,8 +361,8 @@ def _build_run_response(run: Any, child_cost: Decimal | None = None, child_count
         run_number=run.run_number,
         pipeline_name=pipeline_name,
         langgraph_thread_id=run.langgraph_thread_id,
-        error_detail=run.error_detail,
-        error_code=run.error_code,
+        error_detail=error_detail,
+        error_code=error_code,
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
         trace_id=trace_id,

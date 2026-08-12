@@ -1,8 +1,9 @@
 """Unit tests for the error-code registry (agent-failure UX, phase 1).
 
 Covers registry integrity (every legacy alias resolves to a registered dotted
-code), the ``map_legacy_code`` / ``class_for`` / ``is_retryable`` lookups, and
-the ``harness.unknown`` fallback for unmapped codes.
+code), the ``map_legacy_code`` / ``class_for`` / ``is_retryable`` lookups, the
+``harness.unknown`` fallback for unmapped codes, and the shared
+``sanitize_error_text`` / ``present_error`` read-surface helpers.
 """
 
 from modulo.core.pipeline_engine.error_codes import (
@@ -11,6 +12,8 @@ from modulo.core.pipeline_engine.error_codes import (
     class_for,
     is_retryable,
     map_legacy_code,
+    present_error,
+    sanitize_error_text,
 )
 
 
@@ -111,3 +114,85 @@ def test_is_retryable_transient_codes_true():
         "connector.rate_limit",
     ):
         assert is_retryable(code) is True, code
+
+
+# ---------------------------------------------------------------------------
+# sanitize_error_text / present_error (P4)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_is_noop_for_clean_strings():
+    """Clean strings pass through verbatim — including the strings pinned by
+    the MCP/API tests ("run likely hung", "LLM provider returned 429 ...")."""
+    assert sanitize_error_text("run likely hung") == "run likely hung"
+    assert sanitize_error_text("LLM provider returned 429 Too Many Requests") == (
+        "LLM provider returned 429 Too Many Requests"
+    )
+    assert sanitize_error_text("") == ""
+    assert sanitize_error_text(None) == ""
+
+
+def test_sanitize_redacts_secret_patterns():
+    assert "<redacted>" in sanitize_error_text("Bearer tok1234567890")
+    assert "Bearer" not in sanitize_error_text("Bearer tok1234567890")
+    assert "<redacted>" in sanitize_error_text("key sk-abcdefghijkl1234 here")
+    assert "sk-abcdefghijkl1234" not in sanitize_error_text("key sk-abcdefghijkl1234 here")
+    assert "<redacted>" in sanitize_error_text("ghp_abcdefghijklmnopqrstuvwxyz12")
+    assert "ghp_abcdefghijklmnopqrstuvwxyz12" not in sanitize_error_text("ghp_abcdefghijklmnopqrstuvwxyz12")
+    assert "<redacted>" in sanitize_error_text("AKIAABCDEFGHIJKLMNOP")
+    assert "<redacted>" in sanitize_error_text("postgres://user:supersecret@localhost/db")
+
+
+def test_sanitize_is_idempotent():
+    sample = "boom: Bearer tok1234567890, key sk-abcdefghijkl1234"
+    once = sanitize_error_text(sample)
+    twice = sanitize_error_text(once)
+    assert once == twice
+
+
+def test_sanitize_strips_hard_control_characters_only():
+    # \n (a legitimate line break) is preserved; NUL and \x07 are stripped.
+    assert sanitize_error_text("line1\x00\x07line2\n") == "line1line2\n"
+
+
+def test_sanitize_caps_input_before_regex():
+    long = "x" * 10000
+    assert len(sanitize_error_text(long)) == 5000
+
+
+def test_sanitize_coerces_non_str():
+    assert sanitize_error_text(12345) == "12345"
+    assert sanitize_error_text(b"bytes") == "b'bytes'"
+
+
+def test_present_error_passes_code_through_raw():
+    # P2 dropped: codes stay raw on every wire surface.
+    code, detail = present_error("rate_limited", "LLM provider returned 429 Too Many Requests", 5000)
+    assert code == "rate_limited"
+    assert detail == "LLM provider returned 429 Too Many Requests"
+
+
+def test_present_error_none_detail_returns_none():
+    code, detail = present_error(None, None, 5000)
+    assert code is None
+    assert detail is None
+
+
+def test_present_error_truncates_codepoint_safely_with_ellipsis():
+    code, detail = present_error("task_failure", "e" * 300, 200)
+    assert code == "task_failure"
+    assert detail.endswith("…")
+    assert len(detail) == 201
+
+
+def test_present_error_sanitizes_before_truncate():
+    _code, detail = present_error("task_failure", "sk-abcdefghijkl1234 " + "y" * 300, 200)
+    assert "sk-abcdefghijkl1234" not in detail
+    assert "<redacted>" in detail
+    assert detail.endswith("…")
+
+
+def test_present_error_coerces_non_str_detail():
+    code, detail = present_error("task_failure", 12345, 5000)
+    assert code == "task_failure"
+    assert detail == "12345"
