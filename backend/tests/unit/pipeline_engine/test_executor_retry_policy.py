@@ -576,7 +576,7 @@ async def test_execute_retry_policy_applies_backoff_delay():
     # The fenced pending-reset still fired before the re-raise.
     reset_stmt = next(s for s in statements if "status='pending'" in s)
     assert "claim_token=:tok" in reset_stmt
-    # No terminal failure �?" the retry path never finalizes.
+    # No terminal failure — the retry path never finalizes.
     mock_finalize.assert_not_awaited()
 
 
