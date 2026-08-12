@@ -1,3 +1,5 @@
+import { toDate } from '../lib/formatDate'
+
 export function runStatusBadgeClass(status: string): string {
   const map: Record<string, string> = {
     complete: 'bg-success/10 text-success',
@@ -15,8 +17,8 @@ export function runStatusBadgeClass(status: string): string {
 
 export function formatRunDate(dateStr: string | null): string {
   if (!dateStr) return '—'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return dateStr
+  const d = toDate(dateStr)
+  if (!d) return dateStr
   return d.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',

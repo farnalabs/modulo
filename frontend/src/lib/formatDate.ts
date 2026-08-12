@@ -1,8 +1,12 @@
 import { format } from 'date-fns'
 
-function toDate(date: Date | string | number | null | undefined): Date | null {
+/**
+ * Safely parses a date-like value, returning null for invalid input.
+ * Shared single source of truth for parsing user/API-supplied timestamps.
+ */
+export function toDate(date: Date | string | number | null | undefined): Date | null {
   if (date == null) return null
-  const d = date instanceof Date ? date : new Date(date)
+  const d = date instanceof Date ? date : new Date(date) // nosemgrep: new-date-without-guard
   return isNaN(d.getTime()) ? null : d
 }
 

@@ -19,8 +19,9 @@ export function gatherContext(): Record<string, unknown> {
       if (plan.currentTier) ctx.tier = plan.currentTier
       if (plan.orgId) ctx.orgName = plan.orgId
     }
-  } catch {
-    // Pinia not yet initialized
+  } catch (e) {
+    // Pinia not yet initialized — context gathering is best-effort
+    console.warn('[error-tracking] pinia not initialized during context gather', e)
   }
 
   ctx.hasAuth = !!getAccessToken()
