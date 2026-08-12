@@ -1,6 +1,9 @@
 """Unit tests for db/rls.py — set_rls_org, set_rls_user_context, register_rls_reset_hook."""
 
+import asyncio
+import logging
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -47,6 +50,14 @@ class TestSetRlsOrg:
         with pytest.raises(RuntimeError, match="requires an active transaction"):
             await set_rls_org(session, _ORG_ID)
 
+    async def test_none_org_id_returns_early_without_transaction(self) -> None:
+        """System-admin no-org path must be a no-op even outside a transaction."""
+        session = _make_session(in_tx=False)
+
+        await set_rls_org(session, None)
+
+        session.execute.assert_not_called()
+
 
 class TestSetRlsUserContext:
     async def test_sets_user_id_and_org_role(self) -> None:
@@ -85,3 +96,76 @@ class TestRegisterRlsResetHook:
             register_rls_reset_hook(engine)
 
         mock_listens.assert_called_once_with(engine.sync_engine, "checkout")
+
+
+def _capture_checkout_listener(engine: MagicMock) -> Any:
+    """Register the reset hook and return the actual checkout listener function."""
+
+    captured: dict[str, Any] = {}
+
+    def _fake_listens_for(target: object, ident: str) -> Any:
+        def _decorator(fn: Any) -> Any:
+            captured["fn"] = fn
+            return fn
+
+        return _decorator
+
+    with patch("modulo.db.rls.event.listens_for", side_effect=_fake_listens_for):
+        register_rls_reset_hook(engine)
+
+    assert "fn" in captured, "register_rls_reset_hook did not register a listener"
+    return captured["fn"]
+
+
+class TestCheckoutResetListener:
+    """Exercise the actual _reset_org_on_checkout body for postgres checkouts."""
+
+    def _listener(self) -> Any:
+        engine = MagicMock()
+        engine.dialect.name = "postgresql"
+        engine.sync_engine = MagicMock()
+        return _capture_checkout_listener(engine)
+
+    def test_clears_all_gucs_on_checkout(self) -> None:
+        cursor = MagicMock()
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        self._listener()(connection, MagicMock(), MagicMock())
+
+        assert cursor.execute.call_count == 3
+        executed_sql = [str(call) for call in cursor.execute.call_args_list]
+        for config_name in ("app.organisation_id", "app.user_id", "app.org_role"):
+            assert any(f"set_config('{config_name}'" in sql for sql in executed_sql)
+        cursor.close.assert_called_once()
+
+    def test_logs_warning_when_cursor_api_unavailable(self, caplog: pytest.LogCaptureFixture) -> None:
+        connection = object()
+
+        with caplog.at_level(logging.WARNING, logger="modulo.db.rls"):
+            self._listener()(connection, MagicMock(), MagicMock())
+
+        assert any("sync cursor API not available" in message for message in caplog.messages)
+
+    def test_re_raises_cancelled_error(self) -> None:
+        cursor = MagicMock()
+        cursor.execute.side_effect = asyncio.CancelledError()
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        with pytest.raises(asyncio.CancelledError):
+            self._listener()(connection, MagicMock(), MagicMock())
+
+        cursor.close.assert_called_once()
+
+    def test_logs_warning_when_set_config_fails(self, caplog: pytest.LogCaptureFixture) -> None:
+        cursor = MagicMock()
+        cursor.execute.side_effect = RuntimeError("connection gone")
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        with caplog.at_level(logging.WARNING, logger="modulo.db.rls"):
+            self._listener()(connection, MagicMock(), MagicMock())
+
+        assert any("failed to clear RLS session context" in message for message in caplog.messages)
+        cursor.close.assert_called_once()
