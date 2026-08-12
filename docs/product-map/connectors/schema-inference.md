@@ -7,6 +7,7 @@ bdd:
   - backend/tests/bdd/features/schemas/schema_inference.feature
 unit-tests:
   - backend/tests/unit/core/test_schema_inference.py
+  - backend/tests/unit/core/test_schema_sanitize.py
   - backend/tests/unit/api/test_schema_infer_endpoint.py
   - backend/tests/unit/core/test_schema_migration.py
   - backend/tests/unit/core/test_schema_validation.py
@@ -35,7 +36,7 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [x] Schema inference reads sample data from the connected tool: issue records from Jira/Linear, repo metadata from GitHub/GitLab
 - [x] Reads respect the connector's ACL and credential scope — no escalation via inference path
 - [ ] Reads are limited to a configurable sample size (default: 200 per PRD; actual default is 10, max 100, prompt caps at 50)
-- [ ] Sample data is sanitised before being sent to the inference LLM — no plaintext credentials, no internal URLs
+- [x] Sample data is sanitised before being sent to the inference LLM — credential-like values masked, control chars stripped, no plaintext tokens or credentials leak into the prompt
 - [ ] Read timeout is independent of pipeline-run read timeout (shorter: 10s default)
 
 ### Schema Generation — LLM-assisted draft from sample data
@@ -95,13 +96,13 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 ## Known Gaps
 
 - [ ] **Connector read interface for inference not defined**: ConnectorHub has `sample()` method but no `infer_schema()` or connector-type-aware sampling
-- [ ] **Data sanitisation rules not defined**: what fields are scrubbed from sample data before LLM inference is unspecified
+- [x] ~~**Data sanitisation rules not defined**: what fields are scrubbed from sample data before LLM inference is unspecified~~ **RESOLVED 2026-08-12**: `schema_registry/sanitize.py` defines the scrubbing rules — sensitive-keyed values are masked (segment/suffix matching incl. plural forms for token/secret/password/api_key/access_key/private_key/authorization/credential, masking strings, non-string scalars, and list/dict contents under a sensitive key), control characters stripped, strings capped at 2000 chars, arrays at 100, nesting at depth 8, deep defensive copy (caller data never mutated)
 - [ ] **No CLI or UI for triggering inference**: endpoint and SchemaInferenceView.vue exist, but no onboarding wizard step or CLI command for triggering per-connector inference
 - [ ] **Sampled record default (200)**: PRD says default 200 records, code caps at 50 in prompt builder, API default limit is 10, max is 100
 - [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented
 - [ ] **No abstract_name inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
-- [ ] **SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used
-- [ ] **CRITICAL: Sample data not sanitised before LLM prompt**: raw fields are interpolated with only markdown code-fence separation; PRD requires SandboxedEnvironment with structural separators
+- [ ] **SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — structural separators + untrusted-data instruction implemented (2026-08-12); Jinja SandboxedEnvironment itself not used (no user-authored template in the inference path)
+- [x] ~~**CRITICAL: Sample data not sanitised before LLM prompt**: raw fields are interpolated with only markdown code-fence separation; PRD requires SandboxedEnvironment with structural separators~~ **RESOLVED 2026-08-12**: sample data is sanitised by `schema_registry/sanitize.py` and rendered between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators; the system prompt declares the block untrusted input and forbids following embedded instructions
 - [ ] **No concurrency guard**: multiple concurrent inference requests per connector are not serialised
 - [ ] **No enterprise feature flag on inference endpoint**
 - [ ] **Connector-type-aware field extraction not implemented**: all connector types use the same generic prompt
@@ -109,6 +110,7 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 
 ## QA History
 
+- 2026-08-12: improve-architecture — RESOLVED the "CRITICAL: Sample data not sanitised before LLM prompt" and "Data sanitisation rules not defined" known gaps. Sample/example data flowing into the inference and generation prompts is now scrubbed by `schema_registry/sanitize.py` (credential-like values masked via segment/suffix key matching incl. plural/collection forms, container/scalar masking under sensitive keys, control chars stripped, string/array/depth bounds enforced, deep defensive copy) and rendered between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators (with delimiter-marker escaping) plus an explicit "untrusted input" instruction in both system prompts. Added 48 unit-test cases in `test_schema_sanitize.py` asserting no secret ever reaches the prompt and separators render correctly. 91 targeted schema unit tests pass, ruff clean, mypy --strict clean, import-linter 7/7.
 - 2026-07-03: Cross-cutting QA (index 111). Fixed stale checkboxes (audit event [ ]→[x], connector-type validation confirmed). Added Error Handling section (11 behaviour checkboxes covering all error paths). Added 30s timeout on connector sampling step. Added ProgrammingError→501 unit tests (infer + generate endpoints). Updated Known Gaps: removed 2 stale gaps (connector-type validation, audit event dispatch), added 9 new gaps. Created website docs stub. Status: partial (17 known gaps remain).
 - 2026-07-08: Cross-cutting QA (index 269). Fixed CRITICAL — added `try/except Exception→500` guard around `create_secrets_backend()` in both `infer_schema_endpoint` and `generate_schema_endpoint` (previously unguarded — bad Fernet key or unexpected error from `create_secrets_backend` would propagate to CatchAllMiddleware as opaque 500). Corrected 3 stale `[ ]`→`[x]` Error Handling checkboxes for schema generation (no backends→400, ProgrammingError→501, GenerationError→502). Added 2 new Error Handling checkboxes. Added `test_schema_generate_endpoint.py` to unit-tests. Added 2 new tests for Exception→500 on both endpoints. All new tests pass. Pre-existing: `test_generate_schema_generation_failure_returns_502` asserts 502 but CatchAllMiddleware returns 500 — systemic CatchAllMiddleware bug intercepting HTTPException before FastAPI's exception handler. Status: partial.
 - 2026-07-11: Round 3 improve-architecture. Removed stale Known Gap (timeout fix verified in code with `async with asyncio.timeout(30.0)`). Removed 3 duplicate gaps (sample limit, rare-field, abstract_name already documented in lines 100-102). 12 gaps remain (was 16).

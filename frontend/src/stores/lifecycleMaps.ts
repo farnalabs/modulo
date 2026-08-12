@@ -4,6 +4,8 @@ import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 import type { JourneySummary, JourneyDetail, JourneyListResponse } from '../types/lifecycleMap'
 
+export const UNATTRIBUTED_STAGE_KEY = '__unattributed__'
+
 export interface LifecycleMapStage {
   id: string
   name: string
@@ -117,11 +119,16 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     const grouped: Record<string, JourneySummary[]> = {}
     for (const journey of journeys.value) {
       const stageId = journey.current_stage?.stage_id
-      if (!stageId) continue
-      ;(grouped[stageId] ??= []).push(journey)
+      const key = stageId ?? (journey.unattributed ? UNATTRIBUTED_STAGE_KEY : null)
+      if (!key) continue
+      ;(grouped[key] ??= []).push(journey)
     }
     return grouped
   })
+
+  const unattributedJourneys = computed<JourneySummary[]>(() =>
+    journeys.value.filter((journey) => journey.unattributed)
+  )
 
   async function fetchJourneys(mapId: string): Promise<void> {
     if (isLoadingJourneys.value) return
@@ -301,6 +308,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     isLoadingJourneyDetail,
     selectedJourneyKey,
     journeysByStage,
+    unattributedJourneys,
     graduatedCount,
     manualCount,
     fetchMaps,
