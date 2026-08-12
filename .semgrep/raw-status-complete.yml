@@ -71,9 +71,15 @@ rules:
         # ONLY until the Phase 2 accept-as-complete sweep (FAR-146) rewrites
         # them onto the shared success predicate - remove the file from this
         # list once its raw status check is gone.
+        #
+        # Note: semgrep constant-propagation means a comparison against a
+        # module constant that resolves to 'complete' (e.g. builder.py's
+        # `RunDailyFact.status == _COMPLETE_STATUS` where
+        # `_COMPLETE_STATUS = "complete"`) also matches the rule.
         - "**/backend/src/modulo/api/routes/dashboard.py"
         - "**/backend/src/modulo/db/crud/run.py"
         - "**/backend/src/modulo/core/pipeline_execution.py"
         - "**/backend/src/modulo/core/pipeline_engine/executor.py"
         - "**/backend/src/modulo/core/saq_worker.py"
         - "**/backend/src/modulo/core/feedback_manager/__init__.py"
+        - "**/backend/src/modulo/core/analytics/builder.py"

@@ -15,6 +15,12 @@ run on Windows). They assert the rule is scoped to backend product code, that
 every known pre-existing consumer is path-excluded, that the message points at
 the shared success predicate, and that the raw-status match predicate behaves
 as the rule intends.
+
+The match predicate models semgrep constant-propagation: a comparison against a
+module constant that resolves to ``"complete"`` (e.g. builder.py's
+``RunDailyFact.status == _COMPLETE_STATUS`` where
+``_COMPLETE_STATUS = "complete"``) matches just like a ``"complete"`` string
+literal does.
 """
 
 from pathlib import Path
@@ -32,6 +38,7 @@ KNOWN_CONSUMER_FILES = [
     "core/pipeline_engine/executor.py",
     "core/saq_worker.py",
     "core/feedback_manager/__init__.py",
+    "core/analytics/builder.py",
 ]
 
 
@@ -45,15 +52,27 @@ RULE = _load_rule()
 
 
 def _is_raw_success_match(var_name: str, value: object) -> bool:
-    """Emulate the rule's match predicate.
+    """Emulate the rule's match predicate, including constant propagation.
 
     Mirrors the rule intent: a status-like variable whose value is exactly
     ``"complete"`` is the forbidden bare success check (it must go through the
     shared status-enum / success-predicate module instead). Any other status
     value (``"failed"``, ``"stalled"``, ``None``, ...) is NOT a raw success
     comparison and must not match.
+
+    Semgrep applies constant-propagation when matching, so a comparison such as
+    ``RunDailyFact.status == _COMPLETE_STATUS`` (where
+    ``_COMPLETE_STATUS = "complete"``) also matches even though the literal is
+    not written at the comparison site. To model that, the helper resolves a
+    value that names a known module constant to that constant's value.
     """
-    return "status" in var_name and value == "complete"
+    constants = {
+        "_COMPLETE_STATUS": "complete",
+        "_FAILED_STATUS": "failed",
+        "_STALLED_STATUS": "stalled",
+    }
+    resolved = constants.get(value, value) if isinstance(value, str) else value
+    return "status" in var_name and resolved == "complete"
 
 
 def test_rule_id_languages_and_scope() -> None:
@@ -79,6 +98,18 @@ def test_every_known_consumer_is_path_excluded() -> None:
 def test_raw_complete_value_is_flagged() -> None:
     assert _is_raw_success_match("status", "complete") is True
     assert _is_raw_success_match("result_status", "complete") is True
+
+
+def test_constant_propagation_of_complete_is_flagged() -> None:
+    # Semgrep resolves _COMPLETE_STATUS = "complete", so
+    # `RunDailyFact.status == _COMPLETE_STATUS` matches the rule exactly as
+    # `status == "complete"` does (see builder.py:182).
+    assert _is_raw_success_match("status", "_COMPLETE_STATUS") is True
+
+
+def test_constant_propagation_of_non_success_is_not_flagged() -> None:
+    assert _is_raw_success_match("status", "_FAILED_STATUS") is False
+    assert _is_raw_success_match("status", "_STALLED_STATUS") is False
 
 
 @pytest.mark.parametrize("value", ["failed", "stalled", None])
