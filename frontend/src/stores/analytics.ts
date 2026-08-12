@@ -246,7 +246,7 @@ export function measureValue(
  * count (mirroring the backend's own duration weighting in bucket_rows).
  */
 export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
-  const groups = new Map<string, AnalyticsBucket & { durSum: number; durN: number }>();
+  const groups = new Map<string, AnalyticsBucket & { durSum: number; durN: number; rateSum: number; rateN: number }>();
   for (const b of buckets) {
     const groupKey = b.key ?? "";
     let g = groups.get(groupKey);
@@ -257,6 +257,8 @@ export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
         count: 0,
         durSum: 0,
         durN: 0,
+        rateSum: 0,
+        rateN: 0,
       };
       groups.set(groupKey, g);
     }
@@ -272,7 +274,8 @@ export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
       g.durN += b.count;
     }
     if (typeof b.success_rate === "number" && b.count > 0) {
-      g.success_rate = (g.success_rate ?? 0) + b.success_rate * b.count;
+      g.rateSum += b.success_rate * b.count;
+      g.rateN += b.count;
     }
   }
   return [...groups.values()].map((g) => ({
@@ -282,7 +285,7 @@ export function aggregateByKey(buckets: AnalyticsBucket[]): AnalyticsBucket[] {
     total_cost_usd: g.total_cost_usd,
     total_tokens: g.total_tokens,
     avg_duration_ms: g.durN > 0 ? g.durSum / g.durN : null,
-    success_rate: g.success_rate != null && g.count > 0 ? g.success_rate / g.count : null,
+    success_rate: g.rateN > 0 ? g.rateSum / g.rateN : null,
   }));
 }
 

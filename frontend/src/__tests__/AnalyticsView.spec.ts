@@ -337,6 +337,18 @@ describe('aggregateByKey', () => {
     expect(agg[0].avg_duration_ms).toBeNull()
     expect(agg[0].success_rate).toBeNull()
   })
+
+  it('weights success_rate only across buckets that report it', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'manual', count: 2, success_rate: 0.5 },
+      { date: '2026-08-02', key: 'manual', count: 4, success_rate: 0.75 },
+      { date: '2026-08-03', key: 'manual', count: 4, success_rate: null },
+    ]
+    const agg = aggregateByKey(series)
+    expect(agg).toHaveLength(1)
+    expect(agg[0].count).toBe(10)
+    expect(agg[0].success_rate).toBeCloseTo(0.6667, 3)
+  })
 })
 
 describe('computeTrendDelta', () => {

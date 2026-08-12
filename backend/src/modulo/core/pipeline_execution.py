@@ -111,21 +111,6 @@ def get_settings() -> Any:
     return _get_settings()
 
 
-class SchedulerDBError(Exception):
-    """Raised when a scheduler DB query fails transiently.
-
-    Relocated from ``modulo.core.pipeline_executor_task`` (PR B-2, plan F1) so
-    the SAQ scheduler modules never import the deleted Celery task module.
-    """
-
-
-def _make_sync_url(database_url: str) -> str:
-    """Convert async DB URL to sync by replacing async driver with sync equivalent."""
-    return (
-        database_url.replace("+asyncpg", "+psycopg").replace("+aiomysql", "+mysqldb").replace("+aiosqlite", "+pysqlite")
-    )
-
-
 def _resolve_claim_stale_seconds(*, stale_seconds: int | None) -> int:
     """Resolve the claim staleness window.
 
@@ -584,10 +569,6 @@ async def zombie_watchdog(
             f"Executor dispatched no node within {grace_seconds}s setup grace (claimed-but-nodeless zombie watchdog)"
         ),
     )
-
-
-async def _wait_event(evt: asyncio.Event) -> None:
-    await evt.wait()
 
 
 async def _read_run_status(aeng: AsyncEngine, run_id: str, org_id: str) -> str | None:
