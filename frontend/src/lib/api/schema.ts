@@ -4509,6 +4509,49 @@ export interface paths {
         patch: operations["graduate_lifecycle_map_stage_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__stages__stage_id__graduate_patch"];
         trace?: never;
     };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/journeys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Journeys Endpoint
+         * @description Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref.
+         */
+        get: operations["list_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/journeys/{kind}/{ref}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Journey Endpoint
+         * @description Single journey detail incl. recent run history.
+         *
+         *     ``kind`` and ``ref`` are path params: refs containing ``/`` must be
+         *     percent-encoded (``%2F``) so they survive URL routing.
+         */
+        get: operations["get_journey_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys__kind___ref__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/oauth/clients": {
         parameters: {
             query?: never;
@@ -9505,6 +9548,109 @@ export interface components {
             } | null;
             /** Pipeline Name Override */
             pipeline_name_override?: string | null;
+        };
+        /**
+         * JourneyCurrentStage
+         * @description The map stage a journey currently sits in (latest stage identity).
+         */
+        JourneyCurrentStage: {
+            /**
+             * Map Id
+             * Format: uuid
+             */
+            map_id: string;
+            /** Version */
+            version?: number | null;
+            /** Stage Id */
+            stage_id: string;
+            /** Stage Name */
+            stage_name?: string | null;
+            /** Position */
+            position?: number | null;
+        };
+        /** JourneyDetailResponse */
+        JourneyDetailResponse: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /**
+             * Canonical Work Item Id
+             * Format: uuid
+             */
+            canonical_work_item_id: string;
+            current_stage?: components["schemas"]["JourneyCurrentStage"] | null;
+            /** Status */
+            status?: string | null;
+            /** Provenance */
+            provenance?: string | null;
+            /**
+             * Run Count
+             * @default 0
+             */
+            run_count: number;
+            /** Latest Run Id */
+            latest_run_id?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Runs */
+            runs?: components["schemas"]["JourneyRunHistoryItem"][];
+        };
+        /** JourneyListResponse */
+        JourneyListResponse: {
+            /** Items */
+            items: components["schemas"]["JourneySummaryResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** JourneyRunHistoryItem */
+        JourneyRunHistoryItem: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Status */
+            status?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Provenance */
+            provenance?: string | null;
+        };
+        /**
+         * JourneySummaryResponse
+         * @description One journey in the map-scoped list wire shape.
+         */
+        JourneySummaryResponse: {
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string;
+            /**
+             * Canonical Work Item Id
+             * Format: uuid
+             */
+            canonical_work_item_id: string;
+            current_stage?: components["schemas"]["JourneyCurrentStage"] | null;
+            /** Status */
+            status?: string | null;
+            /** Provenance */
+            provenance?: string | null;
+            /**
+             * Run Count
+             * @default 0
+             */
+            run_count: number;
+            /** Latest Run Id */
+            latest_run_id?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** LibraryPrimitiveCreate */
         LibraryPrimitiveCreate: {
@@ -25390,6 +25536,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LifecycleMapVersionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_get: {
+        parameters: {
+            query?: {
+                kind?: string | null;
+                ref?: string | null;
+                cursor?: string | null;
+                limit?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneyListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_journey_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys__kind___ref__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+                kind: string;
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneyDetailResponse"];
                 };
             };
             /** @description Validation Error */
