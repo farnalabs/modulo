@@ -15,6 +15,7 @@ code:
 unit-tests:
   - backend/tests/unit/library_service/test_workflow_import_export.py
   - backend/tests/unit/library_service/test_workflow_import_export_resilience.py
+  - backend/tests/unit/workflow_import_export/test_import_export.py
 depends-on: [feat-pipelines-core, feat-pipelines-library]
 status: partial
 ---
@@ -152,6 +153,7 @@ import it into another organisation with schema/connector/model backend binding.
 
 ## QA History
 
+- 2026-08-12: improve-tests QA lens pass on the `workflow_import_export` test package — dedicated 72-test unit suite for `modulo.core.workflow_import_export` (previously only `_sanitize_retry_policy` was covered; line coverage 11% → 88%). Locks the pure helper contracts (`_safe_uuid`, `_sanitize_slug`, `suggest_import_name`), the ZIP/name/retry-policy sanitisation gates, the local-equivalent resolution chain (`resolve_schema` / `resolve_connector_type` / `resolve_model_backend`), the v1 ZIP and v2 YAML exporters (org-private stripping, trigger/owner-team/author enrichment), and `materialize_import` happy/error paths (format gate, owner-team validation, schema name-collision rename, IntegrityError retry, connector-binding rewire, unresolved-ref warnings, malformed retry_policy → `{}`, non-list graph nodes, invalid/unknown edges).
 - 2026-07-05: Prodmap pipelines QA: Added depends-on (feat-pipelines-core, feat-pipelines-library). Added QA History section. Moved `confirm_import` account_id bug fix description from Known Gaps to QA History.
 - 2026-07-06: Cross-cutting QA on feat-pipelines-workflow-feature-files:
   - Verified all export behaviours match code
