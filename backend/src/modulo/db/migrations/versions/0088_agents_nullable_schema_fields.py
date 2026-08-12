@@ -1,7 +1,7 @@
 """Make agents schema/backend references nullable (FAR-31).
 
-Revision ID: 0087_agents_nullable_schema_fields
-Revises: 0086_seeded_alert_rules
+Revision ID: 0088_agents_nullable_schema_fields
+Revises: 0087_circuit_breaker
 Create Date: 2026-08-12
 
 The MCP ``create_agent`` tool previously sentineled omitted schema IDs as
@@ -25,8 +25,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0087_agents_nullable_schema_fields"
-down_revision: str | None = "0086_seeded_alert_rules"
+revision: str = "0088_agents_nullable_schema_fields"
+down_revision: str | None = "0087_circuit_breaker"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
