@@ -100,9 +100,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         ("/mcp", 200, 60),  # PRD §7.18: general MCP tools — 200/min
         # NOTE: MCP trigger_pipeline tool has a separate 60/min limit enforced
         # in mcp_server.py at the application level since all MCP tools share
-        # the same HTTP path. HITL review endpoints (20/min per PRD §7.18)
-        # live under /api/v1/runs/{id}/hitl/ and are capped by the runs rule.
+        # the same HTTP path.
     ]
+
+    # PRD §7.18: HITL review actions — 20/min per user. The review endpoints
+    # live under /api/v1/runs/{run_id}/hitl/{gate_id}/ where the run/gate ids
+    # are variable, so a static prefix cannot match them; the "/hitl/" marker
+    # is matched as a path segment by _rule_for / _should_rate_limit. This is
+    # more restrictive than the /api/v1/runs rule (60/min) that would
+    # otherwise apply to these paths.
+    HITL_RULE: ClassVar[tuple[str, int, int]] = ("/hitl/", 20, 60)
 
     @classmethod
     def set_rules(cls, rules: list[tuple[str, int, int]]) -> None:
@@ -155,10 +162,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if _matches_bypass_token(token, self._bypass_token or ""):
             return False
         path = request.url.path
+        if self.HITL_RULE[0] in path:
+            return True
         return any(path.startswith(p) for p, _, _ in self.RULES)
 
     def _rule_for(self, request: Request) -> tuple[str, int, int]:
         path = request.url.path
+        if self.HITL_RULE[0] in path:
+            return self.HITL_RULE
         for prefix, max_req, window in self.RULES:
             if path.startswith(prefix):
                 return (prefix, max_req, window)
