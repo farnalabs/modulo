@@ -77,7 +77,7 @@ class RunawayGuard:
                         "max_duration_seconds": self._max_duration_seconds,
                     },
                 )
-                raise RunawayRunError("max_duration", int(elapsed), self._max_duration_seconds)
+                raise RunawayRunError("max_duration", elapsed, self._max_duration_seconds)
 
     # ------------------------------------------------------------------
     # Steps guard
