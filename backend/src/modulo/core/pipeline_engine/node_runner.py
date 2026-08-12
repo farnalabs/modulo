@@ -1706,11 +1706,23 @@ def make_sandbox_agent_fn(
             result_summary: str = ""
             changed_files: list[str] = []
             pr_url: str = ""
+            # A1 elevation input (agent-failure UX, phase 1): surface the
+            # agent's RAW verdict from output.json VERBATIM — never derived from
+            # exit_code. Missing / non-string values degrade to None so a
+            # missing status can never look like a false "complete".
+            agent_status: str | None = None
+            agent_outcome: str | None = None
 
             if isinstance(output_json, dict):
                 result_summary = output_json.get("summary", "")
                 changed_files = output_json.get("changed_files", [])
                 pr_url = output_json.get("pr_url", "")
+                _raw_status = output_json.get("status")
+                _raw_outcome = output_json.get("outcome")
+                if isinstance(_raw_status, str):
+                    agent_status = _raw_status
+                if isinstance(_raw_outcome, str):
+                    agent_outcome = _raw_outcome
 
             if status == "failed" and not result_summary:
                 # Never report a silent empty-summary failure — explain WHY the
@@ -1748,6 +1760,8 @@ def make_sandbox_agent_fn(
                             "agent_stderr": agent_stderr,
                             "stdout_length": _stdout_len,
                             "stderr_length": _stderr_len,
+                            "agent_status": agent_status,
+                            "agent_outcome": agent_outcome,
                             **_stall_reason_field,
                             **_sandbox_failure_fields,
                             "attempt_key": attempt_key,
@@ -1764,6 +1778,8 @@ def make_sandbox_agent_fn(
                     "agent_stderr": agent_stderr,
                     "stdout_length": _stdout_len,
                     "stderr_length": _stderr_len,
+                    "agent_status": agent_status,
+                    "agent_outcome": agent_outcome,
                     **_stall_reason_field,
                     **_sandbox_failure_fields,
                     "attempt_key": attempt_key,
