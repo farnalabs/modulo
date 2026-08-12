@@ -1679,6 +1679,131 @@ def step_jira_error_reports_quota(ctx):
     assert "X-RateLimit-Remaining" in error, f"Expected X-RateLimit-Remaining in error: {error}"
 
 
+@given("a Jira connector whose health check reports an invalid token")
+def step_jira_health_invalid_token(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Jira authentication failed — invalid or expired API token (HTTP 401)")
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@given("a Jira connector whose health check reports forbidden")
+def step_jira_health_forbidden(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(
+            ok=False,
+            detail="Jira permission denied — credentials lack the required permission (HTTP 403)",
+        )
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@given("a Jira connector whose health check reports a network error")
+def step_jira_health_network_error(ctx):
+    from modulo.connectors.base import HealthResult
+
+    async def mock_health_check():
+        return HealthResult(ok=False, detail="Jira API network error (code: network_connection): Connection refused")
+
+    ctx["connector"].health_check = mock_health_check
+
+
+@when("the Jira API returns HTTP 401 with an invalid token")
+def step_jira_api_401_invalid_token(ctx):
+    from modulo.connectors.jira import JiraAuthError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise JiraAuthError(
+            "Jira API HTTP 401: Unauthorized",
+            status_code=401,
+            error_code="invalid_token",
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@when("the Jira API returns HTTP 403 with insufficient permission")
+def step_jira_api_403_forbidden(ctx):
+    from modulo.connectors.jira import JiraAuthError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise JiraAuthError(
+            "Jira API HTTP 403: Forbidden",
+            status_code=403,
+            error_code="forbidden",
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@when("the Jira API returns HTTP 429 with exhausted quota")
+def step_jira_api_429_exhausted_quota(ctx):
+    from modulo.connectors.jira import JiraRateLimitError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise JiraRateLimitError(
+            "Jira API HTTP 429: Rate limit exceeded",
+            status_code=429,
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@when("the Jira API returns HTTP 404 for a missing issue")
+def step_jira_api_404_not_found(ctx):
+    from modulo.connectors.jira import JiraNotFoundError
+
+    connector = ctx["connector"]
+
+    async def mock_query(q):
+        raise JiraNotFoundError(
+            "Jira API HTTP 404: Not Found",
+            status_code=404,
+        )
+
+    connector.query = mock_query
+    ctx["query_error"] = None
+    ctx["_expected_operation"] = "query"
+
+
+@then(parsers.parse('the connector raises a Jira error with code "{code}"'))
+def step_connector_raises_jira_error_code(code, ctx):
+    import asyncio
+
+    from modulo.connectors.base import ConnectorQuery
+    from modulo.connectors.jira import JiraError
+
+    connector = ctx["connector"]
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"})))
+        ctx["query_error"] = "unexpected_success"
+    except JiraError as exc:
+        ctx["query_error"] = str(exc)
+        assert exc.error_code == code, f"Expected error code {code!r} but got {exc.error_code!r}"
+    except ValueError as exc:
+        ctx["query_error"] = str(exc)
+        raise AssertionError(f"Expected a JiraError but got a plain ValueError: {exc}") from exc
+    finally:
+        loop.close()
+
+
 @when(parsers.parse('I assign issue "{key}" to account "{account_id}"'))
 def step_jira_assign_issue(key, account_id, ctx):
     from modulo.connectors.base import ConnectorPayload

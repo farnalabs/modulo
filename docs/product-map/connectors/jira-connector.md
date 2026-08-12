@@ -8,6 +8,7 @@ bdd:
 unit-tests:
   - backend/tests/unit/connectors/test_jira.py
   - backend/tests/unit/connectors/test_jira_resilience.py
+  - backend/tests/unit/connectors/test_jira_errors.py
   - backend/tests/unit/connector_hub/test_build_connector.py
 code:
   - backend/src/modulo/connectors/jira/__init__.py
@@ -88,7 +89,9 @@ Async Jira REST API connector implementing `ConnectorBase`. Provides read/write 
 - [x] Catch `httpx.HTTPStatusError` — returns `HealthResult(ok=False)` with status code and response text
 - [x] Catch `httpx.TimeoutException` and `httpx.ConnectError` — returns `HealthResult(ok=False)` with connection error detail
 - [x] Catch any generic `Exception` — returns `HealthResult(ok=False)` with truncated message
-- [ ] Detect expired tokens vs invalid instance URL vs network errors — partially covered: HTTP errors and network errors distinguished, but token expiry vs invalid URL both produce HTTP 401
+- [x] Distinguish expired/invalid tokens (HTTP 401) from invalid instance URLs / network errors — `health_check()` reports "invalid or expired API token (HTTP 401)" vs "network error (code: network_connection)" as distinct, actionable details
+- [x] Report insufficient permission (HTTP 403) distinctly — "permission denied … (HTTP 403)"
+- [x] Report rate-limit exhaustion (HTTP 429) distinctly — "rate limit exhausted (HTTP 429) (code: rate_limited)"
 - [ ] Per-operation permission check before write operations
 
 ### Prompt Portability — issue-tracker terminology
@@ -116,6 +119,20 @@ Async Jira REST API connector implementing `ConnectorBase`. Provides read/write 
 - [x] `_call_api` surfaces `X-RateLimit-*` quota headers in the final 429 error message
 - [x] `_parse_json` narrowed to `json.JSONDecodeError` only — prevents masking programming errors
 
+### Typed Error Hierarchy
+
+- [x] `JiraError(ValueError)` base with machine-parseable `error_code` + originating `status_code` — all subclasses remain `ValueError`-compatible so `except ValueError` callers are unaffected
+- [x] `JiraAPIError` (`api_error`) raised for non-retryable business-level HTTP errors
+- [x] `JiraRateLimitError` (`rate_limited`) raised on exhausted 429 after automatic retries
+- [x] `JiraAuthError` with `invalid_token` (HTTP 401) vs `forbidden` (HTTP 403) — token-expiry distinguished from insufficient permission
+- [x] `JiraNotFoundError` (`not_found`) raised on HTTP 404
+- [x] `JiraNetworkError` with `network_timeout` / `network_connection` — transport failures (incl. unreachable/invalid instance URL) distinguished from HTTP errors
+- [x] `_error_for_status()` maps HTTP statuses → typed errors in one place
+- [x] `_parse_json` raises `JiraAPIError` with `invalid_response` on decode failure
+- [x] 304 raises `JiraAPIError` with `not_modified`
+- [x] Exhausted retries raise `JiraNetworkError` with `retries_exhausted`-style fallback message
+- [x] `health_check()` branches on typed exceptions — invalid/expired token, insufficient permission, rate-limit exhaustion, and network/transport failures reported as distinct details
+
 ### Resilience & Integration Robustness
 
 - [x] `_compute_delay` includes random jitter — prevents thundering herd on retry
@@ -138,11 +155,15 @@ Async Jira REST API connector implementing `ConnectorBase`. Provides read/write 
 - [x] ~~**No attachment support**~~ — **RESOLVED (2026-08-06)**: agents can upload via `write("issue_attachment")` / `write("attachment")`, list via `query("issue_attachments")` / `query("attachments")`, and download via `query("attachment")` (base64 content + content type)
 - [x] ~~**No remote links / components / versions**~~ — **RESOLVED (2026-08-06)**: added `query("issue_remote_links")` + `write("issue_remote_link")` + `write("remote_link_delete")`, and `query("project_components")` + `query("project_versions")`
 - [x] ~~**No field metadata**~~ — **RESOLVED (2026-08-05)**: agents can now discover create-issue fields + custom fields (`query("field_metadata")`), all instance fields (`query("fields")`), and per-project issue-type statuses (`query("statuses")`)
-- [ ] **Token-expiry vs invalid-URL distinction**: expired tokens and invalid instance URLs both surface HTTP 401 from `GET /myself` — only HTTP vs network error classes are distinguished
+- [x] ~~**Token-expiry vs invalid-URL distinction**~~ — **RESOLVED (2026-08-12)**: expired tokens (HTTP 401 → `JiraAuthError` `invalid_token`), insufficient permission (HTTP 403 → `forbidden`), rate-limit exhaustion (429 → `JiraRateLimitError`), and network/transport failures incl. unreachable instance URLs (`JiraNetworkError` `network_timeout`/`network_connection`) are now distinct typed errors with machine-parseable codes; `health_check()` surfaces each failure mode as an actionable detail
 
 ---
 
 ## QA History
+
+### 2026-08-12 — improve-architecture: typed-error programme (invalid-token vs permission vs rate-limit vs network distinction)
+
+**RESOLVED the "Token-expiry vs invalid-URL distinction" known gap** (`connectors/jira/__init__.py`). Jira failures were previously flattened into a single generic `ValueError` — no way to branch programmatically, and an expired token vs an invalid/unreachable instance URL were indistinguishable. Mirrored the Slack/GitHub/GitLab/Linear typed-exception programme. (1) **Typed error hierarchy** — new `JiraError(ValueError)` base + `JiraAPIError` (`api_error`), `JiraRateLimitError` (`rate_limited`), `JiraAuthError` (`invalid_token` on HTTP 401, `forbidden` on HTTP 403), `JiraNotFoundError` (`not_found`), `JiraNetworkError` (`network_timeout`/`network_connection`); every typed error carries a machine-parseable `error_code` + originating `status_code`. (2) **`_call_api` raises typed errors** — new `_error_for_status()` maps HTTP statuses → types in one place; 304 → `not_modified`, invalid JSON / non-object data → `invalid_response` (via `_parse_json`), exhausted 429 → `rate_limited`, timeouts/connection failures → `JiraNetworkError`; all subclasses remain `ValueError`-compatible so `except ValueError` callers (incl. the BDD mock connector) are unaffected. (3) **Health-check distinction** — `health_check()` now reports invalid/expired token, insufficient permission, rate-limit exhaustion, and transport failures as distinct details (`Jira authentication failed — invalid or expired API token (HTTP 401)`, `Jira permission denied — credentials lack the required permission (HTTP 403)`, `Jira API rate limit exhausted (HTTP 429) (code: rate_limited)`, `Jira API network error (code: network_connection): …`). **Tests** — 18 unit tests in `test_jira_errors.py` (hierarchy + default `error_code` matrix, `_error_for_status` matrix, 401/403/404/500/exhausted-429/timeout/connect/304/invalid-JSON typed errors, health-check invalid-token/forbidden/rate-limited/network-error/ok) + 7 BDD scenarios in `jira_connector.feature` (health invalid token / forbidden / network error, query typed errors `invalid_token`/`forbidden`/`rate_limited`/`not_found`) with 8 new step definitions in `test_connectors.py` + the mock connector extended. Updated product map (`unit-tests:` frontmatter, 4 behaviours `[ ]`→`[x]`, 11 new Typed Error Hierarchy behaviours, Known Gap → RESOLVED, QA History). 18/18 `test_jira_errors.py` pass, 151/151 jira connector unit tests pass (133 existing + 18 new), 7/7 new jira BDD scenarios pass (8 pre-existing connector-suite BDD failures unchanged), ruff check + format clean, mypy --strict clean. Status: partial (per-operation permission checks, prompt portability documentation remain).
 
 ### 2026-08-06 — improve-architecture: Jira Data Center + attachments + remote links + components/versions RESOLVED
 

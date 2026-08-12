@@ -110,6 +110,80 @@ def _jitter(delay: float, *, tight: bool = False) -> float:
     return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
 
 
+class JiraError(ValueError):
+    """Base class for all Jira connector errors.
+
+    Carries a machine-parseable ``error_code`` so callers can branch on
+    failure modes (invalid/expired token, insufficient permission, rate limit,
+    network) without parsing human-readable messages. ``status_code`` holds the
+    Jira HTTP status when the error originated from an HTTP response (``None``
+    for transport-level failures and local validation).
+    """
+
+    error_code = "jira_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        if error_code is not None:
+            self.error_code = error_code
+        self.status_code = status_code
+
+
+class JiraAPIError(JiraError):
+    """Raised when Jira returns a non-retryable business-level HTTP error."""
+
+    error_code = "api_error"
+
+
+class JiraRateLimitError(JiraAPIError):
+    """Raised when Jira rate-limits the request and automatic retries are exhausted."""
+
+    error_code = "rate_limited"
+
+
+class JiraAuthError(JiraAPIError):
+    """Raised when the token/credentials are invalid or expired (HTTP 401) or
+    the authenticated user lacks the required permission (HTTP 403).
+
+    The ``error_code`` distinguishes the two auth failure modes:
+    ``invalid_token`` (bad/expired credentials) vs ``forbidden`` (the
+    credentials are valid but lack the required permission).
+    """
+
+    error_code = "authentication_failed"
+
+
+class JiraNotFoundError(JiraAPIError):
+    """Raised when Jira reports a resource does not exist (HTTP 404)."""
+
+    error_code = "not_found"
+
+
+class JiraNetworkError(JiraError):
+    """Raised on transport-level failures (timeout, connection)."""
+
+    error_code = "network_error"
+
+
+def _error_for_status(status_code: int, detail: str) -> JiraError:
+    """Map a Jira HTTP status to the matching structured error type."""
+    if status_code == 429:
+        return JiraRateLimitError(detail, status_code=429)
+    if status_code == 401:
+        return JiraAuthError(detail, status_code=401, error_code="invalid_token")
+    if status_code == 403:
+        return JiraAuthError(detail, status_code=403, error_code="forbidden")
+    if status_code == 404:
+        return JiraNotFoundError(detail, status_code=404)
+    return JiraAPIError(detail, status_code=status_code)
+
+
 class JiraConnector(ConnectorBase):
     """Read/write Jira issues via the REST API (Cloud API v3 / Data Center API v2).
 
@@ -174,6 +248,16 @@ class JiraConnector(ConnectorBase):
     response headers when present (empty dict when absent; Jira Data Center
     does not report these headers). On HTTP 429 the connector waits until
     ``X-RateLimit-Reset`` instead of blind backoff.
+
+    Errors are raised as ``JiraError`` subclasses (all ``ValueError``-compatible)
+    carrying a machine-parseable ``error_code``: ``JiraAuthError`` with
+    ``invalid_token`` (HTTP 401) or ``forbidden`` (HTTP 403),
+    ``JiraRateLimitError`` (``rate_limited``, exhausted HTTP 429),
+    ``JiraNotFoundError`` (``not_found``, HTTP 404), ``JiraNetworkError``
+    (``network_timeout`` / ``network_connection``), and ``JiraAPIError``
+    (``api_error`` / ``invalid_response`` / ``not_modified``). ``health_check()``
+    surfaces each failure mode distinctly (expired token vs insufficient
+    permission vs rate limit vs unreachable instance/network error).
     """
 
     def __init__(
@@ -241,7 +325,11 @@ class JiraConnector(ConnectorBase):
                 async with self._client() as client:
                     r = await client.request(method, path, **kwargs)
                     if r.status_code == 304:
-                        raise ValueError("Jira API returned 304 Not Modified — resource unchanged")
+                        raise JiraAPIError(
+                            "Jira API returned 304 Not Modified — resource unchanged",
+                            error_code="not_modified",
+                            status_code=304,
+                        )
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         await asyncio.sleep(self._sleep_delay(r, attempt))
                         continue
@@ -252,25 +340,26 @@ class JiraConnector(ConnectorBase):
                 if exc.response.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                     await asyncio.sleep(self._sleep_delay(exc.response, attempt))
                     continue
+                status_code = exc.response.status_code
                 detail = exc.response.text[:200]
-                if exc.response.status_code == 429:
+                if status_code == 429:
                     quota = _rate_limit_detail(exc.response)
                     if quota:
                         detail = f"{detail} (quota: {quota})"
-                raise ValueError(f"Jira API HTTP {exc.response.status_code}: {detail}") from exc
+                raise _error_for_status(status_code, f"Jira API HTTP {status_code}: {detail}") from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(_jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
                     continue
-                raise ValueError("Jira API timeout") from exc
+                raise JiraNetworkError("Jira API timeout", error_code="network_timeout") from exc
             except httpx.ConnectError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(_jitter(min(_BASE_DELAY * (1 << attempt), _MAX_DELAY)))
                     continue
-                raise ValueError("Jira API connection error") from exc
-        raise ValueError("Jira API request failed after retries") from last_exc
+                raise JiraNetworkError("Jira API connection error", error_code="network_connection") from exc
+        raise JiraNetworkError("Jira API request failed after retries") from last_exc
 
     @staticmethod
     def _sleep_delay(response: httpx.Response, attempt: int) -> float:
@@ -288,23 +377,49 @@ class JiraConnector(ConnectorBase):
         return _compute_delay(attempt, response)
 
     async def _parse_json(self, response: httpx.Response) -> Any:
-        """Safely parse JSON response, wrapping decode errors."""
+        """Safely parse JSON response, wrapping decode errors as a typed error."""
         try:
             return response.json()
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Jira API invalid response: {response.text[:200]}") from exc
+            raise JiraAPIError(
+                f"Jira API invalid response: {response.text[:200]}",
+                error_code="invalid_response",
+            ) from exc
 
     async def health_check(self) -> HealthResult:
-        """Verify connectivity by fetching the current user's profile."""
+        """Verify connectivity by fetching the current user's profile.
+
+        Distinguishes invalid/expired credentials (HTTP 401), insufficient
+        permission (HTTP 403), rate-limit exhaustion (HTTP 429), and
+        transport failures (timeout/connection — incl. an unreachable instance
+        URL) so the failure mode is actionable rather than a generic message.
+        """
         try:
             r = await self._call_api("GET", "/myself")
             user_info = await self._parse_json(r)
             display_name = user_info.get("displayName", "")
             return HealthResult(ok=True, detail=display_name)
-        except ValueError as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
         except asyncio.CancelledError:
             raise
+        except JiraAuthError as exc:
+            if exc.error_code == "invalid_token":
+                return HealthResult(
+                    ok=False,
+                    detail="Jira authentication failed — invalid or expired API token (HTTP 401)",
+                )
+            return HealthResult(
+                ok=False,
+                detail="Jira permission denied — credentials lack the required permission (HTTP 403)",
+            )
+        except JiraRateLimitError:
+            return HealthResult(
+                ok=False,
+                detail="Jira API rate limit exhausted (HTTP 429) (code: rate_limited)",
+            )
+        except JiraNetworkError as exc:
+            return HealthResult(ok=False, detail=f"Jira API network error (code: {exc.error_code}): {exc}")
+        except JiraError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

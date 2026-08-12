@@ -194,3 +194,47 @@ Feature: Jira Connector
     Given a Jira connector with valid credentials
     When I query attachment content without an id
     Then the result is an error
+
+  Scenario: Health check detects an invalid or expired token
+    Given a Jira connector with valid credentials
+    And a Jira connector whose health check reports an invalid token
+    When I perform a health check
+    Then the health result indicates failure
+    And the health result detail contains "invalid or expired API token"
+    And the health result detail contains "HTTP 401"
+
+  Scenario: Health check detects insufficient permission
+    Given a Jira connector with valid credentials
+    And a Jira connector whose health check reports forbidden
+    When I perform a health check
+    Then the health result indicates failure
+    And the health result detail contains "permission denied"
+    And the health result detail contains "HTTP 403"
+
+  Scenario: Health check detects a network error distinct from a token failure
+    Given a Jira connector with valid credentials
+    And a Jira connector whose health check reports a network error
+    When I perform a health check
+    Then the health result indicates failure
+    And the health result detail contains "network error"
+    And the health result detail contains "code: network_connection"
+
+  Scenario: Query surfaces a typed auth error with a machine-readable code
+    Given a Jira connector with valid credentials
+    When the Jira API returns HTTP 401 with an invalid token
+    Then the connector raises a Jira error with code "invalid_token"
+
+  Scenario: Query surfaces a permission error with a machine-readable code
+    Given a Jira connector with valid credentials
+    When the Jira API returns HTTP 403 with insufficient permission
+    Then the connector raises a Jira error with code "forbidden"
+
+  Scenario: Query surfaces a rate-limit error with a machine-readable code
+    Given a Jira connector with valid credentials
+    When the Jira API returns HTTP 429 with exhausted quota
+    Then the connector raises a Jira error with code "rate_limited"
+
+  Scenario: Query surfaces a not-found error with a machine-readable code
+    Given a Jira connector with valid credentials
+    When the Jira API returns HTTP 404 for a missing issue
+    Then the connector raises a Jira error with code "not_found"
