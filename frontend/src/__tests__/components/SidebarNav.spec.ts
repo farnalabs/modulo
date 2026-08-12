@@ -50,6 +50,18 @@ function mountSidebar(props = {}) {
 describe('SidebarNav', () => {
   beforeEach(() => {
     localStorage.clear()
+    // useSidebar's useStorage refs are module singletons — localStorage.clear()
+    // alone leaves the in-memory refs polluted across tests (a prior test may
+    // have collapsed a group). Dispatch a synthetic storage event so
+    // @vueuse/core's listener resets the 'sidebar-group-prefs' ref to its
+    // default empty state.
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'sidebar-group-prefs',
+        newValue: '{}',
+        storageArea: localStorage,
+      }),
+    )
     vi.clearAllMocks()
   })
 
@@ -147,14 +159,58 @@ describe('SidebarNav', () => {
     expect(localStorage.getItem('sidebar-group-prefs')).toContain('core')
   })
 
-  it('renders a flat collapsed list with no group headers when collapsed', async () => {
+  it('renders a collapsed rail with per-group disclosure controls instead of a flat list', async () => {
     const { wrapper } = mountSidebar({ collapsed: true })
     await flushPromises()
+    // no full sidebar group headers in the rail
     expect(wrapper.findAll('.sidebar-group-header').length).toBe(0)
+    // one disclosure button per visible group (BUILD is the only visible group for a viewer)
+    const toggles = wrapper.findAll('.sidebar-group-rail-toggle')
+    expect(toggles.length).toBe(1)
+    const toggle = toggles[0]
+    // BUILD is default-expanded -> aria-expanded true
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(toggle.attributes('aria-controls')).toBe('sidebar-group-rail-core')
+    expect(toggle.attributes('title')).toBeTruthy()
+    expect(toggle.attributes('aria-label')).toBeTruthy()
+    // expanded groups render their item links (dashboard and runs for a viewer)
     const links = wrapper.findAll('.sidebar-link')
-    // visible items across visible groups: dashboard and runs for a viewer
     expect(links.length).toBe(2)
     expect(links.map((l) => l.attributes('href'))).toEqual(expect.arrayContaining(['/', '/runs']))
     expect(links.every((l) => l.attributes('title'))).toBe(true)
+  })
+
+  it('collapses groups in the rail, hiding their items, and persists the toggle', async () => {
+    const { wrapper } = mountSidebar({ collapsed: true })
+    await flushPromises()
+    const toggle = wrapper.find('.sidebar-group-rail-toggle')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.sidebar-group-rail-toggle').attributes('aria-expanded')).toBe('false')
+    // a collapsed group renders no item links in the rail
+    expect(wrapper.findAll('.sidebar-link').length).toBe(0)
+    // persisted for the next mount
+    expect(localStorage.getItem('sidebar-group-prefs')).toContain('core')
+  })
+
+  it('honours per-group collapse state for system admins in the rail', async () => {
+    const { wrapper } = mountSidebar({ collapsed: true, isSystemAdmin: true })
+    await flushPromises()
+    const toggles = wrapper.findAll('.sidebar-group-rail-toggle')
+    expect(toggles.length).toBe(2)
+    const byControls = Object.fromEntries(
+      toggles.map((b) => [b.attributes('aria-controls'), b.attributes('aria-expanded')]),
+    )
+    // BUILD is default-expanded, ADMIN is default-collapsed
+    expect(byControls['sidebar-group-rail-core']).toBe('true')
+    expect(byControls['sidebar-group-rail-admin']).toBe('false')
+    // expanded group's links render; collapsed group's links do not
+    expect(wrapper.findAll('.sidebar-link').map((l) => l.attributes('href'))).toEqual(
+      expect.arrayContaining(['/', '/runs']),
+    )
+    expect(wrapper.findAll('.sidebar-link').map((l) => l.attributes('href'))).not.toContain(
+      '/settings/license',
+    )
   })
 })
