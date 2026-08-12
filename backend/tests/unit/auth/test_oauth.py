@@ -142,7 +142,9 @@ class TestHashSecret:
         assert len(_hash_secret("anything")) == 64
 
     def test_deterministic(self) -> None:
-        assert _hash_secret("foo") == _hash_secret("foo")
+        # Golden value pins the exact digest so a change in algorithm or
+        # encoding fails loudly instead of silently altering client hashes.
+        assert _hash_secret("foo") == "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
 
     def test_different_inputs_differ(self) -> None:
         assert _hash_secret("foo") != _hash_secret("bar")
