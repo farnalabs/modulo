@@ -1,5 +1,6 @@
 """Unit tests for Notifier dispatch, HMAC signing, retry, and dead-letter logic."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -474,6 +475,59 @@ async def test_dispatch_429_missing_retry_after_uses_default_backoff(notifier: N
     assert sleeps == RETRY_DELAYS
 
 
+async def test_dispatch_retain_payload_re_raises_cancelled_error_on_encrypt(notifier: Notifier) -> None:
+    """A cancellation while encrypting the retained payload must propagate."""
+    ep = _fake_endpoint(secret=None)
+    notifier._fernet = MagicMock()
+    notifier._fernet.encrypt = MagicMock(side_effect=asyncio.CancelledError)
+
+    with (
+        patch.object(notifier, "_record_delivery", AsyncMock()),
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        patch.object(notifier, "_reset_dead_letter", AsyncMock()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(200))
+            await _do_dispatch(notifier, ep, retain_payload=True)
+
+
+async def test_dispatch_retain_payload_encrypt_failure_logs_and_continues(notifier: Notifier) -> None:
+    """A failed payload encryption must be logged but must not drop the delivery."""
+    ep = _fake_endpoint(secret=None)
+    record_kwargs: dict[str, Any] = {}
+
+    async def _record(
+        endpoint: Any,
+        event_type: str,
+        run_id: Any,
+        status: str,
+        attempt_count: int,
+        response_code: Any,
+        last_error: Any,
+        payload_ciphertext: Any,
+    ) -> None:
+        record_kwargs.update(payload_ciphertext=payload_ciphertext)
+
+    notifier._fernet = MagicMock()
+    notifier._fernet.encrypt = MagicMock(side_effect=RuntimeError("crypto unavailable"))
+
+    with (
+        patch.object(notifier, "_record_delivery", _record),
+        patch.object(notifier, "_increment_dead_letter", AsyncMock()),
+        patch.object(notifier, "_reset_dead_letter", AsyncMock()),
+        patch("modulo.core.notifier._log.exception") as mock_log,
+    ):
+        async with respx.mock:
+            respx.post(ep.url).mock(Response(200))
+            result = await _do_dispatch(notifier, ep, retain_payload=True)
+
+    assert result.status == "delivered"
+    assert record_kwargs.get("payload_ciphertext") is None
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[0] == "notifier.encrypt_failed"
+
+
 # ---------------------------------------------------------------------------
 # _increment_dead_letter
 # ---------------------------------------------------------------------------
@@ -515,6 +569,33 @@ async def test_increment_dead_letter_auto_disables_at_threshold(notifier: Notifi
         await notifier._increment_dead_letter(ep)
 
     assert ep.auto_disabled, "Should auto-disable at threshold"
+
+
+async def test_increment_dead_letter_re_raises_cancelled_error(notifier: Notifier) -> None:
+    """A cancellation during the dead-letter UPDATE must propagate."""
+    ep = _fake_endpoint()
+    _, factory = _make_db_session(execute=AsyncMock(side_effect=asyncio.CancelledError))
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await notifier._increment_dead_letter(ep)
+
+
+async def test_increment_dead_letter_survives_db_error(notifier: Notifier) -> None:
+    """A DB error during the dead-letter UPDATE is logged, never re-raised."""
+    ep = _fake_endpoint()
+    _, factory = _make_db_session(execute=AsyncMock(side_effect=RuntimeError("db down")))
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        patch("modulo.core.notifier._log.exception") as mock_log,
+    ):
+        await notifier._increment_dead_letter(ep)
+
+    mock_log.assert_called_once()
+    assert mock_log.call_args.args[0] == "notifier.increment_dead_letter_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +653,18 @@ async def test_reset_dead_letter_survives_db_error(notifier: Notifier) -> None:
     mock_log.assert_called_once()
 
 
+async def test_reset_dead_letter_re_raises_cancelled_error(notifier: Notifier) -> None:
+    """A cancellation during the reset UPDATE must propagate."""
+    ep = _fake_endpoint()
+    _, factory = _make_db_session(execute=AsyncMock(side_effect=asyncio.CancelledError))
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await notifier._reset_dead_letter(ep)
+
+
 # ---------------------------------------------------------------------------
 # _record_delivery
 # ---------------------------------------------------------------------------
@@ -623,6 +716,18 @@ async def test_record_delivery_survives_db_error(notifier: Notifier) -> None:
         await notifier._record_delivery(ep, "hitl_awaiting", _RUN, "delivered", 1, 200, None, None)
 
     mock_log.assert_called_once()
+
+
+async def test_record_delivery_re_raises_cancelled_error(notifier: Notifier) -> None:
+    """A cancellation while writing the delivery log must propagate."""
+    ep = _fake_endpoint()
+    _, factory = _make_db_session(add=MagicMock(side_effect=asyncio.CancelledError))
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await notifier._record_delivery(ep, "hitl_awaiting", _RUN, "delivered", 1, 200, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +821,32 @@ async def test_dispatch_event_in_app_failure_does_not_abort_webhooks(notifier: N
     mock_log.assert_called_once()
 
 
-async def test_dispatch_event_retains_payload_end_to_end(notifier: Notifier) -> None:
+async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifier: Notifier) -> None:
+    """A cancellation inside the in-app notification block must propagate, not be
+    swallowed by the ``except Exception`` guard."""
+    mapper_instance = MagicMock()
+    mapper_instance.create_from_event = AsyncMock(return_value=None)
+
+    with (
+        patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[])),
+        patch.object(notifier, "_session_factory") as factory,
+        patch(
+            "modulo.core.notifier.event_mapper.NotificationEventMapper",
+            return_value=mapper_instance,
+        ),
+        patch("modulo.core.notifier.set_rls_org", AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        factory.return_value.__aenter__.return_value = session
+
+        await notifier.dispatch_event(_ORG, "hitl_overdue", {"run_id": str(_RUN)})
+
+    mapper_instance.create_from_event.assert_not_called()
     """retain_payload must flow from dispatch_event through _dispatch_inline to the
     delivery log, encrypting the actual body that was POSTed (incl. timestamp)."""
     ep = _fake_endpoint()
