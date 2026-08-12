@@ -2133,7 +2133,29 @@ export default {
       "description": "Description"
     },
     "LifecycleMapView": {
-      "version_label": "Version:"
+      "version_label": "Version:",
+      "journey": {
+        "detail_title": "Journey: {journey}",
+        "close": "Close",
+        "loading": "Loading journey...",
+        "no_runs": "No runs yet",
+        "run_count": "{count} run | {count} runs",
+        "provenance": {
+          "derived": "Derived",
+          "reported": "Reported"
+        },
+        "status": {
+          "complete": "Complete",
+          "failed": "Failed",
+          "stalled": "Stalled",
+          "running": "Running",
+          "pending": "Pending",
+          "awaiting_human": "Awaiting Human",
+          "cancelled": "Cancelled",
+          "eval_failed": "Eval Failed",
+          "claimed": "Claimed"
+        }
+      }
     },
     "EnvironmentProfileList": {
       "try_a_different_search_term": "Try a different search term.",

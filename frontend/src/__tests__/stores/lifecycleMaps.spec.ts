@@ -11,6 +11,7 @@ vi.mock('../../lib/api/auth', () => ({
 
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapVersion, LifecycleStage } from '../../stores/lifecycleMaps'
+import type { JourneySummary } from '../../types/lifecycleMap'
 
 function okJsonResponse(data: unknown) {
   return {
@@ -86,6 +87,25 @@ const version = (overrides: Partial<LifecycleMapVersion> = {}): LifecycleMapVers
   version: 2,
   created_at: '2026-01-02T00:00:00Z',
   created_by: 'alice',
+  ...overrides,
+})
+
+const journey = (overrides: Partial<JourneySummary> = {}): JourneySummary => ({
+  kind: 'pr',
+  ref: '123',
+  canonical_work_item_id: '00000000-0000-0000-0000-000000000001',
+  current_stage: {
+    map_id: 'map-1',
+    version: 1,
+    stage_id: 'stage-1',
+    stage_name: 'Build',
+    position: 0,
+  },
+  status: 'running',
+  provenance: 'derived',
+  run_count: 3,
+  latest_run_id: '00000000-0000-0000-0000-000000000003',
+  updated_at: '2026-01-03T00:00:00Z',
   ...overrides,
 })
 
@@ -343,5 +363,126 @@ describe('useLifecycleMapsStore', () => {
 
     expect(store.pipelines).toEqual([])
     expect(store.error).toBe('pipelines down')
+  })
+
+  it('fetchJourneys populates the journeys list', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({ items: [journey()], next_cursor: null }))
+    const store = useLifecycleMapsStore()
+
+    await store.fetchJourneys('map-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/lifecycle-maps/map-1/journeys?limit=200',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(store.journeys).toHaveLength(1)
+    expect(store.journeys[0].kind).toBe('pr')
+    expect(store.isLoadingJourneys).toBe(false)
+    expect(store.journeysError).toBeNull()
+  })
+
+  it('fetchJourneys tolerates a missing items key', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({}))
+    const store = useLifecycleMapsStore()
+
+    await store.fetchJourneys('map-1')
+
+    expect(store.journeys).toEqual([])
+    expect(store.journeysError).toBeNull()
+  })
+
+  it('fetchJourneys groups journeys by their current stage', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({
+      items: [
+        journey(),
+        journey({ ref: '456', current_stage: { ...journey().current_stage!, stage_id: 'stage-2' } }),
+      ],
+    }))
+    const store = useLifecycleMapsStore()
+
+    await store.fetchJourneys('map-1')
+
+    expect(store.journeysByStage['stage-1']).toHaveLength(1)
+    expect(store.journeysByStage['stage-2']).toHaveLength(1)
+    expect(store.journeysByStage['stage-1'][0].ref).toBe('123')
+  })
+
+  it('fetchJourneys drops journeys without a current stage from the stage grouping', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({
+      items: [journey({ current_stage: null })],
+    }))
+    const store = useLifecycleMapsStore()
+
+    await store.fetchJourneys('map-1')
+
+    expect(store.journeys).toHaveLength(1)
+    expect(store.journeysByStage).toEqual({})
+  })
+
+  it('fetchJourneys surfaces the error and empties the list', async () => {
+    fetchMock.mockResolvedValue(errorResponse(404, 'map gone'))
+    const store = useLifecycleMapsStore()
+    store.journeys = [journey()]
+
+    await store.fetchJourneys('map-1')
+
+    expect(store.journeys).toEqual([])
+    expect(store.journeysError).toBe('map gone')
+    expect(store.isLoadingJourneys).toBe(false)
+  })
+
+  it('fetchJourneyDetail loads the journey with its run history', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({
+      ...journey(),
+      runs: [{ run_id: 'run-1', status: 'complete', completed_at: '2026-01-04T00:00:00Z', provenance: 'derived' }],
+    }))
+    const store = useLifecycleMapsStore()
+
+    await store.fetchJourneyDetail('map-1', 'pr', '123')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/lifecycle-maps/map-1/journeys/pr/123',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(store.selectedJourneyKey).toBe('pr:123')
+    expect(store.journeyDetail?.runs).toHaveLength(1)
+    expect(store.journeyDetail?.runs[0].status).toBe('complete')
+    expect(store.isLoadingJourneyDetail).toBe(false)
+  })
+
+  it('fetchJourneyDetail URL-encodes the ref path segment', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({ ...journey(), runs: [] }))
+    const store = useLifecycleMapsStore()
+
+    await store.fetchJourneyDetail('map-1', 'issue', 'PROJ/42')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/lifecycle-maps/map-1/journeys/issue/PROJ%2F42',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('fetchJourneyDetail records the error and keeps the selected key', async () => {
+    fetchMock.mockResolvedValue(errorResponse(404, 'journey gone'))
+    const store = useLifecycleMapsStore()
+
+    await store.fetchJourneyDetail('map-1', 'pr', '999')
+
+    expect(store.journeyDetailError).toBe('journey gone')
+    expect(store.journeyDetail).toBeNull()
+    expect(store.selectedJourneyKey).toBe('pr:999')
+    expect(store.isLoadingJourneyDetail).toBe(false)
+  })
+
+  it('clearJourneyDetail resets the detail state', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({ ...journey(), runs: [] }))
+    const store = useLifecycleMapsStore()
+    await store.fetchJourneyDetail('map-1', 'pr', '123')
+
+    store.clearJourneyDetail()
+
+    expect(store.journeyDetail).toBeNull()
+    expect(store.journeyDetailError).toBeNull()
+    expect(store.selectedJourneyKey).toBeNull()
   })
 })
