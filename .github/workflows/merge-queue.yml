@@ -68,11 +68,15 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
+
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Configure git
         run: |
@@ -499,11 +503,11 @@ jobs:
         if: steps.merge.outputs.merged_count != '0'
         working-directory: frontend
         run: |
-          npm ci
-          npm run lint -- --quiet
-          npm run type-check
-          npm run test:unit
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run lint -- --quiet
+          pnpm run type-check
+          pnpm run test:unit
+          pnpm run build
 
       - name: Capture frontend failures
         if: failure() && steps.merge.outputs.merged_count != '0'

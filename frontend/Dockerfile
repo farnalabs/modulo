@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --ignore-scripts --no-audit --no-fund && \
+COPY package.json pnpm-lock.yaml .npmrc pnpm-workspace.yaml ./
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    npm install -g pnpm@11.21.0 && pnpm install --frozen-lockfile --ignore-scripts && \
     if [ ! -f node_modules/reka-ui/dist/index.d.ts ] && [ -f node_modules/reka-ui/dist/index.d.cts ]; then \
         cp node_modules/reka-ui/dist/index.d.cts node_modules/reka-ui/dist/index.d.ts; \
     fi && \
@@ -12,4 +12,4 @@ RUN --mount=type=cache,target=/root/.npm \
     fi
 COPY . .
 EXPOSE 5173
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+CMD ["pnpm", "run", "dev", "--", "--host", "0.0.0.0"]

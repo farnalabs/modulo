@@ -5,7 +5,7 @@
 FAR-101 follow-up on #817. The frontend suite (641 tests, ~94 files) runs on
 GitHub's `ubicloud-standard-2` runner (2 vCPU). Facts and rules:
 
-- **Worker concurrency is capped in CI, not in config.** `npm run test:unit` is
+- **Worker concurrency is capped in CI, not in config.** `pnpm run test:unit` is
   `vitest run src --pool=threads --maxWorkers=4`, and vitest CLI flags override
   anything set in `vite.config.ts`. So `maxWorkers` is deliberately NOT set in
   the config file — it lives in `.github/workflows/ci.yml` (Frontend and WCAG
@@ -24,7 +24,7 @@ GitHub's `ubicloud-standard-2` runner (2 vCPU). Facts and rules:
   over bare `await flushPromises()` chains, and always tear down timers/mocks
   in `afterEach`. Never use fixed sleeps to make a test pass.
 - If you need to run the suite locally in a worktree, run the CI-equivalent:
-  `npx vitest run src --pool=threads --maxWorkers=2` (fewer workers is also
+  `pnpm exec vitest run src --pool=threads --maxWorkers=2` (fewer workers is also
   much faster on 2-core dev machines).
 
 ## Lessons Learned
@@ -34,12 +34,12 @@ GitHub's `ubicloud-standard-2` runner (2 vCPU). Facts and rules:
 The `reka-ui` npm package v2.10.1 ships its type declarations as `dist/index.d.cts` (CommonJS TypeScript)
 but its `package.json` `types` field points to the non-existent `dist/index.d.ts`. This causes
 `@vue/compiler-sfc` to fail with "Unresolvable type reference" when resolving
-`defineProps<RekaUiProps>()` in `.vue` components, breaking both `npm run build` and `npm run test:unit`.
+`defineProps<RekaUiProps>()` in `.vue` components, breaking both `pnpm run build` and `pnpm run test:unit`.
 
 The `postinstall` script in `package.json` (at `scripts/reka-ui-patch.ps1`) copies
-`index.d.cts` → `index.d.ts` after each `npm install`.
+`index.d.cts` → `index.d.ts` after each `pnpm install`.
 
-**Verification:** After `npm install`, run:
+**Verification:** After `pnpm install`, run:
 ```powershell
 Test-Path node_modules/reka-ui/dist/index.d.ts
 # Should be True
@@ -49,8 +49,8 @@ When upgrading reka-ui, verify the package still ships only `.d.cts` (not `.d.ts
 and that `scripts/reka-ui-patch.ps1` still applies. If reka-ui ships proper `.d.ts`
 in a future version, remove `scripts/reka-ui-patch.ps1` and the `postinstall` script.
 
-**Note:** The postinstall only runs on `npm install`. If `scripts/reka-ui-patch.ps1`
-is edited, re-run `npm install` (not just the script) to ensure the hook fires.
+**Note:** The postinstall only runs on `pnpm install`. If `scripts/reka-ui-patch.ps1`
+is edited, re-run `pnpm install` (not just the script) to ensure the hook fires.
 
 ### Permission gating: `canSeeItem()` must check `requiredPermissions`
 
