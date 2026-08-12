@@ -1,17 +1,21 @@
 <template>
   <div class="page-wide">
-    <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
+    <ErrorAlert v-if="error" :message="error" />
     <template v-else>
-      <PageHeader :title="$t('views.AgentOutputDiffView.agent_output_diff')" subtitle="Compare agent outputs across two pipeline runs" />
+      <PageHeader :title="$t('views.AgentOutputDiffView.agent_output_diff')" :subtitle="$t('views.AgentOutputDiffView.subtitle')" />
 
-      <div class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
+      <div v-if="loadingRuns" class="rounded-lg border bg-card p-6" data-testid="diff-loading">
+        <div class="grid gap-4">
+          <div v-for="n in 3" :key="n" class="h-9 animate-pulse rounded-lg bg-muted" />
+        </div>
+      </div>
+      <div v-else class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
         <div class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</span>
+          <label for="agentoutputdiffview-field-run-a" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</label>
           <div class="flex gap-2">
             <Select aria-label="Select run A" v-model="runIdA">
               <SelectTrigger data-testid="diff-recent-runs-a" aria-label="Select run A" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
+                <SelectValue :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
@@ -19,11 +23,12 @@
                 </SelectItem>
               </SelectContent>
             </Select>
-            <input aria-label="Paste a run ID (or select from dropdown)"
+            <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
               v-model="runIdA"
+              id="agentoutputdiffview-field-run-a"
               data-testid="diff-run-id-a"
               type="text"
-                placeholder="Paste a run ID (or select from dropdown)"
+              :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
               class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
@@ -34,16 +39,16 @@
             v-model="nodeId"
             data-testid="diff-node-id"
             type="text"
-            placeholder="node_name"
+            :placeholder="$t('views.AgentOutputDiffView.node_id_placeholder')"
             class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
         </label>
         <div class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</span>
+          <label for="agentoutputdiffview-field-run-b" class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</label>
           <div class="flex gap-2">
             <Select aria-label="Select run B" v-model="runIdB">
               <SelectTrigger data-testid="diff-recent-runs-b" aria-label="Select run B" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <SelectValue :placeholder="loadingRuns ? 'Loading...' : 'Select recent run...'" />
+                <SelectValue :placeholder="loadingRuns ? $t('views.AgentOutputDiffView.loading') : $t('views.AgentOutputDiffView.select_recent_run')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem v-for="run in recentRuns" :key="run.id" :value="run.id">
@@ -51,23 +56,24 @@
                 </SelectItem>
               </SelectContent>
             </Select>
-            <input aria-label="Paste a run ID (or select from dropdown)"
+            <input :aria-label="$t('views.AgentOutputDiffView.paste_run_id')"
               v-model="runIdB"
+              id="agentoutputdiffview-field-run-b"
               data-testid="diff-run-id-b"
               type="text"
-              placeholder="Paste a run ID (or select from dropdown)"
+              :placeholder="$t('views.AgentOutputDiffView.paste_run_id')"
               class="w-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
         </div>
         <Button
-          :disabled="!canCompare"
+          :disabled="!canCompare || loading"
           data-testid="diff-compare-btn"
           variant="default"
           class="px-5 py-2"
           @click="handleCompare"
         >
-          Compare
+          {{ $t('views.AgentOutputDiffView.compare') }}
         </Button>
       </div>
 
@@ -77,36 +83,36 @@
           data-testid="diff-identical-banner"
           class="rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-center text-sm font-medium text-green-600"
         >
-          Outputs are identical
+          {{ $t('views.AgentOutputDiffView.outputs_identical') }}
         </div>
 
         <div class="flex flex-wrap gap-4 text-sm">
           <span class="rounded bg-muted px-2.5 py-1 tabular-nums text-muted-foreground">
-            <strong class="text-foreground">{{ totalLines }}</strong> lines total
+            {{ $t('views.AgentOutputDiffView.lines_total', { count: totalLines }) }}
           </span>
           <span class="rounded bg-green-500/10 px-2.5 py-1 tabular-nums text-green-600">
-            +<strong>{{ addedCount }}</strong> added
+            {{ $t('views.AgentOutputDiffView.added', { count: addedCount }) }}
           </span>
           <span class="rounded bg-red-500/10 px-2.5 py-1 tabular-nums text-red-600">
-            -<strong>{{ removedCount }}</strong> removed
+            {{ $t('views.AgentOutputDiffView.removed', { count: removedCount }) }}
           </span>
           <span class="rounded bg-muted px-2.5 py-1 tabular-nums text-muted-foreground">
-            <strong class="text-foreground">{{ unchangedCount }}</strong> unchanged
+            {{ $t('views.AgentOutputDiffView.unchanged', { count: unchangedCount }) }}
           </span>
         </div>
 
         <details class="rounded-lg border bg-card">
           <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
-            Raw outputs (collapsible)
+            {{ $t('views.AgentOutputDiffView.raw_outputs') }}
           </summary>
           <div class="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2">
             <div>
-              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}: <span class="font-mono">{{ runIdA }}</span></h4>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a_output', { runId: runIdA }) }}</h4>
               <JsonViewer v-if="result.node_output_a" :data="result.node_output_a" :show-toolbar="true" :max-height="'16rem'" />
               <span v-else class="text-xs text-muted-foreground">—</span>
             </div>
             <div>
-              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}: <span class="font-mono">{{ runIdB }}</span></h4>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b_output', { runId: runIdB }) }}</h4>
               <JsonViewer v-if="result.node_output_b" :data="result.node_output_b" :show-toolbar="true" :max-height="'16rem'" />
               <span v-else class="text-xs text-muted-foreground">—</span>
             </div>
@@ -115,11 +121,17 @@
 
         <div class="overflow-hidden rounded-lg border bg-card">
           <div class="border-b bg-muted/50 px-4 py-2 text-xs font-medium text-muted-foreground">
-            Line-level diff <span class="ml-2 text-green-500">(+) added</span> <span class="ml-1 text-red-500">(-) removed</span>
+            {{ $t('views.AgentOutputDiffView.line_level_diff') }} <span class="ml-2 text-green-500">{{ $t('views.AgentOutputDiffView.plus_added') }}</span> <span class="ml-1 text-red-500">{{ $t('views.AgentOutputDiffView.minus_removed') }}</span>
           </div>
           <div class="overflow-x-auto">
             <table class="w-full text-left font-mono text-xs leading-relaxed">
               <tbody>
+                <tr
+                  v-if="result.diff_lines.length === 0"
+                  class="text-center text-muted-foreground"
+                >
+                  <td colspan="4" class="px-4 py-6">{{ $t('views.AgentOutputDiffView.no_diff_lines') }}</td>
+                </tr>
                 <tr
                   v-for="(line, idx) in result.diff_lines"
                   :key="idx"
@@ -147,7 +159,6 @@ import { useApi } from '../composables/useApi'
 import { useDataFetch } from '../composables/useDataFetch'
 import { useMutation } from '../composables/useMutation'
 import type { components } from '../lib/api/client'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
