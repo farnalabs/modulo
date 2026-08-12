@@ -20,8 +20,6 @@ from modulo.api.routes.admin_remy import (
     get_user_skill_or_404,
     get_user_skills,
 )
-from modulo.api.routes.auth import MeResponse
-from modulo.api.routes.auth import me as _me_handler
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength, verify_password
@@ -36,15 +34,6 @@ from modulo.db.rls import set_rls_org
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["user"])
-
-
-@router.get("/me", response_model=MeResponse)
-@handle_db_errors("me.current_user_profile")
-async def current_user_profile(
-    current_user: TenantPrincipal = Depends(get_current_tenant_user),
-    session: AsyncSession = Depends(get_db_session),
-) -> MeResponse:
-    return await _me_handler(current_user, session)
 
 
 class SettingsResponse(BaseModel):

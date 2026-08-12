@@ -138,11 +138,6 @@ async def _require_org_sandbox_capacity(session: AsyncSession, run_id: uuid.UUID
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.claim_gate")
-@router.post(
-    "/runs/{run_id}/hitl/{gate_id}/claim",
-    response_model=ClaimResponse,
-    status_code=status.HTTP_200_OK,
-)
 async def claim_gate(
     run_id: uuid.UUID,
     gate_id: str,
@@ -218,10 +213,6 @@ async def claim_gate(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.approve_gate")
-@router.post(
-    "/runs/{run_id}/hitl/{gate_id}/approve",
-    status_code=status.HTTP_200_OK,
-)
 async def approve_gate(
     run_id: uuid.UUID,
     gate_id: str,
@@ -311,10 +302,6 @@ async def approve_gate(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.approve_gate_with_modification")
-@router.post(
-    "/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
-    status_code=status.HTTP_200_OK,
-)
 async def approve_gate_with_modification(
     run_id: uuid.UUID,
     gate_id: str,
@@ -412,10 +399,6 @@ async def approve_gate_with_modification(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.reject_gate")
-@router.post(
-    "/runs/{run_id}/hitl/{gate_id}/reject",
-    status_code=status.HTTP_200_OK,
-)
 async def reject_gate(
     run_id: uuid.UUID,
     gate_id: str,
@@ -507,10 +490,6 @@ async def reject_gate(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.deliver_manual_output")
-@router.post(
-    "/runs/{run_id}/hitl/{gate_id}/deliver-manual",
-    status_code=status.HTTP_200_OK,
-)
 async def deliver_manual_output(
     run_id: uuid.UUID,
     gate_id: str,
@@ -609,10 +588,6 @@ async def deliver_manual_output(
     status_code=status.HTTP_200_OK,
 )
 @handle_db_errors("hitl.submit_manual_output")
-@router.post(
-    "/runs/{run_id}/manual/{gate_id}/submit",
-    status_code=status.HTTP_200_OK,
-)
 async def submit_manual_output(
     run_id: uuid.UUID,
     gate_id: str,
@@ -701,10 +676,6 @@ async def submit_manual_output(
     response_model=PendingGatesResponse,
 )
 @handle_db_errors("hitl.list_run_pending_gates")
-@router.get(
-    "/runs/{run_id}/hitl/pending",
-    response_model=PendingGatesResponse,
-)
 async def list_run_pending_gates(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -760,10 +731,6 @@ async def list_run_pending_gates(
     response_model=PendingGatesResponse,
 )
 @handle_db_errors("hitl.list_org_pending_gates")
-@router.get(
-    "/hitl/pending",
-    response_model=PendingGatesResponse,
-)
 async def list_org_pending_gates(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("hitl.list"),

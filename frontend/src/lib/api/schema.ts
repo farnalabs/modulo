@@ -3895,8 +3895,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current User Profile */
-        get: operations["current_user_profile_api_v1_me_get"];
+        /** Me */
+        get: operations["me_api_v1_me_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -23898,7 +23898,7 @@ export interface operations {
             };
         };
     };
-    current_user_profile_api_v1_me_get: {
+    me_api_v1_me_get: {
         parameters: {
             query?: {
                 _fresh?: boolean;
@@ -23915,7 +23915,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["modulo__api__routes__auth__MeResponse"];
+                    "application/json": components["schemas"]["modulo__api__routes__viewmodel__MeResponse"];
                 };
             };
             /** @description Validation Error */
