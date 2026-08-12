@@ -57,11 +57,14 @@ filtered = schema.include(
 
 
 @filtered.parametrize()
-@settings(max_examples=3, suppress_health_check=[HealthCheck.too_slow])
-# 3 examples per endpoint (not 10): each schemathesis example spins the full app
-# lifespan (migrations + seeding) via from_asgi, so higher counts make the
-# deploy gate impractically slow for marginal extra coverage on these simple
-# auth-guarded GET endpoints.
+@settings(max_examples=1, suppress_health_check=[HealthCheck.too_slow])
+# 1 example per endpoint: each schemathesis example spins the full app lifespan
+# (migrations + seeding) via from_asgi. On the ephemeral ubicloud runner this
+# was killed ~10 min into the run ("runner has received a shutdown signal",
+# exit 143 - an infrastructure kill, not a test failure) before the fuzz could
+# finish. 3 examples per endpoint is 3x the lifespan spins for marginal extra
+# coverage on these simple auth-guarded GET endpoints; 1 example completes
+# within the runner's usable window while still catching 5xx regressions.
 def test_api_fuzz_get_endpoints(case):
     """All read-only GET endpoints must respond without 500 errors."""
     # The fuzzer runs unauthenticated, so auth-protected GET endpoints
