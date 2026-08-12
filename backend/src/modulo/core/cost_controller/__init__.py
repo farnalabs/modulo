@@ -14,12 +14,13 @@ rows survive.
 """
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,15 +31,22 @@ from modulo.core.cost_controller.breakdown.metrics import (
 )
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
 from modulo.db.models.team import Team
+from modulo.db.models.trigger import Trigger
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "build_cost_report_buckets",
     "check_and_record_spend",
+    "check_pipeline_circuit_breaker",
     "created_at_day_start",
     "get_cost_report",
     "get_or_create_daily_count",
+    "reset_pipeline_circuit_breaker",
+    "sum_pipeline_monthly_spend",
 ]
 
 _REPORT_COMPONENT_LIMIT = 500
@@ -301,6 +309,229 @@ def _accumulate_refused(row: OrgDailyRunCount, amount: Decimal) -> None:
         )
     else:
         row.refused_spend_usd = new_refused
+
+
+# ===========================================================================
+# Pipeline cost-control circuit breaker (FAR-105, spec §8.10)
+# ===========================================================================
+#
+# Per-pipeline monthly spend threshold. When the pipeline's accumulated run
+# spend for the current month plus a new run's cost would exceed
+# ``Pipeline.circuit_breaker_threshold``, the breaker trips: the pipeline is
+# marked ``circuit_breaker_tripped``, ALL of its triggers are permanently
+# paused (``Trigger.active = False`` — the same predicate the trigger engine /
+# cron / polling paths gate on, so no new trigger-initiated runs can start),
+# and an admin notification is dispatched (``EVENT_CIRCUIT_BREAKER_TRIPPED``).
+# An admin re-enabling the pipeline clears the flag and re-activates triggers.
+
+
+async def sum_pipeline_monthly_spend(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    exclude_run_id: uuid.UUID | None = None,
+) -> Decimal:
+    """SUM the pipeline's run spend (``runs.total_cost_usd``) for the current month.
+
+    Reads the ``runs`` table (the terminal-cost source, spec §8.10) for runs of
+    the pipeline whose ``started_at`` falls in the current UTC month. The daily
+    ledger (``org_daily_run_counts``) is NOT used — it is keyed per org/team
+    day, not per pipeline, so a per-pipeline monthly total must come from
+    ``runs``.
+
+    ``exclude_run_id`` excludes the in-flight run from the sum. The ledger
+    wiring (``finalize``) writes the run's cost BEFORE the breaker check, so
+    the current run must be excluded to avoid double-counting it as both a
+    stored run and the added ``cost_usd``.
+    """
+    now = datetime.now(UTC)
+    month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    stmt = select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+        Run.organisation_id == org_id,
+        Run.pipeline_id == pipeline_id,
+        Run.started_at.isnot(None),
+        Run.started_at >= month_start,
+    )
+    if exclude_run_id is not None:
+        stmt = stmt.where(Run.id != exclude_run_id)
+    result = await session.execute(stmt)
+    return Decimal(result.scalar_one() or 0)
+
+
+async def check_pipeline_circuit_breaker(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    cost_usd: Decimal,
+    run_id: uuid.UUID | None = None,
+) -> tuple[bool, str | None]:
+    """Check the pipeline's monthly circuit-breaker threshold, tripping if exceeded.
+
+    Returns ``(approved: bool, reason: str | None)``. ``ok=false`` with
+    ``reason="circuit_breaker_tripped"`` means the pipeline's monthly
+    accumulated spend plus *cost_usd* would exceed its threshold (the breaker
+    tripped, pausing the pipeline's triggers and notifying admins), or the
+    breaker was already tripped — a new run must not proceed. ``ok=true`` with
+    ``reason=None`` when the pipeline has no threshold configured or the spend
+    stays within it.
+
+    Fail-closed on a tripped pipeline: an already-tripped breaker rejects
+    immediately (no spend re-read). The trip is idempotent — a concurrent
+    second trip is a no-op.
+    """
+    if cost_usd is None:
+        return False, "cost_must_not_be_none"
+    if cost_usd.is_nan() or cost_usd.is_infinite():
+        return False, "cost_must_be_finite"
+    if cost_usd < 0:
+        return False, "cost_must_be_non_negative"
+
+    pipeline = (
+        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
+    ).scalar_one_or_none()
+    if pipeline is None:
+        return True, None
+    if pipeline.circuit_breaker_tripped:
+        return False, "circuit_breaker_tripped"
+    threshold = pipeline.circuit_breaker_threshold
+    if threshold is None:
+        return True, None
+
+    monthly = await sum_pipeline_monthly_spend(
+        session,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        exclude_run_id=run_id,
+    )
+    if monthly + cost_usd > threshold:
+        await trip_pipeline_circuit_breaker(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            pipeline_name=pipeline.name,
+            pipeline=pipeline,
+            run_id=run_id,
+        )
+        return False, "circuit_breaker_tripped"
+    return True, None
+
+
+async def trip_pipeline_circuit_breaker(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    pipeline_name: str,
+    pipeline: Pipeline | None = None,
+    run_id: uuid.UUID | None = None,
+) -> bool:
+    """Trip the pipeline's circuit breaker: mark tripped, pause triggers, notify.
+
+    Sets ``circuit_breaker_tripped`` (idempotent), sets ``active = False`` on
+    every non-deleted trigger of the pipeline (the enforcement predicate for
+    trigger-initiated runs), and dispatches the ``circuit_breaker_tripped``
+    admin notification (fail-open — a notifier failure never blocks the trip).
+
+    ``pipeline`` may be passed in (already loaded by the caller) to avoid a
+    re-read; when omitted the row is loaded here. Returns ``True`` when the
+    pipeline existed and was (re)marked tripped.
+    """
+    if pipeline is None:
+        pipeline = (
+            await session.execute(
+                select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id)
+            )
+        ).scalar_one_or_none()
+        if pipeline is None:
+            return False
+    if pipeline.circuit_breaker_tripped:
+        return False  # idempotent — a concurrent second trip is a no-op
+    pipeline.circuit_breaker_tripped = True
+    pipeline.circuit_breaker_tripped_at = datetime.now(UTC)
+    await session.execute(
+        update(Trigger)
+        .where(
+            Trigger.organisation_id == org_id,
+            Trigger.pipeline_id == pipeline_id,
+            Trigger.deleted_at.is_(None),
+        )
+        .values(active=False)
+    )
+    await session.flush()
+    await _dispatch_circuit_breaker_tripped(org_id, pipeline_id, pipeline_name, run_id=run_id)
+    return True
+
+
+async def reset_pipeline_circuit_breaker(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+) -> bool:
+    """Admin re-enable: clear the tripped flag and re-activate the pipeline's triggers.
+
+    Returns ``True`` when the pipeline exists and the breaker was reset
+    (triggers re-activated); ``False`` when no such pipeline exists in the org.
+    """
+    pipeline = (
+        await session.execute(select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id))
+    ).scalar_one_or_none()
+    if pipeline is None:
+        return False
+    pipeline.circuit_breaker_tripped = False
+    pipeline.circuit_breaker_tripped_at = None
+    await session.execute(
+        update(Trigger)
+        .where(
+            Trigger.organisation_id == org_id,
+            Trigger.pipeline_id == pipeline_id,
+            Trigger.deleted_at.is_(None),
+        )
+        .values(active=True)
+    )
+    await session.flush()
+    return True
+
+
+async def _dispatch_circuit_breaker_tripped(
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    pipeline_name: str,
+    run_id: uuid.UUID | None = None,
+) -> None:
+    """Dispatch the ``circuit_breaker_tripped`` admin notification (fail-open).
+
+    Lazily builds the notifier from the shared engine + settings so the cost
+    controller stays importable without an app engine. A notifier failure is
+    logged and swallowed — the trip (flag + trigger pause) is the enforcement,
+    the notification is best-effort (ADR: best-effort ops fail open WITH a log).
+    """
+    try:
+        from modulo.core.notifier import EVENT_CIRCUIT_BREAKER_TRIPPED, Notifier
+        from modulo.db.session import get_shared_engine
+        from modulo.settings import get_settings
+
+        settings = get_settings()
+        notifier = Notifier(get_shared_engine(), settings.fernet_key)
+        await notifier.dispatch_event(
+            org_id,
+            EVENT_CIRCUIT_BREAKER_TRIPPED,
+            {
+                "pipeline_id": str(pipeline_id),
+                "pipeline_name": pipeline_name,
+                "run_id": str(run_id) if run_id else None,
+            },
+            run_id=run_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "circuit_breaker.notify_failed",
+            extra={"org_id": str(org_id), "pipeline_id": str(pipeline_id)},
+        )
 
 
 async def get_cost_report(
