@@ -230,6 +230,39 @@ describe('AppSidebar', () => {
       expect(openDrawer.attributes('aria-hidden')).toBeUndefined()
       expect(openDrawer.classes()).not.toContain('invisible')
     })
+
+    it('makes the non-hamburger header controls inert while the drawer is open', async () => {
+      const isInert = (el: Element) => {
+        const attr = el.getAttribute('inert')
+        return attr !== null && attr !== 'false'
+      }
+
+      const wrapper = mountSidebar()
+      await flushPromises()
+      const controls = wrapper.find('header > div.ml-auto')
+      expect(controls.exists()).toBe(true)
+      expect(isInert(controls.element)).toBe(false)
+
+      await wrapper.find('[aria-controls="mobile-sidebar"]').trigger('click')
+      await flushPromises()
+      expect(isInert(controls.element)).toBe(true)
+
+      // The hamburger button stays OUTSIDE the inert wrapper so the drawer can
+      // be closed even while the other header controls are inert.
+      const hamburger = wrapper.find('[aria-controls="mobile-sidebar"]')
+      expect(hamburger.element.closest('[inert]')).toBeNull()
+
+      wrapper.unmount()
+    })
+
+    it('localises the search button title via i18n', async () => {
+      const wrapper = mountSidebar()
+      await flushPromises()
+      const searchBtn = wrapper.find('button[aria-label="Search pages"]')
+      expect(searchBtn.exists()).toBe(true)
+      const modifier = navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'
+      expect(searchBtn.attributes('title')).toBe(`Search pages... (${modifier}+K)`)
+    })
   })
 
   describe('mobile — icon rail + overlay panel (flag ON, experimental)', () => {

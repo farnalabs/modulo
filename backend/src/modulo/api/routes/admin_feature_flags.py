@@ -162,6 +162,7 @@ async def list_feature_flags(
                     "depends_on": f.depends_on,
                 }
                 for f in registry.tier_gap_flags()
+                if f.name not in org_overrides
             ],
         }
 
