@@ -163,11 +163,6 @@ PERMISSIONS: dict[str, str] = {
     "admin.rate_limit.manage": "admin",
     "view.manage": "operator",
     "view.list": "viewer",
-    # stages
-    "stage.create": "operator",
-    "stage.update": "operator",
-    "stage.delete": "operator",
-    "stage.list": "viewer",
     # variants
     "variant.create": "operator",
     "variant.update": "operator",

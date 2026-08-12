@@ -91,6 +91,21 @@ def test_parse_empty_when_no_matching_keys() -> None:
     assert parse_self_report_refs(None) == []  # type: ignore[arg-type]
 
 
+def test_parse_handles_self_referential_dict_cycle() -> None:
+    merged: dict[str, Any] = {"work_item_refs": [_ENTRY]}
+    merged["node_1"] = {"output": merged}
+    # The cyclic node is walked once; the top-level refs are still collected and
+    # the walk terminates without recursing forever.
+    assert parse_self_report_refs(merged) == [_ENTRY]
+
+
+def test_parse_handles_self_referential_list_cycle() -> None:
+    inner: list[Any] = [_ENTRY]
+    inner.append(inner)
+    raw = parse_self_report_refs({"work_item_refs": inner})
+    assert raw == [_ENTRY, inner]
+
+
 def test_parse_is_pure_deterministic_and_non_mutating() -> None:
     merged = {
         "work_item_refs": [_ENTRY],
