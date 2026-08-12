@@ -316,6 +316,113 @@ query($id: String!) {
 _LABEL_CREATE_INPUT_KEYS = ("name", "teamId", "color", "description", "parentId")
 
 
+class LinearError(ValueError):
+    """Base class for all Linear connector errors.
+
+    Carries a machine-parseable ``error_code`` so callers can branch on
+    failure modes (invalid API key, missing permission, rate limit, network)
+    without parsing human-readable messages. ``status_code`` holds the Linear
+    HTTP status when the error originated from an HTTP response (``None`` for
+    transport-level failures, GraphQL body errors, and local validation).
+    """
+
+    error_code = "linear_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        if error_code is not None:
+            self.error_code = error_code
+        self.status_code = status_code
+
+
+class LinearAPIError(LinearError):
+    """Raised when Linear returns a non-retryable business-level error."""
+
+    error_code = "api_error"
+
+
+class LinearRateLimitError(LinearAPIError):
+    """Raised when Linear rate-limits the request and automatic retries are exhausted."""
+
+    error_code = "rate_limited"
+
+
+class LinearAuthError(LinearAPIError):
+    """Raised when the API key is invalid/expired (HTTP 401 or GraphQL
+    ``AUTHENTICATION_REQUIRED``) or lacks the required permission (HTTP 403 or
+    GraphQL ``FORBIDDEN``).
+
+    The ``error_code`` distinguishes the two failure modes:
+    ``invalid_token`` (bad credentials) vs ``forbidden`` (the key is valid but
+    lacks the required permission).
+    """
+
+    error_code = "authentication_failed"
+
+
+class LinearNotFoundError(LinearAPIError):
+    """Raised when Linear reports a resource does not exist (HTTP 404)."""
+
+    error_code = "not_found"
+
+
+class LinearNetworkError(LinearError):
+    """Raised on transport-level failures (timeout, connection, protocol)."""
+
+    error_code = "network_error"
+
+
+def _error_for_status(status_code: int, detail: str) -> LinearError:
+    """Map a Linear HTTP status to the matching structured error type."""
+    if status_code == 429:
+        return LinearRateLimitError(detail, status_code=429)
+    if status_code == 401:
+        return LinearAuthError(detail, status_code=401, error_code="invalid_token")
+    if status_code == 403:
+        return LinearAuthError(detail, status_code=403, error_code="forbidden")
+    if status_code == 404:
+        return LinearNotFoundError(detail, status_code=404)
+    return LinearAPIError(detail, status_code=status_code)
+
+
+def _graphql_error_types(errors: Any) -> list[str]:
+    """Extract Linear GraphQL ``extensions.type`` values from an ``errors`` array."""
+    if not isinstance(errors, list):
+        return []
+    types: list[str] = []
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        extensions = error.get("extensions")
+        error_type = extensions.get("type") if isinstance(extensions, dict) else None
+        if isinstance(error_type, str):
+            types.append(error_type)
+    return types
+
+
+def _classify_graphql_error(errors: Any) -> LinearError:
+    """Classify a Linear GraphQL ``errors`` array into a typed error.
+
+    Linear reports auth failures via HTTP status and GraphQL body errors such
+    as ``AUTHENTICATION_REQUIRED`` (invalid/missing key) and ``FORBIDDEN``
+    (valid key without the required permission). Unknown error types fall back
+    to a generic ``LinearAPIError`` so callers can keep branching on the code.
+    """
+    types = _graphql_error_types(errors)
+    detail = f"Linear API error: {errors}"
+    if "AUTHENTICATION_REQUIRED" in types:
+        return LinearAuthError(detail, error_code="invalid_token")
+    if "FORBIDDEN" in types:
+        return LinearAuthError(detail, error_code="forbidden")
+    return LinearAPIError(detail)
+
+
 def _parse_retry_after(response: httpx.Response) -> float | None:
     value = response.headers.get("Retry-After")
     if value:
@@ -426,7 +533,10 @@ class LinearConnector(ConnectorBase):
                         json={"query": query, "variables": variables or {}},
                     )
                     if r.status_code == 304:
-                        raise ValueError("Linear API returned 304 Not Modified — resource unchanged")
+                        raise LinearAPIError(
+                            "Linear API returned 304 Not Modified — resource unchanged",
+                            error_code="not_modified",
+                        )
                     if r.status_code in _RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
                         delay = _compute_delay(attempt, r)
                         await asyncio.sleep(delay)
@@ -438,41 +548,45 @@ class LinearConnector(ConnectorBase):
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
-                raise ValueError(f"Linear API HTTP {exc.response.status_code}: {exc.response.text[:200]}") from exc
+                detail = f"Linear API HTTP {exc.response.status_code}: {exc.response.text[:200]}"
+                raise _error_for_status(exc.response.status_code, detail) from exc
             except httpx.TimeoutException as exc:
                 if attempt < _MAX_RETRIES:
                     delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
-                raise ValueError("Linear API timeout") from exc
+                raise LinearNetworkError("Linear API timeout", error_code="network_timeout") from exc
             except httpx.ConnectError as exc:
                 if attempt < _MAX_RETRIES:
                     delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
-                raise ValueError("Linear API connection error") from exc
+                raise LinearNetworkError("Linear API connection error", error_code="network_connection") from exc
             except httpx.ProtocolError as exc:
                 if attempt < _MAX_RETRIES:
                     delay = _compute_delay(attempt)
                     await asyncio.sleep(delay)
                     last_exc = exc
                     continue
-                raise ValueError("Linear API protocol error") from exc
+                raise LinearNetworkError("Linear API protocol error", error_code="network_protocol") from exc
             try:
                 body: dict[str, Any] = r.json()
             except json.JSONDecodeError as exc:
-                raise ValueError(f"Linear API invalid response: {exc}") from exc
+                raise LinearAPIError(f"Linear API invalid response: {exc}", error_code="invalid_response") from exc
             if "errors" in body:
-                raise ValueError(f"Linear API error: {body['errors']}")
+                raise _classify_graphql_error(body["errors"])
             raw_data = body.get("data")
             if raw_data is None:
                 return {}
             if not isinstance(raw_data, dict):
-                raise ValueError("Linear API response 'data' must be an object")
+                raise LinearAPIError(
+                    "Linear API response 'data' must be an object",
+                    error_code="invalid_response",
+                )
             return cast("dict[str, Any]", raw_data)
-        raise ValueError("Linear API request failed after retries") from last_exc
+        raise LinearError("Linear API request failed after retries", error_code="retries_exhausted") from last_exc
 
     async def _team_states(self, team_id: str) -> list[dict[str, Any]]:
         """Fetch all workflow states for a team, paginating through every page."""
@@ -581,6 +695,24 @@ class LinearConnector(ConnectorBase):
             return HealthResult(ok=True, detail=name)
         except asyncio.CancelledError:
             raise
+        except LinearAuthError as exc:
+            if exc.error_code == "invalid_token":
+                status = f" (HTTP {exc.status_code})" if exc.status_code else ""
+                return HealthResult(
+                    ok=False,
+                    detail=f"Linear authentication failed — invalid or expired API key{status} (code: invalid_token)",
+                )
+            return HealthResult(
+                ok=False,
+                detail="Linear permission denied — API key lacks the required permission (code: forbidden)",
+            )
+        except LinearRateLimitError as exc:
+            status = f" (HTTP {exc.status_code})" if exc.status_code else ""
+            return HealthResult(ok=False, detail=f"Linear API rate limit exhausted{status} (code: rate_limited)")
+        except LinearNetworkError as exc:
+            return HealthResult(ok=False, detail=f"Linear API network error (code: {exc.error_code}): {exc}")
+        except LinearError as exc:
+            return HealthResult(ok=False, detail=str(exc)[:200])
         except Exception as exc:
             return HealthResult(ok=False, detail=str(exc)[:200])
 

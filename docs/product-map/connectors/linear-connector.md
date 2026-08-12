@@ -7,6 +7,8 @@ bdd:
   - backend/tests/bdd/features/connectors/linear_connector.feature
 unit-tests:
   - backend/tests/unit/connectors/test_linear.py
+  - backend/tests/unit/connectors/test_linear_resilience.py
+  - backend/tests/unit/connectors/test_linear_errors.py
 code:
   - backend/src/modulo/connectors/linear/__init__.py
   - backend/src/modulo/connectors/base.py
@@ -91,8 +93,16 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 2
 - [x] Validate API key by executing viewer query — fail on GraphQL errors
 - [x] Return authenticated user name in `detail` on success
 - [x] Return error detail from GraphQL `"errors"` response on failure
-- [ ] Detect expired API keys vs network errors vs insufficient permissions
+- [x] **Distinguish expired API keys vs network errors vs insufficient permissions** — `health_check()` reports an invalid/expired key (`code: invalid_token`, HTTP 401 or GraphQL `AUTHENTICATION_REQUIRED`), a valid key lacking permission (`code: forbidden`, HTTP 403 or GraphQL `FORBIDDEN`), rate-limit exhaustion (`code: rate_limited`), and transport failures (`code: network_timeout`/`network_connection`) as distinct details — no more generic "error" for every failure mode
 - [ ] Per-operation permission check before mutation calls
+
+### Structured Error Handling — typed exceptions
+
+- [x] `LinearError(ValueError)` base class carries a machine-parseable `error_code` + originating `status_code`
+- [x] Typed hierarchy: `LinearAPIError` (`api_error`), `LinearRateLimitError` (`rate_limited`), `LinearAuthError` (`invalid_token` for bad credentials / `forbidden` for missing permission), `LinearNotFoundError` (`not_found`), `LinearNetworkError` (`network_timeout` / `network_connection` / `network_protocol`)
+- [x] `_error_for_status()` maps HTTP statuses → typed errors in one place (429 → rate_limited, 401 → invalid_token, 403 → forbidden, 404 → not_found, other non-retryable → api_error)
+- [x] `_classify_graphql_error()` classifies Linear GraphQL `errors` bodies by `extensions.type` (`AUTHENTICATION_REQUIRED` → invalid_token, `FORBIDDEN` → forbidden, unknown → api_error) — malformed payloads never raise
+- [x] All `ValueError`-compatible so `except ValueError` callers are unaffected
 
 ### Error Handling & Resilience
 
@@ -121,9 +131,15 @@ Async Linear GraphQL API connector implementing `ConnectorBase`. BDD coverage: 2
 
 ## Known Gaps
 
-- (none — the two documented gaps were resolved on 2026-08-03; see QA History)
+- **Per-operation permission check before mutation calls** — write resources are not pre-verified against the key's declared permissions before a mutation is sent; Linear reports permission failures as `FORBIDDEN` GraphQL errors at execution time (now surfaced as `code: forbidden`).
+- **GraphQL query-complexity limits and cost-based rate limiting** — the connector does not inspect Linear's query-complexity/point-budget reporting to avoid expensive queries before they run.
+- **Prompt portability** — GraphQL queries are hard-coded in source (no query discovery), so Linear schema changes (field deprecation, new fields) require a source update; prompt templates may use Linear-specific terminology.
 
 ## QA History
+
+### 2026-08-12 — improve-architecture: typed-error programme (invalid-key vs permission vs rate-limit vs network distinction)
+
+**RESOLVED** the "Detect expired API keys vs network errors vs insufficient permissions" known gap (`connectors/linear/__init__.py`), mirroring the Slack/GitHub/GitLab typed-exception programme so Linear failures can be branched on programmatically instead of by parsing messages. (1) **Typed error hierarchy** — new `LinearError(ValueError)` base + `LinearAPIError`, `LinearRateLimitError`, `LinearAuthError` (`invalid_token` on HTTP 401 / GraphQL `AUTHENTICATION_REQUIRED`; `forbidden` on HTTP 403 / GraphQL `FORBIDDEN`), `LinearNotFoundError`, `LinearNetworkError` (`network_timeout`/`network_connection`/`network_protocol`); every typed error carries a stable machine-parseable `error_code` + originating `status_code`. (2) **`_graphql` raises the typed subclasses** — new `_error_for_status()` maps statuses → types in one place; the 304, invalid-JSON, non-object-data, and exhausted-429 paths now raise typed errors with codes (`not_modified`/`invalid_response`/`rate_limited`); timeouts/connection/protocol failures raise `LinearNetworkError`. (3) **GraphQL body classification** — new `_classify_graphql_error()` extracts `extensions.type` from the `errors` array (`AUTHENTICATION_REQUIRED` → `invalid_token`, `FORBIDDEN` → `forbidden`, malformed payloads fall back to `api_error` without raising). (4) **Health-check distinction** — `health_check()` now reports invalid/expired key, insufficient permission, rate-limit exhaustion, and network/transport failures as distinct details (e.g. `Linear authentication failed — invalid or expired API key (HTTP 401) (code: invalid_token)`, `Linear API rate limit exhausted (HTTP 429) (code: rate_limited)`). Added 23 unit tests in `test_linear_errors.py` (hierarchy + default `error_code` matrix, `_error_for_status` matrix, GraphQL classifier + malformed payload matrix, 401/403/404/500/exhausted-429/timeout/connect/protocol/invalid-JSON typed errors, GraphQL auth-classification, health-check invalid-key-http/invalid-key-graphql/forbidden/rate-limited/network-error/ok). Updated product map (`unit-tests:` + 6 behaviours `[ ]`→`[x]` incl. the health-distinction gap, Known Gaps rewritten). 114/114 linear unit tests pass (91 existing + 23 new), ruff check + format clean, mypy --strict clean. Status: partial (per-operation permission checks, GraphQL query-complexity limits, prompt portability remain).
 
 ### 2026-08-03 — improve-architecture: 2 known gaps RESOLVED (dedicated assign/unassign + fuzzy/duplicate-name disambiguation)
 - **RESOLVED** "Assign/unassign issue" — added `write("issue_assign")` (accepts `{"id", "assigneeId": "<id>"}` direct, `{"id", "email": "..."}` or `{"id", "name": "..."}` resolved via a new Linear `users(first: 1, filter: ...)` GraphQL query with `ValueError` on no-match, or `{"assigneeId": null}` / `{"unassign": true}` to clear) and `write("issue_unassign")` (`{"id"}`), both applied via a single `issueUpdate` and returning the updated issue.
