@@ -33,6 +33,12 @@ vi.mock('../lib/api/client', () => ({
 import { api } from '../lib/api/client'
 import AgentOutputDiffView from '../views/AgentOutputDiffView.vue'
 
+vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+  ok: true,
+  status: 200,
+  json: () => Promise.resolve({ recent_runs: [] }),
+}))
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -62,6 +68,7 @@ describe('AgentOutputDiffView', () => {
     const wrapper = mount(AgentOutputDiffView, {
       global: { plugins: [router] },
     })
+    await flushPromises()
     await nextTick()
     const btn = wrapper.find('[data-testid="diff-compare-btn"]')
     expect(btn.attributes('disabled')).toBeDefined()
@@ -73,6 +80,7 @@ describe('AgentOutputDiffView', () => {
     const wrapper = mount(AgentOutputDiffView, {
       global: { plugins: [router] },
     })
+    await flushPromises()
     await nextTick()
     await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
     await wrapper.find('[data-testid="diff-node-id"]').setValue('node-1')
@@ -87,6 +95,7 @@ describe('AgentOutputDiffView', () => {
     const wrapper = mount(AgentOutputDiffView, {
       global: { plugins: [router] },
     })
+    await flushPromises()
     await nextTick()
 
     await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
@@ -124,6 +133,7 @@ describe('AgentOutputDiffView', () => {
     const wrapper = mount(AgentOutputDiffView, {
       global: { plugins: [router] },
     })
+    await flushPromises()
     await nextTick()
 
     await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
@@ -150,6 +160,7 @@ describe('AgentOutputDiffView', () => {
     const wrapper = mount(AgentOutputDiffView, {
       global: { plugins: [router] },
     })
+    await flushPromises()
     await nextTick()
 
     await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
@@ -187,6 +198,7 @@ describe('AgentOutputDiffView', () => {
     const wrapper = mount(AgentOutputDiffView, {
       global: { plugins: [router] },
     })
+    await flushPromises()
     await nextTick()
 
     await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
