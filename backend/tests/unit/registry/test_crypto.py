@@ -3,6 +3,7 @@
 import copy
 
 import pytest
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from modulo.core.registry import _BUILTIN_REGISTRY, verify_primitive_signature
@@ -253,6 +254,52 @@ class TestPEMCryptoV2:
         _, pub_pem = generate_keypair()
         assert verify(pub_pem, b"data", "\x00\x01\x02\xff") is False
 
+    def test_sign_rejects_non_ed25519_private_key(self):
+        from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
+
+        from modulo.registry.crypto import sign
+
+        rsa_priv = generate_private_key(public_exponent=65537, key_size=2048)
+        priv_pem = rsa_priv.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode()
+        with pytest.raises(TypeError, match="not an Ed25519 private key"):
+            sign(priv_pem, b"data")
+
+    def test_sign_rejects_malformed_pem(self):
+        from modulo.registry.crypto import sign
+
+        with pytest.raises(ValueError):
+            sign("-----BEGIN PRIVATE KEY-----\ngarbage\n-----END PRIVATE KEY-----", b"data")
+
+    def test_verify_rejects_non_ed25519_public_key(self):
+        from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
+
+        from modulo.registry.crypto import generate_keypair, sign, verify
+
+        rsa_priv = generate_private_key(public_exponent=65537, key_size=2048)
+        pub_pem = (
+            rsa_priv.public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            .decode()
+        )
+
+        priv_pem, _ = generate_keypair()
+        sig = sign(priv_pem, b"data")
+        assert verify(pub_pem, b"data", sig) is False
+
+    def test_verify_rejects_malformed_public_key_pem(self):
+        from modulo.registry.crypto import generate_keypair, sign, verify
+
+        priv_pem, _ = generate_keypair()
+        sig = sign(priv_pem, b"data")
+        assert verify("-----BEGIN PUBLIC KEY-----\ngarbage\n-----END PUBLIC KEY-----", b"data", sig) is False
+
     def test_sign_and_verify_json_payload(self):
         import json
 
@@ -340,6 +387,17 @@ class TestTrustAnchor:
 
         _, pub_pem = generate_keypair()
         assert verify_trust_anchor(pub_pem, "\x00\x01\x02\xff") is False
+
+    def test_verify_trust_anchor_empty_anchor_returns_false(self):
+        from modulo.registry.crypto import (
+            generate_keypair,
+            sign_with_trust_anchor,
+            verify_trust_anchor,
+        )
+
+        _, pub_pem = generate_keypair()
+        ta_sig = sign_with_trust_anchor(pub_pem)
+        assert verify_trust_anchor(pub_pem, ta_sig, "") is False
 
 
 class TestModuleExports:

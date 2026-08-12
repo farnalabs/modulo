@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import { usePlanStore } from '../stores/planStore'
+import { api } from '../lib/api/client'
 
 vi.mock('../lib/api/client', () => ({
   api: {
@@ -45,6 +46,12 @@ vi.mock('../lib/api/client', () => ({
       return Promise.resolve({ data: null, error: undefined })
     }),
     PUT: vi.fn().mockResolvedValue({ data: null, error: undefined }),
+    POST: vi.fn().mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/costs/anomalies/dismiss/')) {
+        return Promise.resolve({ data: null, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    }),
   },
   getAccessToken: vi.fn().mockReturnValue('mock-token'),
 }))
@@ -71,5 +78,27 @@ describe('AdminCostBreakdownView', () => {
 
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Cost Breakdown')
+  })
+
+  it('dismisses an anomaly via POST', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.$patch({ features: { admin_cost_breakdown: true } })
+
+    const wrapper = mount(AdminCostBreakdownView, {
+      global: { plugins: [pinia] },
+    })
+
+    await flushPromises()
+    await flushPromises()
+
+    const dismissButton = wrapper.find('[data-testid="cost-anomaly-dismiss-anomaly-1"]')
+    expect(dismissButton.exists()).toBe(true)
+    await dismissButton.trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(api.POST).toHaveBeenCalledWith('/api/v1/admin/costs/anomalies/dismiss/anomaly-1')
   })
 })

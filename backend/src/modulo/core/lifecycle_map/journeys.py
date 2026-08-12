@@ -37,6 +37,33 @@ def encode_cursor(updated_at: datetime, journey_id: uuid.UUID) -> str:
     return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
 
 
+def _is_unattributed(journey: Journey, referenced: set[tuple[str, str]]) -> bool:
+    """A journey is *unattributed* when a map stage pipeline has seen its work
+    item but the journey never advanced into a map stage.
+
+    True only when ALL of:
+    * the latest stage identity is null (no ``map_id``/``stage_id``) — the
+      journey was hydrated from a create-stamp, never advanced by
+      ``advance_journeys``;
+    * zero terminal runs (``run_count == 0``);
+    * at least one surviving run through this map's stage pipelines stamped
+      the journey's canonical ``(kind, ref)`` (the ``referenced`` set).
+
+    The run-existence leg is what separates a genuine unattributed hole (the
+    work item was hydrated from a create-stamp but the run never advanced to a
+    map stage) from a brand-new journey that simply has not been run yet. The
+    simpler ``no stage and no runs`` rule would false-positive on that second
+    group, so we require a matching surviving run — the same set
+    ``list_map_journeys`` already computes for orphan scoping, so this costs no
+    extra query.
+    """
+    if journey.map_id is not None or journey.stage_id is not None:
+        return False
+    if (journey.run_count or 0) > 0:
+        return False
+    return (journey.kind, journey.ref) in referenced
+
+
 def decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
     """Decode a keyset cursor; raises ``ValueError`` for malformed input."""
     try:
@@ -91,11 +118,13 @@ async def list_map_journeys(
     owner_team_id: uuid.UUID | None = None,
     cursor: str | None = None,
     limit: int = _DEFAULT_LIMIT,
-) -> tuple[list[Journey], str | None]:
+) -> tuple[list[tuple[Journey, bool]], str | None]:
     """Map-scoped journeys ordered by ``updated_at DESC, id DESC``.
 
-    Returns ``(journeys, next_cursor)``; ``next_cursor`` is ``None`` on the
-    last page. A journey is map-scoped when:
+    Returns ``((journey, unattributed) pairs, next_cursor)``; ``next_cursor``
+    is ``None`` on the last page. ``unattributed`` is True when a map stage
+    pipeline has seen the journey's work item but it never advanced into a map
+    stage (see ``_is_unattributed``). A journey is map-scoped when:
 
     * its latest-stage identity points at this map (``map_id`` matches), or
     * it has no stage identity yet and at least one run through this map's
@@ -151,7 +180,7 @@ async def list_map_journeys(
     if has_more and items:
         last = items[-1]
         next_cursor = encode_cursor(last.updated_at, last.id)
-    return items, next_cursor
+    return [(journey, _is_unattributed(journey, referenced)) for journey in items], next_cursor
 
 
 async def get_map_journey(
@@ -161,8 +190,14 @@ async def get_map_journey(
     kind: str,
     ref: str,
     owner_team_id: uuid.UUID | None = None,
-) -> Journey | None:
-    """Single journey detail by exact (kind, ref), scoped to *map_id*."""
+) -> tuple[Journey, bool] | None:
+    """Single journey detail by exact (kind, ref), scoped to *map_id*.
+
+    Returns ``(journey, unattributed)`` or ``None`` when no journey matches;
+    ``unattributed`` is True when a map stage pipeline has seen the journey's
+    work item but it never advanced into a map stage (see
+    ``_is_unattributed``).
+    """
     kind = canonicalise_kind(kind)
     ref = canonicalise_ref(kind, ref)
 
@@ -185,7 +220,10 @@ async def get_map_journey(
     )
     if owner_team_id is not None:
         query = query.where(Journey.owner_team_id == owner_team_id)
-    return (await session.execute(query)).scalar_one_or_none()
+    journey = (await session.execute(query)).scalar_one_or_none()
+    if journey is None:
+        return None
+    return journey, _is_unattributed(journey, referenced)
 
 
 async def list_journey_runs(

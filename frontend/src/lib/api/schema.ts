@@ -1500,10 +1500,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Dismiss Anomaly Endpoint */
-        get: operations["dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Dismiss Anomaly Endpoint */
+        post: operations["dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9589,6 +9589,11 @@ export interface components {
              * @default 0
              */
             run_count: number;
+            /**
+             * Unattributed
+             * @default false
+             */
+            unattributed: boolean;
             /** Latest Run Id */
             latest_run_id?: string | null;
             /**
@@ -9644,6 +9649,11 @@ export interface components {
              * @default 0
              */
             run_count: number;
+            /**
+             * Unattributed
+             * @default false
+             */
+            unattributed: boolean;
             /** Latest Run Id */
             latest_run_id?: string | null;
             /**
@@ -18077,7 +18087,7 @@ export interface operations {
             };
         };
     };
-    dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__get: {
+    dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
