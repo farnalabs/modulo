@@ -36,9 +36,10 @@ def _make_session(dialect: str = "postgresql") -> AsyncMock:
 
 
 def test_lock_keys_are_deterministic() -> None:
-    k1, k2 = _lock_keys("probe_state:org-1")
-    assert k1 == _lock_keys("probe_state:org-1")[0]
-    assert k2 == _lock_keys("probe_state:org-1")[1]
+    # Golden value pins the exact sha256-derived int4 pair so a change in the
+    # digest or byte-ordering fails loudly instead of silently redistributing
+    # advisory lock keys across concurrent probe/ledger instances.
+    assert _lock_keys("probe_state:org-1") == (-806871212, -1356186801)
 
 
 def test_lock_keys_differ_per_key() -> None:

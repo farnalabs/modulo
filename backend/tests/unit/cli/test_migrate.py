@@ -58,10 +58,10 @@ class TestSerialisation:
 
 class TestHashRecord:
     def test_hash_record_deterministic(self) -> None:
-        rec = {"a": 1, "b": "x"}
-        h1 = _hash_record(rec)
-        h2 = _hash_record(rec)
-        assert h1 == h2
+        # Golden value pins the exact digest so a change in sort_keys,
+        # ensure_ascii, or the hash algorithm fails loudly instead of silently
+        # altering migration integrity hashes.
+        assert _hash_record({"a": 1, "b": "x"}) == "ce5c626fb40307427cf323b5c307a3ea230856fa4bad676eaaa2577b5a857a85"
 
     def test_hash_record_different_inputs(self) -> None:
         assert _hash_record({"a": 1}) != _hash_record({"a": 2})
