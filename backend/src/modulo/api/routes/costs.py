@@ -924,7 +924,7 @@ async def get_anomalies(
 
 
 @handle_db_errors("costs.dismiss_anomaly_endpoint")
-@router.get("/anomalies/dismiss/{anomaly_id}", status_code=204)
+@router.post("/anomalies/dismiss/{anomaly_id}", status_code=204)
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
     _: object = require_feature("admin_cost_breakdown"),

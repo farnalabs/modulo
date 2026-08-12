@@ -104,8 +104,9 @@ Discovered from 1 completed delivery tasks.
 - [x] `GET /anomalies` returns computed anomalies (spend >2x rolling 7-day avg)
 - [x] `GET /anomalies` includes stored anomalies merged with computed
 - [x] `GET /anomalies` returns empty list when no anomalies
-- [x] `GET /anomalies/dismiss/{id}` dismisses an anomaly
-- [x] `GET /anomalies/dismiss/{id}` when not found returns 404
+- [x] `POST /anomalies/dismiss/{id}` dismisses an anomaly
+- [x] `POST /anomalies/dismiss/{id}` when not found returns 404
+- [x] `GET /anomalies/dismiss/{id}` is not allowed (405 — dismiss mutates state)
 - [x] Auth: anomaly endpoints admin-only
 
 ### Error Handling
@@ -121,7 +122,7 @@ Discovered from 1 completed delivery tasks.
 - [x] ProgrammingError on GET /api/v1/admin/costs/reports returns 501
 - [x] ProgrammingError on DELETE /api/v1/admin/costs/reports/{id} returns 501
 - [x] ProgrammingError on GET /api/v1/admin/costs/anomalies returns 501
-- [x] ProgrammingError on GET /api/v1/admin/costs/anomalies/dismiss/{id} returns 501
+- [x] ProgrammingError on POST /api/v1/admin/costs/anomalies/dismiss/{id} returns 501
 - [x] SQLAlchemyError on GET /api/v1/admin/costs returns 503
 - [x] SQLAlchemyError on GET /api/v1/admin/costs/limits returns 503
 - [x] SQLAlchemyError on PUT /api/v1/admin/costs/limits/org returns 503
@@ -133,7 +134,7 @@ Discovered from 1 completed delivery tasks.
 - [x] SQLAlchemyError on GET /api/v1/admin/costs/reports returns 503
 - [x] SQLAlchemyError on DELETE /api/v1/admin/costs/reports/{id} returns 503
 - [x] SQLAlchemyError on GET /api/v1/admin/costs/anomalies returns 503
-- [x] SQLAlchemyError on GET /api/v1/admin/costs/anomalies/dismiss/{id} returns 503
+- [x] SQLAlchemyError on POST /api/v1/admin/costs/anomalies/dismiss/{id} returns 503
 - [x] Warning logged with org_id context on every SQLAlchemyError path
 
 ### Resilience & Integration Robustness
@@ -159,9 +160,9 @@ Discovered from 1 completed delivery tasks.
 - Circuit breaker not implemented
 - `config/model_pricing.yaml` does not exist yet
 - Token-level accumulation via LLM callback not wired up
-- Anomalies route uses GET for dismiss action (should be POST/PATCH per REST conventions)
 - Integration tests skipped (awaiting fixture repair)
 
 ## QA History
 
+- 2026-08-12: improve-architecture → partial: **RESOLVED the "Anomalies route uses GET for dismiss action" REST-convention gap** (`api/routes/costs.py`). The `dismiss_anomaly_endpoint` was registered as `GET /anomalies/dismiss/{id}` while the frontend (`AdminCostBreakdownView.vue`) issues `POST` — a runtime 405 that made anomaly dismissal non-functional and a REST-convention violation (state-mutating GET). Changed the route to `POST` (matching the in-app-notifications/onboarding dismiss endpoints), keeping the 204/404 behaviour, `require_feature`/`require_permission` guards, and the 501/503 error mapping unchanged. Updated the OpenAPI-generated client (`frontend/src/lib/api/schema.ts`, operation renamed to `dismiss_anomaly_endpoint_..._post`) and the two `TestDismissAnomaly` unit tests to `client.post`; added a regression guard `test_dismiss_is_post_not_get` (asserts GET → 405). Frontend spec now mocks `api.POST` and adds a dismiss-flow test asserting the POST call. Updated product map behaviours `[ ]`→`[x]` (dismiss is POST, GET → 405, 501/503 paths), Known Gap → RESOLVED, QA History.
 - 2026-07-07: feat-core-cost-breakdown → partial, cross-cutting QA (index 241): Fixed CRITICAL — added SQLAlchemyError→503 catches to all 12 cost route handlers (previously only caught ProgrammingError→501). Fixed CRITICAL — frontend AdminCostControlsView.vue read/wrote wrong field names (`daily_limit_usd`→`daily_spend_limit`, `teams`→`team_limits`, `org_daily_limit_usd`→`org_daily_spend_limit`) making team budget editing non-functional. Fixed CRITICAL — frontend AdminCostBreakdownView.vue called POST for dismiss anomaly but backend uses GET (405 Method Not Allowed). Fixed MAJOR — ~35 hardcoded English strings across both cost views wrapped in $t() with 33 new i18n keys. Added Resilience & Integration Robustness section to product map with 3 checkboxes. Added SQLAlchemyError→503 error handling section (12 checkboxes). Added 12 unit tests for SQLAlchemyError→503. Created test_costs_sqlalchemy_error.py. All tests pass. Merged to main. Status: partial.
