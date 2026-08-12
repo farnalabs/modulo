@@ -29,6 +29,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "lifecycle_map_stages",
         "mcp_setup_tokens",
         "model_backends",
+        "modulo_journey_facts",
         "node_categories",
         "node_observations",
         "nodes",
