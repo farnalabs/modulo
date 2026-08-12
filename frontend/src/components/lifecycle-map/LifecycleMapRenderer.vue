@@ -51,6 +51,20 @@
               {{ nodeProps.data.ownerBadge }}
             </span>
           </div>
+          <div
+            v-if="nodeJourneys(nodeProps.data.stageId).length"
+            class="mt-2 flex flex-col gap-1"
+          >
+            <JourneyCard
+              v-for="journey in nodeJourneys(nodeProps.data.stageId)"
+              :key="`${journey.kind}:${journey.ref}`"
+              :journey="journey"
+              @click.stop
+              @keydown.enter.stop
+              @keydown.space.stop
+              @open="onJourneyOpen(journey)"
+            />
+          </div>
         </div>
       </template>
     </VueFlow>
@@ -66,12 +80,37 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import type { Node, Edge } from '@vue-flow/core'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapTransition } from '../../stores/lifecycleMaps'
+import type { JourneySummary } from '../../types/lifecycleMap'
+import JourneyCard from './JourneyCard.vue'
 
 const props = defineProps<{
   mapData: LifecycleMap | null
+  journeys?: JourneySummary[]
   onModuloStageClick?: (stage: LifecycleMapStage) => void
   onExternalStageClick?: (stage: LifecycleMapStage) => void
 }>()
+
+const emit = defineEmits<{
+  (e: 'journey-open', journey: JourneySummary): void
+}>()
+
+const journeysByStage = computed<Record<string, JourneySummary[]>>(() => {
+  const grouped: Record<string, JourneySummary[]> = {}
+  for (const journey of props.journeys ?? []) {
+    const stageId = journey.current_stage?.stage_id
+    if (!stageId) continue
+    ;(grouped[stageId] ??= []).push(journey)
+  }
+  return grouped
+})
+
+function nodeJourneys(stageId: unknown): JourneySummary[] {
+  return stageId ? (journeysByStage.value[stageId as string] ?? []) : []
+}
+
+function onJourneyOpen(journey: JourneySummary): void {
+  emit('journey-open', journey)
+}
 
 const defaultEdgeOptions: DefaultEdgeOptions = {
   type: 'smoothstep',

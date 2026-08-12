@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
+import type { JourneySummary, JourneyDetail, JourneyListResponse } from '../types/lifecycleMap'
 
 export interface LifecycleMapStage {
   id: string
@@ -103,6 +104,63 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
 
   const saving = ref(false)
   const pipelines = ref<PipelineSummary[]>([])
+
+  const journeys = ref<JourneySummary[]>([])
+  const isLoadingJourneys = ref(false)
+  const journeysError = ref<string | null>(null)
+  const journeyDetail = ref<JourneyDetail | null>(null)
+  const journeyDetailError = ref<string | null>(null)
+  const isLoadingJourneyDetail = ref(false)
+  const selectedJourneyKey = ref<string | null>(null)
+
+  const journeysByStage = computed<Record<string, JourneySummary[]>>(() => {
+    const grouped: Record<string, JourneySummary[]> = {}
+    for (const journey of journeys.value) {
+      const stageId = journey.current_stage?.stage_id
+      if (!stageId) continue
+      ;(grouped[stageId] ??= []).push(journey)
+    }
+    return grouped
+  })
+
+  async function fetchJourneys(mapId: string): Promise<void> {
+    if (isLoadingJourneys.value) return
+    isLoadingJourneys.value = true
+    journeysError.value = null
+    try {
+      const data = await get<JourneyListResponse>(`/api/v1/lifecycle-maps/${mapId}/journeys?limit=200`)
+      journeys.value = data?.items ?? []
+    } catch (e: unknown) {
+      journeysError.value = formatApiError(e)
+      journeys.value = []
+    } finally {
+      isLoadingJourneys.value = false
+    }
+  }
+
+  async function fetchJourneyDetail(mapId: string, kind: string, ref: string): Promise<void> {
+    isLoadingJourneyDetail.value = true
+    journeyDetail.value = null
+    journeyDetailError.value = null
+    selectedJourneyKey.value = `${kind}:${ref}`
+    try {
+      const data = await get<JourneyDetail>(
+        `/api/v1/lifecycle-maps/${mapId}/journeys/${encodeURIComponent(kind)}/${encodeURIComponent(ref)}`
+      )
+      journeyDetail.value = data
+    } catch (e: unknown) {
+      journeyDetailError.value = formatApiError(e)
+    } finally {
+      isLoadingJourneyDetail.value = false
+    }
+  }
+
+  function clearJourneyDetail(): void {
+    journeyDetail.value = null
+    journeyDetailError.value = null
+    isLoadingJourneyDetail.value = false
+    selectedJourneyKey.value = null
+  }
 
   async function fetchMaps(): Promise<void> {
     if (isLoading.value) return
@@ -235,6 +293,14 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     detailError,
     saving,
     pipelines,
+    journeys,
+    isLoadingJourneys,
+    journeysError,
+    journeyDetail,
+    journeyDetailError,
+    isLoadingJourneyDetail,
+    selectedJourneyKey,
+    journeysByStage,
     graduatedCount,
     manualCount,
     fetchMaps,
@@ -244,5 +310,8 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     updateVersion,
     graduateStage,
     fetchPipelines,
+    fetchJourneys,
+    fetchJourneyDetail,
+    clearJourneyDetail,
   }
 })
