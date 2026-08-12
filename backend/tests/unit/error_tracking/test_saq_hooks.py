@@ -180,3 +180,25 @@ class TestAfterProcess:
             await saq_hooks.after_process(ctx)
         log_exc.assert_called_once()
         # No exception escapes — the hook must never break the worker.
+
+
+class TestGetEnginePrepPing:
+    def test_engine_created_with_pool_pre_ping(self) -> None:
+        saved = saq_hooks._ENGINE
+        try:
+            saq_hooks._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.modulo_db = "postgres"
+            mock_engine = MagicMock()
+            with (
+                patch.object(saq_hooks, "_ENGINE", None),
+                patch.object(saq_hooks, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch("modulo.settings.get_settings", return_value=settings_mock),
+            ):
+                saq_hooks._get_engine()
+            _, kwargs = mock_create.call_args
+            assert kwargs["pool_pre_ping"] is True
+            assert kwargs["connect_args"]["statement_cache_size"] == 0
+            assert kwargs["connect_args"]["ssl"] is False
+        finally:
+            saq_hooks._ENGINE = saved
