@@ -647,8 +647,8 @@ jobs:
         env:
           E2E_TARGET: app
           E2E_NO_WEBSERVER: "true"
-          E2E_ADMIN_EMAIL: ${{ secrets.E2E_STAGING_ADMIN_EMAIL }}
-          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_STAGING_ADMIN_PASSWORD }}
+          E2E_ADMIN_EMAIL: ${{ secrets.E2E_PROD_ADMIN_EMAIL }}
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
         continue-on-error: true # nosemgrep: continue-on-error-in-ci
         # Deliberate: failures are surfaced by the "Fail on smoke test failure"
         # aggregate step below instead of hard-failing here.
