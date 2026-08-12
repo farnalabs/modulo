@@ -234,6 +234,7 @@ async def create_run(
     work_item_refs: list[dict[str, Any]] | None = None,
     is_replay: bool | None = None,
     variant_group_id: uuid.UUID | None = None,
+    feedback_correction: dict[str, Any] | None = None,
 ) -> Run:
     # Soft-deleted-org guard (follow-up gap from the reconcile delivery): a run
     # must never be created in an org whose deletion flow has set status='deleted'
@@ -284,6 +285,16 @@ async def create_run(
     # strip happens BEFORE _input_hash() so an injected reserved key cannot
     # alter the run's hash, and the STRIPPED payload is what gets stored.
     stored_payload = _strip_reserved_keys(input_payload)
+
+    # Engine-only feedback-correction context (FAR-142): the
+    # ``_feedback_correction`` key is reserved and stripped above, so a user
+    # payload can never forge correction-run context. Correction runs flow the
+    # value through the explicit ``feedback_correction`` kwarg instead, which
+    # injects it AFTER the strip — the value still reaches the stored
+    # input_payload (and executor._seed_state's promotion to run_context), but
+    # only engine callers can set it.
+    if feedback_correction is not None:
+        stored_payload["_feedback_correction"] = feedback_correction
 
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"

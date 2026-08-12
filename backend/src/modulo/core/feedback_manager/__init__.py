@@ -39,7 +39,6 @@ _AI_HANDLER_TYPES = frozenset(
         "ai_correction_with_human_review",
     }
 )
-_FEEDBACK_CORRECTION_KEY = "_feedback_correction"
 _POST_CORRECTION_EVAL_NAME = "post_correction_eval"
 _DEFAULT_PAGE_SIZE = 20
 _MAX_PAGE_SIZE = 100
@@ -356,8 +355,11 @@ class FeedbackManager:
         2. Fetch the original run (the one that produced the rejected output).
         3. Create a new run with ``parent_run_id`` set to the original run_id,
            copying the original's pipeline_id, snapshot_id, and input_payload.
-        4. Inject a _feedback_correction block into the new run's
-           ``input_payload`` so the executor promotes it to ``run_context``.
+        4. Pass a feedback_correction block via create_run's explicit
+           ``feedback_correction`` kwarg (reserved-key safe: create_run strips
+           any user-supplied ``_feedback_correction`` first, then injects this
+           engine-only value post-strip) so the executor promotes it to
+           ``run_context``.
         5. Link the correction run to the FeedbackRecord and transition status
            to ``correcting``.
         6. Return the new run_id.
@@ -393,7 +395,6 @@ class FeedbackManager:
             feedback_correction.update(run_context_overrides)
 
         input_payload = dict(original_run.input_payload or {})
-        input_payload[_FEEDBACK_CORRECTION_KEY] = feedback_correction
 
         new_run = await create_run(
             self._session,
@@ -404,6 +405,7 @@ class FeedbackManager:
             input_payload=input_payload,
             account_id=record.account_id,
             parent_run_id=record.run_id,
+            feedback_correction=feedback_correction,
         )
 
         await self.link_correction_run(record_id, new_run.id)

@@ -141,6 +141,31 @@ class TestReservedKeyStripBeforeHash:
         assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
         assert run.work_item_id != uuid.UUID("00000000-0000-0000-0000-00000000dead")
 
+    async def test_feedback_correction_kwarg_injected_post_strip(self, session: AsyncSession) -> None:
+        """A correction run spawned via create_run's ``feedback_correction``
+        kwarg stores the block in the run's input_payload (so
+        executor._seed_state can promote it to run_context), while a raw
+        payload carrying the same key is stripped first — the kwarg is
+        engine-only and wins over any user-supplied value."""
+        await _seed_org(session)
+
+        correction_block = {"rejection_reason": "bad output", "is_correction_run": True}
+        kwarg_run = await _create(
+            session,
+            input_payload={"user_input": "x", "_feedback_correction": {"is_correction_run": True}},
+            feedback_correction=correction_block,
+        )
+        assert kwarg_run.input_payload is not None
+        assert kwarg_run.input_payload["user_input"] == "x"
+        assert kwarg_run.input_payload["_feedback_correction"] == correction_block
+
+        raw_run = await _create(
+            session,
+            input_payload={"user_input": "x", "_feedback_correction": {"is_correction_run": True}},
+        )
+        assert raw_run.input_payload is not None
+        assert "_feedback_correction" not in raw_run.input_payload
+
 
 class TestForgePreventionPerInputPath:
     def test_raw_webhook_passthrough_empty_mapping_keeps_forged_key_in_route_payload(
