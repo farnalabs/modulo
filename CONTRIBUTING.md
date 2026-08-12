@@ -87,7 +87,7 @@ cd ..
 
 # 5. Install frontend dependencies
 cd frontend
-npm install
+pnpm install --frozen-lockfile
 cd ..
 
 # 6. Start the backend (uvicorn with hot-reload)
@@ -100,7 +100,7 @@ uv run uvicorn modulo.api.main:app --reload --host 0.0.0.0 --port 8000
 
 # 7. In a separate terminal, start the frontend
 cd frontend
-npm run dev
+pnpm run dev
 ```
 
 The backend is available at `http://localhost:8000` and the frontend at `http://localhost:5173`.
@@ -237,13 +237,13 @@ step modules have relaxed rules.
 cd frontend
 
 # Lint
-npm run lint                 # eslint src/**/*.{vue,ts,js}
+pnpm run lint                 # eslint src/**/*.{vue,ts,js}
 
 # Type check
-npm run type-check           # vue-tsc --noEmit
+pnpm run type-check           # vue-tsc --noEmit
 
 # Format check
-npm run lint:fix             # auto-fix lint issues
+pnpm run lint:fix             # auto-fix lint issues
 ```
 
 ### Pre-commit hooks
@@ -308,7 +308,7 @@ cd backend
 uv run alembic upgrade heads
 # In separate terminals:
 #   backend:  uv run uvicorn modulo.api.main:app --host 0.0.0.0 --port 8000
-#   frontend: cd ../frontend && npm run build && npm run preview -- --port 4173
+#   frontend: cd ../frontend && pnpm run build && pnpm run preview -- --port 4173
 cd backend
 uv run pytest tests/bdd/ -m e2e --base-url http://localhost:4173 -q
 ```
@@ -317,14 +317,14 @@ uv run pytest tests/bdd/ -m e2e --base-url http://localhost:4173 -q
 
 ```powershell
 cd frontend
-npm run test:unit            # vitest run src
+pnpm run test:unit            # vitest run src
 ```
 
 ### Frontend E2E tests
 
 ```powershell
 cd frontend
-npm run test:e2e             # playwright test
+pnpm run test:e2e             # playwright test
 ```
 
 ### Coverage thresholds
