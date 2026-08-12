@@ -32,7 +32,6 @@ from modulo.db.models import (
     Run,
     Schema,
     SchemaVersion,
-    Stage,
     Team,
 )
 from modulo.db.session import AsyncSessionLocal
@@ -47,7 +46,6 @@ ConflictStrategy = Literal["skip", "overwrite", "rename"]
 ENTITY_ORDER: list[tuple[str, type]] = [
     ("users", Account),
     ("teams", Team),
-    ("stages", Stage),
     ("schemas", Schema),
     ("schema_versions", SchemaVersion),
     ("model_backends", ModelBackend),
@@ -61,7 +59,6 @@ ENTITY_ORDER: list[tuple[str, type]] = [
 NAME_CONFLICT_FIELD: dict[str, str] = {
     "users": "email",
     "teams": "name",
-    "stages": "name",
     "schemas": "name",
     "model_backends": "name",
     "library_primitives": "name",
@@ -73,7 +70,6 @@ NAME_CONFLICT_FIELD: dict[str, str] = {
 FK_COLUMNS: dict[str, list[str]] = {
     "users": ["organisation_id"],
     "teams": ["organisation_id", "created_by"],
-    "stages": ["organisation_id", "owner_team_id", "created_by"],
     "schemas": ["organisation_id", "created_by"],
     "schema_versions": ["organisation_id", "schema_id", "created_by"],
     "model_backends": ["organisation_id", "owner_team_id", "created_by"],
@@ -87,14 +83,13 @@ FK_COLUMNS: dict[str, list[str]] = {
         "input_schema_id",
         "output_schema_id",
     ],
-    "pipelines": ["organisation_id", "stage_id", "owner_team_id", "created_by"],
+    "pipelines": ["organisation_id", "owner_team_id", "created_by"],
     "runs": ["organisation_id", "pipeline_id", "snapshot_id", "trigger_id", "owner_team_id", "created_by"],
 }
 
 IMPORT_SKIP_COLS: dict[str, set[str]] = {
     "users": {"id", "organisation_id", "created_at", "updated_at", "last_login"},
     "teams": {"id", "organisation_id", "created_at", "updated_at"},
-    "stages": {"id", "organisation_id", "created_at", "updated_at"},
     "schemas": {"id", "organisation_id", "created_at", "updated_at"},
     "schema_versions": {"id", "organisation_id", "created_at", "updated_at"},
     "model_backends": {"id", "organisation_id", "created_at", "updated_at"},

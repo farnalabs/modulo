@@ -8,17 +8,13 @@ bdd:
 code:
   - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/api/routes/pipeline_folders.py
-  - backend/src/modulo/api/routes/stages.py
   - backend/src/modulo/db/models/pipeline_folder.py
   - backend/src/modulo/db/models/pipeline_edge.py
-  - backend/src/modulo/db/models/stage.py
   - backend/src/modulo/db/crud/pipeline_folder.py
-  - backend/src/modulo/db/crud/stage.py
   - backend/src/modulo/db/migrations/versions/0007_pipeline_folders.py
   - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/core/graph_validator/category_validator.py
   - frontend/src/views/PipelineEditorView.vue
-  - frontend/src/views/StageBoardView.vue
   - frontend/src/views/PipelineListView.vue
   - frontend/src/components/pipelines/FolderTree.vue
   # frontend/src/views/PipelineTemplateGallery.vue — removed, merged into PipelineListView
@@ -33,7 +29,6 @@ code:
   - frontend/src/components/pipeline/composite/SchemaMappingPanel.vue
   - frontend/src/components/pipeline/nodes/CompositeNode.vue
 unit-tests:
-  - backend/tests/unit/api/test_stages.py
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/unit/api/test_error_handling.py
   - backend/tests/unit/test_pipeline_node_conversion.py
@@ -52,39 +47,10 @@ status: partial
 Pipeline Builder UI and data-model components — the visual side of pipelines.
 Execution, run lifecycle, event streaming, HITL runtime, and token/cost tracking
 are covered by `feat-pipelines-cicd-pipeline`. This entry covers the builder,
-canvas, Stage Board, edge model, graph validation (on-save), agent/schema pickers,
+canvas, edge model, graph validation (on-save), agent/schema pickers,
 copy-to-adapt (save-as-composite), node conversion, and ownership/visibility.
 
 ## Behaviours
-
-### Stage Board — Kanban View
-
-- [x] Stage created with name, optional description, position, visibility (org/team), and optional owner_team_id via POST /api/v1/stages — 201
-- [x] Stage list returns paginated results sorted by position then name with RLS enforcement
-- [x] Stage list filterable by owner_team_id query parameter
-- [x] Stage detail retrieved by ID via GET /api/v1/stages/{id} — 200
-- [x] Stage fields updated via PATCH /api/v1/stages/{id} (partial update)
-- [x] Stage deleted via DELETE /api/v1/stages/{id} — 204
-- [x] Stage list filtered by team filter (Frontend computed filter based on owner_team_id)
-- [x] Stage list filtered by pipeline status (running, idle, failed, complete, awaiting_human)
-- [x] Stage list filtered by date range (from/to)
-- [x] Stage details slide-out panel with name, description, position, visibility, connected pipeline count, created date
-- [x] Pipeline cards show name, status badge (with colour coding), team name, created date within stage columns
-- [x] Pipeline move-left/right buttons advance pipeline between stages via PATCH /api/v1/pipelines/{id} (stage_id update)
-- [x] Move buttons disabled while API call is in flight
-- [x] Empty stage shows dashed "No pipelines" placeholder
-- [x] Pipeline detail slide-out panel with name, status, stage, created date
-- [x] Stage column header clickable to show stage details panel
-- [x] Create Stage dialog with name, description, position, visibility inputs
-- [x] Create Stage validates non-empty name before enabling submit
-- [x] Create Stage error displayed inline on failure
-- [x] Stage board wrapped in FeatureGate (team_rbac, team tier, show-disabled mode)
-- [x] Stage CRUD routes return 501 Not Implemented when stages table does not exist (ProgrammingError caught)
-- [x] Stage ownership model: visibility 'team' requires owner_team_id (CHECK constraint), visibility 'org' is default
-- [x] Stage CRUD enforces RLS — all queries scoped to organisation_id
-- [ ] Stage reorder (drag-and-drop position swap) — not implemented, only move-left/right per pipeline
-- [ ] Stage board has no search input for stages — only team/status/date filters on pipelines
-- [ ] Stage deletion cascading — no test for what happens to pipelines assigned to a deleted stage
 
 ### Pipeline Folders
 
@@ -220,7 +186,6 @@ frontend-side integration:
 
 - [ ] PipelineEditorView does not display real-time run progress within the canvas
 - [ ] No WebSocket subscription started from PipelineEditorView
-- [ ] Stage Board shows pipeline status badges but does not update in real-time via WebSocket
 - [ ] Run detail page (frontend/src/views/RunDetailView.vue) uses WebSocket events — covered separately
 
 ### Agent Theme (V1) — ?mode=agent Route
@@ -230,25 +195,12 @@ frontend-side integration:
 
 ### Resource Ownership on Creation
 
-- [x] Stage model has owner_team_id FK to teams.id (ondelete=RESTRICT), visibility field
-- [x] Stage create accepts owner_team_id, visibility parameters
-- [x] Stage CHECK constraint: visibility 'team' requires owner_team_id IS NOT NULL
-- [x] Stage list filterable by owner_team_id
 - [x] Pipeline create accepts visibility field (org/team pattern)
 - [x] Pipeline Pydantic model validates visibility with regex pattern
-- [x] Stage Board team filter uses owner_team_id to filter stages and pipelines
 - [ ] Pipeline model does not have owner_team_id field — only visibility
-- [ ] No ownership picker UI component for pipeline creation — only for stage creation
 
 ## Edge Cases
 
-- [x] Empty stage list returns total=0 with empty items array
-- [x] Non-existent stage ID returns 404 on get/update/delete
-- [x] Stage create with empty name returns 422
-- [x] Stage create with missing name returns 422
-- [x] Stage create with invalid visibility value returns 422
-- [x] Stage update with empty name returns 422
-- [x] Unauthenticated stage requests return 401/403
 - [x] Pipeline graph with no nodes — GraphValidator returns TOPOLOGY_NO_NODES error
 - [x] Pipeline graph with cycle — GraphValidator detects and returns TOPOLOGY_CYCLE error
 - [x] Graph exceeding max nodes (500) or max edges (1000) — rejected with 422
@@ -258,12 +210,9 @@ frontend-side integration:
 - [x] Non-existent output schema in graph — 422 with unknown schema IDs
 - [x] Manual node output_schema_id that doesn't exist in org — 422
 - [x] Missing snapshot in revert-to-manual — 404
-- [x] Missing DB table for stages — 501 Not Implemented
 
 ## Error Handling
 
-- [x] Stage CRUD routes catch ProgrammingError → 501
-- [x] Stage CRUD routes catch SQLAlchemyError → 503
 - [x] Pipeline CRUD routes catch ProgrammingError → 501
 - [x] Pipeline CRUD routes catch SQLAlchemyError → 503
 - [x] Pipeline clone route catches ProgrammingError → 501 and SQLAlchemyError → 503 (via @handle_db_errors decorator)
@@ -274,9 +223,6 @@ frontend-side integration:
 - [x] Save-as-composite route moved all DB queries inside session.begin() — RLS leak fixed
 - [x] GraphValidator errors propagate with specific error codes (TOPOLOGY_*, SCHEMA_*, CONNECTOR_*, MODEL_BACKEND_*, ENV_*, COMPOSITE_*)
 - [x] Graph validation errors surfaced in PipelineGraphResponse.validation_issues — returned to frontend, not lost
-- [x] 10 new unit tests covering ProgrammingError→501 and SQLAlchemyError→503 for all 5 stage routes
-- [ ] Stage DELETE with pipelines still assigned — no test for FK constraint behaviour
-- [ ] Stage create with non-existent owner_team_id — no explicit test (FK constraint at DB level)
 
 ## Known Gaps
 
@@ -300,34 +246,26 @@ frontend-side integration:
 
 ### Missing website docs
 - No pipeline-builder page at `Website/modulo-website/src/docs/` — needs separate website worktree
-- No docs stubs for Pipeline Builder, Stage Board, or Graph Validation features
+- No docs stubs for Pipeline Builder or Graph Validation features
 
 ### Frontend pipeline views not fully i18n'd
 - PipelineEditorView.vue (~825 lines) has 23 `$t()` calls but ~30 hardcoded English strings in templates (MANUAL, AGENT, HITL labels, edge properties, HITL gate config, Save as Composite dialog, schema info)
-- StageBoardView.vue has 0 `$t()` calls and ~30 hardcoded English strings (filter labels, stage/pipeline detail panels, create dialog)
 - CompositeEditorView.vue and all 9 composite component files have 0 `$t()` calls — fully hardcoded English
 - PipelineListView.vue and PipelineEditorView.vue correctly use `formatApiError(e)` for error handlers
 
 ### Stale product map code reference
 - `PipelineTemplateGallery.vue` referenced in frontmatter `code:` but the file no longer exists — was merged into PipelineListView
 
-### Stage Board limitations
-- No drag-and-drop stage reordering
-- No search/filter input for stage names (only team filter on stages)
-- No pipeline search within stage columns
-- No test for stage deletion with assigned pipelines
-
-### No BDD for stages
-- No BDD feature file covers Stage CRUD scenarios
-- pipeline_builder.feature has only 5 UI scenarios — does not cover agent picker, edge config, HITL gate config, save-as-composite, or stage board
+### No BDD for pipeline builder UI
+- pipeline_builder.feature has only 5 UI scenarios — does not cover agent picker, edge config, HITL gate config, or save-as-composite
 - No BDD for graph validation (pipeline_config_validation.feature has only 4 scenarios — no schema compatibility, connector, model backend, or composite validation scenarios)
 
 ### Ownership picker incomplete
-- Pipeline model lacks owner_team_id — only Stage has it
-- No dedicated ownership picker component in UI — only a visibility selector on stage creation dialog
+- Pipeline model lacks owner_team_id
+- No dedicated ownership picker component in UI
 
 ## QA History
 
-- 2026-07-08: Cross-cutting QA (index 254): Fixed CRITICAL — RLS leak in save_as_composite_endpoint (3 DB queries outside session.begin() — Agent lookup, PipelineEdge fetch, create_composite_template — missing RLS context on Postgres; all moved inside transaction). Fixed CRITICAL — added SQLAlchemyError→503 catches to all 5 stage routes (previously only ProgrammingError→501). Fixed CRITICAL — added SQLAlchemyError→503 catches to 8 pipeline CRUD + clone routes. Fixed CRITICAL — combined `except (IntegrityError, ProgrammingError, SQLAlchemyError)` in convert-to-agent/revert-to-manual split into separate handlers with correct status codes (409/501/503). Fixed MAJOR — added `populate_by_name=True` to StageResponse. Fixed MAJOR — replaced 10 `e instanceof Error ? e.message : String(e)` handlers with `formatApiError(e)` in 4 frontend views (PipelineEditorView, StageBoardView, PipelineListView, PipelineTemplateGallery). Created backend/tests/unit/api/test_stage_programming_error.py with 10 tests covering all 5 stage routes × 2 error types. Fixed 2 pre-existing test failures (license tier assertion, AsyncMock for publish_primitive). Merged to main at v0.3.227. Status: partial.
+- 2026-07-08: Cross-cutting QA (index 254): Fixed CRITICAL — RLS leak in save_as_composite_endpoint (3 DB queries outside session.begin() — Agent lookup, PipelineEdge fetch, create_composite_template — missing RLS context on Postgres; all moved inside transaction). Fixed CRITICAL — added SQLAlchemyError→503 catches to 8 pipeline CRUD + clone routes. Fixed CRITICAL — combined `except (IntegrityError, ProgrammingError, SQLAlchemyError)` in convert-to-agent/revert-to-manual split into separate handlers with correct status codes (409/501/503). Fixed MAJOR — replaced 10 `e instanceof Error ? e.message : String(e)` handlers with `formatApiError(e)` in 4 frontend views (PipelineEditorView, PipelineListView, PipelineTemplateGallery). Fixed 2 pre-existing test failures (license tier assertion, AsyncMock for publish_primitive). Merged to main at v0.3.227. Status: partial.
 - 2026-07-05: Prodmap pipelines QA: Fixed depends-on direction (core → cicd was inverted). Fixed false Known Gap about missing `test_graph_validator.py`. Fixed website docs path prefix. Updated delivery-tasks note.
-- 2026-07-09: Cross-cutting QA (index 338): Updated frontmatter — added graph_validator unit tests to unit-tests, populated depends-on with feat-core-pipeline-execution, feat-pipelines-cicd-pipeline, feat-core-agent-model. Corrected stale claims: graph_validator/__init__.py is 817 lines (not 876), test_graph_validator.py now covers topology/schema/connector/backend/conditional edges (52 tests), test_category_validator.py covers node categories (12 tests). Removed dead `PipelineTemplateGallery.vue` code reference. Added Known Gaps for frontend i18n coverage (PipelineEditorView, StageBoardView, CompositeEditorView all have 30+ hardcoded strings). Added `@handle_db_errors` decorator clarification to Error Handling section. Status: partial.
+- 2026-07-09: Cross-cutting QA (index 338): Updated frontmatter — added graph_validator unit tests to unit-tests, populated depends-on with feat-core-pipeline-execution, feat-pipelines-cicd-pipeline, feat-core-agent-model. Corrected stale claims: graph_validator/__init__.py is 817 lines (not 876), test_graph_validator.py now covers topology/schema/connector/backend/conditional edges (52 tests), test_category_validator.py covers node categories (12 tests). Removed dead `PipelineTemplateGallery.vue` code reference. Added Known Gaps for frontend i18n coverage (PipelineEditorView, CompositeEditorView all have 30+ hardcoded strings). Added `@handle_db_errors` decorator clarification to Error Handling section. Status: partial.

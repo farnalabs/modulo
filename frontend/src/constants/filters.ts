@@ -1,7 +1,7 @@
 /**
  * Centralized filter value constants for run statuses.
  * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled')
- * These are used across DashboardView, RunsListView, StageBoardView, etc.
+ * These are used across DashboardView, RunsListView, etc.
  */
 export const RUN_STATUS = {
   PENDING: 'pending',

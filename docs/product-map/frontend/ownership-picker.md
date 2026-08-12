@@ -3,15 +3,12 @@ id: feat-frontend-ownership-picker
 prd: 9.3
 delivery-tasks: [task-nv1-ownership-picker]
 bdd:
-  - backend/tests/bdd/features/teams/ownership_picker.feature
   - backend/tests/bdd/features/workflows/import.feature
   - backend/tests/bdd/features/workflows/export.feature
   - backend/tests/bdd/features/library/copy_to_adapt.feature
 code:
   - frontend/src/components/OwnershipPicker.vue
   - frontend/src/views/LibraryPipelineWizard.vue
-unit-tests:
-  - backend/tests/bdd/steps/test_ownership_picker.py
 depends-on: [feat-teams-team-ownership]
 status: partial
 ---
@@ -82,7 +79,6 @@ from the admin API.
 
 ### BDD Coverage (backend)
 
-- [x] Ownership picker feature file exists at `backend/tests/bdd/features/teams/ownership_picker.feature`
 - [x] Import assigns owner_team_id from bundle selection (import.feature:46-49)
 - [x] Export strips owner_team_id from bundle (export.feature:21-24)
 - [x] Copy-to-adapt propagates target_team_id as owner_team_id (copy_to_adapt.feature:21-23)
@@ -113,7 +109,7 @@ from the admin API.
 ### Test Coverage
 - No dedicated frontend unit tests for OwnershipPicker component — always stubbed in parent tests
 - No Playwright E2E test for ownership picker selection flow
-- BDD coverage for ownership picker interaction is through ownership_picker.feature (teams domain) + import/export/copy-to-adapt (workflow propagation) — no frontend BDD for picker UI interaction
+- BDD coverage for ownership picker interaction is through import/export/copy-to-adapt (workflow propagation) — no frontend BDD for picker UI interaction
 
 ### Component Limitations
 - No `disabled` prop — CSS classes exist but are never triggered
@@ -136,4 +132,3 @@ from the admin API.
 - **Fixed**: `label="Owner"` prop hardcoded in English across 3 parent views (LibraryPipelineWizard, PipelineTemplateGallery, CopyPipelineWizard) — now uses `$t('views.LibraryPipelineWizard.owner')` via a new translation key
 - **Added**: `views.LibraryPipelineWizard.owner` translation key to en-US.js
 - **Added**: Internationalisation behaviour section with 2 checked behaviours
-- **Verified**: Backend stages.py routes all have `ProgrammingError` catch for 501 on missing DB tables (all 5 CRUD routes)

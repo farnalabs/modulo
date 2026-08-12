@@ -9,7 +9,7 @@ RLS policy exactly:
     OR (owner_team_id IN (SELECT team_id FROM team_memberships WHERE account_id = ...))
     OR (org_role = 'admin')
 
-Team-scoped resource set (Phase-1 floor): ``pipelines``, ``stages``,
+Team-scoped resource set (Phase-1 floor): ``pipelines``,
 ``connector_instances``, ``model_backends``, ``environment_profiles``,
 ``library_primitives``, ``lifecycle_maps``. ``lifecycle_maps`` carries the
 visibility CHECK constraint but only strict org RLS at the DB layer — the
@@ -41,7 +41,6 @@ from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
-from modulo.db.models.stage import Stage
 from modulo.db.models.team_membership import TeamMembership
 
 
@@ -114,7 +113,6 @@ resolve_pipeline_team_scope = team_scope_resolver(Pipeline, path_param="pipeline
 
 # Pattern instantiations for the remaining team-scoped tables. Each is wired by
 # PR B once its routes are swept; the resolver mechanism is identical.
-resolve_stage_team_scope = team_scope_resolver(Stage, path_param="stage_id")
 resolve_connector_team_scope = team_scope_resolver(ConnectorInstance, path_param="connector_id")
 resolve_model_backend_team_scope = team_scope_resolver(ModelBackend, path_param="backend_id")
 resolve_environment_profile_team_scope = team_scope_resolver(EnvironmentProfile, path_param="profile_id")
@@ -127,7 +125,6 @@ resolve_lifecycle_map_team_scope = team_scope_resolver(LifecycleMap, path_param=
 # accidental runs resolver is a test failure, not a silent scoping regression.
 TEAM_SCOPED_RESOLVERS: dict[str, TeamScopeProvider] = {
     "pipelines": resolve_pipeline_team_scope,
-    "stages": resolve_stage_team_scope,
     "connector_instances": resolve_connector_team_scope,
     "model_backends": resolve_model_backend_team_scope,
     "environment_profiles": resolve_environment_profile_team_scope,
