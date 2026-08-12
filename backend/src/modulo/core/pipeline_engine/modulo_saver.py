@@ -513,6 +513,34 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
             row_factory=dict_row,
         )
 
+    def _connection_is_stale(self) -> bool:
+        """True when the current DB connection can no longer be used."""
+        conn = getattr(self, "conn", None)
+        if conn is None:
+            return False
+        return bool(getattr(conn, "closed", False) or getattr(conn, "broken", False))
+
+    @asynccontextmanager
+    async def _cursor(self, *, pipeline: bool = False) -> AsyncIterator[Any]:
+        """Create a DB cursor, transparently reconnecting a stale connection.
+
+        Long-running pipeline runs can idle the DB connection until the server
+        closes it; the inherited AsyncPostgresSaver._cursor then raises
+        ``psycopg.OperationalError: the connection is closed`` on the next
+        checkpoint write (aput/aget_tuple/alist/setup), failing the whole run.
+        Detect the stale connection up front and reconnect before opening a
+        cursor. Only reconnects when a conn_string is available; without one
+        the base behavior (raise) is preserved.
+        """
+        if self._conn_string and self._connection_is_stale():
+            _log.warning(
+                "checkpoint.cursor_reconnect",
+                extra={"detail": "stale DB connection detected; reconnecting before cursor"},
+            )
+            await self._reconnect()
+        async with super()._cursor(pipeline=pipeline) as cur:
+            yield cur
+
     # ------------------------------------------------------------------
     # Override: from_conn_string — passes org_id and fernet_key
     # ------------------------------------------------------------------
