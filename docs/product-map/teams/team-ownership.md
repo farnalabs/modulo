@@ -8,7 +8,6 @@ bdd:
   - backend/tests/bdd/features/library/copy_to_adapt.feature
 code:
   - backend/src/modulo/db/models/pipeline.py
-  - backend/src/modulo/db/models/stage.py
   - backend/src/modulo/db/models/connector_instance.py
   - backend/src/modulo/db/models/model_backend.py
   - backend/src/modulo/db/models/library_primitive.py
@@ -30,7 +29,6 @@ code:
   - backend/src/modulo/db/migrations/versions/0001_v2_identity_org.py
   - backend/src/modulo/db/migrations/versions/0003_v2_pipeline_runtime.py
 unit-tests:
-  - backend/tests/bdd/steps/test_ownership_picker.py
   - backend/tests/unit/library_service/test_workflow_import_export_resilience.py
   - backend/tests/unit/core/library_service/test_contribute.py
   - backend/tests/unit/api/test_contributions.py
@@ -41,7 +39,7 @@ status: partial
 ---
 # Team Ownership (Resource Ownership)
 
-Resource-level team ownership model — pipelines, stages, connector instances, model
+Resource-level team ownership model — pipelines, connector instances, model
 backends, library primitives, and runs carry `owner_team_id` (nullable FK) and
 `visibility` (`org` | `team`). Controls which team can see and use each resource
 with enforcement via DB constraints, RLS policies, and ViewModel validation.
@@ -49,7 +47,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 ## Behaviours
 
 ### Schema & Models
-- [x] Pipeline, Stage, ConnectorInstance, ModelBackend, LibraryPrimitive all carry `owner_team_id` (nullable UUID FK) and `visibility` (`org` | `team`, default `org`) — verified in ORM models
+- [x] Pipeline, ConnectorInstance, ModelBackend, LibraryPrimitive all carry `owner_team_id` (nullable UUID FK) and `visibility` (`org` | `team`, default `org`) — verified in ORM models
 - [x] `owner_team_id` FK has `ondelete=RESTRICT` — verified on Pipeline model (line 39), prevents team deletion while resources exist
 - [x] DB check constraint enforces `visibility = 'org' OR owner_team_id IS NOT NULL` on team-scoped entities — verified on Pipeline model (lines 20-23)
 - [ ] LibraryPrimitive has extended constraint: `visibility IN ('org', 'community') OR owner_team_id IS NOT NULL` — Pydantic validators exist but DB constraint not verified
@@ -64,11 +62,6 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Each resource has exactly one `owner_team_id` — single FK, no multi-team ACL support (documented limitation)
 - [x] `owner_team_id=NULL` + `visibility=team` is invalid — blocked by DB check constraint (verified on Pipeline)
 - [ ] Admin may reassign ownership of any resource regardless of current team — no endpoint exists; no ownership transfer mechanism
-
-### Stage Team Ownership
-- [x] Stage carries `owner_team_id` and `visibility` — ORM model includes both columns
-- [ ] Team-visibility Stage may only contain pipelines owned by the same team — not verified in code
-- [ ] Cross-team pipeline assignment to a team Stage is blocked with `stage_team_mismatch` error — not verified in code
 
 ### Pipeline Ownership Changes
 - [ ] Changing pipeline's `owner_team_id` is blocked while any non-terminal run exists (`pending`, `running`, `awaiting_human`, `waiting_for_lock`) — no route endpoint exists to change ownership
@@ -105,7 +98,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [ ] `resource_team_ownership_changed` audit event records `resource_type`, `resource_id`, `old_team_id`, `new_team_id`, `changed_by` — not implemented
 
 ### RLS Enforcement
-- [ ] `rls_team_isolation` policy exists on pipelines, stages, connector_instances, model_backends, and library_primitives — migration 0025 named `team_visibility_rls`, content needs verification
+- [ ] `rls_team_isolation` policy exists on pipelines, connector_instances, model_backends, and library_primitives — migration 0025 named `team_visibility_rls`, content needs verification
 - [ ] Admin bypasses team scope via `current_setting('app.org_role') = 'admin'` check in RLS policy — not verified in migration
 - [ ] User not in any team sees only org-visibility resources — no team-private leakage — relies on RLS policy, not verified
 - [ ] User in multiple teams sees each team's resources independently with their respective team roles — relies on RLS policy, not verified
@@ -117,9 +110,8 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Copy-to-adapt propagates `target_team_id` as `owner_team_id` (copy_to_adapt.feature:21-23) — verified
 
 ### Error States
-- [x] Creating resource with `visibility=team` but no `owner_team_id` blocked by Pydantic validators — all 5 resource types (pipeline, connector, model_backend, stage, library) now have `@model_validator` enforcing the constraint (feat-teams-team-ownership index 336)
+- [x] Creating resource with `visibility=team` but no `owner_team_id` blocked by Pydantic validators — all 4 resource types (pipeline, connector, model_backend, library) now have `@model_validator` enforcing the constraint (feat-teams-team-ownership index 336)
 - [x] Team deletion blocked when owned resources exist (`team_has_resources`) — verified in teams.py and admin.py
-- [ ] Cross-team pipeline to team-stage assignment blocked (`stage_team_mismatch`) — no validation exists
 - [x] Cross-team connector binding blocked (`connector_team_mismatch`) — enforced at pipeline-save command layer (HTTP 409)
 - [ ] Pipeline ownership change blocked during active runs (`pipeline_has_active_runs`) — no ownership change endpoint exists
 - [ ] Non-admin using ownership change endpoint returns 403 — no ownership change endpoint exists
@@ -133,15 +125,15 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - [x] Multiple resources owned by same team — bulk team deletion blocked until all reassigned — verified in resource check logic
 
 ### Error Handling (API Resilience)
-- [x] All DB-backed ownership routes catch `ProgrammingError` and return 501 Not Implemented — verified: connectors.py (5 routes), pipelines.py, model_backends.py, stages.py all have ProgrammingError catches (templates.py fixed 503→501 in feat-teams-team-ownership index 336)
-- [x] All DB-backed ownership routes catch `SQLAlchemyError` and return 503 Service Unavailable — verified: connectors.py (5 routes), pipelines.py, model_backends.py, stages.py all have SQLAlchemyError catches
+- [x] All DB-backed ownership routes catch `ProgrammingError` and return 501 Not Implemented — verified: connectors.py (5 routes), pipelines.py, model_backends.py all have ProgrammingError catches (templates.py fixed 503→501 in feat-teams-team-ownership index 336)
+- [x] All DB-backed ownership routes catch `SQLAlchemyError` and return 503 Service Unavailable — verified: connectors.py (5 routes), pipelines.py, model_backends.py all have SQLAlchemyError catches
 - [ ] Connector credential validation failures (GitHub scope check) return structured 422 with scope details — verified
 - [ ] Team deletion audit event recording is in a separate transaction from the delete — if audit fails, deletion has already occurred (TOCTOU in admin.py lines 1142-1155 and teams.py lines 343-355)
 
 ### Resilience
-- [x] Missing DB table (migration not applied) does not crash the API — all 5 resource route files (pipelines.py, connectors.py, model_backends.py, stages.py, library.py) enforce ProgrammingError→501 on every route
+- [x] Missing DB table (migration not applied) does not crash the API — all 4 resource route files (pipelines.py, connectors.py, model_backends.py, library.py) enforce ProgrammingError→501 on every route
 - [x] Concurrent resource assignment to a team being deleted does not produce inconsistent state — the resource-check and delete are in one transaction (mitigates TOCTOU for the delete itself)
-- [x] Ownership validation failures surface as structured 4xx errors, not opaque 500s — all 5 resource types now have Pydantic cross-field validators for `visibility='team'` requiring `owner_team_id` (feat-teams-team-ownership index 336)
+- [x] Ownership validation failures surface as structured 4xx errors, not opaque 500s — all 4 resource types now have Pydantic cross-field validators for `visibility='team'` requiring `owner_team_id` (feat-teams-team-ownership index 336)
 
 ## QA History
 
@@ -161,8 +153,7 @@ with enforcement via DB constraints, RLS policies, and ViewModel validation.
 - **Team deletion audit event in separate transaction** — both `admin.py` and `teams.py` record the audit event in a separate `session.begin()` after the delete, so if audit recording fails, the deletion already happened.
 
 ### Test-Level Gaps
-- No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features (`ownership_picker.feature`, `import.feature`, `export.feature`, `copy_to_adapt.feature`) cover ownership propagation
-- No BDD scenarios for `stage_team_mismatch` error path
+- No dedicated BDD feature file for team ownership exists — only import/export/copy-to-adapt BDD features (`import.feature`, `export.feature`, `copy_to_adapt.feature`) cover ownership propagation
 - ~~No BDD scenarios for `connector_team_mismatch` error path~~ — RESOLVED (2026-08-01): `cross_team_isolation.feature` scenario "Cross-team pipeline binding is blocked" now runs and exercises the real rule via `core/team_visibility.py`
 - No BDD scenarios for pipeline ownership change blocked during active runs
 - No BDD scenarios for `resource_team_ownership_changed` audit event

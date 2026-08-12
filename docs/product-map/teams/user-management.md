@@ -8,7 +8,6 @@ bdd:
   - backend/tests/bdd/features/users/runner_role.feature
   - backend/tests/bdd/features/teams/admin_override.feature
   - backend/tests/bdd/features/teams/cross_team_isolation.feature
-  - backend/tests/bdd/features/teams/ownership_picker.feature
   - backend/tests/bdd/features/teams/stale_jwt_revocation.feature
   - backend/tests/bdd/features/teams/team_create.feature
   - backend/tests/bdd/features/teams/team_crud.feature

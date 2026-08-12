@@ -5,9 +5,7 @@ The migration upserts flags into ``feature_flag_catalog`` that the seed catalog
 to ``_KNOWN_FLAGS`` (or to ``catalog.FLAGS``) without updating the migration's
 ``_FLAGS`` dict, existing deployments seeded with ``ON CONFLICT DO NOTHING``
 never pick it up. This test keeps the migration's flag list in sync with the
-current head of the chain (0082_lifecycle_map_stages, on top of
- 0081_pipeline_retry_policy, on top of 0080_add_mobile_sidebar_rail_flag) — so the
-head property holds against the current chain.
+current head of the chain.
 """
 
 import importlib.util
@@ -26,7 +24,7 @@ _MIGRATION_PATH = (
 )
 
 # The migration this branch introduces — the current head of the chain.
-_HEAD_MIGRATION_NAME = "0087_circuit_breaker"
+_HEAD_MIGRATION_NAME = "0088_drop_stages"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"

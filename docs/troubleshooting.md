@@ -59,7 +59,7 @@ Common issues, their causes, and resolutions.
 | Symptom | Cause | Resolution | Log Pattern |
 |---|---|---|---|
 | WebSocket disconnects frequently | Network issues, proxy timeout, or load balancer idle timeout | Check reverse proxy WebSocket support (e.g. `proxy_read_timeout` in nginx); increase timeout configuration | `WebSocket disconnected: code 1006` |
-| Events not updating in UI | WebSocket disconnected or event broker ring buffer full | Refresh the page; reconnect will replay from the last event sequence number | Missing live updates on stage board or run inspection |
+| Events not updating in UI | WebSocket disconnected or event broker ring buffer full | Refresh the page; reconnect will replay from the last event sequence number | Missing live updates on run inspection |
 | Replay events not working | Requested `since_event_seq` is outside the 100-event ring buffer range | Use a lower sequence number or perform a full reconnect (omit `since_event_seq`) | `400: since_event_seq <N> not available (buffer: <min>-<max>)` |
 
 ---

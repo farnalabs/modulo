@@ -101,7 +101,6 @@ from modulo.api.routes.schema_folders import router as schema_folders_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
 from modulo.api.routes.sso import router as sso_router
-from modulo.api.routes.stages import router as stages_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
 from modulo.api.routes.triggers import pipeline_triggers_router
@@ -594,7 +593,7 @@ async def _seed_demo_data(settings: Settings) -> None:
 
     Creates a demo account with admin role, sample pipelines,
     schemas, model backends, connectors, library primitives,
-    stages, and other resources for find-and-fix exploration.
+    and other resources for find-and-fix exploration.
     Seeding NEVER changes the org's plan/tier — a valid signed license
     (org-level, system in-memory, or MODULO_LICENSE_KEY) is the only way
     team-tier features activate.
@@ -612,7 +611,6 @@ async def _seed_demo_data(settings: Settings) -> None:
     from modulo.db.models.organisation import Organisation
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.schema import Schema, SchemaVersion
-    from modulo.db.models.stage import Stage
     from modulo.db.rls import set_rls_org
 
     engine = get_or_create_engine(settings)
@@ -734,19 +732,6 @@ async def _seed_demo_data(settings: Settings) -> None:
             )
             session.add(mb)
             logger.info("startup.demo_model_backend_seeded")
-
-        # Seed a sample stage
-        existing_stages = await session.execute(select(Stage).where(Stage.organisation_id == org_id).limit(1))
-        if existing_stages.scalar_one_or_none() is None:
-            stage = Stage(
-                organisation_id=org_id,
-                account_id=demo_account.id,
-                name="Development",
-                description="Development stage for testing pipelines",
-                position=0,
-            )
-            session.add(stage)
-            logger.info("startup.demo_stage_seeded")
 
         logger.info("startup.demo_data_ready")
 
@@ -1291,7 +1276,6 @@ app.include_router(variants_router)
 app.include_router(feedback_router)
 app.include_router(plugins_router)
 app.include_router(scim_router)
-app.include_router(stages_router)
 app.include_router(templates_router)
 app.include_router(onboarding_router)
 app.include_router(environments_router)
