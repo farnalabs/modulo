@@ -7,6 +7,7 @@ explicitly rather than relying on the module-level `get_settings()` call.
 """
 
 import asyncio
+import hmac
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
@@ -36,6 +37,18 @@ class _NoopRateLimiter:
 
     async def check(self, key: str, max_requests: int, window_s: int = 60) -> bool:
         return True
+
+
+def _matches_bypass_token(token: str, bypass_token: str) -> bool:
+    """Return whether ``token`` matches the bypass secret using a constant-time comparison.
+
+    The bypass token is a shared secret that disables rate limiting (including the
+    auth lockout), so it must not be compared with ``==`` which short-circuits on the
+    first mismatching byte and leaks a timing oracle.
+    """
+    if not token or not bypass_token:
+        return False
+    return hmac.compare_digest(token, bypass_token)
 
 
 def _create_registry(settings: Settings) -> RateLimiterRegistry | _NoopRateLimiter:
@@ -139,7 +152,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method not in ("POST", "PUT", "PATCH"):
             return False
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
-        if token and self._bypass_token and token == self._bypass_token:
+        if _matches_bypass_token(token, self._bypass_token or ""):
             return False
         path = request.url.path
         return any(path.startswith(p) for p, _, _ in self.RULES)
@@ -281,7 +294,7 @@ class AuthRateLimitMiddleware(BaseHTTPMiddleware):
         if request.method not in ("POST", "PUT", "PATCH"):
             return False
         token = request.headers.get(RATELIMIT_BYPASS_HEADER, "")
-        if token and self._bypass_token and token == self._bypass_token:
+        if _matches_bypass_token(token, self._bypass_token or ""):
             return False
         return request.url.path.startswith("/api/v1/auth/")
 
