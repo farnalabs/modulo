@@ -576,5 +576,56 @@ async def test_execute_retry_policy_applies_backoff_delay():
     # The fenced pending-reset still fired before the re-raise.
     reset_stmt = next(s for s in statements if "status='pending'" in s)
     assert "claim_token=:tok" in reset_stmt
-    # No terminal failure — the retry path never finalizes.
+    # No terminal failure �?" the retry path never finalizes.
     mock_finalize.assert_not_awaited()
+
+
+async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
+    """FAR-136 Gap 2 end-to-end wiring: a sandbox-agent HANG death that
+    exhausts the SAQ retry budget reaches the retry-policy decision as
+    error_code "node_cancelled" with "likely hung" in error_detail — and is NOT
+    re-dispatched. The run terminal-fails via finalize_cost (no
+    RunRetryPolicyError, no fenced pending-reset, no backoff sleep).
+
+    This proves the hang exclusion is wired at the execute() call site — that
+    ``error_detail`` is actually passed into ``_retry_after_policy``. A
+    regression that dropped ``error_detail`` at the call site would keep the
+    pure-function hang tests green while real hang deaths resumed retrying."""
+    from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError
+
+    hang_msg = (
+        "Sandbox agent command produced no output within 1200s. "
+        "No stdout/stderr was captured - the agent likely hung before writing any result."
+    )
+    run = _make_run(node_attempt_count=5, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    retry_policy = {"on": ["failure"], "max_retries": 5}
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    compiled = _mock_compiled_raising(SandboxNodeFailedError(hang_msg))
+
+    sleep_mock = AsyncMock()
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
+        # The hang is excluded, so the backoff sleep must NOT fire at all.
+        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        executor = PipelineExecutor(MagicMock())
+        result = await executor.execute(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            input_payload={},
+            claim_token="tok-claim-abc",
+        )
+    # No re-dispatch: no RunRetryPolicyError escaped, and no backoff sleep ran.
+    sleep_mock.assert_not_awaited()
+    # Terminal failure via the single finalization path.
+    mock_finalize.assert_awaited_once()
+    assert mock_finalize.await_args.kwargs["status"] == "failed"
+    assert mock_finalize.await_args.kwargs["error_code"] == "node_cancelled"
+    # No fenced pending-reset was issued for a hang death.
+    resets = [s for s in statements if "status='pending'" in s]
+    assert resets == []
+    assert result is not None
