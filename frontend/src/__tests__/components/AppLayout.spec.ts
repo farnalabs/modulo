@@ -81,11 +81,57 @@ describe('AppLayout', () => {
           stubs: { LogoMark: true },
         },
       })
+      // The mocked onboarding API resolves ready=true with isFirstRun defaulting
+      // to true, so the banner would otherwise be active. Dismiss it to isolate
+      // the header-only offset path this test exercises.
+      const onboarding = useOnboardingStore()
+      onboarding.dismissed = true
       await nextTick()
       await nextTick()
       const main = wrapper.find('main')
       expect(main.classes()).toContain('pt-14')
       expect(wrapper.find('[aria-controls="mobile-sidebar"]').exists()).toBe(true)
+    })
+
+    it('combines header + banner offsets into one additive padding class when both are active on mobile', async () => {
+      mockMatchMedia(false)
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      const store = useOnboardingStore()
+      store.ready = true
+      store.isFirstRun = true
+      store.dismissed = false
+      await nextTick()
+      await nextTick()
+      const main = wrapper.find('main')
+      expect(main.classes()).toContain('pt-[calc(3.5rem+8.25rem)]')
+      expect(main.classes()).not.toContain('pt-14')
+      expect(main.classes()).not.toContain('pt-[8.25rem]')
+    })
+
+    it('uses banner-only padding on mobile when the rail header (flag ON) replaces the fixed header', async () => {
+      mockMatchMedia(false)
+      const wrapper = mount(AppLayout, {
+        global: {
+          plugins: [createPinia(), router],
+          stubs: { LogoMark: true },
+        },
+      })
+      const planStore = usePlanStore()
+      planStore.features['mobile_sidebar_rail'] = true
+      const onboarding = useOnboardingStore()
+      onboarding.ready = true
+      onboarding.isFirstRun = true
+      onboarding.dismissed = false
+      await nextTick()
+      await nextTick()
+      const main = wrapper.find('main')
+      expect(main.classes()).toContain('pt-[8.25rem]')
+      expect(main.classes()).not.toContain('pt-14')
     })
   })
 

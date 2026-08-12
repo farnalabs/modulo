@@ -105,39 +105,41 @@
         <Menu v-if="!mobileOpen" class="h-[22px] w-[22px]" aria-hidden="true" />
         <X v-else class="h-[22px] w-[22px]" aria-hidden="true" />
       </button>
-      <NotificationBell class="ml-auto" />
-      <button
-        @click="$emit('open-command-palette')"
-        class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        :title="`Search pages... (${isMac ? 'Cmd' : 'Ctrl'}+K)`"
-        :aria-label="$t('components.AppLayout.search_pages')"
-      >
-        <Search class="h-[22px] w-[22px]" aria-hidden="true" />
-      </button>
-      <label for="applayout-field-1" class="toggle-switch ml-2 mr-2" :class="isLight ? 'light' : 'dark'">
-        <span class="track">
-          <span class="thumb" />
-        </span>
-        <input
-          id="applayout-field-1"
-          type="checkbox"
-          class="sr-only"
-          :aria-label="$t('components.AppLayout.toggle_theme')"
-          @change="$emit('toggle-theme')"
-          :checked="isLight"
-        />
-      </label>
-      <router-link to="/" class="flex items-center gap-1.5">
-        <div
-          class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5"
+      <div class="flex items-center gap-1.5 ml-auto" :inert="mobileOpen">
+        <NotificationBell />
+        <button
+          @click="$emit('open-command-palette')"
+          class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          :title="$t('components.AppLayout.search_pages_hint', { modifier: isMac ? 'Cmd' : 'Ctrl' })"
+          :aria-label="$t('components.AppLayout.search_pages')"
         >
-          <LogoMark :size="24" transparent />
-        </div>
-        <h2 class="hidden min-[360px]:inline text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
-        <Badge v-if="planStore.currentTier" variant="outline" class="hidden min-[380px]:inline-flex text-[10px] px-1.5 py-0 leading-none opacity-70">
-          {{ planStore.getTierLabel(planStore.currentTier) }}
-        </Badge>
-      </router-link>
+          <Search class="h-[22px] w-[22px]" aria-hidden="true" />
+        </button>
+        <label for="applayout-field-1" class="toggle-switch ml-2 mr-2" :class="isLight ? 'light' : 'dark'">
+          <span class="track">
+            <span class="thumb" />
+          </span>
+          <input
+            id="applayout-field-1"
+            type="checkbox"
+            class="sr-only"
+            :aria-label="$t('components.AppLayout.toggle_theme')"
+            @change="$emit('toggle-theme')"
+            :checked="isLight"
+          />
+        </label>
+        <router-link to="/" class="flex items-center gap-1.5">
+          <div
+            class="flex items-center justify-center rounded-lg bg-primary/10 p-1.5"
+          >
+            <LogoMark :size="24" transparent />
+          </div>
+          <h2 class="hidden min-[360px]:inline text-lg font-bold tracking-tight">{{ $t('components.AppLayout.modulo') }}</h2>
+          <Badge v-if="planStore.currentTier" variant="outline" class="hidden min-[380px]:inline-flex text-[10px] px-1.5 py-0 leading-none opacity-70">
+            {{ planStore.getTierLabel(planStore.currentTier) }}
+          </Badge>
+        </router-link>
+      </div>
     </header>
 
     <div

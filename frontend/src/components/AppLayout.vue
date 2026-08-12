@@ -15,7 +15,7 @@
 
     <main
       class="flex-1 min-w-0 overflow-auto bg-background relative"
-      :class="[showMobileHeader ? 'pt-14 md:pt-0' : '', onboardingActive ? 'pt-[8.25rem] md:pt-20' : '']"
+      :class="mainPaddingClass"
       :style="remyDockedStyle"
     >
       <div class="relative z-10">
@@ -75,6 +75,22 @@ const isLight = ref(document.documentElement.classList.contains("light"));
 // fixed header — the rail is in-flow — so no offset. Shared with AppSidebar via
 // useSidebarMode so the two can't drift.
 const { showMobileHeader } = useSidebarMode();
+
+// Single mutually-exclusive padding source: the fixed mobile header (3.5rem)
+// and the onboarding banner (8.25rem mobile / 5rem desktop) are both offsets
+// that would collide if applied as separate additive class bindings — when both
+// conditions are true on mobile one class silently wins and the other is lost.
+// Only one computed drives <main>'s padding-top.
+const mainPaddingClass = computed(() => {
+  if (onboardingActive.value) {
+    // Banner is in-flow at the top of <main>; on mobile it must clear the fixed
+    // header (3.5rem) AND reserve its own height (8.25rem).
+    return showMobileHeader.value
+      ? 'pt-[calc(3.5rem+8.25rem)] md:pt-20'
+      : 'pt-[8.25rem] md:pt-20'
+  }
+  return showMobileHeader.value ? 'pt-14 md:pt-0' : ''
+});
 
 const remyDockedStyle = computed(() =>
   remyStore.panelState === "docked" ? { paddingRight: `${remyStore.panelSize.width}px` } : undefined,

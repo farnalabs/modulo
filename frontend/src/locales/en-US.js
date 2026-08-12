@@ -2244,6 +2244,7 @@ export default {
       "remy_stop": "Stop",
       "modulo": "Modulo",
       "search_pages": "Search pages",
+      "search_pages_hint": "Search pages... ({modifier}+K)",
       "toggle_theme": "Toggle theme",
       "close_navigation": "Close navigation",
       "open_navigation": "Open navigation",
