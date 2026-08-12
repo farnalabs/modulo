@@ -2703,14 +2703,20 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         # dict lives only in this worker process).
         #
         # D1: update the OTel runtime gauges/counters from this tick (best-effort,
-        # only when telemetry is enabled). The sample reads the runs table via a
-        # system-scoped session; the stall-reason counters reflect THIS tick's
-        # terminalizers (their error_code labels match the runbook).
+        # only when telemetry is enabled). The samples read the runs and
+        # error_groups tables via system-scoped sessions; the stall-reason
+        # counters reflect THIS tick's terminalizers (their error_code labels
+        # match the runbook).
         if get_settings().modulo_telemetry_enabled:
             try:
-                from modulo.core.error_tracking.metrics import record_stall_reason, sample_run_runtime_metrics
+                from modulo.core.error_tracking.metrics import (
+                    record_stall_reason,
+                    sample_error_group_metrics,
+                    sample_run_runtime_metrics,
+                )
 
                 await sample_run_runtime_metrics(_open_factory())
+                await sample_error_group_metrics(_open_factory())
                 if summary["nodeless_failed"]:
                     record_stall_reason("executor_stalled", summary["nodeless_failed"])
                 if summary["claim_cap_terminalized"]:

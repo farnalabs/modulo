@@ -139,6 +139,46 @@ def set_active_groups(count: int, level: str) -> None:
         _error_groups_active.set(count, attributes={"level": level})
 
 
+async def sample_error_group_metrics(factory: Any) -> None:
+    """Sample the error_groups table and update the ``modulo_error_groups_active``
+    gauge.
+
+    Called from the dispatcher_reconcile tick (every 60s) when telemetry is
+    enabled. Previously the gauge existed but was never updated — it stayed at
+    its initial value forever. "Active" means a group in a non-terminal state
+    (``new`` or ``acknowledged``; ``resolved`` and ``archived`` are excluded),
+    counted per ``level_peak``. Counts are cross-org by design (same as the
+    run-runtime liveness sample). Levels with zero active groups are explicitly
+    set to 0 so a drained level doesn't leave a stale reading. Every failure is
+    swallowed: metrics must never break the tick.
+    """
+    if _error_groups_active is None:
+        init_metrics()
+    if _error_groups_active is None:
+        return
+    try:
+        from sqlalchemy import func, select
+
+        from modulo.db.models.error_group import ErrorGroup
+
+        async with factory() as session:
+            rows = (
+                await session.execute(
+                    select(ErrorGroup.level_peak, func.count(ErrorGroup.id))
+                    .where(ErrorGroup.status.in_(("new", "acknowledged")))
+                    .group_by(ErrorGroup.level_peak)
+                )
+            ).all()
+
+        counts: dict[str, int] = {level: int(count) for level, count in rows}
+        for level in ("warning", "error", "critical"):
+            set_active_groups(counts.get(level, 0), level)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("metrics.sample_error_groups_failed", exc_info=True)
+
+
 def record_stall_reason(stall_reason: str, count: int = 1) -> None:
     """Record terminalizations of running runs by their stall reason (D1).
 
