@@ -67,6 +67,8 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [x] Malformed LLM response (bad JSON) raises a JSON decode error
 - [x] LLM response missing required keys (`suggested_prompt`, `rationale`) raises a KeyError
 - [x] LLM call failures (network, timeout) propagate to the caller
+- [x] Optimization validates the `version` path parameter — a version absent from `prompt_version_history` (and not `current`) returns 404 before any LLM call
+- [x] Optimization uses the requested version's template as the source (or the active prompt for `current`) — `optimize_prompt` no longer ignores the `version` path param
 
 ### Apply Optimized Prompt
 
@@ -92,7 +94,7 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - [x] Missing DB table on get_eval_results_with_defs returns 501
 - [x] 422 on empty eval_result_ids in optimize endpoint
 - [x] 404 on non-existent agent for all prompt endpoints
-- [x] 404 on non-existent version for get/rollback/diff endpoints
+- [x] 404 on non-existent version for get/rollback/diff/optimize endpoints
 - [x] 404 on no eval results found for optimize endpoint
 - [x] 404 on non-existent model backend for optimize endpoint
 - [x] 500 on credential decryption failure for optimize endpoint
@@ -101,7 +103,7 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 
 ### Edge Cases
 
-- [x] Version label in optimize response is computed from history length, not validated against `version` path param — non-existent version like "v99" accepted as source
+- [x] Optimize against `current` uses the active prompt template; optimize against a named version uses that version's template — `_resolve_prompt_template` is shared with the diff endpoint (resolved 2026-08-12: version param is now validated + used, see QA History)
 - [x] Apply with duplicate version label creates entry with same label as existing
 - [x] Rollback to current version creates a new history entry with same template (append-only)
 - [x] Diff of same version (version_a == version_b) returns all lines as "unchanged"
@@ -125,9 +127,16 @@ LLM-driven prompt improvement from eval failures, with full version history, rol
 - No unauthorized access scenarios for prompt history (non-member org, viewer role)
 - Bound check on LLM response length — very long suggested_prompt could hit DB column limits
 - No website docs stub for prompt optimization
-- `version` path parameter in `optimize_prompt` is accepted but never validated or used — non-existent version accepted as source
+- ~~`version` path parameter in `optimize_prompt` is accepted but never validated or used — non-existent version accepted as source~~ **RESOLVED 2026-08-12**: see QA History.
 
 ## QA History
+
+### 2026-08-12 — improve-architecture: validate + use the optimize `version` path param RESOLVED
+- **RESOLVED "version path param accepted but never validated or used"** (`api/routes/agents.py`). `optimize_prompt` accepted any `version` (e.g. `v99` or garbage) and silently optimized from the agent's *current* template.
+- (1) New module-level `_resolve_prompt_template(agent, version)` — `current` resolves to the active `prompt_template`, any other label must exist in `prompt_version_history` (empty templates resolve to `""`, unknown labels to `None`); shared by `optimize_prompt` and `diff_prompt_versions` (the diff route's inline `_get_template` closure was replaced with the shared helper, identical semantics).
+- (2) `optimize_prompt` now resolves the source template from the `version` path param before any eval/LLM work — unknown version returns 404 `"Prompt version v99 not found"` (checked before the eval-results query and LLM call, mirroring get/rollback/diff), and the optimizer is invoked with the requested version's template instead of `agent.prompt_template`.
+- (3) Tests — 3 new unit tests in `test_agent_prompts.py`: `test_optimize_returns_404_when_version_not_found` (404 detail + `optimize.assert_not_called()`), `test_optimize_uses_specified_version_template` (optimizer called with the requested version's template, next version label from history length), `test_optimize_uses_current_template_when_version_current` (`current` → active template). Updated `test_optimize_returns_404_when_no_eval_results` to seed a v1 history entry so the eval-results check is still the one exercised.
+- Updated product map `core/prompt-optimization.md` (2 new behaviour `[x]`, error-handling 404-on-version line extended to optimize, edge-case quirk rewritten as resolved, Known Gap → RESOLVED). 10/10 `test_agent_prompts.py` + 57/57 prompt-optimizer/prompt-versioning tests + 20/20 `test_agents_endpoint.py` pass (77 total), ruff check + format clean, mypy --strict clean on `agents.py`. Status: partial (6 gaps remain — diff unit test, integration test, perf test, unauthorized-access tests, response-length bound, docs stub).
 
 ### 2026-07-09 — Cross-cutting QA (improve-architecture index 358)
 - Fixed CRITICAL — 3 broken unit test assertions in `test_prompt_optimizer.py`: `test_raises_on_bad_json` expected `json.JSONDecodeError` but `_parse_llm_response` raises `OptimizationFailedError`; `test_raises_on_missing_required_keys` expected `KeyError` but `_parse_llm_response` raises `OptimizationFailedError`; `test_optimize_passes_through_llm_errors` expected `RuntimeError` to propagate but the retry loop catches it and raises `OptimizationFailedError` after 3 retries. Fixed all 3 to expect `OptimizationFailedError`.
