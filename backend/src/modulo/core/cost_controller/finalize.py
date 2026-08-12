@@ -44,7 +44,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.analytics import record_run_facts
-from modulo.core.cost_controller import check_and_record_spend
+from modulo.core.cost_controller import check_and_record_spend, check_pipeline_circuit_breaker
 from modulo.core.cost_controller.breakdown.aggregate import build_cost_breakdown, clamp_reported
 from modulo.core.cost_controller.breakdown.constants import (
     COST_COLUMN_CAP,
@@ -778,6 +778,28 @@ async def _ledger_block(
 
     locked.ledger_written = True
     await session.flush()
+
+    # FAR-105 cost-control circuit breaker — check the pipeline's monthly spend
+    # threshold now that this run's cost is recorded. The monthly sum EXCLUDES
+    # the current run (its cost is already persisted and is added back as
+    # ``total``), so the comparison is "accumulated this month + this run" vs
+    # the threshold. FAIL-OPEN: a breaker failure must never fail the terminal
+    # write (the ledger is the enforcement; the trip is best-effort control).
+    try:
+        await check_pipeline_circuit_breaker(
+            session,
+            org_id=org_id,
+            pipeline_id=locked.pipeline_id,
+            cost_usd=total,
+            run_id=run_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "cost_ledger.circuit_breaker_check_failed",
+            extra={"run_id": str(run_id), "pipeline_id": str(locked.pipeline_id)},
+        )
 
 
 async def _record_duplicate_terminal_event(session: AsyncSession, run_id: uuid.UUID) -> None:

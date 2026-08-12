@@ -1424,6 +1424,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Circuit Breaker
+         * @description Admin re-enable: clear a tripped pipeline circuit breaker.
+         *
+         *     Sets ``circuit_breaker_tripped = False`` on the pipeline and re-activates
+         *     all of its (non-deleted) triggers so new runs are allowed again (spec §8.10
+         *     ``circuit_breaker``: "Permanently pauses trigger until admin re-enables").
+         */
+        post: operations["reset_circuit_breaker_api_v1_admin_costs_circuit_breaker__pipeline_id__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/costs/export": {
         parameters: {
             query?: never;
@@ -7749,6 +7773,15 @@ export interface components {
             latency_ms?: number | null;
             /** Detail */
             detail?: string | null;
+        };
+        /** CircuitBreakerResetResponse */
+        CircuitBreakerResetResponse: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Circuit Breaker Tripped */
+            circuit_breaker_tripped: boolean;
+            /** Triggers Reactivated */
+            triggers_reactivated: number;
         };
         /** ClaimRequest */
         ClaimRequest: {
@@ -17990,6 +18023,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CostControlsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_circuit_breaker_api_v1_admin_costs_circuit_breaker__pipeline_id__reset_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CircuitBreakerResetResponse"];
                 };
             };
             /** @description Validation Error */
