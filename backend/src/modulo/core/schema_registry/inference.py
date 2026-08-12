@@ -8,6 +8,7 @@ from modulo.core.schema_registry._common import _safe_json_dumps, invoke_and_par
 from modulo.core.schema_registry.sanitize import (
     _SAMPLE_BLOCK_END,
     _SAMPLE_BLOCK_START,
+    _escape_block_markers,
     sanitise_sample_records,
 )
 from modulo.model_backends.base import ModelBackendBase
@@ -40,7 +41,7 @@ def _build_infer_prompt(
     max_records: int = _MAX_SAMPLE_RECORDS,
 ) -> list[BaseMessage]:
     display = sanitise_sample_records(samples)[:max_records]
-    sample_text = _safe_json_dumps(display)
+    sample_text = _escape_block_markers(_safe_json_dumps(display))
     message_text = (
         f"Sample data ({len(display)} records):\n"
         f"{_SAMPLE_BLOCK_START}\n{sample_text}\n{_SAMPLE_BLOCK_END}\n"

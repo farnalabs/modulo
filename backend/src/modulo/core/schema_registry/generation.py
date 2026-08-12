@@ -8,6 +8,7 @@ from modulo.core.schema_registry._common import _safe_json_dumps, invoke_and_par
 from modulo.core.schema_registry.sanitize import (
     _SAMPLE_BLOCK_END,
     _SAMPLE_BLOCK_START,
+    _escape_block_markers,
     sanitise_sample_records,
 )
 from modulo.model_backends.base import ModelBackendBase
@@ -45,7 +46,7 @@ def _build_generate_prompt(
     parts = [f"Description:\n{description}\n"]
     if examples:
         display = sanitise_sample_records(examples)[:max_examples]
-        sample_text = _safe_json_dumps(display)
+        sample_text = _escape_block_markers(_safe_json_dumps(display))
         parts.append(f"Example records ({len(display)}):\n{_SAMPLE_BLOCK_START}\n{sample_text}\n{_SAMPLE_BLOCK_END}\n")
     parts.append("Return ONLY the JSON Schema object.")
     return [
