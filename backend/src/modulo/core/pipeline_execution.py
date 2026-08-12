@@ -461,6 +461,11 @@ async def mark_complete(
             "mark_complete skipped for run %s (claim superseded, cancelled, or not running)",
             run_id,
         )
+    else:
+        # FAR-143 — a raw terminal write never runs finalize_cost, so journeys
+        # would never advance. Advance from the run's CREATE-STAMPED refs (no
+        # self-report parse here — there are no merged outputs).
+        await _advance_journeys_from_stored_refs(aeng, run_id, org_id, RUN_COMPLETE_STATUS)
 
 
 async def fail_run_terminal(
@@ -507,7 +512,57 @@ async def fail_run_terminal(
             run_id,
             error_code,
         )
+        # FAR-143 — same raw-writer gap as mark_complete: advance journeys from
+        # the run's CREATE-STAMPED refs (fail-open).
+        await _advance_journeys_from_stored_refs(aeng, run_id, org_id, "failed")
     return ok
+
+
+async def _advance_journeys_from_stored_refs(
+    aeng: AsyncEngine,
+    run_id: str,
+    org_id: str,
+    status: str,
+) -> None:
+    """FAR-143 — advance journeys from a run's stored refs, fail-open.
+
+    ``mark_complete`` / ``fail_run_terminal`` write the terminal status with a
+    raw ``text()`` UPDATE on a connection and never run ``finalize_cost`` (so
+    they never parse outputs or persist them). Runs carrying CREATE-STAMPED
+    refs (``runs.work_item_refs``) would therefore never advance their journeys
+    through those paths. This helper opens its OWN session/transaction AFTER the
+    raw write succeeds (the write is committed before it runs) and advances
+    journeys from the stored refs only — no self-report parse here (the raw
+    writers have no merged outputs).
+
+    FAIL-OPEN: a journey-write failure is logged and swallowed — it must never
+    roll back or fail the already-committed terminal write.
+    """
+    try:
+        from modulo.core.lifecycle_map.advancement import advance_journeys
+
+        factory = async_sessionmaker(aeng, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, uuid.UUID(org_id))
+            run = await get_run(session, uuid.UUID(run_id))
+            if run is None or not run.work_item_refs:
+                return
+            await advance_journeys(
+                session,
+                run.organisation_id,
+                run_id=run.id,
+                pipeline_id=run.pipeline_id,
+                refs=run.work_item_refs,
+                status=status,
+                completed_at=run.completed_at,
+                run_created_at=run.created_at,
+                is_replay=bool(run.is_replay),
+                variant_group_id=run.variant_group_id,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline_execution.journey_advance_failed run=%s", run_id, exc_info=True)
 
 
 async def zombie_watchdog(

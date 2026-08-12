@@ -21,6 +21,7 @@ import pytest
 
 from modulo.api.main import app
 from tests.unit.api.route_introspection import (
+    get_all_apiroutes,
     get_mutating_routes,
     get_permission_tag,
     get_resolved_min_role,
@@ -251,3 +252,71 @@ def test_team_membership_gate_present_on_team_pipeline_routes() -> None:
             assert tag is not None, f"{route.path} missing permission tag"
             kinds = {t["permission_kind"] for t in tag.get("tags", [tag])}
             assert "team_scope" in kinds, f"{route.path} missing team_scope gate; tags={tag.get('tags')}"
+
+
+def test_no_duplicate_route_registrations() -> None:
+    """Every (method, path) is registered exactly once.
+
+    A route stacked with two identical ``@router.<method>(...)`` decorators
+    (e.g. around ``@handle_db_errors``) registers twice. Starlette matches the
+    FIRST-registered handler, so the raw, unwrapped function wins and the
+    ``handle_db_errors`` wrapper becomes dead code — plus the route is
+    duplicated in the OpenAPI schema. Previously fixed in
+    admin_monitor_config.py / admin_triggers.py; the same defect was removed
+    from events.py, hitl.py, and run_ws.py.
+    """
+    keys: dict[tuple[str, str], str] = {}
+    duplicates: list[tuple[str, str]] = []
+
+    for route in get_all_apiroutes(app):
+        for method in sorted((route.methods or set()) - {"HEAD", "OPTIONS"}):
+            key = (method, route.path)
+            if key in keys:
+                duplicates.append(key)
+            else:
+                keys[key] = route.path
+
+    assert not duplicates, (
+        "Routes registered more than once (first registration wins, so any "
+        "error-handling wrapper on the second is dead code):\n" + "\n".join(f"{m} {p}" for m, p in duplicates)
+    )
+
+
+def test_handle_db_errors_wrapper_active_on_regexposed_routes() -> None:
+    """The re-exposed HITL/SSE/WS handlers keep the handle_db_errors wrapper.
+
+    Locking the fix from the double-registration cleanup: each previously
+    duplicated route must now resolve to the *wrapped* endpoint (the wrapper
+    sets ``__wrapped__``), not the raw handler that the old first-registration
+    used to shadow.
+    """
+    wrapped: dict[str, str] = {}
+
+    def _collect(routes: object, prefix: str = "") -> None:
+        for r in getattr(routes, "routes", []):
+            tn = type(r).__name__
+            if tn in ("APIRoute", "APIWebSocketRoute") or "WebSocketRoute" in tn:
+                path = (prefix + r.path) if prefix else r.path
+                endpoint = getattr(r, "endpoint", None)
+                if endpoint is not None and hasattr(endpoint, "__wrapped__"):
+                    wrapped[path] = endpoint.__name__
+            elif tn == "_IncludedRouter" and hasattr(r, "original_router"):
+                _collect(r.original_router, prefix)
+
+    _collect(app)
+
+    expected = {
+        "/api/v1/events",
+        "/api/v1/runs/{run_id}/hitl/{gate_id}/claim",
+        "/api/v1/runs/{run_id}/hitl/{gate_id}/approve",
+        "/api/v1/runs/{run_id}/hitl/{gate_id}/approve-with-modification",
+        "/api/v1/runs/{run_id}/hitl/{gate_id}/reject",
+        "/api/v1/runs/{run_id}/hitl/{gate_id}/deliver-manual",
+        "/api/v1/runs/{run_id}/manual/{gate_id}/submit",
+        "/api/v1/runs/{run_id}/hitl/pending",
+        "/api/v1/hitl/pending",
+    }
+    missing = sorted(p for p in expected if p not in wrapped)
+    assert not missing, f"handle_db_errors wrapper not active on: {missing}"
+    ws = [p for p, _ in wrapped.items() if p.endswith("/ws")]
+    assert ws, "websocket route should carry the handle_db_errors wrapper"
