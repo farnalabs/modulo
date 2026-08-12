@@ -300,7 +300,9 @@ def test_sha256_hex_is_hex_string() -> None:
 
 
 def test_sha256_hex_is_deterministic() -> None:
-    assert sha256_hex(b"x") == sha256_hex(b"x")
+    # Golden value pins the exact digest so a change in the hash algorithm
+    # fails loudly instead of silently altering trigger identifiers.
+    assert sha256_hex(b"x") == "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
 
 
 @pytest.mark.parametrize("raw", [None, "not-bytes", 42, ["bytes"]])
