@@ -68,11 +68,7 @@ async def _seed_all(session: AsyncSession, org_id: uuid.UUID, account_id: uuid.U
 
 async def _schemas(session: AsyncSession, org_id: uuid.UUID) -> list[Schema]:
     return list(
-        (
-            await session.execute(
-                select(Schema).where(Schema.organisation_id == org_id).order_by(Schema.name)
-            )
-        ).scalars()
+        (await session.execute(select(Schema).where(Schema.organisation_id == org_id).order_by(Schema.name))).scalars()
     )
 
 
@@ -80,9 +76,7 @@ async def _versions_for(session: AsyncSession, schema_id: uuid.UUID) -> list[Sch
     return list(
         (
             await session.execute(
-                select(SchemaVersion)
-                .where(SchemaVersion.schema_id == schema_id)
-                .order_by(SchemaVersion.version_number)
+                select(SchemaVersion).where(SchemaVersion.schema_id == schema_id).order_by(SchemaVersion.version_number)
             )
         ).scalars()
     )
