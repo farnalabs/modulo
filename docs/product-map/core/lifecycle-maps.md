@@ -11,6 +11,8 @@ code:
   - backend/src/modulo/api/routes/lifecycle_maps.py
   - backend/src/modulo/core/lifecycle_map/
   - backend/src/modulo/db/models/lifecycle_map.py
+  - backend/src/modulo/db/models/journey.py
+  - backend/src/modulo/db/lifecycle_refs.py
   - frontend/src/components/lifecycle-map/
   - frontend/src/stores/lifecycleMaps.ts
   - frontend/src/types/lifecycleMap.ts
@@ -35,9 +37,20 @@ work without acting as a pipeline execution engine.
 - [x] The frontend provides list, detail, and visual editor routes
 - [x] Content updates increment the map version while metadata-only updates preserve it
 - [x] Stage content can represent manual, external, placeholder, and Modulo-managed stages
-- [ ] Persisted version history can be listed and inspected
-- [ ] Graduation changes a stage to a linked Modulo pipeline through a dedicated API operation
+- [x] Persisted version history can be listed and inspected (version list/GET endpoints; only the active version is served)
+- [x] Graduation changes a stage to a linked Modulo pipeline through a dedicated API operation (PATCH .../versions/{version_id}/stages/{stage_id}/graduate)
 - [ ] Lifecycle maps can be exported, imported, and shared as library primitives
+
+## Journeys
+
+- [x] Journeys are minted from a run's work_item_refs (canonical kind/ref) at run create time
+- [x] Map-scoped journey list endpoint with keyset pagination and optional kind/ref filter
+- [x] Journey detail returns run history with status, provenance, and completion date
+- [x] Map canvas renders provenance badges for journey runs
+- [x] Advancement service moves journeys between stages with compare-and-set semantics and stage resolution
+- [x] Self-report parse extracts stage identity from run outputs
+- [x] Reconciliation sweep detects and fixes journey/stage drift
+- [x] Journey reads are org-scoped and gated by run.list permission
 
 ## Error Handling
 
@@ -64,3 +77,10 @@ work without acting as a pipeline execution engine.
 - [ ] No audit logging for map operations
 
 ## Known Gaps
+
+- Immutable per-version snapshot history with browse-back is not retained — only the active version is served (GET of a non-current version returns 404); the version counter and version API surface exist.
+- Lifecycle maps cannot yet be exported / imported / shared as library primitives.
+
+## QA History
+
+- 2026-08-12 — Product-state sync: added Journeys section (FAR-141–145), marked version persistence + graduation implemented, updated code paths.
