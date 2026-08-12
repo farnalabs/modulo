@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid, text
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped, SoftDeleteMixin
@@ -43,6 +44,14 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     max_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=3600, server_default="3600")
     max_steps: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Cost-control circuit breaker (FAR-105, spec §8.10) — per-pipeline monthly
+    # spend threshold. When the pipeline's monthly accumulated spend + a new
+    # run's cost would exceed ``circuit_breaker_threshold``, the breaker trips
+    # (``circuit_breaker_tripped``), permanently pausing the pipeline's
+    # triggers until an admin re-enables the pipeline. Migration 0086.
+    circuit_breaker_threshold: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
+    circuit_breaker_tripped: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    circuit_breaker_tripped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     default_autonomy_level: Mapped[str | None] = mapped_column(String(30), server_default="manual_approval")
