@@ -1,4 +1,13 @@
-"""Alert evaluation engine — sliding-window rule matching with cooldown."""
+"""Alert evaluation engine — sliding-window rule matching with cooldown.
+
+One cooldown family (FAR-151 §15.8): ``(rule_id, fingerprint)`` cross-run
+suppression plus ``(rule_id, fingerprint, run_id)`` per-run enumeration. Keys
+follow the documented ``alert_cooldown:{org_id}:{rule_id}:{fingerprint}``
+format (backend AGENTS.md lesson) and extend it with a ``:run:{run_id}`` suffix
+for the per-run key. Signal-keyed rules (``rule.signal`` set) match only signal
+events carrying the same signal; NULL-signal (legacy) rules keep matching by
+level only.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +15,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -14,7 +23,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
-from modulo.core.error_tracking.metrics import record_error_alert
+from modulo.core.error_tracking.metrics import (
+    record_alert_delivery_failed,
+    record_alert_suppressed,
+    record_error_alert,
+)
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
@@ -22,6 +35,10 @@ from modulo.db.models.error_notification_rule import ErrorNotificationRule
 _log = logging.getLogger(__name__)
 
 _COOLDOWN_TTL = 86400  # 24 hours — max safe window for cooldown persistence
+
+# Lifecycle event names carried on webhook/in-app deliveries.
+ALERT_EVENT_OPENED = "error_alert"
+ALERT_EVENT_RESOLVED = "alert_resolved"
 
 
 @dataclass
@@ -35,15 +52,25 @@ class TriggeredAlert:
     level: str
     count: int
     environment: str | None = None
+    alert_id: uuid.UUID = field(default_factory=uuid.uuid4)
+    signal: str | None = None
+    elevation_signal: str | None = None
+    attempt_n: int | None = None
+    run_group_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
 class _CooldownKey:
+    org_id: uuid.UUID
     rule_id: uuid.UUID
     fingerprint: str
+    run_id: str | None = None
 
     def __str__(self) -> str:
-        return f"cooldown:{self.rule_id}:{self.fingerprint}"
+        base = f"alert_cooldown:{self.org_id}:{self.rule_id}:{self.fingerprint}"
+        if self.run_id is not None:
+            return f"{base}:run:{self.run_id}"
+        return base
 
 
 class AlertEngine:
@@ -66,6 +93,11 @@ class AlertEngine:
         count: int,
         *,
         environment: str | None = None,
+        signal: str | None = None,
+        run_id: str | None = None,
+        elevation_signal: str | None = None,
+        attempt_n: int | None = None,
+        run_group_id: uuid.UUID | None = None,
     ) -> list[TriggeredAlert]:
         """Evaluate all enabled rules for *org_id* and return triggered alerts.
 
@@ -85,7 +117,13 @@ class AlertEngine:
         now = time.time()
 
         for rule in rules:
-            if rule.condition_level != level:
+            rule_signal = getattr(rule, "signal", None)
+            if isinstance(rule_signal, str):
+                # Signal-keyed rule — fires only on a matching signal event
+                # (FAR-151 §15.8). A signal rule never fires on legacy events.
+                if signal is None or rule_signal != signal:
+                    continue
+            elif rule.condition_level != level:
                 continue
             min_count = rule.condition_min_count if rule.condition_min_count is not None else 0
             window_seconds = rule.condition_window_seconds or 0
@@ -108,23 +146,46 @@ class AlertEngine:
             if effective_count < min_count:
                 continue
 
-            ck = _CooldownKey(rule_id=rule.id, fingerprint=fingerprint)
+            cross_key = _CooldownKey(org_id=org_id, rule_id=rule.id, fingerprint=fingerprint)
             try:
-                last_fired = await self._get_last_fired(ck)
+                cross_last = await self._get_last_fired(cross_key)
             except Exception:
                 _log.exception("alert.cooldown_read_failed", extra={"rule_id": str(rule.id)})
-                last_fired = None
-            if last_fired is not None and (now - last_fired) < rule.cooldown_seconds:
+                cross_last = None
+            if cross_last is not None and (now - cross_last) < rule.cooldown_seconds:
                 _log.debug(
                     "alert.cooldown_skip",
                     extra={"rule_id": str(rule.id), "fingerprint": fingerprint},
                 )
+                record_alert_suppressed(str(rule.id))
                 continue
+            if run_id is not None:
+                run_key = _CooldownKey(org_id=org_id, rule_id=rule.id, fingerprint=fingerprint, run_id=run_id)
+                try:
+                    run_last = await self._get_last_fired(run_key)
+                except Exception:
+                    _log.exception("alert.cooldown_read_failed", extra={"rule_id": str(rule.id)})
+                    run_last = None
+                if run_last is not None:
+                    # Per-run enumeration (FAR-151 §15.8): this run already fired
+                    # this rule+fingerprint — it must not fire again, regardless
+                    # of the cross-run window.
+                    _log.debug(
+                        "alert.cooldown_run_skip",
+                        extra={"rule_id": str(rule.id), "fingerprint": fingerprint, "run_id": run_id},
+                    )
+                    record_alert_suppressed(str(rule.id))
+                    continue
 
             try:
-                await self._set_last_fired(ck, now)
+                await self._set_last_fired(cross_key, now)
             except Exception:
                 _log.exception("alert.cooldown_write_failed", extra={"rule_id": str(rule.id)})
+            if run_id is not None:
+                try:
+                    await self._set_last_fired(run_key, now)
+                except Exception:
+                    _log.exception("alert.cooldown_write_failed", extra={"rule_id": str(rule.id)})
 
             triggered.append(
                 TriggeredAlert(
@@ -137,6 +198,10 @@ class AlertEngine:
                     level=level,
                     count=effective_count,
                     environment=environment,
+                    signal=signal,
+                    elevation_signal=elevation_signal,
+                    attempt_n=attempt_n,
+                    run_group_id=run_group_id,
                 ),
             )
 
@@ -184,6 +249,7 @@ class AlertEngine:
                     error_group=error_group,
                 )
             except Exception:
+                record_alert_delivery_failed(str(alert.rule_id), alert.action_type)
                 _log.exception(
                     "alert.dispatch_failed",
                     extra={"rule_id": str(alert.rule_id), "group_id": str(alert.error_group_id)},
