@@ -82,11 +82,6 @@ async def _untrack_connection(org_id: str, queue: asyncio.Queue[dict[str, Any]])
     summary="Subscribe to org-scoped real-time resource-change events via SSE.",
 )
 @handle_db_errors("events.sse_event_stream")
-@router.get(
-    "/api/v1/events",
-    operation_id="stream_events",
-    summary="Subscribe to org-scoped real-time resource-change events via SSE.",
-)
 async def sse_event_stream(
     request: Request,
     principal: TenantPrincipal = require_permission("events.list"),

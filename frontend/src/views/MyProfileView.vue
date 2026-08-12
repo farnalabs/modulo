@@ -108,7 +108,7 @@ function formatMemberSince(dateStr: string): string {
 
 async function loadProfile() {
   try {
-    const { data, error } = await api.GET('/api/v1/me')
+    const { data, error } = await api.GET('/api/v1/auth/me')
     if (error) {
       profile.value = { ...EMPTY_PROFILE }
       return
