@@ -766,28 +766,23 @@ pnpm run test:unit
 The full inventory of suites and their root paths lives in `docs/definition-of-done.md` §1.
 Agents run targeted files only (see §2 impact consideration) — never the full 35-40 min suite in a worktree.
 
-### Frontend worktrees and node_modules
+### Frontend worktrees and node_modules (pnpm)
 
-`git worktree add` creates a new working tree with no installed dependencies.
-Fast path on Windows — junction the main repo's `frontend/node_modules` into the
-worktree (validated FAR-115/117/118/119, 2026-08-08). If the main repo's
-node_modules is current (lockfiles match):
+`git worktree add` creates a new working tree with no installed dependencies. The frontend uses pnpm, so a worktree gets its OWN real node_modules — no junctions, no shared physical tree. To provision:
 
 ```powershell
-Test-Path "<worktree>\frontend\node_modules"   # expect False
-cmd /c mklink /J "<worktree>\frontend\node_modules" "<main-repo>\frontend\node_modules"
+Set-Location <worktree>\frontend
+pnpm install --frozen-lockfile
 ```
 
-The junction is gitignored and harmless. With it, Workers can run `pnpm run lint`,
-`pnpm exec vue-tsc --noEmit`, and `pnpm exec vitest run <spec> --pool=threads --maxWorkers=2`
-in the worktree — and the pre-commit `eslint` hook passes on commit (without it,
-`git commit` fails at eslint with `'eslint' is not recognized`, even for
-CSS-only changes). Remove the junction before `git worktree remove` if desired
-(leftover is harmless). If lockfiles differ, `pnpm install` in the
-worktree instead.
+pnpm hard-links package contents from its global content store, so a warm install is ~2s and needs no re-download. The global store lives outside the repo (default `%LOCALAPPDATA%\pnpm\store` on Windows, `~/.local/share/pnpm/store` elsewhere) — worktrees share the store, never a mutable node_modules tree. This is why the OLD junction fast-path (mklink /J main's node_modules into worktrees) was removed: PowerShell's `Remove-Item -Recurse` follows NTFS junctions and deletes the target's contents (PowerShell/PowerShell#26913), and any install through a junction corrupted the one tree everyone read.
 
-Without a junction, Workers implement and commit without frontend tooling;
-verification happens via GitHub CI on the PR.
+Rules:
+1. **Every worktree provisions its own node_modules with `pnpm install --frozen-lockfile`** — never junction to main's tree, never copy main's node_modules.
+2. **Installing through a junction is forbidden** (the junction no longer exists; if you see a leftover junction in an old worktree, remove it: `cmd /c rmdir "<worktree>\frontend\node_modules"`).
+3. If `pnpm install --frozen-lockfile` fails, main's lockfile may have drifted — fix deps on MAIN (`pnpm install` in `Repos/modulo/frontend`, commit the lockfile) and re-run in the worktree.
+4. Pre-commit hooks (eslint via `pnpm run lint`, etc.) work in a worktree once its own node_modules is installed.
+5. If a worktree's node_modules is corrupt/missing, delete it and re-run `pnpm install --frozen-lockfile` — it is an isolated tree; nothing else is affected.
 
 **Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
 admin-view gaps whenever an `Admin*.vue` file is touched — every
@@ -795,7 +790,6 @@ admin-view gaps whenever an `Admin*.vue` file is touched — every
 change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
 FAR-117), the commit is blocked — add the wrapper with the correct feature name
 (match sibling views) rather than bypassing the hook.
-- **`pnpm install` in a worktree can yield node_modules WITHOUT the `.bin` shims** (2026-08-08) — `pnpm run test:unit` then fails with 'vitest is not recognized' (and `npx` fails too, and `node node_modules/vitest/vitest.mjs` fails with `ERR_MODULE_NOT_FOUND`). Worktree frontend tooling is therefore unreliable even when node_modules appears present. Don't burn time reinstalling in the worktree: use the main tree's node_modules junction (see the junction lesson) when it exists, otherwise skip worktree frontend checks and let GitHub CI (PR) + `gate.ps1`/`smoke-test.ps1` (post-merge, main tree) be the verification gates.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
@@ -830,9 +824,9 @@ Fly.io's bluegreen strategy waits for ALL health checks to return non-"unavailab
 
 `{count === 1 ? '' : 's'}` inside a translation value is parsed by `@intlify/message-compiler` as a malformed interpolation expression, causing build failures with error code 7. Never use JS expressions inside translation strings. Use vue-i18n pluralization syntax (`"key | key_plural"`) or simplify the message.
 
-### Ops: pnpm install on Windows generates lockfile with platform-specific packages
+### Ops: pnpm lockfiles are platform-agnostic — no --force needed
 
-Running `pnpm install` on Windows adds packages like `@rollup/rollup-win32-x64-msvc` to the lockfile. Docker builds on Linux reject these with EBADPLATFORM. Use `pnpm install` to skip platform checks. The `--force` flag is needed because the lockfile is generated from a Windows development environment and deployed to Linux.
+pnpm records os/cpu per package in pnpm-lock.yaml, so a lockfile generated on Windows installs correctly on Linux (Docker/CI). The old npm EBADPLATFORM failure (Windows lockfile + Linux Docker) and its `npm ci --force` workaround do not apply. Never pass `--force` to `pnpm install` to work around platform errors — it is not the same flag and masks real issues. If a Docker build fails to resolve a platform-specific optional dep, the lockfile or the package's os/cpu metadata is the problem, not the generating OS.
 
 ### Database / Multi-backend
 
@@ -969,7 +963,7 @@ Running `pnpm install` on Windows adds packages like `@rollup/rollup-win32-x64-m
 
 - **Before deploying, run `pnpm run build` locally to catch frontend build errors early.** The Docker build lacks interactivity and hides errors behind 10-minute retries. Common issues caught: Rolldown parser errors from Vue template syntax, missing dependencies imported but not in `package.json`, duplicate manifest.yaml keys from parallel distributed work. The local frontend build may fail due to a corrupted `lightningcss.win32-x64-msvc.node` binary (native module, Windows-specific). If that happens, delete `node_modules` and re-run `pnpm install` to regenerate the native binary.
 
-- **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `pnpm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
+- **`pnpm-lock.yaml` must be updated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `pnpm add <package>` (or `pnpm add -D <package>`) and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that cross-references `package.json` dependencies against imports in `src/`.
 
 ### Deploy throttle: anchor on last real deployment, never the most recent triggered run
 
