@@ -284,9 +284,7 @@ def _add_spend(row: OrgDailyRunCount, cost_usd: Decimal) -> None:
         row.total_spend_usd = COST_COLUMN_CAP
         row.clamped = True
         record_ledger_clamped()
-        import logging
-
-        logging.getLogger(__name__).warning(
+        _log.warning(
             "cost_ledger.day_clamped",
             extra={"run_date": str(row.run_date), "team_id": str(row.team_id or "none")},
         )
@@ -301,9 +299,7 @@ def _accumulate_refused(row: OrgDailyRunCount, amount: Decimal) -> None:
     if new_refused > COST_COLUMN_CAP:
         row.refused_spend_usd = COST_COLUMN_CAP
         record_ledger_refused_clamped()
-        import logging
-
-        logging.getLogger(__name__).warning(
+        _log.warning(
             "cost_ledger.refused_clamped",
             extra={"run_date": str(row.run_date), "team_id": str(row.team_id or "none")},
         )
@@ -556,16 +552,7 @@ async def get_cost_report(
     if group_by not in ("team", "org"):
         raise ValueError(f"Unknown group_by '{group_by}'. Expected 'team' or 'org'.")
 
-    today = datetime.now(UTC).date()
-
-    if period == "day":
-        since: date = today
-    elif period == "week":
-        since = today - timedelta(days=today.weekday())
-    elif period == "month":
-        since = date(today.year, today.month, 1)
-    else:
-        since = date(today.year, 1, 1)
+    since = _report_since(datetime.now(UTC).date(), period)
 
     if group_by == "team":
         q = (
