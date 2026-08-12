@@ -24,7 +24,7 @@
         <h2 class="mb-4 text-base font-semibold" data-testid="admin-views-form-title">{{ editingId ? 'Edit View' : 'New View' }}</h2>
         <form class="space-y-4" @submit.prevent="handleSave">
           <div>
-            <label for="adminviewsview-field-6" class="mb-1 block text-sm font-medium">Name</label>
+            <label for="adminviewsview-field-6" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.name') }}</label>
             <input id="adminviewsview-field-6"
               v-model="form.name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -40,10 +40,10 @@
                 <SelectValue placeholder="table" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="table">Table</SelectItem>
-                <SelectItem value="grid">Grid</SelectItem>
-                <SelectItem value="kanban">Kanban</SelectItem>
-                <SelectItem value="timeline">Timeline</SelectItem>
+                <SelectItem value="table">{{ $t('views.AdminViewsView.table') }}</SelectItem>
+                <SelectItem value="grid">{{ $t('views.AdminViewsView.grid') }}</SelectItem>
+                <SelectItem value="kanban">{{ $t('views.AdminViewsView.kanban') }}</SelectItem>
+                <SelectItem value="timeline">{{ $t('views.AdminViewsView.timeline') }}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -58,7 +58,7 @@
             />
           </div>
           <div>
-            <label for="adminviewsview-field-3" class="mb-1 block text-sm font-medium">Columns</label>
+            <label for="adminviewsview-field-3" class="mb-1 block text-sm font-medium">{{ $t('views.AdminViewsView.columns') }}</label>
             <input id="adminviewsview-field-3"
               v-model="form.columns"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -83,8 +83,8 @@
                 <SelectValue placeholder="desc" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="desc">Descending</SelectItem>
-                <SelectItem value="asc">Ascending</SelectItem>
+                <SelectItem value="desc">{{ $t('views.AdminViewsView.descending') }}</SelectItem>
+                <SelectItem value="asc">{{ $t('views.AdminViewsView.ascending') }}</SelectItem>
               </SelectContent>
             </Select>
             </div>
@@ -147,12 +147,12 @@
         <table class="w-full text-left text-sm">
           <thead class="bg-muted/50">
             <tr>
-              <th class="px-4 py-3 font-medium">Name</th>
-              <th class="px-4 py-3 font-medium">Type</th>
-              <th class="px-4 py-3 font-medium">Filters</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.name') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.type') }}</th>
+              <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.filters') }}</th>
               <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.created_by') }}</th>
               <th class="px-4 py-3 font-medium">{{ $t('views.AdminViewsView.created_at') }}</th>
-              <th class="px-4 py-3 font-medium text-right">Actions</th>
+              <th class="px-4 py-3 font-medium text-right">{{ $t('views.AdminViewsView.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y">
