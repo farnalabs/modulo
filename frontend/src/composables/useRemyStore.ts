@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { api, type components } from '@/lib/api/client'
 import { formatApiError } from '@/lib/api/formatError'
+import { toDate } from '@/lib/formatDate'
 import { pauseUiCommands, resumeUiCommands } from './useUiCommandExecutor'
 import type { ChatSession, ChatMessage, PageContext, ToolResult } from '@/types/remy'
 
@@ -67,10 +68,10 @@ export const useRemyStore = defineStore('remy', () => {
   const sortedSessions = computed(() =>
     Array.isArray(sessions.value)
       ? [...sessions.value].sort((a, b) => {
-          const ta = new Date(a.updated_at).getTime()
-          const tb = new Date(b.updated_at).getTime()
-          if (isNaN(ta) || isNaN(tb)) return 0
-          return tb - ta
+          const ta = toDate(a.updated_at)
+          const tb = toDate(b.updated_at)
+          if (!ta || !tb) return 0
+          return tb.getTime() - ta.getTime()
         })
       : [],
   )

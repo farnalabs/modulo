@@ -924,7 +924,7 @@ async function saveAccessList() {
   const err = await putConfig({
     access_list: { user_ids: userIds, team_ids: teamIds, org_roles: accessList.selectedRoles },
   })
-  if (err) accessError.value = `Failed to save access list: ${err}`
+  if (err) accessError.value = `Failed to save access list: ${formatApiError(err)}`
   accessSaving.value = false
   configSaving.value = false
 }
@@ -959,7 +959,7 @@ async function saveModelConfig() {
     allowed_providers: modelConfig.allowedProviders,
     allowed_models: allowedModels,
   })
-  if (err) modelError.value = `Failed to save model config: ${err}`
+  if (err) modelError.value = `Failed to save model config: ${formatApiError(err)}`
   modelSaving.value = false
   configSaving.value = false
 }
@@ -975,7 +975,7 @@ async function saveSystemPrompt() {
   promptSaving.value = true
   promptError.value = null
   const err = await putConfig({ system_prompt: systemPrompt.value })
-  if (err) promptError.value = `Failed to save system prompt: ${err}`
+  if (err) promptError.value = `Failed to save system prompt: ${formatApiError(err)}`
   promptSaving.value = false
   configSaving.value = false
 }
@@ -1030,7 +1030,7 @@ async function saveToolPerms() {
     permission_mode: toolPermMode.value,
     tool_permissions: toolPerms.value,
   })
-  if (err) toolPermError.value = `Failed to save: ${err}`
+  if (err) toolPermError.value = `Failed to save: ${formatApiError(err)}`
   toolPermSaving.value = false
   configSaving.value = false
 }
@@ -1081,7 +1081,7 @@ async function saveSafetyConfig() {
     allowed_selectors: allowedSelectors,
     allowed_page_patterns: allowedPagePatterns,
   })
-  if (err) safetyError.value = `Failed to save safety config: ${err}`
+  if (err) safetyError.value = `Failed to save safety config: ${formatApiError(err)}`
   safetySaving.value = false
   configSaving.value = false
 }
@@ -1097,7 +1097,7 @@ async function saveGuidance() {
   guidanceSaving.value = true
   guidanceError.value = null
   const err = await putConfig({ additional_guidance: guidance.value })
-  if (err) guidanceError.value = `Failed to save guidance: ${err}`
+  if (err) guidanceError.value = `Failed to save guidance: ${formatApiError(err)}`
   guidanceSaving.value = false
   configSaving.value = false
 }

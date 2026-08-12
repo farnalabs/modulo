@@ -19,6 +19,7 @@
 
 import type { Breadcrumb, ErrorEventInput, MonitorBackend, MonitorConfig, MonitorLevel, UserInfo } from '../types'
 import { isModuleNotFound } from './sdk-utils'
+import { toDate } from '../../lib/formatDate'
 
 interface SentryApi {
   init(config: Record<string, unknown>): void
@@ -114,14 +115,13 @@ export class SentryMonitorBackend implements MonitorBackend {
 
   addBreadcrumb(breadcrumb: Breadcrumb): void {
     if (!this.initialized || !this.sentry) return
+    const timestampMs = toDate(breadcrumb.timestamp)?.getTime()
     try {
       this.sentry.addBreadcrumb({
         type: breadcrumb.type,
         category: breadcrumb.type,
         data: breadcrumb.data,
-        timestamp: breadcrumb.timestamp
-          ? new Date(breadcrumb.timestamp).getTime() / 1000
-          : undefined,
+        timestamp: timestampMs ? timestampMs / 1000 : undefined,
       })
     } catch (e) {
       console.warn('[monitor] Sentry.addBreadcrumb failed:', e)
@@ -132,7 +132,9 @@ export class SentryMonitorBackend implements MonitorBackend {
     if (this.sentry) {
       try {
         this.sentry.close()
-      } catch { /* ignore */ }
+      } catch (e) {
+        console.warn('[monitor] Sentry.close failed:', e)
+      }
     }
     this.initialized = false
     this.sentry = null

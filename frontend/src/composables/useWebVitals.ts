@@ -82,8 +82,9 @@ export function useWebVitals() {
       onCLS(sendToAnalytics)
       onINP(sendToAnalytics)
       onTTFB(sendToAnalytics)
-    } catch {
+    } catch (e) {
       // web-vitals not available
+      console.warn('[web-vitals] failed to load web-vitals module', e)
     }
   })
 
