@@ -2523,7 +2523,11 @@ export default {
       "item_system_config": "System Config",
       "item_admin_pipelines": "Admin Pipelines",
       "item_housekeeping": "Housekeeping",
-      "item_parameter_schemas": "Parameter Schemas"
+      "item_parameter_schemas": "Parameter Schemas",
+      "group_collapsed_hint": "collapsed",
+      "group_expanded_hint": "expanded",
+      "click_to_expand": "click to expand",
+      "click_to_collapse": "click to collapse"
     },
     "NotificationCard": {
       "hide_from_dashboard_keep_in_notifications_page": "Hide from dashboard, keep in notifications page",
