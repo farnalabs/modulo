@@ -22,19 +22,23 @@ database (no mocks of the function under test):
 
 import uuid
 from collections.abc import AsyncGenerator
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.core.trigger_engine import _apply_payload_mapping
+from modulo.core.trigger_engine import TriggerEngine, _apply_payload_mapping
 from modulo.db.crud.run import _floor_work_item_id, create_run
+from modulo.db.crud.variant_group import run_variant_weighted
 from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
+from modulo.db.models.variant_group import VariantGroup
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -44,7 +48,7 @@ _REF_ENTRIES = [{"kind": "GitHub Issue", "ref": "https://github.com/a/b/pull/5",
 
 _TABLES: list[Table] = cast(
     list[Table],
-    [Organisation.__table__, Run.__table__, Journey.__table__],
+    [Organisation.__table__, Run.__table__, Journey.__table__, VariantGroup.__table__],
 )
 
 
@@ -326,3 +330,112 @@ class TestFailOpen:
         run = await _create(session, work_item_refs=_REF_ENTRIES)
         assert run.id is not None
         assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
+
+
+class TestVariantAndReplayWiring:
+    """FAR-143 part 3 — run_variant_weighted stamps variant_group_id; a replay
+    event creates its run with is_replay=True."""
+
+    async def test_run_variant_weighted_stamps_variant_group_id(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        group = VariantGroup(
+            organisation_id=_ORG,
+            pipeline_id=_PIPELINE,
+            name="ab-test",
+            variants=[{"snapshot_id": str(_SNAPSHOT), "weight": 1.0}],
+            selection_strategy="weighted",
+        )
+        session.add(group)
+        await session.flush()
+
+        result = await run_variant_weighted(session, org_id=_ORG, group=group, input_payload={})
+        assert result is not None
+        run = await session.get(Run, result["run_id"])
+        assert run is not None
+        assert run.variant_group_id == group.id
+        # The variant group's run_count is incremented alongside.
+        group_row = await session.get(VariantGroup, group.id)
+        assert group_row is not None
+        assert group_row.run_count == 1
+
+    async def test_replay_event_creates_run_with_is_replay(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        event_id = uuid.uuid4()
+        trigger_id = uuid.uuid4()
+        event = SimpleNamespace(
+            id=event_id,
+            trigger_id=trigger_id,
+            trigger_type="webhook",
+            validation_result="accepted",
+            organisation_id=_ORG,
+        )
+        trigger = SimpleNamespace(
+            id=trigger_id,
+            pipeline_id=_PIPELINE,
+            active=True,
+            config_json={},
+            organisation_id=_ORG,
+            max_concurrent_runs=5,
+        )
+        payload = SimpleNamespace(raw_payload={"a": 1}, raw_body=b"body", organisation_id=_ORG)
+        pipeline = SimpleNamespace(rate_limit_config=None)
+
+        class _RowResult:
+            def __init__(self, value: object) -> None:
+                self._value = value
+
+            def scalar_one_or_none(self) -> object:
+                return self._value
+
+            def scalar_one(self) -> object:
+                return self._value
+
+        class _ReplaySession:
+            def __init__(self) -> None:
+                self.added: list[Any] = []
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _RowResult:
+                sql = str(stmt)
+                # Order matters — "count" matches ``max_concurrent_runs`` columns
+                # on triggers/pipelines, so the table-specific checks run first.
+                if "trigger_events" in sql:
+                    return _RowResult(event)
+                if "pg_try_advisory_lock" in sql:
+                    return _RowResult(True)
+                if "triggers" in sql:
+                    return _RowResult(trigger)
+                if "webhook_payloads" in sql:
+                    return _RowResult(payload)
+                if "pipelines" in sql:
+                    return _RowResult(pipeline)
+                if "count" in sql:
+                    return _RowResult(0)
+                return _RowResult(None)
+
+            async def flush(self) -> None:
+                return None
+
+            def add(self, obj: Any) -> None:
+                self.added.append(obj)
+
+            def add_all(self, objs: list[Any]) -> None:
+                self.added.extend(objs)
+
+        calls: dict[str, Any] = {}
+
+        async def _fake_create_run(session: object, **kwargs: Any) -> Any:
+            calls.update(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+        monkeypatch.setattr("modulo.core.trigger_engine.create_run", _fake_create_run)
+        monkeypatch.setattr("modulo.core.trigger_engine.ensure_triggers_resumable", AsyncMock())
+
+        engine = TriggerEngine()
+        _, _, _ = await engine.replay_event(
+            _ReplaySession(),  # type: ignore[arg-type]
+            event_id=event_id,
+            org_id=_ORG,
+            snapshot_id=_SNAPSHOT,
+        )
+        assert calls.get("is_replay") is True
+        assert calls.get("trigger_type") == "webhook"
+        assert calls.get("trigger_id") == trigger_id

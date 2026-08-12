@@ -63,6 +63,11 @@ from modulo.core.cost_controller.breakdown.params import (
     CostComponentConfig,
     build_telemetry,
 )
+from modulo.core.lifecycle_map.advancement import advance_journeys
+from modulo.core.lifecycle_map.self_report import (
+    parse_self_report_refs,
+    validate_and_normalise_reported_refs,
+)
 from modulo.core.node_output_split import (
     extend_node_type_map_from_edges,
     node_telemetry,
@@ -70,6 +75,7 @@ from modulo.core.node_output_split import (
 )
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.cost_component import CostComponent
+from modulo.db.models.journey import Journey
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
@@ -566,6 +572,9 @@ async def _fallback_write(
         run = await session.get(Run, run_id)
         if run is not None:
             await record_run_facts(session, run)
+            # FAR-143 — the LEGACY FALLBACK terminal also advances journeys
+            # (fail-open, own savepoint).
+            await _advance_journeys_on_terminal(session, run, status, merged_outputs)
 
 
 def _is_abort_error(exc: Exception) -> bool:
@@ -799,6 +808,126 @@ async def _record_duplicate_terminal_event(session: AsyncSession, run_id: uuid.U
         _log.exception("cost_ledger.duplicate_event_record_failed", extra={"run_id": str(run_id)})
 
 
+async def _confirm_reported_refs(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Self-report is ADVISORY — keep only refs with an existing journey row.
+
+    A reported claim (``source="reported"``) can only CONFIRM / MATCH an
+    existing journey keyed by the same canonical ``(org, kind, ref)``; it can
+    NEVER mint one (minting is owned by the create-time
+    ``INSERT ... ON CONFLICT DO NOTHING`` path in ``modulo.db.crud.run``).
+    ``entries`` are already canonicalised (kind/ref/source="reported") by
+    ``validate_and_normalise_reported_refs``. Org-scoped SELECT EXISTS per
+    entry — the caller owns RLS context.
+    """
+    confirmed: list[dict[str, Any]] = []
+    for entry in entries:
+        exists = (
+            await session.execute(
+                select(Journey.id).where(
+                    Journey.organisation_id == org_id,
+                    Journey.kind == entry["kind"],
+                    Journey.ref == entry["ref"],
+                )
+            )
+        ).scalar_one_or_none()
+        if exists is not None:
+            confirmed.append(entry)
+    return confirmed
+
+
+def _merge_effective_refs(
+    stamped: list[dict[str, Any]] | None,
+    confirmed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Create-stamped refs first, then confirmed reported refs (dedup, cap 100).
+
+    A reported (kind, ref) that duplicates a create-stamped entry is collapsed
+    (first occurrence wins — the derived stamp predates the reported claim). The
+    combined list is capped at 100 so a hostile output cannot grow the run's
+    ``work_item_refs`` without bound.
+    """
+    effective: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in stamped or []:
+        if isinstance(entry, dict) and entry.get("kind") and entry.get("ref"):
+            key = (str(entry["kind"]), str(entry["ref"]))
+            if key not in seen:
+                seen.add(key)
+                effective.append(entry)
+    for entry in confirmed:
+        key = (entry["kind"], entry["ref"])
+        if key not in seen:
+            seen.add(key)
+            effective.append(entry)
+    return effective[:100]
+
+
+async def _advance_journeys_on_terminal(
+    session: AsyncSession,
+    run: Run,
+    status: str,
+    merged_outputs: dict[str, Any],
+) -> None:
+    """FAR-143 finalise hook — self-report confirm + journey advancement.
+
+    FAIL-OPEN and isolated in its own SAVEPOINT (``begin_nested``), separate
+    from the ``record_run_facts`` savepoint: a journey-write failure must NEVER
+    affect the terminal status write or the run finalisation (the
+    cost/ledger/analytics outcome). The steps (parse -> confirm -> advance)
+    share the savepoint, so a throw rolls back only the journey work and the
+    hook logs + swallows.
+
+    ``status`` is the run's terminal status (``complete`` / ``failed`` /
+    ``eval_failed`` / ``cancelled``); ``advance_journeys`` internally decides
+    advancing vs mint-only from it. ``merged_outputs`` is the merged output set
+    the finalize path is about to persist (or already persisted) — self-report
+    refs are parsed from it. The run row is refreshed first so the advance sees
+    the just-written terminal ``status`` / ``completed_at`` even when the
+    status write went through the raw fenced UPDATE (which bypasses the ORM
+    identity map).
+    """
+    try:
+        async with session.begin_nested():
+            await session.refresh(run)
+            raw = parse_self_report_refs(merged_outputs)
+            reported, counters = validate_and_normalise_reported_refs(raw)
+            confirmed = await _confirm_reported_refs(session, run.organisation_id, reported)
+            effective = _merge_effective_refs(run.work_item_refs, confirmed)
+            if confirmed:
+                run.work_item_refs = effective
+                await session.flush()
+            await advance_journeys(
+                session,
+                run.organisation_id,
+                run_id=run.id,
+                pipeline_id=run.pipeline_id,
+                refs=effective,
+                status=status,
+                completed_at=run.completed_at,
+                run_created_at=run.created_at,
+                is_replay=bool(run.is_replay),
+                variant_group_id=run.variant_group_id,
+            )
+            _log.info(
+                "cost_finalize.journey_advanced",
+                extra={
+                    "run_id": str(run.id),
+                    "parsed": counters["valid"],
+                    "confirmed": len(confirmed),
+                    "malformed": counters["malformed"],
+                    "capped": counters["capped"],
+                },
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("cost_finalize.journey_advance_failed", extra={"run_id": str(run.id)})
+
+
 async def finalize_cost(
     session: AsyncSession,
     *,
@@ -867,6 +996,9 @@ async def finalize_cost(
         )
         if is_terminal:
             await record_run_facts(session, run)
+            # FAR-143 — even with empty outputs the run still advances from its
+            # create-stamped refs (zero-cost terminal).
+            await _advance_journeys_on_terminal(session, run, status, merged_outputs)
         return
 
     # --- the never-fail envelope: component read + build + run write (§1.5) ---
@@ -952,6 +1084,10 @@ async def finalize_cost(
     # its own savepoint and never affects the cost/ledger outcome.
     if is_terminal:
         await record_run_facts(session, run)
+        # FAR-143 — self-report confirm + journey advancement (fail-open, own
+        # savepoint). Also covers the reduced-escape terminal (its fresh-tx
+        # status write is committed before we get here).
+        await _advance_journeys_on_terminal(session, run, status, merged_outputs)
 
 
 async def _load_node_type_map(session: AsyncSession, snapshot_id: uuid.UUID) -> dict[str, str]:

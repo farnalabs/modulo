@@ -1,4 +1,4 @@
-"""Journey advancement service tests (FAR-143 part 2).
+"""Journey advancement service tests (FAR-143 part 2 + part 3).
 
 These tests exercise the REAL ``advance_journeys`` path against an in-memory
 SQLite database (no mocks of the function under test), mirroring the session
@@ -13,28 +13,48 @@ setup in ``test_journey_create_run.py``:
     stage (unless at a map-stage pipeline)
   * stage identity resolves only for map-stage pipelines
   * refs are canonicalised (``#123`` vs ``123`` land in the same row)
+
+Part 3 wiring (FAR-143 part 3):
+
+  * the ``finalize_cost`` hook (``_advance_journeys_on_terminal``) advances
+    from create-stamped refs AND from confirmed self-report refs (never mints
+    from self-report), and is fail-open in its own savepoint
+  * ``finalize_cost`` fires the hook on the zero-cost early-return, the main
+    terminal, and the legacy-fallback terminal paths
+  * the raw writers (``mark_complete`` / ``fail_run_terminal``) advance
+    journeys from stored refs via ``_advance_journeys_from_stored_refs``
 """
 
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any, cast
+from decimal import Decimal
+from typing import Any, Self, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.cost_controller.finalize import _advance_journeys_on_terminal, finalize_cost
 from modulo.core.lifecycle_map.advancement import advance_journeys
+from modulo.core.pipeline_execution import (
+    _advance_journeys_from_stored_refs,
+    fail_run_terminal,
+    mark_complete,
+)
 from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
 from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.run import Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _MAP_PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a2")
 _MAP_ID = uuid.UUID("00000000-0000-0000-0000-0000000000c1")
 _ACCOUNT = uuid.UUID("00000000-0000-0000-0000-0000000000d1")
+_SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
 
 _REFS = [{"kind": "pr", "ref": "#123", "source": "derived"}]
 
@@ -47,7 +67,7 @@ _T3 = datetime(2026, 1, 4, 0, 0, 0)
 
 _TABLES: list[Table] = cast(
     list[Table],
-    [Journey.__table__, LifecycleMapStage.__table__],
+    [Journey.__table__, LifecycleMapStage.__table__, Run.__table__],
 )
 
 
@@ -472,3 +492,351 @@ class TestRefCanonicalisation:
         assert advanced == 0
         rows = (await session.execute(select(Journey))).scalars().all()
         assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# FAR-143 part 3 — finalize_cost hook + raw-writer wiring
+# ---------------------------------------------------------------------------
+
+
+async def _seed_run(
+    session: AsyncSession,
+    *,
+    refs: list[dict[str, Any]] | None = None,
+    status: str = "running",
+    is_replay: bool = False,
+    variant_group_id: uuid.UUID | None = None,
+    completed_at: datetime | None = None,
+) -> Run:
+    """Seed a Run row directly (create-time stamping via ``create_run`` is
+    covered in ``test_journey_create_run.py``)."""
+    run = Run(
+        id=uuid.uuid4(),
+        organisation_id=_ORG,
+        pipeline_id=_PIPELINE,
+        snapshot_id=_SNAPSHOT,
+        trigger_type="manual",
+        run_number=1,
+        input_hash="x",
+        langgraph_thread_id=f"{_ORG}:{uuid.uuid4()}",
+        status=status,
+        work_item_refs=refs,
+        is_replay=is_replay,
+        variant_group_id=variant_group_id,
+        created_at=_T1,
+        completed_at=completed_at,
+        # Explicit — SQLite renders the model's ``server_default="false"`` as
+        # ``DEFAULT 'false'`` (a truthy string), which would trip finalize_cost's
+        # B6 cancel-wins rewrite on this backend.
+        cancellation_requested=False,
+        ledger_written=False,
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def _seed_journey_by_kind(
+    session: AsyncSession,
+    kind: str,
+    ref: str,
+) -> Journey:
+    journey = Journey(
+        organisation_id=_ORG,
+        kind=kind,
+        ref=ref,
+        canonical_work_item_id=canonical_work_item_id(_ORG, kind, ref),
+        run_count=0,
+        created_at=_T0,
+        updated_at=_T0,
+    )
+    session.add(journey)
+    await session.flush()
+    return journey
+
+
+async def _read_journey_by_kind(session: AsyncSession, kind: str, ref: str) -> Journey | None:
+    session.expire_all()
+    return (
+        await session.execute(
+            select(Journey).where(
+                Journey.organisation_id == _ORG,
+                Journey.kind == kind,
+                Journey.ref == ref,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _read_run_refs(session: AsyncSession, run_id: uuid.UUID) -> list[dict[str, Any]] | None:
+    session.expire_all()
+    return (await session.execute(select(Run.work_item_refs).where(Run.id == run_id))).scalar_one()
+
+
+def _patch_finalize_machinery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``finalize_cost``'s cost/ledger/analytics machinery cheap no-ops so
+    the journey-hook wiring can be asserted without a full cost stack."""
+
+    async def _noop(*_a: Any, **_k: Any) -> None:
+        return None
+
+    async def _fake_components(*_a: Any, **_k: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr("modulo.core.cost_controller.finalize.record_run_facts", _noop)
+    monkeypatch.setattr("modulo.core.cost_controller.finalize._ledger_block", _noop)
+    monkeypatch.setattr("modulo.core.cost_controller.finalize.load_live_components", _fake_components)
+    # ``finalize_cost`` calls ``get_settings()`` at argument-evaluation time for
+    # ``build_cost_breakdown(..., settings=...)`` — stub it so no real Settings
+    # (which requires env vars) is constructed.
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: MagicMock())
+    monkeypatch.setattr(
+        "modulo.core.cost_controller.finalize.build_telemetry",
+        lambda _enriched, _components: ({}, {}),
+    )
+    monkeypatch.setattr(
+        "modulo.core.cost_controller.finalize.build_cost_breakdown",
+        lambda _telemetry, _components, settings=None: ([], Decimal(0)),
+    )
+
+
+class TestFinalizeJourneyHook:
+    """The finalise hook itself — self-report confirm + create-stamped advance."""
+
+    async def test_create_stamped_refs_advance(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+        await _advance_journeys_on_terminal(session, run, "complete", {})
+        journey = await _read_journey_by_kind(session, "github_pr", "123")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.latest_status == "complete"
+        assert journey.latest_provenance == "derived"
+        assert journey.run_count == 1
+
+    async def test_self_report_confirmed_ref_is_appended_and_advances(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+        await _seed_journey_by_kind(session, "github_pr", "456")
+        merged = {"node1": {"output": {"work_item_refs": [{"kind": "github_pr", "ref": "#456", "status": "done"}]}}}
+        await _advance_journeys_on_terminal(session, run, "complete", merged)
+
+        refs = await _read_run_refs(session, run_id)
+        assert refs is not None
+        assert {"kind": "github_pr", "ref": "456", "source": "reported", "status": "done"} in refs
+        assert {"kind": "github_pr", "ref": "123", "source": "derived"} in refs
+        journey = await _read_journey_by_kind(session, "github_pr", "456")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.latest_provenance == "reported"
+        assert journey.run_count == 1
+
+    async def test_self_report_without_journey_is_dropped_not_minted(self, session: AsyncSession) -> None:
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+        merged = {"node1": {"work_item_refs": [{"kind": "github_pr", "ref": "#789", "status": "done"}]}}
+        await _advance_journeys_on_terminal(session, run, "complete", merged)
+
+        refs = await _read_run_refs(session, run_id)
+        assert refs == [{"kind": "github_pr", "ref": "123", "source": "derived"}]
+        assert await _read_journey_by_kind(session, "github_pr", "789") is None
+
+    async def test_fail_open_logs_and_does_not_raise(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+
+        async def _boom(*_a: Any, **_k: Any) -> int:
+            raise RuntimeError("journey explosion")
+
+        monkeypatch.setattr("modulo.core.cost_controller.finalize.advance_journeys", _boom)
+        with caplog.at_level("ERROR", logger="modulo.core.cost_controller.finalize"):
+            await _advance_journeys_on_terminal(session, run, "complete", {})
+        assert any("journey_advance_failed" in m for m in caplog.messages)
+        # Nothing escaped — and no journey was written.
+        assert await _read_journey_by_kind(session, "github_pr", "123") is None
+        # The run row is untouched by the hook failure.
+        assert await _read_run_refs(session, run_id) == [{"kind": "github_pr", "ref": "123", "source": "derived"}]
+
+
+class TestFinalizeCostWiring:
+    """finalize_cost fires the hook on the terminal paths."""
+
+    async def test_early_return_terminal_advances_from_stamped_refs(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_finalize_machinery(monkeypatch)
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+        await finalize_cost(
+            session,
+            run_id=run_id,
+            org_id=_ORG,
+            status="complete",
+            segment_node_token_usage=None,
+            segment_completed_node_outputs=None,
+            node_type_map={},
+            is_terminal=True,
+        )
+        journey = await _read_journey_by_kind(session, "github_pr", "123")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.run_count == 1
+
+    async def test_main_path_confirms_self_report_and_advances(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_finalize_machinery(monkeypatch)
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+        await _seed_journey_by_kind(session, "github_pr", "456")
+        await finalize_cost(
+            session,
+            run_id=run_id,
+            org_id=_ORG,
+            status="complete",
+            segment_node_token_usage={"node1": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}},
+            segment_completed_node_outputs={
+                "node1": {"output": {"work_item_refs": [{"kind": "github_pr", "ref": "#456", "status": "done"}]}}
+            },
+            node_type_map={},
+            is_terminal=True,
+        )
+        refs = await _read_run_refs(session, run_id)
+        assert refs is not None
+        assert {"kind": "github_pr", "ref": "456", "source": "reported", "status": "done"} in refs
+        journey = await _read_journey_by_kind(session, "github_pr", "456")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+
+    async def test_hook_failure_never_blocks_terminal_write(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _patch_finalize_machinery(monkeypatch)
+
+        async def _boom(*_a: Any, **_k: Any) -> int:
+            raise RuntimeError("journey explosion")
+
+        monkeypatch.setattr("modulo.core.cost_controller.finalize.advance_journeys", _boom)
+        run = await _seed_run(session, refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}])
+        run_id = run.id
+        with caplog.at_level("ERROR", logger="modulo.core.cost_controller.finalize"):
+            await finalize_cost(
+                session,
+                run_id=run_id,
+                org_id=_ORG,
+                status="complete",
+                segment_node_token_usage=None,
+                segment_completed_node_outputs=None,
+                node_type_map={},
+                is_terminal=True,
+            )
+        session.expire_all()
+        refreshed = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+        assert refreshed.status == "complete"
+        assert refreshed.completed_at is not None
+        assert any("journey_advance_failed" in m for m in caplog.messages)
+
+
+class _FakeAsyncResult:
+    def __init__(self, row: object | None = None) -> None:
+        self._row = row
+
+    def fetchone(self) -> object | None:
+        return self._row
+
+
+class _FakeAsyncConn:
+    """Async fake connection returning a fixed row (mirrors test_pipeline_execution)."""
+
+    def __init__(self, row: object | None = None) -> None:
+        self._row = row
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _FakeAsyncResult:
+        return _FakeAsyncResult(self._row)
+
+
+class TestRawWriterJourneyAdvance:
+    """mark_complete / fail_run_terminal advance journeys from stored refs."""
+
+    async def test_advance_from_stored_refs_real(self, tmp_path: Any) -> None:
+        # File-backed SQLite so the helper's own session sees the seeded run.
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/journey_raw.db", echo=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+                await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+            maker = async_sessionmaker(engine, expire_on_commit=False)
+            async with maker() as s, s.begin():
+                run = await _seed_run(
+                    s,
+                    refs=[{"kind": "github_pr", "ref": "123", "source": "derived"}],
+                    status="complete",
+                    completed_at=_T2,
+                )
+                run_id = run.id
+            await _advance_journeys_from_stored_refs(engine, str(run_id), str(_ORG), "complete")
+            async with maker() as s:
+                journey = await _read_journey_by_kind(s, "github_pr", "123")
+                assert journey is not None
+                assert journey.latest_terminal_run_id == run_id
+                assert journey.latest_status == "complete"
+                assert journey.run_count == 1
+        finally:
+            await engine.dispose()
+
+    async def test_mark_complete_wires_advance_on_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        engine = MagicMock()
+        engine.connect.return_value = _FakeAsyncConn(("id",))
+        advanced = AsyncMock()
+        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        await mark_complete(engine, "run-1", "org-1")  # type: ignore[arg-type]
+        advanced.assert_awaited_once_with(engine, "run-1", "org-1", "complete")
+
+    async def test_mark_complete_skips_advance_when_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        engine = MagicMock()
+        engine.connect.return_value = _FakeAsyncConn(None)
+        advanced = AsyncMock()
+        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        await mark_complete(engine, "run-1", "org-1")  # type: ignore[arg-type]
+        advanced.assert_not_awaited()
+
+    async def test_fail_run_terminal_wires_advance_on_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        engine = MagicMock()
+        engine.connect.return_value = _FakeAsyncConn(("id",))
+        advanced = AsyncMock()
+        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        ok = await fail_run_terminal(  # type: ignore[arg-type]
+            engine,
+            "run-1",
+            "org-1",
+            error_code="executor_stalled",
+            error_detail="boom",
+        )
+        assert ok is True
+        advanced.assert_awaited_once_with(engine, "run-1", "org-1", "failed")
+
+    async def test_fail_run_terminal_skips_advance_when_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        engine = MagicMock()
+        engine.connect.return_value = _FakeAsyncConn(None)
+        advanced = AsyncMock()
+        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        ok = await fail_run_terminal(  # type: ignore[arg-type]
+            engine,
+            "run-1",
+            "org-1",
+            error_code="executor_stalled",
+            error_detail="boom",
+        )
+        assert ok is False
+        advanced.assert_not_awaited()
