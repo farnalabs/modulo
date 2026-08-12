@@ -57,6 +57,14 @@ _cancellation_check_cv: ContextVar[Callable[[], Awaitable[bool]] | None] = Conte
     "_cancellation_check", default=None
 )
 
+# Async-safe hook for audit-event dispatch. Set per-run by PipelineExecutor. When a
+# non-context-setter node attempts to write run_context, the hook is invoked with
+# {"node_id", "role", "attempted_keys"} so the executor can record a
+# `context_write_by_non_setter` audit event (§8.18). Failures never propagate — the
+# hook must not mask the violation error raised by the decorator.
+_AuditHook = Callable[[dict[str, Any]], Awaitable[None]]
+_audit_hook_cv: ContextVar[_AuditHook | None] = ContextVar("_audit_hook", default=None)
+
 # ModelBackendHub for the current run — provides model backends to make_node_fn.
 _model_backend_hub_cv: ContextVar[Any | None] = ContextVar("_model_backend_hub", default=None)
 
@@ -109,6 +117,55 @@ def set_cancellation_check(
 
 def _get_cancellation_check() -> Callable[[], Awaitable[bool]] | None:
     return _cancellation_check_cv.get()
+
+
+def set_audit_hook(fn: _AuditHook | None) -> None:
+    """Set the audit-event dispatch hook for the current asyncio task.
+
+    Called by PipelineExecutor before graph execution; cleared in a finally block.
+    The hook receives ``{"node_id", "role", "attempted_keys"}`` when a
+    non-context-setter node attempts to write run_context. Pass None to clear.
+    """
+    _audit_hook_cv.set(fn)
+
+
+def _get_audit_hook() -> _AuditHook | None:
+    return _audit_hook_cv.get()
+
+
+async def _dispatch_audit_warning(
+    node_name: str,
+    role: str | None,
+    attempted: list[str],
+) -> None:
+    """Invoke the audit hook for a context-write violation, swallowing failures.
+
+    The hook is best-effort: a slow or failing audit write must never mask the
+    ContextSetterViolationError raised by the decorator, so exceptions are logged
+    and the violation proceeds. asyncio.CancelledError propagates.
+    """
+    hook = _get_audit_hook()
+    if hook is None:
+        return
+    try:
+        await hook(
+            {
+                "node_id": node_name,
+                "role": role,
+                "attempted_keys": attempted,
+            }
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "run_context.audit_hook_failed",
+            extra={
+                "node_name": node_name,
+                "attempted_fields": attempted,
+            },
+            exc_info=True,
+        )
 
 
 def cancellable_node(
@@ -197,8 +254,10 @@ def cancellable_node(
                         )
                     result["run_context"] = result_rc
                 else:
-                    # Non-context-setter violation — log warning and raise.
+                    # Non-context-setter violation — dispatch audit event, log
+                    # warning and raise.
                     attempted = list(result["run_context"].keys())
+                    await _dispatch_audit_warning(fn.__name__, role, attempted)
                     _log.warning(
                         "run_context.violation",
                         extra={

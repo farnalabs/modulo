@@ -58,6 +58,7 @@ from modulo.core.hitl_manager import HITLManager
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import (
     RunCancelledError,
+    set_audit_hook,
     set_cancellation_check,
     set_connector_hub,
     set_model_backend_hub,
@@ -818,6 +819,62 @@ class PipelineExecutor:
             run = await get_run(session, run_id)
             return run is not None and run.cancellation_requested
 
+    def _dispatch_context_write_audit(
+        self,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+    ) -> Callable[[dict[str, Any]], Awaitable[None]]:
+        """Build the audit hook that records non-context-setter run_context writes.
+
+        Mirrors ``_check_db_cancellation``: opens a fresh session, applies RLS, and
+        appends a ``context_write_by_non_setter`` event to the org's audit chain
+        (§8.18). Failures and timeouts are logged and swallowed so the hook can
+        never mask the ContextSetterViolationError raised by the decorator.
+        """
+
+        async def _audit(payload: dict[str, Any]) -> None:
+            try:
+                await asyncio.wait_for(
+                    self._do_context_write_audit(org_id, run_id, payload),
+                    timeout=5.0,
+                )
+            except TimeoutError:
+                _log.warning(
+                    "run_context.audit_hook_timeout",
+                    extra={"run_id": str(run_id)},
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "run_context.audit_hook_failed",
+                    extra={"run_id": str(run_id)},
+                )
+
+        return _audit
+
+    async def _do_context_write_audit(
+        self,
+        org_id: uuid.UUID,
+        run_id: uuid.UUID,
+        payload: dict[str, Any],
+    ) -> None:
+        """Append the ``context_write_by_non_setter`` audit event for a run."""
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type="context_write_by_non_setter",
+                resource_type="run",
+                resource_id=run_id,
+                payload_json={
+                    "node_id": payload.get("node_id"),
+                    "role": payload.get("role"),
+                    "attempted_keys": list(payload.get("attempted_keys") or []),
+                },
+            )
+
     @staticmethod
     def _log_accumulation_state(
         run_id: uuid.UUID,
@@ -982,6 +1039,7 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any] = {}
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
+        set_audit_hook(self._dispatch_context_write_audit(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
 
         # Load model backends for this run's org.
@@ -1032,6 +1090,7 @@ class PipelineExecutor:
             error_code = type(exc).__name__
         finally:
             set_cancellation_check(None)
+            set_audit_hook(None)
             set_model_backend_hub(None)
             if model_backend_hub is not None:
                 await _teardown_hub(model_backend_hub)
@@ -1201,6 +1260,7 @@ class PipelineExecutor:
         completed_node_outputs: dict[str, Any] = {}
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
+        set_audit_hook(self._dispatch_context_write_audit(org_id, run_id))
         self._otel_bridge.set_run_context(str(org_id), str(pipeline_id))
 
         # Load model backends for this run's org — provides LLM access to agent nodes.
@@ -1344,6 +1404,7 @@ class PipelineExecutor:
                 # cancellation check + hubs and close the run's broker so the
                 # retry re-entry gets a fresh broker and no stale contextvars.
                 set_cancellation_check(None)
+                set_audit_hook(None)
                 set_model_backend_hub(None)
                 set_connector_hub(None)
                 if model_backend_hub is not None:
@@ -1359,6 +1420,7 @@ class PipelineExecutor:
                 # it here. Clean up and re-raise so the SAQ job retries (its
                 # next claim will lose against the live/superseded row).
                 set_cancellation_check(None)
+                set_audit_hook(None)
                 set_model_backend_hub(None)
                 set_connector_hub(None)
                 if model_backend_hub is not None:
@@ -1446,6 +1508,7 @@ class PipelineExecutor:
                 # cancellation check + hubs and close the run's broker so the
                 # retry re-entry gets a fresh broker and no stale contextvars.
                 set_cancellation_check(None)
+                set_audit_hook(None)
                 set_model_backend_hub(None)
                 set_connector_hub(None)
                 if model_backend_hub is not None:
@@ -1549,6 +1612,7 @@ class PipelineExecutor:
         finally:
             # Close broker after all post-stream work (suite checks, signals).
             set_cancellation_check(None)
+            set_audit_hook(None)
             set_model_backend_hub(None)
             set_connector_hub(None)
             if model_backend_hub is not None:

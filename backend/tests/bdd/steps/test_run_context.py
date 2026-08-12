@@ -187,9 +187,11 @@ def agent_attempts_write(node_name: str, key: str, value: str, ctx: dict[str, An
     elif value.lower() == "false":
         coerced = False
 
-    @cancellable_node(role="agent")
-    async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
+    async def _bad_node(state: dict[str, Any]) -> dict[str, Any]:
         return {"run_context": {key: coerced}}
+
+    _bad_node.__name__ = node_name
+    bad_node = cancellable_node(role="agent")(_bad_node)
 
     import asyncio
 
@@ -249,6 +251,21 @@ def agent_attempts_write_unspecified(node_name: str, ctx: dict[str, Any]) -> Non
                     "message": "run_context.violation",
                 }
             )
+
+
+@when("an audit hook is registered")
+def audit_hook_registered(ctx: dict[str, Any]) -> None:
+    """Register a decorator audit hook that records dispatched violation payloads."""
+    from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+    received: dict[str, Any] = {}
+
+    async def hook(payload: dict[str, Any]) -> None:
+        received.update(payload)
+
+    set_audit_hook(hook)
+    ctx["audit_hook_received"] = received
+    ctx["audit_hook"] = hook
 
 
 @when(parsers.parse('each agent reads the run_context field "{field}"'))
@@ -402,6 +419,24 @@ def warning_includes_node_name(node_name: str, ctx: dict[str, Any]) -> None:
 def warning_includes_fields(ctx: dict[str, Any]) -> None:
     records = ctx.get("warning_records", [])
     assert any(r.get("fields") for r in records), "No warning record includes attempted fields"
+
+
+@then(parsers.parse('the audit hook receives node "{node_name}" with attempted fields {fields}'))
+def audit_hook_received_node(node_name: str, fields: str, ctx: dict[str, Any]) -> None:
+    """Assert the decorator dispatched the audit hook payload for a violation."""
+    from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+    try:
+        received = ctx.get("audit_hook_received", {})
+        assert received.get("node_id") == node_name, (
+            f"audit hook node_id={received.get('node_id')!r}, expected {node_name!r}"
+        )
+        expected = [f.strip().strip("\"'[]") for f in fields.split(",") if f.strip()]
+        assert received.get("attempted_keys") == expected, (
+            f"audit hook attempted_keys={received.get('attempted_keys')!r}, expected {expected!r}"
+        )
+    finally:
+        set_audit_hook(None)
 
 
 # ===================================================================

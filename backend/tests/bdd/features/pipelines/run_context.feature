@@ -68,6 +68,12 @@ Feature: Run Context — Seeding, Write Guard, and Audit
     And the warning includes the node name "bad-actor"
     And the warning includes the attempted fields
 
+  Scenario: Audit event dispatched on guard violation
+    Given pipeline "deploy-service" with an agent node "bad-actor"
+    When an audit hook is registered
+    And the agent node "bad-actor" attempts to write "secret"="data" to run_context
+    Then the audit hook receives node "bad-actor" with attempted fields ["secret"]
+
   Scenario: Autonomy recommendation overrides pipeline default
     Given pipeline "deploy-service" has autonomy default "manual_approval"
     And run_context contains "autonomy_recommendation" = "fully_autonomous"
