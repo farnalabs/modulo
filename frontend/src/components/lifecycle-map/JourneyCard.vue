@@ -3,6 +3,7 @@
     type="button"
     :data-testid="`journey-card-${journey.kind}-${journey.ref}`"
     class="journey-card w-full rounded-md border border-border bg-card px-2 py-1.5 text-left shadow-sm transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 outline-none"
+    :class="{ 'border-dashed opacity-60': journey.unattributed }"
     @click="$emit('open')"
   >
     <div class="flex items-center justify-between gap-1">
@@ -19,7 +20,14 @@
     </div>
     <div class="mt-1 flex flex-wrap items-center gap-1">
       <span
-        v-if="journey.status"
+        v-if="journey.unattributed"
+        :data-testid="`journey-unattributed-${journey.kind}-${journey.ref}`"
+        class="badge badge-context-slate"
+      >
+        {{ $t('views.LifecycleMapView.journey.unattributed') }}
+      </span>
+      <span
+        v-else-if="journey.status"
         :class="statusBadgeClass(journey.status)"
         :data-testid="`journey-status-${journey.status}`"
         class="badge capitalize"
