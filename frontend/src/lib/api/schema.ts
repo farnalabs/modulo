@@ -1501,9 +1501,9 @@ export interface paths {
             cookie?: never;
         };
         /** Dismiss Anomaly Endpoint */
-        get: operations["dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__get"];
+        get?: never;
         put?: never;
-        post?: never;
+        post: operations["dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17931,7 +17931,7 @@ export interface operations {
             };
         };
     };
-    dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__get: {
+    dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__post: {
         parameters: {
             query?: {
                 _fresh?: boolean;
