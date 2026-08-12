@@ -159,6 +159,21 @@ Feature: GitHub Connector
     Then the health result indicates failure
     And the health result detail contains "missing_scope:repo"
 
+  Scenario: Fine-grained PAT passes scope verification without classic scopes
+    Given a GitHub connector with a fine-grained token
+    When the GitHub API returns the user probe without a permission header
+    Then the GitHub scope verification passes
+
+  Scenario: Health check accepts a fine-grained PAT without classic scopes
+    Given a GitHub connector with a fine-grained token
+    When the GitHub API returns the user probe without a permission header
+    Then the GitHub health check passes for the authenticated user
+
+  Scenario: Health check reports missing fine-grained permissions
+    Given a GitHub connector with a fine-grained token
+    When the GitHub API reports permission "contents:read" on the user probe
+    Then the GitHub health check fails with missing fine-grained permissions
+
   Scenario: Query surfaces a typed auth error with a machine-readable code
     Given a GitHub connector with valid token
     When the GitHub API returns HTTP 401 with an expired token
