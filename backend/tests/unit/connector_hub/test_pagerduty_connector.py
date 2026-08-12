@@ -161,6 +161,20 @@ async def test_write_incident(connector):
     assert result["id"] == "P10"
 
 
+@respx.mock
+async def test_write_incident_unwrapped_response_returns_empty(connector):
+    """A 2xx response without an 'incident' wrapper must not be returned as-is.
+
+    Regression: `result.get("incident", result)` silently returned the whole
+    response (e.g. an error envelope) as the created incident.
+    """
+    respx.post(f"{_BASE}/incidents").mock(return_value=httpx.Response(200, json={"error": "bad"}))
+    result = await connector.write(
+        ConnectorPayload(resource="incident", data={"title": "Disk full", "service_id": "S1"}),
+    )
+    assert result == {}
+
+
 async def test_write_incident_missing_fields(connector):
     with pytest.raises(ValueError, match="'title' and 'service_id' in data"):
         await connector.write(ConnectorPayload(resource="incident", data={"title": "Disk full"}))

@@ -323,6 +323,23 @@ async def test_write_unsupported_resource(connector):
 
 
 # ---------------------------------------------------------------------------
+# write — unwrapped responses must not be echoed back as the result
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_write_unwrapped_response_returns_empty(connector):
+    """A 2xx response without a 'data' wrapper must not be returned as-is.
+
+    Regression: `result.get("data", result)` silently returned the whole
+    response (e.g. an error envelope) as the created entity.
+    """
+    respx.post(f"{_BASE}/rest/workflows").mock(return_value=httpx.Response(200, json={"message": "oops"}))
+    result = await connector.write(ConnectorPayload(resource="workflow", data={"name": "x"}))
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
 # HTTP error propagation
 # ---------------------------------------------------------------------------
 

@@ -247,7 +247,7 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.post("/incidents", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("incident", result))
+        return cast("dict[str, Any]", result.get("incident", {}))
 
     async def _acknowledge_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -262,7 +262,7 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.put(f"/incidents/{incident_id}", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("incident", result))
+        return cast("dict[str, Any]", result.get("incident", {}))
 
     async def _resolve_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -277,7 +277,7 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.put(f"/incidents/{incident_id}", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("incident", result))
+        return cast("dict[str, Any]", result.get("incident", {}))
 
     async def _add_note(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         incident_id = data.get("incident_id")
@@ -288,4 +288,4 @@ class PagerDutyConnector(ConnectorBase):
         resp = await c.post(f"/incidents/{incident_id}/notes", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("note", result))
+        return cast("dict[str, Any]", result.get("note", {}))

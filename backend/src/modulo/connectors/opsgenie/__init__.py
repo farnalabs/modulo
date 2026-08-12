@@ -252,7 +252,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.post("/alerts", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _acknowledge_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -268,7 +268,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.post(f"/alerts/{alert_id}/acknowledge", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _close_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -282,7 +282,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.post(f"/alerts/{alert_id}/close", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _add_alert_note(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -297,7 +297,7 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.post(f"/alerts/{alert_id}/notes", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _snooze_alert(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         alert_id = data.get("id")
@@ -314,4 +314,4 @@ class OpsgenieConnector(ConnectorBase):
         resp = await c.post(f"/alerts/{alert_id}/snooze", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))

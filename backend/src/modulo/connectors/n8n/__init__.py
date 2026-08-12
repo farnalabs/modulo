@@ -246,7 +246,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.post("/rest/workflows", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _update_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -259,7 +259,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.put(f"/rest/workflows/{workflow_id}", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _activate_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -268,7 +268,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.post(f"/rest/workflows/{workflow_id}/activate")
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _deactivate_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -277,7 +277,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.post(f"/rest/workflows/{workflow_id}/deactivate")
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _delete_workflow(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         workflow_id = data.get("id")
@@ -288,7 +288,7 @@ class N8NConnector(ConnectorBase):
             return {"id": workflow_id, "deleted": True}
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _delete_execution(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         execution_id = data.get("id")
@@ -299,7 +299,7 @@ class N8NConnector(ConnectorBase):
             return {"id": execution_id, "deleted": True}
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _create_credential(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         name = data.get("name")
@@ -310,7 +310,7 @@ class N8NConnector(ConnectorBase):
         resp = await c.post("/rest/credentials", json=body)
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
 
     async def _retry_execution(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         execution_id = data.get("id")
@@ -319,4 +319,4 @@ class N8NConnector(ConnectorBase):
         resp = await c.post(f"/rest/executions/{execution_id}/retry")
         resp.raise_for_status()
         result = cast("dict[str, Any]", resp.json())
-        return cast("dict[str, Any]", result.get("data", result))
+        return cast("dict[str, Any]", result.get("data", {}))
