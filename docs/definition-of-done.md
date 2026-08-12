@@ -18,7 +18,7 @@ Static list of the test suites that exist in this repo, their root paths, what t
 | Integration | `backend/tests/integration/` | real Postgres via testcontainers, Alembic migrations applied first, Factory Boy | Docker | `uv run pytest tests/integration/<file> -q -m integration` (usually CI / merge-queue only) |
 | BDD/E2E | `backend/tests/bdd/` (`features/` + `steps/`) | pytest-bdd + Playwright | running backend + Playwright | CI / merge-queue |
 | Load | `backend/tests/load/` | performance/load | full stack | CI / manual |
-| Frontend unit | `frontend/src/__tests__/` (Vitest; the `tests/unit/` path does not exist) | Vitest | node_modules (absent in worktrees) | `npm run test:unit` (main tree or CI) |
+| Frontend unit | `frontend/src/__tests__/` (Vitest; the `tests/unit/` path does not exist) | Vitest | node_modules (absent in worktrees) | `pnpm run test:unit` (main tree or CI) |
 | Frontend e2e | `frontend/tests/e2e/` | Playwright; @smoke tag gates merges | running stack | CI |
 
 ## 2. Test impact consideration (the "guess")

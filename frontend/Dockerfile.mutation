@@ -7,10 +7,10 @@ FROM node:20-slim
 WORKDIR /app
 
 # Copy dependency manifests
-COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/.npmrc frontend/pnpm-workspace.yaml ./
 
-# Install dependencies (ci is strict but fast — will fail if lockfile mismatch)
-RUN npm ci
+# Install dependencies (frozen lockfile is strict but fast — will fail if lockfile mismatch)
+RUN npm install -g pnpm@11.21.0 && pnpm install --frozen-lockfile
 
 # Copy source code and config
 COPY frontend/src/ src/
@@ -24,4 +24,4 @@ COPY frontend/postcss.config.js ./
 COPY frontend/tailwind.config.cjs ./
 
 # Default: mutate stores (fastest meaningful subset)
-CMD ["npx", "stryker", "run", "--mutate", "src/stores/**/*.ts"]
+CMD ["pnpm", "exec", "stryker", "run", "--mutate", "src/stores/**/*.ts"]

@@ -96,20 +96,23 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci --force
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
       - name: Install Playwright browsers
-        run: npx playwright install chromium
+        run: pnpm exec playwright install chromium
       - name: Validate Playwright test compilation
-        run: npx playwright test --list
+        run: pnpm exec playwright test --list
       - name: Run WCAG contrast tests
-        run: npx playwright test wcag-contrast
-      - run: npm run lint
-      - run: npm run type-check
+        run: pnpm exec playwright test wcag-contrast
+      - run: pnpm run lint
+      - run: pnpm run type-check
       - name: Run unit tests (vitest)
         # FAR-101: ubicloud-standard-2 is 2 vCPU. package.json's `test:unit`
         # script hardcodes --maxWorkers=4, which saturates both cores with 4
@@ -119,15 +122,15 @@ jobs:
         # hack. Invoke vitest directly so the script's --maxWorkers=4 is never
         # inherited. 15000ms test/hook timeouts (vite.config.ts, from #817)
         # remain the safety net for heavy mount+settle specs.
-        run: npx vitest run src --pool=threads --maxWorkers=2
-      - run: npm run build
-      - run: npm audit --audit-level=critical
+        run: pnpm exec vitest run src --pool=threads --maxWorkers=2
+      - run: pnpm run build
+      - run: pnpm audit --audit-level=critical
 
   schema-freshness:
     # Regenerates frontend/src/lib/api/schema.ts from the backend's OpenAPI and
     # FAILS if the committed schema differs from what the generator produces.
     # Any backend API change (routes, request/response models) therefore forces
-    # `npm run generate:api` in the same PR. Mirrors scripts/generate-api-types.ps1:
+    # `pnpm run generate:api` in the same PR. Mirrors scripts/generate-api-types.ps1:
     # dump the OpenAPI JSON by importing modulo.api.main, then feed it to
     # openapi-typescript. Runs on ALL events (PR + push to main + manual) so a
     # schema that drifts out of sync on main is caught immediately.
@@ -141,9 +144,14 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.21.0
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install backend deps
         working-directory: backend
         run: uv sync --frozen
@@ -167,19 +175,19 @@ jobs:
           uv run --no-sync python /tmp/gen_openapi.py
       - name: Generate TypeScript types
         # Pin the openapi-typescript version to the one in frontend/package.json
-        # (7.13.0) so the gate is deterministic — a bare `npx openapi-typescript`
+        # (7.13.0) so the gate is deterministic — a bare `pnpm dlx openapi-typescript`
         # would pull the latest release and cause version-skew churn between local
-        # (`npm run generate:api`, uses the lockfile install) and CI.
+        # (`pnpm run generate:api`, uses the lockfile install) and CI.
         working-directory: frontend
         shell: bash
-        run: npx --yes openapi-typescript@7.13.0 /tmp/modulo_openapi.json --output src/lib/api/schema.ts
+        run: pnpm dlx openapi-typescript@7.13.0 /tmp/modulo_openapi.json --output src/lib/api/schema.ts
       - name: Fail if schema.ts is stale
         shell: bash
         run: |
           if git diff --exit-code -- frontend/src/lib/api/schema.ts; then
             echo "schema.ts is up to date"
           else
-            echo "::error::frontend/src/lib/api/schema.ts is stale. Run 'npm run generate:api' from frontend/ and commit the regenerated file."
+            echo "::error::frontend/src/lib/api/schema.ts is stale. Run 'pnpm run generate:api' from frontend/ and commit the regenerated file."
             exit 1
           fi
 
