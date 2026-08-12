@@ -7291,31 +7291,22 @@ export interface components {
             description: string | null;
             /** Is Executable */
             is_executable: boolean;
-            /**
-             * Input Schema Id
-             * Format: uuid
-             */
-            input_schema_id: string;
+            /** Input Schema Id */
+            input_schema_id: string | null;
             /** Input Schema Version */
-            input_schema_version: string;
-            /**
-             * Output Schema Id
-             * Format: uuid
-             */
-            output_schema_id: string;
+            input_schema_version: string | null;
+            /** Output Schema Id */
+            output_schema_id: string | null;
             /** Output Schema Version */
-            output_schema_version: string;
+            output_schema_version: string | null;
             /** Prompt Template */
             prompt_template: string;
             /** Prompt Version History */
             prompt_version_history: {
                 [key: string]: unknown;
             }[];
-            /**
-             * Model Backend Id
-             * Format: uuid
-             */
-            model_backend_id: string;
+            /** Model Backend Id */
+            model_backend_id: string | null;
             /** Connector Type Refs */
             connector_type_refs: {
                 [key: string]: unknown;
