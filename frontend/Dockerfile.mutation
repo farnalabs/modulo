@@ -2,7 +2,7 @@
 # Build from repo root: docker build -t modulo-stryker -f frontend/Dockerfile.mutation .
 # Run: docker run --rm modulo-stryker
 
-FROM node:20-slim
+FROM node:22-slim
 
 WORKDIR /app
 
