@@ -15,7 +15,7 @@ uv sync
 
 # Frontend
 cd "$ROOT/frontend"
-npm install
+pnpm install
 
 # Docker (optional)
 if [ "$1" = "--full" ]; then
