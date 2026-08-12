@@ -592,7 +592,7 @@ CICD_WORKFLOW: dict[str, Any] = {
         "node_version": "22",
         "lint_tools": ["ruff", "mypy"],
         "test_command": "pytest",
-        "build_command": "npm run build",
+        "build_command": "pnpm run build",
         "staging_deploy": True,
         "production_deploy": False,
         "require_approval_for_production": True,
