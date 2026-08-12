@@ -94,7 +94,7 @@ def _seed_session(
     session.execute = AsyncMock(side_effect=_execute)
     session.add = MagicMock()
     session.flush = AsyncMock()
-    session.delete = MagicMock()
+    session.delete = AsyncMock()
     return _configure_begin(session)
 
 
@@ -249,7 +249,7 @@ class TestTombstones:
         session = _make_session()
         result = MagicMock(scalar_one_or_none=MagicMock(return_value=row))
         session.execute = AsyncMock(return_value=result)
-        session.delete = MagicMock()
+        session.delete = AsyncMock()
         with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):
             cleared = await clear_default_rule_tombstone(session, _ORG_ID, "agent.failed")
         assert cleared is True
@@ -270,7 +270,7 @@ class TestTombstones:
             return rules_result
 
         session.execute = AsyncMock(side_effect=_execute)
-        session.delete = MagicMock()
+        session.delete = AsyncMock()
         session.add = MagicMock()
         session.flush = AsyncMock()
         with patch("modulo.core.error_tracking.set_rls_org", AsyncMock()):

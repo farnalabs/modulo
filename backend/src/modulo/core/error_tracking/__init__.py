@@ -770,7 +770,7 @@ async def clear_default_rule_tombstone(session: AsyncSession, org_id: Any, signa
     row = existing.scalar_one_or_none()
     if row is None:
         return False
-    session.delete(row)
+    await session.delete(row)
     return True
 
 
@@ -783,7 +783,7 @@ async def restore_default_alert_rules_for_org(session: AsyncSession, org_id: Any
     await set_rls_org(session, org_id)
     tombstones = await session.execute(select(DeletedDefault).where(DeletedDefault.organisation_id == org_id))
     for row in tombstones.scalars().all():
-        session.delete(row)
+        await session.delete(row)
     return await seed_default_alert_rules_for_org(session, org_id)
 
 
