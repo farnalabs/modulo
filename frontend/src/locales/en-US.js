@@ -249,14 +249,29 @@ export default {
       "proposal_dismissed": "Proposal dismissed."
     },
     "AgentOutputDiffView": {
-      "run_id_a": "Run ID A",
-      "run_id_b": "Run ID B",
       "node_id": "Node ID",
-      "diff_failed": "Diff failed:",
+      "node_id_placeholder": "Node ID",
       "agent_output_diff": "Agent Output Diff",
       "failed_to_compare_outputs": "Failed to compare outputs:",
+      "subtitle": "Compare agent outputs across two pipeline runs",
       "run_a": "Run A",
-      "run_b": "Run B"
+      "run_b": "Run B",
+      "paste_run_id": "Paste a run ID (or select from dropdown)",
+      "select_recent_run": "Select recent run...",
+      "loading": "Loading...",
+      "compare": "Compare",
+      "outputs_identical": "Outputs are identical",
+      "lines_total": "{count} lines total",
+      "added": "+{count} added",
+      "removed": "-{count} removed",
+      "unchanged": "{count} unchanged",
+      "raw_outputs": "Raw outputs (collapsible)",
+      "run_a_output": "Run A: {runId}",
+      "run_b_output": "Run B: {runId}",
+      "line_level_diff": "Line-level diff",
+      "plus_added": "(+) added",
+      "minus_removed": "(-) removed",
+      "no_diff_lines": "No line-level differences"
     },
     "AdminErrorDetailView": {
       "assign_to": "Assign to:",
