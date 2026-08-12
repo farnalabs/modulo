@@ -1510,6 +1510,14 @@ async def fire_ongoing_trigger(
                 "in_flight": outcome.get("in_flight"),
                 "target": outcome.get("target"),
             }
+        # Per-item outcome persistence (debug-only — NOT wired to /healthz/ready).
+        # Best-effort: a stats write failure must never fail the fire job.
+        try:
+            await redis_client.set(f"saq:cron:stats:ongoing:{trigger_id}", json.dumps(summary))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("cron_helpers.ongoing_stats_persist_failed trigger=%s", trigger_id)
         _log.info("fire_ongoing_trigger summary: %s", summary)
         return summary
     finally:
