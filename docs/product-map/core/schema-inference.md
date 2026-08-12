@@ -8,6 +8,7 @@ bdd:
   - backend/tests/bdd/features/connectors/schema_inference.feature
 unit-tests:
   - backend/tests/unit/core/test_schema_inference.py
+  - backend/tests/unit/core/test_schema_sanitize.py
   - backend/tests/unit/api/test_schema_infer_endpoint.py
   - backend/tests/unit/core/test_schema_migration.py
   - backend/tests/unit/core/test_schema_validation.py
@@ -35,6 +36,9 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [x] Build prompt with system instructions and sample data as human message
 - [x] Truncate samples to `_MAX_SAMPLE_RECORDS` (50) before sending to LLM
 - [x] Send samples as formatted JSON block in the human message
+- [x] Sanitise sample records before serialisation — sensitive values masked, control chars stripped, strings/lists/depth bounded
+- [x] Wrap sample data in structural separators (`<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>`) — never interpolate raw field values into prompt instructions
+- [x] System prompt instructs the model that the sample-data block is untrusted input
 - [x] Parse LLM response as plain JSON object
 - [x] Strip markdown code fences from LLM response (with or without language hint)
 - [x] Handle whitespace around JSON and around fences
@@ -215,15 +219,16 @@ LLM-assisted JSON Schema draft from sampled connector data. Entry point for SDLC
 - [ ] **Sampled record default (200)**: PRD says default 200 records, code caps at 50 in prompt builder, API default limit is 10, max is 100 — no sample count displayed in UI
 - [ ] **Rare-field exclusion**: PRD says fields appearing in <10% of samples should be flagged and excluded from draft — not implemented anywhere
 - [ ] **`abstract_name` inference**: PRD says inferred `abstract_name` suggestion per resource type — not implemented; only static string "Inferred from {name}"
-- [ ] **SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used
+- [x] ~~**SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — not used~~ **RESOLVED 2026-08-12**: sample/example data is now scrubbed by `schema_registry/sanitize.py` (credential masking, control-char stripping, length/cardinality/depth bounds) and wrapped in `<<<SAMPLE_DATA>>>` structural separators; the system prompt explicitly declares the block untrusted input
 - [ ] **Sampled data not stored**: PRD says sampled data must not be persisted after inference — not verified/audited post-inference
 - [ ] **Resource-type scope**: PRD says inference works on issue-tracker, git-host, and document-store connectors — no connector-type validation in endpoint (only connector_type_id membership test)
-- [ ] **LLM prompt injection hardening**: PRD requires structural separators and no prompt interpolation of raw field values — current prompt interpolates samples directly via f-string
+- [x] ~~**LLM prompt injection hardening**: PRD requires structural separators and no prompt interpolation of raw field values — current prompt interpolates samples directly via f-string~~ **RESOLVED 2026-08-12**: sample data is sanitised before serialisation and rendered between explicit structural separators; the model is told to treat the block as opaque data
 - [ ] **No E2E integration test**: No end-to-end test for the full sample→infer→review flow; BDD scenarios have step definitions but run against mocked backends
 - [ ] **No connector-type validation**: Endpoint does not validate that the connector instance belongs to a supported type (issue-tracker, git-host, document-store) — only checks connector_type_id membership
 - [ ] **No frontend unit tests**: Zero spec files for SchemaInferenceView or OnboardingWizard schema steps
 
 ## QA History
+- 2026-08-12: improve-architecture — RESOLVED the "SandboxedEnvironment / LLM prompt injection hardening" known gaps (PRD §8.16: sampled records treated as untrusted input, structural separators, no prompt interpolation of raw field values). New `schema_registry/sanitize.py`: `is_sensitive_key` (segment/suffix matching — flags `access_token`, `api_key`, `client_secret` but not `monkey`/`author`/`key_name`), `sanitise_sample_records` (deep defensive copy: sensitive-keyed string values masked, control chars stripped, strings capped at 2000 chars, arrays at 100, nesting at depth 8, non-list passthrough). `_build_infer_prompt` + `_build_generate_prompt` now sanitise before serialising and render sample data between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators (replacing bare markdown code fences); both system prompts declare the block untrusted input and instruct the model never to follow instructions inside it. Added 24 unit tests in `test_schema_sanitize.py` (sensitive-key matrix, recursive masking, no input mutation, control-char stripping, length/cardinality/depth caps, structural-separator rendering, no-secret-leak assertions for both inference and generation prompts, serialisability). 106 targeted schema unit tests pass, ruff check + format clean, mypy --strict clean, import-linter 7/7 contracts kept. Status: partial.
 - 2026-07-01: Cross-cutting QA — fixed `_build_infer_prompt` to respect configurable `max_sample_records`, added `ProgrammingError` catch to infer endpoint (501 on missing DB table), added BDD step definitions for all 5 scenarios, added unit test for configurable max_sample_records. 23/23 tests pass.
 - 2026-07-04: Cross-cutting QA (index 167) — fixed `SchemaInferenceService.infer()` and `SchemaGenerationService.generate()` to catch `ValueError` from non-serializable samples → `SchemaInferenceError`/`SchemaGenerationError` (previously raw 500). Added `IntegrityError` → 409 to create_schema and create_schema_version endpoints (previously misleading 503). Added structured Error Handling, Edge Cases, and Resilience & Integration Robustness sections to product map. Created error-path unit tests.
 - 2026-07-08: Cross-cutting QA (index 250) — Fixed CRITICAL bug in `validate_schema_endpoint`: `exc.path.popleft()` mutated the deque, causing the response `path` field to omit the first segment. Copied path to `list()` before reading, preserving all segments. Fixed MAJOR bug in `migrate_data_endpoint`: `create_migration()`/`apply_migration()` calls ran outside any try/except — Python errors (ValueError, TypeError) from schema processing propagated as raw 500. Wrapped in `except Exception` → 500 with structured detail. Added 18 new tests covering validate endpoint (5 tests: valid, invalid type, path regression, empty, union), generate endpoint (3 tests: no backends→400, ProgrammingError→501, SQLAlchemyError→503), infer endpoint (2 tests: ProgrammingError→501, SQLAlchemyError→503), import endpoint (4 tests: invalid JSON→400, non-object→400, valid→200, invalid schema→422), fields endpoint (2 tests: ProgrammingError→501, SQLAlchemyError→503), and migrate endpoint (2 tests: create_plan→500, apply→500). All 39 schema error-handling tests pass.
