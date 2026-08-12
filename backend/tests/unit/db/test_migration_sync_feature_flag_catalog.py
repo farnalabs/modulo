@@ -26,7 +26,7 @@ _MIGRATION_PATH = (
 )
 
 # The migration this branch introduces — the current head of the chain.
-_HEAD_MIGRATION_NAME = "0085_journey_facts"
+_HEAD_MIGRATION_NAME = "0086_seeded_alert_rules"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
