@@ -271,6 +271,25 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 
 ## QA History
 
+### 2026-08-12 — improve-tests: QA lens pass on alert_dispatcher (45% → 100% line + branch coverage)
+
+- **Coverage lifted to 100%** for `modulo.core.error_tracking.alert_dispatcher` via a
+  dedicated 22-test hermetic suite (`tests/unit/error_tracking/test_alert_dispatcher.py`),
+  replacing the thin partial coverage that previously lived inline in
+  `test_error_alerting.py` / `test_alert_delivery_failed_metric.py`.
+- **Dispatch routing matrix locked:** `in_app` (NotificationDeliveryLog entry with
+  `_build_summary` from the sample event), `email` (SMTP resolution from org
+  `settings_json` → global fallback → no-smtp disabled → no-admins → no-active-admins →
+  send success/false → `EmailSendingError` failure metric → unexpected-error swallow),
+  `webhook` (no-URL warning, Slack-emoji formatting, contract payload fields
+  `alert_id`/`elevation_signal`/`attempt_n`/`run_group_id`, HTTP-error + request-error
+  failure metrics), and unknown `action_type` warning.
+- **`dispatch_alert_resolved` fully covered:** in-app record, webhook payload post,
+  HTTP-error and request-error log paths — best-effort semantics verified (never raises).
+- **Helpers pinned:** `_escape_html` and `_format_slack_payload` get direct assertions.
+- **Verification:** 100% line + branch on `alert_dispatcher.py`; full
+  `tests/unit/error_tracking` package (355 tests) passes; ruff check + format clean.
+
 ### 2026-08-12 — improve-architecture (active-groups gauge gap→implemented)
 
 - **Fixed feature gap:** `modulo_error_groups_active` was registered by
