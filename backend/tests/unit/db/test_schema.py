@@ -23,6 +23,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "feature_flag_catalog",
         "feedback_records",
         "hitl_claims",
+        "journeys",
         "library_primitives",
         "lifecycle_maps",
         "lifecycle_map_stages",

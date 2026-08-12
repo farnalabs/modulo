@@ -160,6 +160,18 @@ class Run(OrgScoped):
     # of outputs_json by the Agent Return Contract (FAR-125). NULL for
     # pre-split runs. Written atomically with outputs_json (migration 0074).
     node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # Journey / work-item tracking (FAR-142, migration 0083) — additive,
+    # nullable, never backfilled. ``work_item_id`` is the chain anchor written
+    # ONCE at create (floor id or adopted from the parent run) and NEVER
+    # mutated; ``work_item_refs`` is a JSON array of {kind, ref, source,
+    # status?} entries (JSONB in the migration for the partial GIN index;
+    # generic JSON here keeps SQLite/MariaDB parity — the
+    # hitl_claims.decision_payload precedent). ``is_replay`` is set by
+    # replay_event; ``variant_group_id`` by run_variant_weighted.
+    work_item_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    work_item_refs: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    is_replay: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    variant_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     organisation: Mapped["Organisation"] = relationship()
     pipeline: Mapped["Pipeline"] = relationship()
     snapshot: Mapped["PipelineSnapshot"] = relationship()
