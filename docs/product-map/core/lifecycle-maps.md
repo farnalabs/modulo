@@ -15,7 +15,8 @@ code:
   - frontend/src/stores/lifecycleMaps.ts
   - frontend/src/types/lifecycleMap.ts
   - frontend/src/views/lifecycle-map/
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/core/test_lifecycle_map.py
 depends-on: [feat-core-pipeline-execution]
 status: partial
 ---
