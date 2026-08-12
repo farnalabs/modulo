@@ -186,6 +186,7 @@ async def _seed_run(
     completed_at: datetime | None = None,
     status: str = "complete",
     work_item_id: uuid.UUID | None = None,
+    work_item_refs: list[Any] | None = None,
 ) -> Run:
     run = Run(
         organisation_id=_ORG,
@@ -196,7 +197,7 @@ async def _seed_run(
         run_number=len((await session.execute(select(Run))).all()) + 1,
         input_hash="hash",
         langgraph_thread_id=f"thread-{uuid.uuid4()}",
-        work_item_refs=[{"kind": kind, "ref": ref, "source": "derived"}],
+        work_item_refs=work_item_refs or [{"kind": kind, "ref": ref, "source": "derived"}],
         work_item_id=work_item_id,
         completed_at=completed_at,
     )
@@ -238,6 +239,36 @@ class TestListMapJourneys:
         assert other_journey.id not in ids
         assert next_cursor is None
 
+    async def test_list_map_without_stages_returns_only_attributed(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        attributed = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        # No stages on the map: _referenced_ref_pairs short-circuits to an empty
+        # set, so an un-attributed journey with no matching run must not appear.
+        await _seed_journey(session, kind="linear", ref="FAR-9", map_id=None)
+
+        items, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert [j.id for j, _ in items] == [attributed.id]
+
+    async def test_list_ignores_malformed_run_ref_entries(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        orphan = await _seed_journey(session, kind="linear", ref="FAR-1", map_id=None)
+        # Run on the stage pipeline whose refs mix a valid entry with malformed
+        # ones (non-dict, missing kind/ref) — the malformed entries are skipped.
+        await _seed_run(
+            session,
+            kind="linear",
+            ref="FAR-1",
+            work_item_refs=["not-a-dict", {"kind": None, "ref": "x"}, {"kind": "linear", "ref": "FAR-1"}],
+        )
+
+        items, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert [j.id for j, _ in items] == [orphan.id]
+
     async def test_list_orphan_only_matches_its_own_kind_ref(self, session: AsyncSession) -> None:
         await _seed_org(session)
         await _seed_map(session)
@@ -270,6 +301,19 @@ class TestListMapJourneys:
 
         items, _ = await list_map_journeys(session, map_id=_MAP, kind="github_issue")
         assert {j.id for j, _ in items} == {a.id, b.id}
+
+    async def test_list_ref_only_filter_strips_whitespace(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        target = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        await _seed_journey(session, kind="github_issue", ref="c/d#7", map_id=_MAP)
+
+        # ``ref`` given without ``kind``: the ref is stripped, not canonicalised,
+        # and the query narrows on the raw ref column.
+        items, _ = await list_map_journeys(session, map_id=_MAP, ref="  a/b#5  ")
+
+        assert [j.id for j, _ in items] == [target.id]
 
     async def test_list_owner_team_id_filter(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -479,6 +523,18 @@ class TestJourneyRunHistory:
 
         runs = await list_journey_runs(session, journey=journey)
         assert [r.id for r in runs] == [run.id]
+
+    async def test_detail_respects_limit_and_stops_scanning(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        newest = await _seed_run(session, completed_at=datetime(2026, 1, 3, tzinfo=UTC))
+        await _seed_run(session, completed_at=datetime(2026, 1, 2, tzinfo=UTC))
+
+        runs = await list_journey_runs(session, journey=journey, limit=1)
+
+        assert [r.id for r in runs] == [newest.id]
 
     async def test_empty_history_when_runs_purged(self, session: AsyncSession) -> None:
         await _seed_org(session)
