@@ -534,8 +534,7 @@ async def test_validation_result_constraint_accepts_full_vocabulary(
     async with db_engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT validation_result FROM trigger_events "
-                "WHERE id IN (:ids) ORDER BY validation_result"
+                "SELECT validation_result FROM trigger_events WHERE id IN (:ids) ORDER BY validation_result"
             ).bindparams(bindparam("ids", expanding=True)),
             {"ids": inserted_ids},
         )
