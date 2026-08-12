@@ -173,10 +173,9 @@ class TestValidateRefEntry:
 
 
 class TestCanonicalWorkItemId:
-    def test_is_deterministic(self) -> None:
-        assert canonical_work_item_id(_ORG, "github_issue", "a/b#5") == canonical_work_item_id(
-            _ORG, "github_issue", "a/b#5"
-        )
+    def test_is_deterministic_golden_value(self) -> None:
+        result = canonical_work_item_id(_ORG, "github_issue", "a/b#5")
+        assert result == uuid.UUID("20ad65f6-0880-50c9-81e4-2b0902e10a28")
 
     def test_hash_collapses_to_bare_ref_for_same_row(self) -> None:
         assert canonical_work_item_id(_ORG, "github_issue", "#5") == canonical_work_item_id(_ORG, "github_issue", "5")
