@@ -7508,7 +7508,7 @@ export interface components {
          * AnalyticsTriggerType
          * @enum {string}
          */
-        AnalyticsTriggerType: "manual" | "webhook" | "cron" | "polling" | "agent_signal" | "correction";
+        AnalyticsTriggerType: "manual" | "webhook" | "cron" | "polling" | "agent_signal" | "ongoing" | "correction";
         /** AnomalyResponse */
         AnomalyResponse: {
             /** Id */

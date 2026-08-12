@@ -104,6 +104,7 @@ class AnalyticsTriggerType(StrEnum):
     CRON = "cron"
     POLLING = "polling"
     AGENT_SIGNAL = "agent_signal"
+    ONGOING = "ongoing"
     CORRECTION = "correction"
 
 

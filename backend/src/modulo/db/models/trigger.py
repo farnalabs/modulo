@@ -23,10 +23,23 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     __tablename__ = "triggers"
     __table_args__ = (
         CheckConstraint(
-            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal')",
+            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing')",
             name="ck_triggers_type",
         ),
         CheckConstraint("max_concurrent_runs > 0", name="ck_triggers_max_concurrent_runs"),
+        # Ongoing triggers (FAR-158) are cost-controlled at the DB level: a daily
+        # spend limit is REQUIRED (non-null, > 0) and the target pool size
+        # ``max_concurrent_runs`` is bounded 1..20. Both are partial CHECKs — they
+        # only apply to ``trigger_type = 'ongoing'`` rows — mirroring migration
+        # 0086_ongoing_trigger_type.
+        CheckConstraint(
+            "trigger_type <> 'ongoing' OR (daily_spend_limit IS NOT NULL AND daily_spend_limit > 0)",
+            name="ck_triggers_ongoing_spend_limit",
+        ),
+        CheckConstraint(
+            "trigger_type <> 'ongoing' OR (max_concurrent_runs BETWEEN 1 AND 20)",
+            name="ck_triggers_ongoing_target_range",
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(

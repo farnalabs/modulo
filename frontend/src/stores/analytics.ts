@@ -83,6 +83,7 @@ export const TRIGGER_TYPES = [
   "cron",
   "polling",
   "agent_signal",
+  "ongoing",
   "correction",
 ] as const;
 

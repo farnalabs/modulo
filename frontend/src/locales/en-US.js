@@ -2031,7 +2031,19 @@ export default {
       "pause_all_triggers_action": "Pause all",
       "resume_triggers": "Resume triggers",
       "failed_to_update_pause": "Failed to update trigger pause state: {detail}",
-      "error_updating_pause": "Error updating trigger pause state: {detail}"
+      "error_updating_pause": "Error updating trigger pause state: {detail}",
+      "ongoing": "Ongoing",
+      "ongoing_description": "Keeps the pipeline topped up to a target number of in-flight (active or queued) runs, like a worker pool. When a run finishes, the next scan creates a replacement.",
+      "target_runs": "Target Runs",
+      "target_runs_placeholder": "2",
+      "target_runs_invalid": "Target runs must be between 1 and 20.",
+      "scan_interval": "Scan Interval (seconds)",
+      "scan_interval_placeholder": "60",
+      "daily_spend_limit": "Daily Spend Limit (USD)",
+      "daily_spend_limit_placeholder": "5.00",
+      "daily_spend_limit_required": "A daily spend limit is required for ongoing triggers.",
+      "snapshot_id": "Snapshot ID (optional)",
+      "snapshot_id_placeholder": "Pin a snapshot, or leave blank to use the latest"
     },
     "SettingsTriggerEventLogView": {
       "no_trigger_events_found": "No trigger events found",
@@ -2058,6 +2070,7 @@ export default {
       "webhook": "Webhook",
       "cron": "Cron",
       "polling": "Polling",
+      "ongoing": "Ongoing",
       "result": "Result",
       "accepted": "Accepted",
       "passed": "Passed",

@@ -21,6 +21,9 @@ export const TRIGGER_TYPE = {
   MANUAL: 'manual',
   WEBHOOK: 'webhook',
   CRON: 'cron',
+  POLLING: 'polling',
+  AGENT_SIGNAL: 'agent_signal',
+  ONGOING: 'ongoing',
   CORRECTION: 'correction',
 } as const;
 
