@@ -225,6 +225,72 @@ def test_create_connector_does_not_expose_credentials(client: TestClient) -> Non
     assert body["has_credentials"] is True
 
 
+def _make_github_body(token: str) -> dict[str, str]:
+    return {
+        "name": "GitHub Connector",
+        "connector_type_id": "github",
+        "credentials": token,
+        "config_json": {},
+    }
+
+
+def test_create_github_fine_grained_token_accepted(client: TestClient) -> None:
+    """A fine-grained PAT (github_pat_ prefix) is not rejected by the classic scope check."""
+    token = "github_pat_11ABC"
+    connector = _make_connector(credentials_ciphertext=b"encrypted_bytes")
+    with (
+        patch("modulo.api.routes.connectors.GitHubConnector.verify_scopes", new=AsyncMock(return_value=set())),
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=connector),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body(token))
+
+    assert resp.status_code == 201
+
+
+def test_create_github_fine_grained_missing_permission_reports_fine_grained_detail(client: TestClient) -> None:
+    """Fine-grained missing permissions surface the PRD §7.11 permission set, not classic scopes."""
+    token = "github_pat_11ABC"
+    with (
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(return_value={"contents:write", "pull_requests:write"}),
+        ),
+        patch("modulo.api.routes.connectors.create_connector_instance"),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body(token))
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "fine-grained permissions" in detail
+    assert "pull_requests:write" in detail
+    assert "repo" not in detail
+    assert "contents:write" in detail
+
+
+def test_create_github_classic_missing_scope_reports_classic_detail(client: TestClient) -> None:
+    """Classic tokens keep the classic OAuth-scope rejection detail."""
+    token = "ghp_classic123"
+    with (
+        patch(
+            "modulo.api.routes.connectors.GitHubConnector.verify_scopes",
+            new=AsyncMock(return_value={"repo"}),
+        ),
+        patch("modulo.api.routes.connectors.create_connector_instance"),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.post("/api/v1/connectors", json=_make_github_body(token))
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "OAuth scopes" in detail
+    assert "repo" in detail
+
+
 def test_create_connector_encrypts_credentials(client: TestClient) -> None:
     captured: list[bytes] = []
 
