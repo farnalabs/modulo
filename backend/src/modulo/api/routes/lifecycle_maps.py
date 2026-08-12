@@ -859,7 +859,7 @@ def _build_journey_current_stage(j: Any) -> JourneyCurrentStage | None:
     )
 
 
-def _build_journey_summary(j: Any) -> JourneySummaryResponse:
+def _build_journey_summary(j: Any, unattributed: bool) -> JourneySummaryResponse:
     return JourneySummaryResponse(
         kind=j.kind,
         ref=j.ref,
@@ -868,7 +868,7 @@ def _build_journey_summary(j: Any) -> JourneySummaryResponse:
         status=j.latest_status,
         provenance=j.latest_provenance,
         run_count=j.run_count or 0,
-        unattributed=bool(getattr(j, "_unattributed", False)),
+        unattributed=unattributed,
         latest_run_id=j.latest_terminal_run_id,
         updated_at=j.updated_at,
     )
@@ -937,7 +937,7 @@ async def list_journeys_endpoint(
             detail="An unexpected error occurred.",
         ) from None
     return JourneyListResponse(
-        items=[_build_journey_summary(j) for j in journeys],
+        items=[_build_journey_summary(j, unattributed) for j, unattributed in journeys],
         next_cursor=next_cursor,
     )
 
@@ -964,15 +964,16 @@ async def get_journey_endpoint(
             if lifecycle_map is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
             owner_team_id = _team_scope_filter(lifecycle_map)
-            journey = await get_map_journey(
+            journey_result = await get_map_journey(
                 session,
                 map_id=lifecycle_map_id,
                 kind=kind,
                 ref=ref,
                 owner_team_id=owner_team_id,
             )
-            if journey is None:
+            if journey_result is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journey not found")
+            journey, unattributed = journey_result
             runs = await list_journey_runs(session, journey=journey)
     except ValueError as exc:
         _log.exception("lifecycle_maps.get_journey_endpoint")
@@ -1001,7 +1002,7 @@ async def get_journey_endpoint(
             detail="An unexpected error occurred.",
         ) from None
     return JourneyDetailResponse(
-        **_build_journey_summary(journey).model_dump(),
+        **_build_journey_summary(journey, unattributed).model_dump(),
         runs=[
             JourneyRunHistoryItem(
                 run_id=r.id,

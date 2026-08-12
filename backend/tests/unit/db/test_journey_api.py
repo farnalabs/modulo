@@ -231,7 +231,7 @@ class TestListMapJourneys:
 
         items, next_cursor = await list_map_journeys(session, map_id=_MAP)
 
-        ids = {j.id for j in items}
+        ids = {j.id for j, _ in items}
         assert ids == {stage_journey.id, orphan_journey.id}
         assert other_journey.id not in ids
         assert next_cursor is None
@@ -256,7 +256,7 @@ class TestListMapJourneys:
         await _seed_journey(session, kind="github_issue", ref="c/d#7", map_id=_MAP)
 
         items, _ = await list_map_journeys(session, map_id=_MAP, kind="github_issue", ref="a/b#5")
-        assert [j.id for j in items] == [target.id]
+        assert [j.id for j, _ in items] == [target.id]
 
     async def test_list_kind_filter_without_ref(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -267,7 +267,7 @@ class TestListMapJourneys:
         await _seed_journey(session, kind="linear", ref="FAR-1", map_id=_MAP)
 
         items, _ = await list_map_journeys(session, map_id=_MAP, kind="github_issue")
-        assert {j.id for j in items} == {a.id, b.id}
+        assert {j.id for j, _ in items} == {a.id, b.id}
 
     async def test_list_owner_team_id_filter(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -277,7 +277,7 @@ class TestListMapJourneys:
         await _seed_journey(session, kind="github_issue", ref="c/d#7", map_id=_MAP, owner_team_id=_TEAM_B)
 
         items, _ = await list_map_journeys(session, map_id=_MAP, owner_team_id=_TEAM_A)
-        assert [j.id for j in items] == [team_a.id]
+        assert [j.id for j, _ in items] == [team_a.id]
 
 
 class TestListPagination:
@@ -299,15 +299,15 @@ class TestListPagination:
         expected_order = [j.id for j in reversed(created)]
 
         page1, cursor1 = await list_map_journeys(session, map_id=_MAP, limit=2)
-        assert [j.id for j in page1] == expected_order[:2]
+        assert [j.id for j, _ in page1] == expected_order[:2]
         assert cursor1 is not None
 
         page2, cursor2 = await list_map_journeys(session, map_id=_MAP, limit=2, cursor=cursor1)
-        assert [j.id for j in page2] == expected_order[2:4]
+        assert [j.id for j, _ in page2] == expected_order[2:4]
         assert cursor2 is not None
 
         page3, cursor3 = await list_map_journeys(session, map_id=_MAP, limit=2, cursor=cursor2)
-        assert [j.id for j in page3] == expected_order[4:]
+        assert [j.id for j, _ in page3] == expected_order[4:]
         assert cursor3 is None
 
     def test_cursor_encode_decode_roundtrip(self) -> None:
@@ -337,8 +337,8 @@ class TestUnattributedFlag:
 
         items, _ = await list_map_journeys(session, map_id=_MAP)
 
-        assert [j.id for j in items] == [journey.id]
-        assert journey._unattributed is True
+        assert [j.id for j, _ in items] == [journey.id]
+        assert items[0][1] is True
 
     async def test_not_unattributed_when_stage_identity_set(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -356,8 +356,8 @@ class TestUnattributedFlag:
 
         items, _ = await list_map_journeys(session, map_id=_MAP)
 
-        assert [j.id for j in items] == [journey.id]
-        assert journey._unattributed is False
+        assert [j.id for j, _ in items] == [journey.id]
+        assert items[0][1] is False
 
     async def test_not_unattributed_when_run_count_positive(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -368,8 +368,8 @@ class TestUnattributedFlag:
 
         items, _ = await list_map_journeys(session, map_id=_MAP)
 
-        assert [j.id for j in items] == [journey.id]
-        assert journey._unattributed is False
+        assert [j.id for j, _ in items] == [journey.id]
+        assert items[0][1] is False
 
     def test_is_unattributed_false_without_matching_surviving_run(self) -> None:
         journey = Journey(
@@ -395,7 +395,8 @@ class TestGetMapJourney:
 
         found = await get_map_journey(session, map_id=_MAP, kind="github_issue", ref="a/b#5")
         assert found is not None
-        assert found.id == journey.id
+        journey_obj, _ = found
+        assert journey_obj.id == journey.id
 
     async def test_get_orphan_journey_with_matching_run(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -406,7 +407,8 @@ class TestGetMapJourney:
 
         found = await get_map_journey(session, map_id=_MAP, kind="linear", ref="FAR-1")
         assert found is not None
-        assert found.id == journey.id
+        journey_obj, _ = found
+        assert journey_obj.id == journey.id
 
     async def test_get_journey_on_other_map_returns_none(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -569,7 +571,6 @@ def _make_journey_mock(**overrides: Any) -> MagicMock:
     j.run_count = overrides.get("run_count", 3)
     j.latest_terminal_run_id = overrides.get("latest_terminal_run_id", uuid.uuid4())
     j.updated_at = overrides.get("updated_at", datetime(2026, 1, 1, tzinfo=UTC))
-    j._unattributed = overrides.get("_unattributed", False)
     return j
 
 
@@ -685,7 +686,7 @@ class TestRoutes:
             ),
             patch(
                 "modulo.api.routes.lifecycle_maps.list_map_journeys",
-                new=AsyncMock(return_value=([journey], "cursor-x")),
+                new=AsyncMock(return_value=([(journey, False)], "cursor-x")),
             ),
             TestClient(app) as c,
         ):
@@ -726,7 +727,10 @@ class TestRoutes:
                 "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
-            patch("modulo.api.routes.lifecycle_maps.list_map_journeys", new=AsyncMock(return_value=([journey], None))),
+            patch(
+                "modulo.api.routes.lifecycle_maps.list_map_journeys",
+                new=AsyncMock(return_value=([(journey, False)], None)),
+            ),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys")
@@ -744,13 +748,16 @@ class TestRoutes:
             yield mock_session
 
         app.dependency_overrides[get_db_session] = override_session
-        journey = _make_journey_mock(map_id=None, stage_id=None, run_count=0, _unattributed=True)
+        journey = _make_journey_mock(map_id=None, stage_id=None, run_count=0)
         with (
             patch(
                 "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
-            patch("modulo.api.routes.lifecycle_maps.list_map_journeys", new=AsyncMock(return_value=([journey], None))),
+            patch(
+                "modulo.api.routes.lifecycle_maps.list_map_journeys",
+                new=AsyncMock(return_value=([(journey, True)], None)),
+            ),
             TestClient(app) as c,
         ):
             resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys")
@@ -798,7 +805,7 @@ class TestRoutes:
                 "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
                 new=AsyncMock(return_value=_make_map_mock()),
             ),
-            patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=journey)),
+            patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=(journey, False))),
             patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[run])),
             TestClient(app) as c,
         ):
@@ -831,7 +838,7 @@ class TestRoutes:
             ),
             patch(
                 "modulo.api.routes.lifecycle_maps.get_map_journey",
-                new=AsyncMock(return_value=_make_journey_mock()),
+                new=AsyncMock(return_value=(_make_journey_mock(), False)),
             ),
             patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[])),
             TestClient(app) as c,

@@ -118,11 +118,13 @@ async def list_map_journeys(
     owner_team_id: uuid.UUID | None = None,
     cursor: str | None = None,
     limit: int = _DEFAULT_LIMIT,
-) -> tuple[list[Journey], str | None]:
+) -> tuple[list[tuple[Journey, bool]], str | None]:
     """Map-scoped journeys ordered by ``updated_at DESC, id DESC``.
 
-    Returns ``(journeys, next_cursor)``; ``next_cursor`` is ``None`` on the
-    last page. A journey is map-scoped when:
+    Returns ``((journey, unattributed) pairs, next_cursor)``; ``next_cursor``
+    is ``None`` on the last page. ``unattributed`` is True when a map stage
+    pipeline has seen the journey's work item but it never advanced into a map
+    stage (see ``_is_unattributed``). A journey is map-scoped when:
 
     * its latest-stage identity points at this map (``map_id`` matches), or
     * it has no stage identity yet and at least one run through this map's
@@ -174,13 +176,11 @@ async def list_map_journeys(
     )
     has_more = len(rows) > limit
     items = rows[:limit]
-    for journey in items:
-        journey._unattributed = _is_unattributed(journey, referenced)
     next_cursor: str | None = None
     if has_more and items:
         last = items[-1]
         next_cursor = encode_cursor(last.updated_at, last.id)
-    return items, next_cursor
+    return [(journey, _is_unattributed(journey, referenced)) for journey in items], next_cursor
 
 
 async def get_map_journey(
@@ -190,8 +190,14 @@ async def get_map_journey(
     kind: str,
     ref: str,
     owner_team_id: uuid.UUID | None = None,
-) -> Journey | None:
-    """Single journey detail by exact (kind, ref), scoped to *map_id*."""
+) -> tuple[Journey, bool] | None:
+    """Single journey detail by exact (kind, ref), scoped to *map_id*.
+
+    Returns ``(journey, unattributed)`` or ``None`` when no journey matches;
+    ``unattributed`` is True when a map stage pipeline has seen the journey's
+    work item but it never advanced into a map stage (see
+    ``_is_unattributed``).
+    """
     kind = canonicalise_kind(kind)
     ref = canonicalise_ref(kind, ref)
 
@@ -215,9 +221,9 @@ async def get_map_journey(
     if owner_team_id is not None:
         query = query.where(Journey.owner_team_id == owner_team_id)
     journey = (await session.execute(query)).scalar_one_or_none()
-    if journey is not None:
-        journey._unattributed = _is_unattributed(journey, referenced)
-    return journey
+    if journey is None:
+        return None
+    return journey, _is_unattributed(journey, referenced)
 
 
 async def list_journey_runs(
