@@ -1245,7 +1245,8 @@ Removing or weakening an existing HITL gate is a security-sensitive write guarde
 
 #### Long-Running Pipeline Retention
 Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints accumulate:
-- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled)`. Action: delete the entire `runs` metadata row. LangGraph checkpoint rows (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do NOT cascade on run deletion — the saver schema defines no foreign keys — so the retention job also purges them separately via `batch_delete_langgraph_checkpoints` (same retention window, batch of 500). Job failure is logged to the application logger; does not affect active runs.
+- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled, stalled)` (the `TERMINAL_STATUSES` set, §8.32.4). Action: delete the entire `runs` metadata row. LangGraph checkpoint rows (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do NOT cascade on run deletion — the saver schema defines no foreign keys — so the retention job also purges them separately via `batch_delete_langgraph_checkpoints` (same retention window, batch of 500). Job failure is logged to the application logger; does not affect active runs.
+- **Analytics facts are EXEMPT from the run purge**: `run_daily_facts` (ADR 020) is NOT deleted by the run-retention job — `run_daily_facts.run_id` has no FK to `runs`, so facts survive the 90-day purge and keep dimensioned analytics history alive (see §8.32). Facts have their own retention: **13 months by default**, config-driven via `analytics_facts_retention_months`, enforced by the analytics maintenance cron's `retention_facts` step using **chunked day-slice deletion** (7-day slices, one bounded DELETE per slice) so each statement stays small.
 - **HITL overdue warning**: configurable per-gate. If a run remains in `awaiting_human` beyond N hours, a new notification fires and the UI surfaces a warning badge.
 - **Admin purge action**: admins can force-terminate and archive stale runs.
 
@@ -4219,7 +4220,7 @@ Three distinct run-count denominators exist and are never conflated:
 
 | Denominator | Source | Meaning |
 |---|---|---|
-| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed) |
+| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed / stalled — the `TERMINAL_STATUSES` set) |
 | **Ledger count** | `org_daily_run_counts` | Terminal runs with `total_cost_usd > 0` that passed the spend ledger |
 | **Summary count** | `runs` | All runs (including pending/running/awaiting_human) |
 
