@@ -173,7 +173,7 @@ class TestRemapFk:
             "created_by": None,
             "name": "prod",
         }
-        result = _remap_fk(row, "stages", id_map)
+        result = _remap_fk(row, "model_backends", id_map)
         assert result["owner_team_id"] == uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         assert result["created_by"] is None
         assert result["name"] == "prod"
@@ -183,7 +183,7 @@ class TestRemapFk:
 
     def test_unmapped_value_preserved(self) -> None:
         row = {"id": "u1", "owner_team_id": "99999999-9999-9999-9999-999999999999"}
-        result = _remap_fk(row, "stages", {"11111111-1111-1111-1111-111111111111": "aaa"})
+        result = _remap_fk(row, "model_backends", {"11111111-1111-1111-1111-111111111111": "aaa"})
         assert result["owner_team_id"] == "99999999-9999-9999-9999-999999999999"
 
     def test_unknown_table_unchanged(self) -> None:
@@ -193,7 +193,7 @@ class TestRemapFk:
     def test_original_row_not_mutated(self) -> None:
         id_map = {"11111111-1111-1111-1111-111111111111": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
         row = {"id": "u1", "owner_team_id": "11111111-1111-1111-1111-111111111111"}
-        _remap_fk(row, "stages", id_map)
+        _remap_fk(row, "model_backends", id_map)
         assert row["owner_team_id"] == "11111111-1111-1111-1111-111111111111"
 
 

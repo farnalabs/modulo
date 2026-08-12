@@ -27,7 +27,7 @@ function filterViolations(violations: { id: string }[]) {
 const CAPTURE_DIR = path.join(__dirname, '.mobile-captures')
 fs.mkdirSync(CAPTURE_DIR, { recursive: true })
 
-const FALLBACK_ROUTES = ['/login', '/', '/pipelines', '/stages', '/schemas', '/admin/connectors', '/admin/model-backends']
+const FALLBACK_ROUTES = ['/login', '/', '/pipelines', '/schemas', '/admin/connectors', '/admin/model-backends']
 
 // Enumerate route paths from the manifest at spec load; fall back to a fixed
 // list when the manifest cannot be read or yields nothing.
@@ -52,7 +52,7 @@ function enumerateRoutes(): string[] {
 const ROUTES = enumerateRoutes()
 process.stdout.write(`[mobile-layout] enumerated ${ROUTES.length} routes from manifest.yaml\n`)
 
-const NARROW_ROUTES = ['/login', '/', '/pipelines', '/stages', '/schemas']
+const NARROW_ROUTES = ['/login', '/', '/pipelines', '/schemas']
 
 function sanitizePath(p: string): string {
   return p.replace(/[^a-z0-9-]/gi, '_').replace(/^_+|_+$/g, '') || 'root'

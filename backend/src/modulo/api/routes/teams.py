@@ -428,12 +428,10 @@ async def delete_team_endpoint(
             from modulo.db.models.library_primitive import LibraryPrimitive
             from modulo.db.models.model_backend import ModelBackend
             from modulo.db.models.pipeline import Pipeline
-            from modulo.db.models.stage import Stage
 
             resource_checks: list[tuple[str, int]] = []
             for model_cls, label in [
                 (Pipeline, "pipeline"),
-                (Stage, "stage"),
                 (ConnectorInstance, "connector"),
                 (ModelBackend, "model backend"),
                 (LibraryPrimitive, "library primitive"),

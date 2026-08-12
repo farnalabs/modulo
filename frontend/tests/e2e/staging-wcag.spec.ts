@@ -23,7 +23,7 @@ test.describe('WCAG AA audit (local)', { tag: "@regression" }, () => {
 
   // Core authenticated pages — sampled to avoid full-suite timeout cascades
   const authedPages = [
-    '/pipelines', '/stages', '/schemas',
+    '/pipelines', '/schemas',
     '/admin/connectors', '/admin/model-backends',
   ]
 

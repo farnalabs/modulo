@@ -54,7 +54,6 @@ from modulo.db.models.secret import Secret
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
 from modulo.db.models.spend_anomaly import SpendAnomaly
 from modulo.db.models.sso_provider import SsoProvider
-from modulo.db.models.stage import Stage
 from modulo.db.models.system_config import SystemConfig
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
@@ -136,7 +135,6 @@ __all__ = [
     "SnapshotSchemaPin",
     "SpendAnomaly",
     "SsoProvider",
-    "Stage",
     "SystemConfig",
     "Team",
     "TeamMembership",

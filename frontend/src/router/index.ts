@@ -78,7 +78,6 @@ const AgentOutputDiffView = () => import('../views/AgentOutputDiffView.vue')
 const AdminAuditView = () => import('../views/AdminAuditView.vue')
 const AdminFeatureFlagsView = () => import('../views/AdminFeatureFlagsView.vue')
 const AdminPluginsView = () => import('../views/AdminPluginsView.vue')
-const StageBoardView = () => import('../views/StageBoardView.vue')
 const PipelineEditorView = () => import('../views/PipelineEditorView.vue')
 const CompositeEditorView = () => import('../views/pipeline/CompositeEditorView.vue')
 const CopyPipelineWizard = () => import('../views/CopyPipelineWizard.vue')
@@ -431,11 +430,6 @@ const router = createRouter({
       path: '/admin/remy',
       name: 'admin-remy',
       component: AdminRemyView,
-    },
-    {
-      path: '/stages',
-      name: 'stages',
-      component: StageBoardView,
     },
     {
       path: '/pipelines/copy',
