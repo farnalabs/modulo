@@ -121,9 +121,9 @@ Two concrete implementations of every primitive type exist to validate the abstr
 - Vue 3 + Pinia scaffold; org context in all stores; `planStore` hydrated from `GET /api/v1/license`
 - shadcn-vue + Radix Vue baseline primitives
 - Theme system: `data-theme` on root element; `standard` + `agent` themes; `?theme=<name>` override; `localStorage` persistence
-- Sidebar tier badge (Free/Enterprise/License expired pill in nav footer)
+- Sidebar tier badge (Free/Team/License expired pill in nav footer)
 - `/settings/license` page (tier card, feature checklist, license key management, upgrade CTA)
-- Enterprise-gated feature pattern (lock icon + badge + disabled control + tooltip)
+- Team-tier-gated feature pattern (lock icon + badge + disabled control + tooltip)
 - Vue Flow pipeline canvas with ConnectorBinding picker, HITL gate edge type, inline validation
 - Agent config UI (prompt editor with sandbox warning, model backend selector, connector binding, prompt version history)
 - Schema editor (field definition, type selection, version history, deletion guard)
@@ -338,7 +338,7 @@ All feature flags in alpha default to **enabled** (no license key enforcement). 
 | `community_library` | Browse and copy community registry primitives |
 | `cron_trigger` | Scheduled triggers (cron expression) |
 
-### Enterprise Gate (requires license key – not in alpha)
+### Team Tier (requires license key – not in alpha)
 
 | Flag | Purpose | Target |
 |---|---|---|
