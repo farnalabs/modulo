@@ -193,7 +193,7 @@ class TestMigration0087:
         assert migration.revision == "0087_run_evidence"
         # Independent of the parallel worker's 0086 (seeded alert rules) — must
         # apply standalone off the current head 0085.
-        assert migration.down_revision == "0085_journey_facts"
+        assert migration.down_revision == "0086_seeded_alert_rules"
 
     def test_upgrade_adds_work_intact_and_evidence_table(self) -> None:
         migration = _load_migration("0087_run_evidence.py", "migration_0087_evidence_up")
