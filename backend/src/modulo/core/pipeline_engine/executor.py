@@ -63,6 +63,7 @@ from modulo.core.pipeline_engine.decorator import (
     set_connector_hub,
     set_model_backend_hub,
 )
+from modulo.core.pipeline_engine.error_codes import map_legacy_code
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
@@ -139,9 +140,16 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
     """Return the retry budget (``max_retries``) for a terminal outcome, or None.
 
     Matching rules:
-      - ``"stall"``:    ``final_status == "stalled"`` or ``error_code == "executor_stalled"``
-      - ``"timeout"``:  ``error_code in ("node_timeout", "TimeoutError")``
+      - ``"stall"``:    ``final_status == "stalled"`` or the code resolves to
+                        ``agent.stall`` (legacy ``executor_stalled`` included)
+      - ``"timeout"``:  the code resolves to ``node.timeout`` / ``node.runaway``
+                        (legacy ``node_timeout`` / ``TimeoutError`` included)
       - ``"failure"``:  ``final_status == "failed"`` and not a stall/timeout outcome
+
+    Codes are matched BOTH literally (legacy codes stay backward compatible) and
+    through the shared ``map_legacy_code`` alias table, so dotted registry codes
+    (e.g. an ``agent.failed`` A1 elevation) and legacy codes behave identically
+    (§3.2: one alias table shared by retry/alert/notifier consumers).
 
     Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
     path only — a node returns a stalled output dict (``stall_reason``) in
@@ -168,9 +176,12 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
         return None
     event_set = set(events)
     code = error_code or ""
-    if "stall" in event_set and (final_status == "stalled" or code == "executor_stalled"):
+    mapped = map_legacy_code(code) if code else ""
+    if "stall" in event_set and (final_status == "stalled" or code == "executor_stalled" or mapped == "agent.stall"):
         return max_retries
-    if "timeout" in event_set and code in ("node_timeout", "TimeoutError"):
+    if "timeout" in event_set and (
+        code in ("node_timeout", "TimeoutError") or mapped in ("node.timeout", "node.runaway")
+    ):
         return max_retries
     if (
         "failure" in event_set
@@ -178,6 +189,7 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
         # Timeout is a distinct event — a "failure"-only policy must not retry
         # a timeout outcome, and a stall is not a generic failure.
         and code not in ("node_timeout", "TimeoutError", "executor_stalled")
+        and mapped not in ("node.timeout", "node.runaway", "agent.stall")
     ):
         return max_retries
     return None
@@ -335,6 +347,30 @@ def _node_output_stall_reason(node_output: Any) -> str | None:
         return None
     reason = inner.get("stall_reason")
     return reason if isinstance(reason, str) and reason else None
+
+
+def _node_output_agent_failure(node_output: Any) -> str | None:
+    """Return a reason string when a captured node output self-reported failure.
+
+    Sandbox-agent nodes return ``{"artifacts": [...], "output": {...}}`` where
+    the inner ``output`` dict carries ``agent_status``/``agent_outcome`` —
+    the agent's RAW verdict surfaced verbatim from output.json. A1 elevation
+    fires when ``agent_status == "failed"`` OR ``outcome == "failed"``: a
+    self-declared failure must NEVER land the run ``complete``, regardless of
+    the exit code (§15.4). Returns None for non-dict / non-failed output, so
+    non-sandbox node outputs are never misread.
+    """
+    if not isinstance(node_output, dict):
+        return None
+    inner = node_output.get("output")
+    if not isinstance(inner, dict):
+        return None
+    if inner.get("agent_status") != "failed" and inner.get("agent_outcome") != "failed":
+        return None
+    reason = inner.get("error") or inner.get("summary")
+    if not isinstance(reason, str) or not reason:
+        return "agent self-reported failure"
+    return reason
 
 
 async def org_sandbox_capacity_free(
@@ -1834,6 +1870,11 @@ class PipelineExecutor:
         # a stalled node RETURNS a failed output dict instead of raising, so
         # the run must be recorded as 'stalled', not 'complete' (FAR-98).
         stalled_node_reason: str | None = None
+        # Set when a captured sandbox-agent node output self-reported failure
+        # (agent_status=failed OR outcome=failed) — A1 elevation (agent-failure
+        # UX, phase 1): such a run must NEVER land 'complete'. Only published
+        # at terminalization; never twice.
+        agent_failure_reason: str | None = None
         try:
             async for lg_event in compiled.astream_events(initial_state, lg_config, version="v2"):
                 if guard is not None:
@@ -1883,6 +1924,9 @@ class PipelineExecutor:
                                         "run_stalled",
                                         {"node_id": name, "stall_reason": stall_reason},
                                     )
+                                agent_failure = _node_output_agent_failure(output)
+                                if agent_failure:
+                                    agent_failure_reason = agent_failure
 
                 if event_kind == "on_chat_model_end":
                     metadata = lg_event.get("metadata") or {}
@@ -1958,6 +2002,27 @@ class PipelineExecutor:
                                         node_budget,
                                     )
 
+            if agent_failure_reason and not stalled_node_reason:
+                # A1 elevation (agent-failure UX, phase 1, §15.4): a node that
+                # self-reported failure must NEVER land the run 'complete'.
+                # Fail-open — any elevation computation error logs a warning and
+                # falls back to today's path (§2.3.6). If the node also stalled,
+                # the stall terminalization below wins (existing behaviour).
+                try:
+                    from modulo.settings import get_settings
+
+                    if get_settings().modulo_agent_failure_elevation_enabled:
+                        broker.publish(
+                            "run_failed",
+                            {"error": "agent.failed", "detail": agent_failure_reason},
+                        )
+                        return "failed", "agent.failed", agent_failure_reason, node_token_usage or None
+                except Exception:
+                    _log.warning(
+                        "agent_failure_elevation.failed_open",
+                        extra={"run_id": str(run_id), "detail": agent_failure_reason},
+                        exc_info=True,
+                    )
             if stalled_node_reason:
                 broker.publish("run_failed", {"error": "executor_stalled", "detail": stalled_node_reason})
                 return "stalled", "executor_stalled", stalled_node_reason, node_token_usage or None

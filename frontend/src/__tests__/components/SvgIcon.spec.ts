@@ -28,4 +28,21 @@ describe('SvgIcon', () => {
     expect(wrapper.find('circle').exists()).toBe(true)
     expect(wrapper.find('path').exists()).toBe(true)
   })
+
+  it('falls back to the File icon for unknown names instead of rendering empty', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = mount(SvgIcon, { props: { name: 'DefinitelyNotAnIcon' } })
+
+    expect(warnSpy).toHaveBeenCalledWith('SvgIcon: unknown icon "DefinitelyNotAnIcon"')
+    expect(wrapper.find('svg').exists()).toBe(true)
+    expect(wrapper.find('svg').classes()).toContain('lucide-file')
+  })
+
+  it('renders the housekeeping icon for the Broom name (Sparkles substitution)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = mount(SvgIcon, { props: { name: 'Broom' } })
+
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(wrapper.find('svg').exists()).toBe(true)
+  })
 })

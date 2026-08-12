@@ -600,7 +600,7 @@ class TestDismissAnomaly:
             ),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
-            resp = client.get(self.ENDPOINT)
+            resp = client.post(self.ENDPOINT)
 
         assert resp.status_code == 204
 
@@ -612,9 +612,15 @@ class TestDismissAnomaly:
             ),
             patch("modulo.api.routes.costs.set_rls_org"),
         ):
-            resp = client.get(self.ENDPOINT)
+            resp = client.post(self.ENDPOINT)
 
         assert resp.status_code == 404
+
+    def test_dismiss_is_post_not_get(self, client: TestClient) -> None:
+        """The dismiss action mutates state, so GET must not be allowed (REST 405)."""
+        resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 405
 
 
 class TestCostControlsCurrency:
