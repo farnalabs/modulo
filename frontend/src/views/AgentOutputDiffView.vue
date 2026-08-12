@@ -7,7 +7,7 @@
 
       <div class="flex flex-wrap items-end gap-4 rounded-lg border bg-card p-6">
         <div class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">Run A</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}</span>
           <div class="flex gap-2">
             <Select aria-label="Select run A" v-model="runIdA">
               <SelectTrigger data-testid="diff-recent-runs-a" aria-label="Select run A" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -39,7 +39,7 @@
           />
         </label>
         <div class="flex flex-col gap-1.5">
-          <span class="text-xs font-medium text-muted-foreground">Run B</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}</span>
           <div class="flex gap-2">
             <Select aria-label="Select run B" v-model="runIdB">
               <SelectTrigger data-testid="diff-recent-runs-b" aria-label="Select run B" class="w-72 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -101,12 +101,12 @@
           </summary>
           <div class="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2">
             <div>
-              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run A: <span class="font-mono">{{ runIdA }}</span></h4>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_a') }}: <span class="font-mono">{{ runIdA }}</span></h4>
               <JsonViewer v-if="result.node_output_a" :data="result.node_output_a" :show-toolbar="true" :max-height="'16rem'" />
               <span v-else class="text-xs text-muted-foreground">—</span>
             </div>
             <div>
-              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">Run B: <span class="font-mono">{{ runIdB }}</span></h4>
+              <h4 class="mb-2 text-xs font-semibold text-muted-foreground">{{ $t('views.AgentOutputDiffView.run_b') }}: <span class="font-mono">{{ runIdB }}</span></h4>
               <JsonViewer v-if="result.node_output_b" :data="result.node_output_b" :show-toolbar="true" :max-height="'16rem'" />
               <span v-else class="text-xs text-muted-foreground">—</span>
             </div>

@@ -109,11 +109,11 @@
 
       <template v-else-if="step === 2">
         <div class="card p-6 mb-6">
-          <h2 class="text-lg font-medium text-foreground mb-4">Copy Configuration</h2>
+          <h2 class="text-lg font-medium text-foreground mb-4">{{ $t('views.CopyPipelineWizard.copy_configuration') }}</h2>
 
           <div class="space-y-4">
             <div>
-              <label for="copypipelinewizard-field-6" class="block text-sm font-medium text-foreground mb-1">New Pipeline Name</label>
+              <label for="copypipelinewizard-field-6" class="block text-sm font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.new_pipeline_name') }}</label>
               <input id="copypipelinewizard-field-6"
                 v-model="pipelineName"
                 type="text"
@@ -124,13 +124,13 @@
             </div>
 
             <div>
-              <span class="block text-sm font-medium text-foreground mb-1">Target Ownership</span>
-              <p class="text-xs text-muted-foreground mb-2">Choose who the copied pipeline belongs to.</p>
+              <span class="block text-sm font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.target_ownership') }}</span>
+              <p class="text-xs text-muted-foreground mb-2">{{ $t('views.CopyPipelineWizard.choose_who_the_copied_pipeline_belongs_to') }}</p>
               <OwnershipPicker v-model="ownership" :label="$t('views.LibraryPipelineWizard.owner')" />
             </div>
 
             <div class="border-t border-border pt-4">
-              <h3 class="text-sm font-medium text-foreground mb-3">What to Copy</h3>
+              <h3 class="text-sm font-medium text-foreground mb-3">{{ $t('views.CopyPipelineWizard.what_to_copy') }}</h3>
 
               <div class="space-y-3">
                 <label for="copypipelinewizard-field-5" class="flex items-start gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
@@ -142,8 +142,8 @@
                     data-testid="copy-wizard-scope-all"
                   />
                   <div>
-                    <p class="text-sm font-medium text-foreground">All nodes</p>
-                    <p class="text-xs text-muted-foreground">Copy the entire pipeline graph including all agents, manual nodes, and edges.</p>
+                    <p class="text-sm font-medium text-foreground">{{ $t('views.CopyPipelineWizard.all_nodes') }}</p>
+                    <p class="text-xs text-muted-foreground">{{ $t('views.CopyPipelineWizard.copy_the_entire_pipeline_graph_including_all_agents_manual_nodes_and_edges') }}</p>
                   </div>
                 </label>
 
@@ -156,37 +156,37 @@
                     data-testid="copy-wizard-scope-selected"
                   />
                   <div>
-                    <p class="text-sm font-medium text-foreground">Selected nodes only</p>
-                    <p class="text-xs text-muted-foreground">Only copy specific nodes and their edges. Opens in editor for further adaptation.</p>
+                    <p class="text-sm font-medium text-foreground">{{ $t('views.CopyPipelineWizard.selected_nodes_only') }}</p>
+                    <p class="text-xs text-muted-foreground">{{ $t('views.CopyPipelineWizard.only_copy_specific_nodes_and_their_edges_opens_in_editor_for_further_adaptation') }}</p>
                   </div>
                 </label>
               </div>
             </div>
 
             <div class="border-t border-border pt-4 space-y-3">
-              <h3 class="text-sm font-medium text-foreground mb-3">Additional Options</h3>
+              <h3 class="text-sm font-medium text-foreground mb-3">{{ $t('views.CopyPipelineWizard.additional_options') }}</h3>
 
               <label for="copypipelinewizard-field-3" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
                 <input id="copypipelinewizard-field-3" v-model="keepEvalConfigs" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-evals" />
                 <div>
-                  <p class="text-sm font-medium text-foreground">Keep eval configurations</p>
-                  <p class="text-xs text-muted-foreground">Preserve eval configs, scoring criteria, and threshold settings from the source pipeline.</p>
+                  <p class="text-sm font-medium text-foreground">{{ $t('views.CopyPipelineWizard.keep_eval_configurations') }}</p>
+                  <p class="text-xs text-muted-foreground">{{ $t('views.CopyPipelineWizard.preserve_eval_configs_scoring_criteria_and_threshold_settings_from_the_source_pipeline') }}</p>
                 </div>
               </label>
 
               <label for="copypipelinewizard-field-2" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
                 <input id="copypipelinewizard-field-2" v-model="keepTriggers" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-keep-triggers" />
                 <div>
-                  <p class="text-sm font-medium text-foreground">Keep triggers</p>
-                  <p class="text-xs text-muted-foreground">Copy trigger configurations (schedules, webhooks, events) to the new pipeline.</p>
+                  <p class="text-sm font-medium text-foreground">{{ $t('views.CopyPipelineWizard.keep_triggers') }}</p>
+                  <p class="text-xs text-muted-foreground">{{ $t('views.CopyPipelineWizard.copy_trigger_configurations_schedules_webhooks_events_to_the_new_pipeline') }}</p>
                 </div>
               </label>
 
               <label for="copypipelinewizard-field-1" class="flex items-center gap-3 p-3 rounded-lg border border-input hover:bg-accent/50 cursor-pointer">
                 <input id="copypipelinewizard-field-1" v-model="shareConnectors" type="checkbox" class="h-4 w-4" data-testid="copy-wizard-share-connectors" />
                 <div>
-                  <p class="text-sm font-medium text-foreground">Share connector bindings</p>
-                  <p class="text-xs text-muted-foreground">Keep connector bindings pointing to the same instances. Uncheck to create unbound copies.</p>
+                  <p class="text-sm font-medium text-foreground">{{ $t('views.CopyPipelineWizard.share_connector_bindings') }}</p>
+                  <p class="text-xs text-muted-foreground">{{ $t('views.CopyPipelineWizard.keep_connector_bindings_pointing_to_the_same_instances_uncheck_to_create_unbound_copies') }}</p>
                 </div>
               </label>
             </div>
@@ -214,28 +214,28 @@
 
       <template v-else-if="step === 3">
         <div class="card p-6 mb-6">
-          <h2 class="text-lg font-medium text-foreground mb-4">Review Copy</h2>
+          <h2 class="text-lg font-medium text-foreground mb-4">{{ $t('views.CopyPipelineWizard.review_copy') }}</h2>
 
           <div class="space-y-4">
             <div class="bg-muted rounded-lg p-4">
-              <h3 class="text-sm font-medium text-foreground mb-2">Source Pipeline</h3>
+              <h3 class="text-sm font-medium text-foreground mb-2">{{ $t('views.CopyPipelineWizard.source_pipeline') }}</h3>
               <p class="text-sm text-foreground">{{ selectedPipeline?.name }}</p>
               <p v-if="selectedPipeline?.description" class="text-xs text-muted-foreground mt-0.5">{{ selectedPipeline?.description }}</p>
             </div>
 
             <div class="grid grid-cols-2 gap-4">
               <div class="bg-muted rounded-lg p-4">
-                <p class="text-xs text-muted-foreground mb-1">New Name</p>
+                <p class="text-xs text-muted-foreground mb-1">{{ $t('views.CopyPipelineWizard.new_name') }}</p>
                 <p class="text-sm font-medium text-foreground">{{ displayName }}</p>
               </div>
               <div class="bg-muted rounded-lg p-4">
-                <p class="text-xs text-muted-foreground mb-1">Visibility</p>
+                <p class="text-xs text-muted-foreground mb-1">{{ $t('views.CopyPipelineWizard.visibility') }}</p>
                 <p class="text-sm font-medium text-foreground">{{ ownership.visibility === 'org' ? 'Org-wide' : 'Team' }}</p>
               </div>
             </div>
 
             <div class="bg-muted rounded-lg p-4">
-              <h3 class="text-sm font-medium text-foreground mb-2">Copy Options</h3>
+              <h3 class="text-sm font-medium text-foreground mb-2">{{ $t('views.CopyPipelineWizard.copy_options') }}</h3>
               <ul class="space-y-1.5 text-sm">
                 <li class="flex items-center gap-2">
                   <svg v-if="copyScope === 'all'" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success"><polyline points="20 6 9 17 4 12"/></svg>
@@ -261,7 +261,7 @@
             </div>
 
             <div v-if="ownership.owner_team_id" class="bg-muted rounded-lg p-4">
-              <p class="text-xs text-muted-foreground mb-1">Target Team</p>
+              <p class="text-xs text-muted-foreground mb-1">{{ $t('views.CopyPipelineWizard.target_team') }}</p>
               <p class="text-sm font-medium text-foreground">{{ ownership.owner_team_id }}</p>
             </div>
           </div>
@@ -291,12 +291,12 @@
         <div class="card p-6">
           <div v-if="progressStep === 'preparing'" class="text-center py-8">
             <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p class="text-sm text-muted-foreground">Preparing copy...</p>
+            <p class="text-sm text-muted-foreground">{{ $t('views.CopyPipelineWizard.preparing_copy') }}</p>
           </div>
 
           <div v-else-if="progressStep === 'cloning'" class="text-center py-8">
             <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p class="text-sm text-foreground font-medium mb-1">Cloning pipeline...</p>
+            <p class="text-sm text-foreground font-medium mb-1">{{ $t('views.CopyPipelineWizard.cloning_pipeline') }}</p>
             <p class="text-sm text-muted-foreground">Creating copy of {{ selectedPipeline?.name }}</p>
             <div class="w-full bg-muted rounded-full h-2 mt-4 max-w-xs mx-auto">
               <div class="bg-primary h-2 rounded-full transition-all duration-500" style="width: 60%" />
@@ -305,8 +305,8 @@
 
           <div v-else-if="progressStep === 'configuring'" class="text-center py-8">
             <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p class="text-sm text-foreground font-medium mb-1">Applying configuration...</p>
-            <p class="text-sm text-muted-foreground">Setting up ownership and options</p>
+            <p class="text-sm text-foreground font-medium mb-1">{{ $t('views.CopyPipelineWizard.applying_configuration') }}</p>
+            <p class="text-sm text-muted-foreground">{{ $t('views.CopyPipelineWizard.setting_up_ownership_and_options') }}</p>
             <div class="w-full bg-muted rounded-full h-2 mt-4 max-w-xs mx-auto">
               <div class="bg-primary h-2 rounded-full transition-all duration-500" style="width: 85%" />
             </div>
@@ -316,7 +316,7 @@
             <div class="w-12 h-12 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-4">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success"><polyline points="20 6 9 17 4 12"/></svg>
             </div>
-            <p class="text-lg font-medium text-foreground mb-1">Pipeline Copied!</p>
+            <p class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.pipeline_copied') }}</p>
             <p class="text-sm text-muted-foreground mb-6">{{ result?.name }} is ready for adaptation.</p>
             <div class="flex items-center justify-center gap-3">
               <Button
@@ -341,7 +341,7 @@
             <div class="w-12 h-12 rounded-full bg-destructive/20 flex items-center justify-center mx-auto mb-4">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-destructive"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
             </div>
-            <p class="text-lg font-medium text-destructive mb-1">Copy Failed</p>
+            <p class="text-lg font-medium text-destructive mb-1">{{ $t('views.CopyPipelineWizard.copy_failed') }}</p>
             <p class="text-sm text-muted-foreground mb-6">{{ executeError }}</p>
             <div class="flex items-center justify-center gap-3">
               <Button

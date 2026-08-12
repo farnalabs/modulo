@@ -35,7 +35,8 @@ async function coverageTeardown(config: any) {
         await script.load()
         script.applyCoverage(entry.functions)
         Object.assign(coverageMap, script.toIstanbul())
-      } catch {
+      } catch (e) {
+        console.warn(`[e2e-coverage] failed to map coverage for ${entry.path}`, e)
       }
     }
   }
