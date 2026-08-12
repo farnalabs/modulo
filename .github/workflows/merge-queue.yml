@@ -504,7 +504,7 @@ jobs:
         working-directory: frontend
         run: |
           pnpm install --frozen-lockfile
-          pnpm run lint -- --quiet
+          pnpm run lint --quiet
           pnpm run type-check
           pnpm run test:unit
           pnpm run build
