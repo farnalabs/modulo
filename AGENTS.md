@@ -396,7 +396,7 @@ uv run alembic upgrade heads
 uv run uvicorn modulo.api.main:app --reload --port 8000
 
 # Start frontend (from Product/frontend/)
-npm run dev
+pnpm run dev
 ```
 
 ### Known issues & gotchas
@@ -422,18 +422,18 @@ This checks:
 3. **Playwright @smoke E2E tests** — runs 5 critical tests (login error, login redirect, dashboard auth guard, sidebar, bootstrap) via `--grep "@smoke"`
 4. **Vue type-check** (`vue-tsc --noEmit` catches type errors)
 
-The `@smoke` tag is set per-test via `{ tag: '@smoke' }` in `frontend/tests/e2e/`. Add it to any critical test that should gate merges. Run just the smoke subset with `npm run test:e2e:smoke`.
+The `@smoke` tag is set per-test via `{ tag: '@smoke' }` in `frontend/tests/e2e/`. Add it to any critical test that should gate merges. Run just the smoke subset with `pnpm run test:e2e:smoke`.
 
 The history of this rule: `SchemaBuilderView.vue` existed as an untracked file, was deleted during cleanup, and the router still imported it — causing a 500 on every page load. The smoke test would have caught it.
 
 ### OpenAPI type generation
 
-`npm run dev` auto-generates TypeScript types from the backend's OpenAPI spec (`http://localhost:8000/openapi.json` → `frontend/src/lib/api/schema.d.ts`). The backend must be running for this to work.
+`pnpm run dev` auto-generates TypeScript types from the backend's OpenAPI spec (`http://localhost:8000/openapi.json` → `frontend/src/lib/api/schema.d.ts`). The backend must be running for this to work.
 
 To generate types manually without starting the dev server:
 
 ```powershell
-npm run generate:api
+pnpm run generate:api
 ```
 
 #### Using the typed client
@@ -475,11 +475,11 @@ Returns `{ data, error }` — no throw. Guard with `if (data)` or `if (error)`.
 
 ```powershell
 # Backend must be running on :8000
-npm run generate:api      # one-shot
-npm run dev               # auto-generates on start
+pnpm run generate:api      # one-shot
+pnpm run dev               # auto-generates on start
 ```
 
-After regenerating, verify the frontend still compiles with `npm run build`.
+After regenerating, verify the frontend still compiles with `pnpm run build`.
 
 ---
 
@@ -491,13 +491,13 @@ request/response models), the schema must be regenerated:
 
 ```powershell
 cd frontend
-npm run generate:api
+pnpm run generate:api
 ```
 
 This runs `scripts/generate-api-types.ps1` which imports the backend, dumps the OpenAPI
 schema as JSON, and feeds it to `openapi-typescript` to produce the typed client.
 
-There is no pre-commit hook for this — the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `npm run generate:api`, commit the updated file, and retry.
+There is no pre-commit hook for this — the pre-commit framework runs `generate-api-types` as a manual-stage hook only (`gate.ps1` Phase 1d). You must regenerate manually or run `pre-commit run generate-api-types` when the backend API changes. If CI fails because `schema.ts` is out of date, run `pnpm run generate:api`, commit the updated file, and retry.
 
 ---
 
@@ -529,7 +529,7 @@ Access at `http://local-frontend.modulo.run:5174` (add hosts entry first — see
 
 **IMPORTANT:** Node.js is at `C:\nvm4w\nodejs\node.exe` (not `node` in PATH on Windows).
 Use the full path in `Start-Process` because the background service has a different PATH.
-`npx` / `npm run dev` don't work for backgrounding — always use `node.exe` with the full path to `vite/bin/vite.js`.
+`npx` / `pnpm run dev` don't work for backgrounding — always use `node.exe` with the full path to `vite/bin/vite.js`.
 
 **`vue-i18n` pre-bundling fix:** If the page fails to load with `ReferenceError: init_runtime_dom_esm_bundler is not defined`, Vite's dep optimizer is breaking `vue-i18n`. Add it to `optimizeDeps.exclude` in `vite.config.ts`:
 
@@ -553,7 +553,7 @@ docker compose -f docker-compose.local.yml up -d
 Start-Process -NoNewWindow -FilePath "uv" -ArgumentList "run uvicorn modulo.api.main:app --reload --port 8000"
 
 # Start frontend with --host for network access (from Product/frontend/)
-Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c npm run dev -- --host 0.0.0.0"
+Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c pnpm run dev -- --host 0.0.0.0"
 
 # Check health
 Wait-Process -Name "uv" -ErrorAction SilentlyContinue  # doesn't block; just confirms launched
@@ -703,9 +703,10 @@ vue-tsc, pip-audit) run when you gate via `gate.ps1`, which calls
 
 The `eslint`, `vue-tsc`, and `semgrep` hooks are platform-agnostic wrappers in `scripts/`:
 
-- `scripts/run_frontend_npm.py` runs `npm run <script>` in `frontend/` via the
-  platform's npm (`npm.cmd` on Windows, `npm` on Linux). Replaces the old
-  `bash -c 'cd frontend && npm run ...'` entries, which broke on Windows where
+- `scripts/run_frontend_npm.py` runs `pnpm run <script>` in `frontend/` (npm
+  fallback only) via the platform's package manager (`pnpm.cmd`/`npm.cmd` on
+  Windows, `pnpm`/`npm` on Linux). Replaces the old
+  `bash -c 'cd frontend && pnpm run ...'` entries, which broke on Windows where
   `bash` resolves to WSL and cannot execute Windows-installed `node_modules`.
 - `scripts/run_semgrep.py` skips the incremental semgrep scan on Windows
   (semgrep-core cannot complete the full `backend/src/` scan with
@@ -758,35 +759,30 @@ pytest tests/unit/ --tb=short -q --timeout=120
 ```
 The backend suite takes ~35-40 min (14700+ tests). Frontend — from `Repos/modulo/frontend/`:
 ```
-npm run test:unit
+pnpm run test:unit
 ```
 (478 tests, ~4 min). Both must pass before reporting "tests pass" or proceeding with any merge.
 
 The full inventory of suites and their root paths lives in `docs/definition-of-done.md` §1.
 Agents run targeted files only (see §2 impact consideration) — never the full 35-40 min suite in a worktree.
 
-### Frontend worktrees and node_modules
+### Frontend worktrees and node_modules (pnpm)
 
-`git worktree add` creates a new working tree with no installed dependencies.
-Fast path on Windows — junction the main repo's `frontend/node_modules` into the
-worktree (validated FAR-115/117/118/119, 2026-08-08). If the main repo's
-node_modules is current (lockfiles match):
+`git worktree add` creates a new working tree with no installed dependencies. The frontend uses pnpm, so a worktree gets its OWN real node_modules — no junctions, no shared physical tree. To provision:
 
 ```powershell
-Test-Path "<worktree>\frontend\node_modules"   # expect False
-cmd /c mklink /J "<worktree>\frontend\node_modules" "<main-repo>\frontend\node_modules"
+Set-Location <worktree>\frontend
+pnpm install --frozen-lockfile
 ```
 
-The junction is gitignored and harmless. With it, Workers can run `npm run lint`,
-`npx vue-tsc --noEmit`, and `npx vitest run <spec> --pool=threads --maxWorkers=2`
-in the worktree — and the pre-commit `eslint` hook passes on commit (without it,
-`git commit` fails at eslint with `'eslint' is not recognized`, even for
-CSS-only changes). Remove the junction before `git worktree remove` if desired
-(leftover is harmless). If lockfiles differ, `npm install --force` in the
-worktree instead.
+pnpm hard-links package contents from its global content store, so a warm install is ~2s and needs no re-download. The global store lives outside the repo (default `%LOCALAPPDATA%\pnpm\store` on Windows, `~/.local/share/pnpm/store` elsewhere) — worktrees share the store, never a mutable node_modules tree. This is why the OLD junction fast-path (mklink /J main's node_modules into worktrees) was removed: PowerShell's `Remove-Item -Recurse` follows NTFS junctions and deletes the target's contents (PowerShell/PowerShell#26913), and any install through a junction corrupted the one tree everyone read.
 
-Without a junction, Workers implement and commit without frontend tooling;
-verification happens via GitHub CI on the PR.
+Rules:
+1. **Every worktree provisions its own node_modules with `pnpm install --frozen-lockfile`** — never junction to main's tree, never copy main's node_modules.
+2. **Installing through a junction is forbidden** (the junction no longer exists; if you see a leftover junction in an old worktree, remove it: `cmd /c rmdir "<worktree>\frontend\node_modules"`).
+3. If `pnpm install --frozen-lockfile` fails, main's lockfile may have drifted — fix deps on MAIN (`pnpm install` in `Repos/modulo/frontend`, commit the lockfile) and re-run in the worktree.
+4. Pre-commit hooks (eslint via `pnpm run lint`, etc.) work in a worktree once its own node_modules is installed.
+5. If a worktree's node_modules is corrupt/missing, delete it and re-run `pnpm install --frozen-lockfile` — it is an isolated tree; nothing else is affected.
 
 **Gotcha:** `pre-commit-checks.ps1` (harness Check 5) flags pre-existing
 admin-view gaps whenever an `Admin*.vue` file is touched — every
@@ -794,7 +790,6 @@ admin-view gaps whenever an `Admin*.vue` file is touched — every
 change touches an admin view that lacks one (e.g. `AdminViewsView.vue` until
 FAR-117), the commit is blocked — add the wrapper with the correct feature name
 (match sibling views) rather than bypassing the hook.
-- **`npm install --force` in a worktree can yield node_modules WITHOUT the `.bin` shims** (2026-08-08) — `npm run test:unit` then fails with 'vitest is not recognized' (and `npx` fails too, and `node node_modules/vitest/vitest.mjs` fails with `ERR_MODULE_NOT_FOUND`). Worktree frontend tooling is therefore unreliable even when node_modules appears present. Don't burn time reinstalling in the worktree: use the main tree's node_modules junction (see the junction lesson) when it exists, otherwise skip worktree frontend checks and let GitHub CI (PR) + `gate.ps1`/`smoke-test.ps1` (post-merge, main tree) be the verification gates.
 
 ### Systemic patterns: apply as bulk sweeps, not per-feature QA
 
@@ -829,9 +824,9 @@ Fly.io's bluegreen strategy waits for ALL health checks to return non-"unavailab
 
 `{count === 1 ? '' : 's'}` inside a translation value is parsed by `@intlify/message-compiler` as a malformed interpolation expression, causing build failures with error code 7. Never use JS expressions inside translation strings. Use vue-i18n pluralization syntax (`"key | key_plural"`) or simplify the message.
 
-### Ops: npm install on Windows generates lockfile with platform-specific packages
+### Ops: pnpm lockfiles are platform-agnostic — no --force needed
 
-Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-msvc` to the lockfile. Docker builds on Linux reject these with EBADPLATFORM. Use `npm install --force` to skip platform checks. The `--force` flag is needed because the lockfile is generated from a Windows development environment and deployed to Linux.
+pnpm records os/cpu per package in pnpm-lock.yaml, so a lockfile generated on Windows installs correctly on Linux (Docker/CI). The old npm EBADPLATFORM failure (Windows lockfile + Linux Docker) and its `npm ci --force` workaround do not apply. Never pass `--force` to `pnpm install` to work around platform errors — it is not the same flag and masks real issues. If a Docker build fails to resolve a platform-specific optional dep, the lockfile or the package's os/cpu metadata is the problem, not the generating OS.
 
 ### Database / Multi-backend
 
@@ -966,9 +961,9 @@ Running `npm install` on Windows adds packages like `@rollup/rollup-win32-x64-ms
 
 - **Wrap every lifespan seed/init call in try/except — no single boot-time failure should block the app from starting.** The FastAPI lifespan runs migrations, seeds default data, and initialises the checkpointer. Any of these can crash from transient DB issues (SSL param changes, connection timeouts, schema drift from parallel branch merges). A single failed seed function in the lifespan crashes uvicorn at startup, which makes bluegreen deployments fail health checks and keeps stale machines running. Each call that isn't a hard prerequisite for the app to function (user seeds, demo data, environment profiles, checkpointer init, SSO providers, runtime config store) must be wrapped in `try/except` with `exc_info=True` logging so it's debuggable without blocking the deploy. Found during the ADR 001 staging deploy where `_seed_environment_profiles()` crashed from a DATABASE_URL SSL param issue.
 
-- **Before deploying, run `npm run build` locally to catch frontend build errors early.** The Docker build lacks interactivity and hides errors behind 10-minute retries. Common issues caught: Rolldown parser errors from Vue template syntax, missing dependencies imported but not in `package.json`, duplicate manifest.yaml keys from parallel distributed work. The local frontend build may fail due to a corrupted `lightningcss.win32-x64-msvc.node` binary (native module, Windows-specific). If that happens, delete `node_modules` and re-run `npm install` to regenerate the native binary.
+- **Before deploying, run `pnpm run build` locally to catch frontend build errors early.** The Docker build lacks interactivity and hides errors behind 10-minute retries. Common issues caught: Rolldown parser errors from Vue template syntax, missing dependencies imported but not in `package.json`, duplicate manifest.yaml keys from parallel distributed work. The local frontend build may fail due to a corrupted `lightningcss.win32-x64-msvc.node` binary (native module, Windows-specific). If that happens, delete `node_modules` and re-run `pnpm install` to regenerate the native binary.
 
-- **`package-lock.json` must be regenerated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `npm install <package> --save` and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that runs `node -e "require('./package.json').dependencies"` and cross-references against imports in `src/`.
+- **`pnpm-lock.yaml` must be updated when new dependencies are added to imports.** The gate.ps1 lockfile sync only bumps versions — it doesn't add missing dependencies. If a file imports `@tanstack/vue-query` or `date-fns` but neither is in `package.json`, the Docker build fails silently with Rolldown resolution errors. Run `pnpm add <package>` (or `pnpm add -D <package>`) and commit the updated lockfile alongside the code that uses it. The `pre-commit` ESLint hook doesn't catch unresolved imports — this is a manual check. For CI, add a step that cross-references `package.json` dependencies against imports in `src/`.
 
 ### Deploy throttle: anchor on last real deployment, never the most recent triggered run
 
@@ -1266,8 +1261,7 @@ snake_case and frontend tests mocked `api.GET`.
 Rules:
 - When a PR touches both frontend and backend (or changes any API
   request/response shape), verify the wire shape against the generated OpenAPI
-  types (`frontend/src/lib/api/schema.ts`; regenerate with `npm run
-  generate:api`). Frontend keys must match backend field names unless the
+  types (`frontend/src/lib/api/schema.ts`; regenerate with `pnpm run generate:api`). Frontend keys must match backend field names unless the
   Pydantic model has aliases / `populate_by_name`.
 - A test that mocks `api.GET` / `api.POST` / `httpx.Response` does NOT
   validate the contract. Add at least one test that round-trips through the

@@ -98,10 +98,10 @@ uv run pytest tests/unit tests/architecture
 uv run ruff check .
 
 cd ../frontend
-npm ci
-npm run lint
-npm run type-check
-npm run test:unit
+pnpm install --frozen-lockfile
+pnpm run lint
+pnpm run type-check
+pnpm run test:unit
 ```
 
 On Windows, use PowerShell with `Set-Location backend` and

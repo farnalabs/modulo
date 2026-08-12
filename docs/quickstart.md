@@ -81,8 +81,8 @@ Notes:
 
 ```powershell
 cd Development/Product/frontend
-npm install
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 The UI is now live at `http://localhost:5173`. Log in with `admin:admin`.
