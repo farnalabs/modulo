@@ -61,7 +61,9 @@ export class DatadogRumMonitorBackend implements MonitorBackend {
           datadogLogs: DatadogLogsApi
         }
         this.ddLogger = datadogLogs.datadogLogs
-      } catch { /* logs SDK is optional */ }
+      } catch (e) {
+        console.warn('[monitor] @datadog/browser-logs not available — logs SDK is optional', e)
+      }
 
       const cfg = config.datadogRum
 
