@@ -5,6 +5,16 @@ The ``modulo_facts_*`` inventory lives here (NOT in
 engine's metrics only; the naming decision is recorded in ADR 020). All
 handles are lazy-initialised so a missing meter provider never breaks the
 facts path.
+
+Facts-denominator reference (ADR 020 Decision 1 / PRD §8.32.4): ``run_daily_facts``
+stores one row per TERMINAL run, so the facts count = every run whose status is
+in ``TERMINAL_STATUSES`` (``{"complete", "failed", "cancelled", "eval_failed",
+"stalled"}``, defined in ``modulo.db.models.run`` — the same set the 90-day
+run purge and the facts backfill/reconcile use). This is distinct from the
+cost ledger (terminal runs with ``total_cost_usd > 0``) and the dashboard
+summary (all runs). For success-rate purposes a run counts as SUCCESS only when
+``status == "complete"``; a ``stalled`` run counts as a failure (it never
+completed) — see ``build_facts_query``'s ``complete_count``/``failure_status``.
 """
 
 from __future__ import annotations
