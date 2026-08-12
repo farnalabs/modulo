@@ -69,6 +69,7 @@ export interface JourneySummary {
   status: string | null
   provenance: string | null
   run_count: number
+  unattributed?: boolean
   latest_run_id: string | null
   updated_at: string
 }

@@ -2140,6 +2140,9 @@ export default {
         "loading": "Loading journey...",
         "no_runs": "No runs yet",
         "run_count": "{count} run | {count} runs",
+        "unattributed": "Unattributed",
+        "unattributed_hint": "{count} unattributed run | {count} unattributed runs",
+        "unattributed_desc": "A stage pipeline saw this work item, but the journey never advanced onto the map.",
         "provenance": {
           "derived": "Derived",
           "reported": "Reported"
