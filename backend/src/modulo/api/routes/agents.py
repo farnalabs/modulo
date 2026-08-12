@@ -39,6 +39,22 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 
+def _resolve_prompt_template(agent: Any, version: str) -> str | None:
+    """Resolve a prompt version label to its template.
+
+    ``"current"`` resolves to the agent's active ``prompt_template``. Any other
+    label must exist in ``prompt_version_history``; an unknown label returns
+    ``None``. Empty templates resolve to ``""`` (kept distinct from unknown).
+    """
+    if version == "current":
+        return cast("str | None", agent.prompt_template)
+    for entry in agent.prompt_version_history or []:
+        if entry.get("version") == version:
+            tpl = cast("str | None", entry.get("template"))
+            return tpl or ""
+    return None
+
+
 class AgentCreate(BaseModel):
     name: str = Field(min_length=1)
     description: str | None = None
@@ -507,6 +523,13 @@ async def optimize_prompt(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
+    source_template = _resolve_prompt_template(agent, version)
+    if source_template is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Prompt version {version} not found",
+        )
+
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -587,7 +610,7 @@ async def optimize_prompt(
 
     try:
         optimizer = PromptOptimizer(_llm_call)
-        result = await optimizer.optimize(agent.prompt_template, eval_results, eval_defs)
+        result = await optimizer.optimize(source_template, eval_results, eval_defs)
     except OptimizationFailedError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -828,19 +851,8 @@ async def diff_prompt_versions(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
-    history = list(agent.prompt_version_history or [])
-
-    def _get_template(version: str) -> str | None:
-        if version == "current":
-            return agent.prompt_template
-        for entry in history:
-            if entry.get("version") == version:
-                tpl = cast("str | None", entry.get("template"))
-                return tpl or ""
-        return None
-
-    template_a = _get_template(req.version_a)
-    template_b = _get_template(req.version_b)
+    template_a = _resolve_prompt_template(agent, req.version_a)
+    template_b = _resolve_prompt_template(agent, req.version_b)
 
     if template_a is None:
         raise HTTPException(
