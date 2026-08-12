@@ -252,6 +252,7 @@ _ctx_key_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_key
 _ctx_auth_token: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_token")
 _ctx_user_id: contextvars.ContextVar[uuid.UUID] = contextvars.ContextVar("mcp_user_id")
 _ctx_auth_type: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_auth_type")
+_ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar("mcp_team_id")
 
 
 class McpAuthContextError(LookupError):
@@ -282,6 +283,55 @@ def _ctx_user_id_val() -> uuid.UUID:
 def _ctx_role_val() -> str | None:
     """Get role from the request context (None if unset — scope checks then fail closed)."""
     return _ctx_role.get(None)
+
+
+def _ctx_team_id_val() -> uuid.UUID | None:
+    """Get the team boundary of the current request (None when no team boundary).
+
+    Set by ``McpAuthMiddleware`` only when the caller authenticated with a
+    team-scoped API key (non-null ``OrgApiKey.team_id``). Org-wide API keys,
+    OAuth access tokens and regular JWTs carry no team boundary and resolve
+    to ``None`` — they are org-role-only, matching the REST layer.
+    """
+    return _ctx_team_id.get(None)
+
+
+def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
+    """True when a team-scoped API key must not access a resource owned by *owner_team_id*.
+
+    The boundary only applies to team-scoped API keys (non-null
+    ``_ctx_team_id``): org-wide keys and user/OAuth tokens have no team
+    boundary. A resource with no owning team (org-level pipeline) is
+    accessible to any team-scoped key; a resource owned by a different team
+    is blocked.
+    """
+    key_team_id = _ctx_team_id.get(None)
+    if key_team_id is None:
+        return False
+    return owner_team_id is not None and owner_team_id != key_team_id
+
+
+def _team_scope_error(resource_kind: str, resource_id: str) -> dict[str, Any]:
+    """Error dict for a team-boundary violation by a team-scoped API key."""
+    key_team_id = _ctx_team_id.get(None)
+    return {
+        "error": "team_boundary_violation",
+        "detail": (
+            f"This API key is scoped to team {key_team_id} and cannot access "
+            f"{resource_kind} {resource_id} owned by another team"
+        ),
+    }
+
+
+async def _pipeline_owner_team_id(session: AsyncSession, pipeline_id: uuid.UUID) -> uuid.UUID | None:
+    """Resolve the owning team of a pipeline (None for org-level pipelines)."""
+    from sqlalchemy import select
+
+    from modulo.db.models.pipeline import Pipeline
+
+    return (
+        await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
+    ).scalar_one_or_none()
 
 
 # PRD §7.18: MCP trigger_pipeline is limited to 60 calls/min per client. All
@@ -520,6 +570,7 @@ async def validate_current_auth() -> bool:
                     key_id=key.id,
                 )
             _ctx_role.set(clamped)
+            _ctx_team_id.set(key.team_id)
             return True
 
         if auth_type == "oauth":
@@ -544,6 +595,7 @@ async def validate_current_auth() -> bool:
                 if live_role is None:
                     return False
                 _ctx_role.set(live_role)
+                _ctx_team_id.set(None)  # user tokens carry no team boundary
                 return True
             async with _session(claims.organisation_id) as s:
                 if not await check_oauth_token_family_valid(
@@ -564,6 +616,7 @@ async def validate_current_auth() -> bool:
             if live_role is None:
                 return False
             _ctx_role.set(clamp_oauth_role(scopes_required_role(claims.scopes), live_role))
+            _ctx_team_id.set(None)  # user tokens carry no team boundary
             return True
 
         return False
@@ -690,6 +743,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
                 _ctx_org_id.set(org_id)
                 _ctx_role.set(clamped)
                 _ctx_key_id.set(key.id)
+                _ctx_team_id.set(key.team_id)
                 _ctx_user_id.set(key.account_id)
                 _ctx_auth_token.set(token)
                 _ctx_auth_type.set("api_key")
@@ -772,6 +826,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             _ctx_user_id.set(principal.account_id)
             _ctx_auth_token.set(token)
             _ctx_auth_type.set("oauth")
+            _ctx_team_id.set(None)  # user tokens carry no team boundary
             request.scope["auth_principal"] = {
                 "type": "user",
                 "org_id": str(principal.organisation_id) if principal.organisation_id else "",
@@ -844,6 +899,7 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
         _ctx_user_id.set(claims.account_id)
         _ctx_auth_token.set(token)
         _ctx_auth_type.set("oauth")
+        _ctx_team_id.set(None)  # user tokens carry no team boundary
         request.scope["auth_principal"] = {
             "type": "user",
             "org_id": str(claims.organisation_id),
@@ -1314,6 +1370,9 @@ async def get_pipeline_graph_tool(
             return {"error": "invalid_id", "field": "pipeline_id", "detail": f"Invalid UUID format: {pipeline_id}"}
 
         async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
             result = await get_pipeline_graph(s, pid)
 
         if result is None:
@@ -1446,6 +1505,8 @@ async def update_pipeline_graph(
                 pipeline = await get_pipeline(s, pid)
                 if pipeline is None:
                     return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+                if _team_scoped_key_mismatch(pipeline.owner_team_id):
+                    return _team_scope_error("pipeline", pipeline_id)
                 mismatches = await find_connector_team_mismatches(
                     s,
                     org_id=org_id,
@@ -1549,6 +1610,9 @@ async def bind_connector_to_node(
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
 
+            if _team_scoped_key_mismatch(pipeline.owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+
             from modulo.core.team_visibility import (
                 CONNECTOR_TEAM_MISMATCH,
                 connector_team_mismatch,
@@ -1627,6 +1691,8 @@ async def trigger_pipeline(
             pipeline = await get_pipeline(s, pid)
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            if _team_scoped_key_mismatch(pipeline.owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
             uid = _ctx_user_id_val()
             snapshot = await create_snapshot_from_live_graph(s, pipeline_id=pid, account_id=uid)
             if snapshot is None:
@@ -1685,8 +1751,11 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
+            owner_team_id = await _pipeline_owner_team_id(s, run.pipeline_id) if run is not None else None
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
+        if _team_scoped_key_mismatch(owner_team_id):
+            return _team_scope_error("run", run_id)
         result: dict[str, Any] = {
             "run_id": str(run.id),
             "pipeline_id": str(run.pipeline_id),
@@ -1774,8 +1843,11 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
+            owner_team_id = await _pipeline_owner_team_id(s, run.pipeline_id) if run is not None else None
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
+        if _team_scoped_key_mismatch(owner_team_id):
+            return _team_scope_error("run", run_id)
         outputs = run.outputs_json or {}
         telemetry = run.node_telemetry_json
         if not isinstance(telemetry, dict):
@@ -1831,6 +1903,8 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
+            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, run.pipeline_id)):
+                return _team_scope_error("run", run_id)
             evals = await db_get_run_evals(s, rid)
 
         return {
@@ -1929,6 +2003,8 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
+            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, run.pipeline_id)):
+                return _team_scope_error("run", run_id)
             terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
             if run.status in terminal_statuses:
                 detail = f"Run is already in terminal status: {run.status}"

@@ -47,8 +47,8 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 ### Team-scoped API keys
 
 - [x] API key carries optional `team_id` FK to `teams.id` (nullable, CASCADE on team delete)
-- [ ] Team-scoped API key is restricted to resources accessible to that team under the key's embedded role
-- [ ] Org-wide API key (NULL `team_id`) respects org-level role only — no team boundary
+- [x] Team-scoped API key is restricted to resources accessible to that team under the key's embedded role — MCP tools reject access to pipelines/runs owned by a different team (`team_boundary_violation`)
+- [x] Org-wide API key (NULL `team_id`) respects org-level role only — no team boundary (verified: `_team_scoped_key_mismatch` returns False for `team_id=None`)
 - [x] Team-scoped API keys cannot have `admin` role — `_validate_team_key_role` helper enforces this on both create and update
 - [x] Admin required to set or update `team_id` on create/PUT (403 for non-admin)
 - [x] `team_id` is serialised in list/response payloads
@@ -81,6 +81,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] MCP middleware (`McpAuthMiddleware`) accepts API key bearer tokens with `mk_` prefix
 - [x] Validated key's `role` stored in `_ctx_role` ContextVar for tool handlers
 - [x] Validated key's `key_id` stored in `_ctx_key_id` ContextVar
+- [x] Validated key's `team_id` stored in `_ctx_team_id` ContextVar — set on API-key auth (and refreshed per-event on SSE re-validation); reset to `None` for OAuth/JWT tokens
 - [x] OAuth 2.0 access tokens are the fallback auth mechanism (checked after API key)
 - [x] Health check endpoint (`/mcp/healthz`) is exempt from auth
 
@@ -146,7 +147,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] Re-revoke an already-revoked key → 404 (query filters `revoked_at.is_(None)`)
 - [x] Key name with leading/trailing whitespace → stripped via `_normalise_name` before create/update (2026-08-06); whitespace-only names rejected with 422
 - [ ] `lookup_prefix` of exactly 8 chars in the DB model — any shorter/longer prefix fails to match (DB column is `String(8)`)
-- [ ] MCP middleware validates API key without `org_id` → resolves org from the key's `organisation_id` column, but `_ctx_team_id` is never set
+- [x] MCP middleware validates API key without `org_id` → resolves org from the key's `organisation_id` column and sets `_ctx_team_id` from the key's `team_id` (2026-08-12)
 
 ### Team-scoped edge cases
 
@@ -163,12 +164,16 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 
 ## Known Gaps
 
-- **MCP middleware does not propagate `team_id` to request context.** The `_ctx_team_id` ContextVar does not exist — tool handlers have no way to know which team scope an API key was issued for. Team-scoped enforcement at the MCP layer is incomplete.
 - **BDD coverage is incomplete.** Feature file at `backend/tests/bdd/features/auth/api_keys.feature` has 5 real scenarios (happy path, create, list, revoke, invalid, reject) but is missing scenarios for: admin role rejection, team-scoped key creation, MCP auth validation, role-scope enforcement, MCP config endpoint, not-found handling, unauthenticated access, soft-delete revocation.
-- **No team-scoped enforcement unit tests.** `test_api_key.py` does not test validation of team-scoped keys — no tests verify that a team-scoped key cannot access resources outside its team boundary.
-- **No RLS policy on `org_api_keys` table for team isolation.** When querying API keys via MCP, a team-scoped key could theoretically enumerate org-wide keys via the list endpoint — the list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`.
+- **No RLS policy on `org_api_keys` table for team isolation.** The MCP/API-key list endpoint filters by `organisation_id` only, not by the requesting key's `team_id`. Mitigation: the list endpoint requires `api_key.update` (admin-level) permission and team-scoped keys cannot be `admin` (enforced by `_validate_team_key_role`), so a team-scoped key cannot reach the endpoint — the theoretical enumeration path is closed by role, not by RLS.
 
 ## QA History
+
+### 2026-08-12 — improve-architecture (product-map walk, index 171)
+- **RESOLVED "MCP middleware does not propagate `team_id` to request context"** — added `_ctx_team_id` ContextVar (`mcp_server.py`). `McpAuthMiddleware` sets it from the validated key's `team_id` on API-key auth (both initial dispatch and per-event `validate_current_auth` SSE re-validation); the OAuth/regular-JWT paths explicitly reset it to `None` so user tokens carry no team boundary. Exposed via `_ctx_team_id_val()`.
+- **Implemented team-boundary enforcement at the MCP tool layer** — new `_team_scoped_key_mismatch(owner_team_id)` + `_team_scope_error(...)` helpers; `_pipeline_owner_team_id(session, pipeline_id)` resolves a resource's owning team. A team-scoped key is blocked with error `team_boundary_violation` on pipelines owned by a different team (and org-level pipelines / own-team pipelines remain accessible) across `trigger_pipeline`, `get_pipeline_graph`, `update_pipeline_graph`, `bind_connector_to_node`, `get_run_status`, `get_run_output`, `get_run_evals`, and `cancel_run`. Org-wide keys (`team_id=None`) and OAuth/JWT callers are unaffected — no team boundary.
+- **RESOLVED "No team-scoped enforcement unit tests"** — added `tests/unit/mcp/test_team_scope_enforcement.py` (16 tests): helper semantics (`_team_scoped_key_mismatch` matrix, `_ctx_team_id_val` default, error dict shape), trigger blocked/own-team-allowed/org-wide-allowed, graph read blocked/org-wide-allowed, run tools blocked for other-team runs (status, output, evals, cancel).
+- **Known gaps still open:** BDD coverage incomplete; RLS team isolation on `org_api_keys` (mitigated by role, documented above).
 
 ### 2026-08-06 — improve-architecture (product-map walk)
 - Fixed: `expires_at` in the past no longer accepted on create or update — `_parse_expires_at` normalises naive/`Z`-suffixed datetimes to UTC-aware and the route returns 422 `expires_at must be in the future`.
