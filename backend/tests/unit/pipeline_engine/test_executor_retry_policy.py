@@ -16,10 +16,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.pipeline_engine import executor as executor_module
 from modulo.core.pipeline_engine.executor import (
     PipelineExecutor,
     RunRetryPolicyError,
     _retry_after_policy,
+    _retry_backoff_seconds,
 )
 
 
@@ -191,6 +193,53 @@ def test_retry_after_policy_failure_excludes_timeout_outcome():
     assert _retry_after_policy({"on": ["failure"], "max_retries": 3}, "failed", "node_timeout") is None
 
 
+def test_retry_after_policy_failure_excludes_hang_death():
+    # FAR-136 Gap 2 (prove-the-fix): a sandbox-agent hang death terminalizes as
+    # error_code="node_cancelled" with "likely hung" in error_detail. A
+    # "failure"-only policy must NOT re-dispatch it — each re-dispatch burns a
+    # full node timeout with zero recovery probability.
+    hang_detail = (
+        "Sandbox agent command produced no output within 1200s. No stdout/stderr "
+        "was captured — the agent likely hung before writing any result."
+    )
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 5}, "failed", "node_cancelled", hang_detail) is None
+
+
+def test_retry_after_policy_failure_excludes_hang_death_dotted_code():
+    # The dotted alias (node.cancelled) behaves identically to the legacy code.
+    assert (
+        _retry_after_policy(
+            {"on": ["failure"], "max_retries": 5},
+            "failed",
+            "node.cancelled",
+            "the agent likely hung before writing any result",
+        )
+        is None
+    )
+
+
+def test_retry_after_policy_failure_retries_transient_node_cancelled():
+    # FAR-136 Gap 2 (both directions): a TRANSIENT node_cancelled (no "likely
+    # hung" marker) stays retryable via the "failure" event — the exclusion
+    # must stay surgical.
+    assert (
+        _retry_after_policy(
+            {"on": ["failure"], "max_retries": 3},
+            "failed",
+            "node_cancelled",
+            "Sandbox node cancelled (transient): command wait interrupted",
+        )
+        == 3
+    )
+
+
+def test_retry_after_policy_failure_still_matches_with_detail_present():
+    # A generic failure with an error_detail (no hang marker) still matches the
+    # "failure" event — the new error_detail param must not change the
+    # pre-existing generic-failure behaviour.
+    assert _retry_after_policy({"on": ["failure"], "max_retries": 2}, "failed", "boom", "some detail") == 2
+
+
 def test_retry_after_policy_stall_error_code_on_failed_status():
     # A stall surfaces as status "failed" with error_code "executor_stalled"
     # (the zombie watchdog path) — the "stall" event must still match it.
@@ -254,6 +303,8 @@ async def test_execute_retry_policy_resets_pending_and_reraises():
         patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
         patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
         patch("modulo.settings.get_settings", return_value=settings),
+        # FAR-136 backoff: never actually sleep in the retry tests.
+        patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()),
     ):
         executor = PipelineExecutor(MagicMock())
         with pytest.raises(RunRetryPolicyError) as exc_info:
@@ -302,6 +353,8 @@ def _enter_execute_patches(
     stack.enter_context(patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()))
     stack.enter_context(patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity))
     stack.enter_context(patch("modulo.settings.get_settings", return_value=settings))
+    # FAR-136 backoff: never actually sleep in the retry-budget tests.
+    stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()))
     return finalize_mock
 
 
@@ -430,3 +483,98 @@ async def test_execute_retry_policy_exhausted_boundary_terminal_no_redispatch():
     assert mock_finalize.await_args.kwargs["status"] == "failed"
     assert mock_finalize.await_args.kwargs["error_code"] == "_GenericFailureError"
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# FAR-136 Gap 1 — jittered, capped exponential backoff between re-dispatches
+# ---------------------------------------------------------------------------
+
+
+def test_retry_backoff_schedule_grows_with_attempt(monkeypatch):
+    """The deterministic schedule (jitter pinned to 0) grows with attempt_n."""
+    # Pin jitter to 0 so the pure exponential schedule is exact.
+    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
+    base = executor_module._RETRY_BACKOFF_BASE_SECONDS
+    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
+    # base=45: 45, 90, 180, 300(capped), 300, ...
+    expected = [45.0, 90.0, 180.0, 300.0, 300.0, 300.0, 300.0]
+    for attempt_n, exp in enumerate(expected, start=1):
+        assert _retry_backoff_seconds(attempt_n, base=base, cap=cap) == exp
+
+
+def test_retry_backoff_never_exceeds_cap(monkeypatch):
+    """Even with max jitter the delay never exceeds the cap."""
+    # Pin jitter to its max (b == the upper bound of uniform's range).
+    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: b)
+    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
+    for attempt_n in range(1, 30):
+        assert _retry_backoff_seconds(attempt_n, cap=cap) <= cap
+
+
+def test_retry_backoff_jitter_spreads_schedule(monkeypatch):
+    """Jitter spreads the schedule between the exponential value and the
+    jittered ceiling, while never exceeding the cap."""
+    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
+    base = executor_module._RETRY_BACKOFF_BASE_SECONDS
+    # Deterministic jitter sweep: uniform(a, b) returns a fixed fraction of b.
+    for fraction in (0.0, 0.5, 1.0):
+        monkeypatch.setattr(executor_module.random, "uniform", lambda a, b, f=fraction: b * f)
+        delay = _retry_backoff_seconds(1, base=base, cap=cap)
+        # attempt 1 exponential = base (45), jitter up to fraction*base*0.25.
+        assert base <= delay <= cap
+    # With jitter enabled the delay for attempt 1 differs from the pure
+    # exponential (the spread is real, not a no-op).
+    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: b)
+    with_jitter = _retry_backoff_seconds(1, base=base, cap=cap)
+    monkeypatch.setattr(executor_module.random, "uniform", lambda a, b: 0.0)
+    without_jitter = _retry_backoff_seconds(1, base=base, cap=cap)
+    assert with_jitter > without_jitter
+    assert with_jitter <= cap
+
+
+def test_retry_backoff_bounded_by_max_retries():
+    """The schedule is bounded by the retry budget: the delay for the LAST
+    allowed attempt (attempt == max_retries) never schedules beyond the cap,
+    and attempts beyond the budget stay at the cap (never grow unbounded)."""
+    max_retries = executor_module._RETRY_POLICY_MAX_RETRIES  # 5
+    cap = executor_module._RETRY_BACKOFF_CAP_SECONDS
+    for attempt_n in range(1, max_retries + 1):
+        delay = _retry_backoff_seconds(attempt_n, cap=cap)
+        assert delay <= cap
+    # Attempts beyond the budget remain bounded by the cap.
+    for attempt_n in range(max_retries + 1, max_retries + 10):
+        assert _retry_backoff_seconds(attempt_n, cap=cap) <= cap
+
+
+async def test_execute_retry_policy_applies_backoff_delay():
+    """FAR-136 Gap 1 wiring: the computed backoff delay is actually awaited
+    (via asyncio.sleep) before the RunRetryPolicyError re-raise — the retry
+    is not re-dispatched back-to-back."""
+    run = _make_run(node_attempt_count=2, claim_token="tok-claim-abc")
+    snapshot = _make_snapshot()
+    statements: list[str] = []
+    retry_policy = {"on": ["failure"], "max_retries": 3}
+    session = _make_session(snapshot, statements=statements, retry_policy=retry_policy)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    settings = MagicMock(saq_run_retries=5, saq_e2b_idempotency=True)
+    compiled = _make_failure_compiled()
+
+    sleep_mock = AsyncMock()
+    with ExitStack() as stack:
+        mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
+        stack.enter_context(patch("modulo.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
+        executor = PipelineExecutor(MagicMock())
+        with pytest.raises(RunRetryPolicyError) as exc_info:
+            await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
+    assert exc_info.value.max_retries == 3
+    # The executor slept for a positive backoff delay before re-raising.
+    sleep_mock.assert_awaited_once()
+    delay = sleep_mock.await_args.args[0]
+    assert delay > 0
+    assert delay <= executor_module._RETRY_BACKOFF_CAP_SECONDS
+    # The fenced pending-reset still fired before the re-raise.
+    reset_stmt = next(s for s in statements if "status='pending'" in s)
+    assert "claim_token=:tok" in reset_stmt
+    # No terminal failure — the retry path never finalizes.
+    mock_finalize.assert_not_awaited()
