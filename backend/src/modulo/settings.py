@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     # are stale (default true during the hold). Set false via deploy-time flag
     # after the hold to relax the gate to degraded (alerting continues).
     saq_hard_gate: bool = Field(default=True, alias="SAQ_HARD_GATE")
+    # A1 elevation flag (agent-failure UX, phase 1): when a captured sandbox
+    # node output self-reports agent_status=failed OR outcome=failed, the run
+    # terminalizes as ``failed`` with error_code ``agent.failed`` instead of
+    # landing ``complete``. Rollout flag — agent-failure-ux-proposal §15.4.
+    modulo_agent_failure_elevation_enabled: bool = Field(True, alias="MODULO_AGENT_FAILURE_ELEVATION_ENABLED")
     # Web UI auth — FAIL-CLOSED (system worker refuses to boot without both).
     saq_auth_password: str | None = Field(default=None, alias="SAQ_AUTH_PASSWORD", repr=False)
     saq_auth_username: str | None = Field(default=None, alias="SAQ_AUTH_USERNAME")
