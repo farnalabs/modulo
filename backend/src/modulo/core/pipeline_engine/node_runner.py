@@ -777,7 +777,7 @@ def make_manual_node_fn(
         # Check if this is a resume with human output.
         decision = state.get("_hitl_decision")
         if decision is not None and isinstance(decision, dict):
-            resume_data = decision.get("output", decision)
+            resume_data = decision.get("output")
             manual_output: dict[str, Any] | None = resume_data if isinstance(resume_data, dict) else None
             if output_schema_json and manual_output is not None:
                 _validate_against_schema(manual_output, output_schema_json)
@@ -1026,12 +1026,13 @@ def make_sandbox_agent_fn(
     """
 
     node_id: str = str(node_def["id"])
-    agent_prompt_template: str = node_def.get("agent_prompt") or ""
-    if not agent_prompt_template.strip():
+    agent_prompt = node_def.get("agent_prompt")
+    if not agent_prompt or not str(agent_prompt).strip():
         raise ValueError(
             f"sandbox_agent node '{node_def.get('id')}' is missing required 'agent_prompt' "
             "— an empty prompt would dispatch the agent with no instructions"
         )
+    agent_prompt_template: str = str(agent_prompt)
     template_id: str = node_def.get("template_id", "opencode")
     commands_concatenation_string: str = node_def.get("commands_concatenation_string", " && ")
     agent_commands_raw: list[str] | None = node_def.get("agent_commands")
@@ -1498,6 +1499,23 @@ def make_sandbox_agent_fn(
                 # fill and block a long session (FAR-97). The subshell preserves
                 # the command's exit code for the SDK's wait().
                 wrapped_command = f"( {agent_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
+                # System env vars first — provide defaults from the host. DO NOT
+                # move pipeline env before these: pipelines need to override
+                # GITHUB_TOKEN for identity separation (e.g. PR Reviewer uses
+                # modulo-reviewbot PAT, not the system default farnalabs bot).
+                # The reserved-prefix validator already prevents overriding
+                # MODULO_* vars, so update() below is the sanctioned override.
+                sandbox_envs: dict[str, str] = {
+                    "MODULO_RUN_ID": run_id,
+                    "MODULO_PIPELINE_ID": pipeline_id,
+                    "MODULO_ORG_ID": org_id,
+                    "MODULO_INPUT_PAYLOAD": _input_json,
+                    "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
+                    "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
+                    or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
+                    or os.environ.get("GITHUB_TOKEN", ""),
+                }
+                sandbox_envs.update(env_vars_extra)
                 cmd_handle = await asyncio.wait_for(
                     sandbox.commands.run(
                         wrapped_command,
@@ -1505,25 +1523,7 @@ def make_sandbox_agent_fn(
                         on_stdout=_on_stdout,
                         on_stderr=_on_stderr,
                         timeout=sandbox_timeout,
-                        envs={
-                            # System env vars first -- provide defaults from the host.
-                            # DO NOT move env_vars_extra before these. Pipelines need
-                            # to override GITHUB_TOKEN for identity separation (e.g.
-                            # PR Reviewer uses modulo-reviewbot PAT, not the system
-                            # default farnalabs bot). The reserved prefix validator
-                            # already prevents overriding MODULO_* vars.
-                            "MODULO_RUN_ID": run_id,
-                            "MODULO_PIPELINE_ID": pipeline_id,
-                            "MODULO_ORG_ID": org_id,
-                            "MODULO_INPUT_PAYLOAD": _input_json,
-                            "APP_MODULO_OPENCODE_API_KEY": os.environ.get("APP_MODULO_OPENCODE_API_KEY", ""),
-                            "GITHUB_TOKEN": os.environ.get("GITHUB_DOGFOOD_PAT_ALL", "")
-                            or os.environ.get("GITHUB_DOGFOOD_PAT_WR", "")
-                            or os.environ.get("GITHUB_TOKEN", ""),
-                            # Pipeline env vars last -- override system defaults.
-                            # See comment above for why ordering is critical.
-                            **env_vars_extra,
-                        },
+                        envs=sandbox_envs,
                     ),
                     timeout=min(sandbox_timeout, 120),
                 )

@@ -193,7 +193,7 @@ class DatadogConnector(ConnectorBase):
         resp = await c.post("/api/v1/events", json=body)
         resp.raise_for_status()
         result: dict[str, Any] = resp.json()
-        return cast("dict[str, Any]", result.get("event", result))
+        return cast("dict[str, Any]", result.get("event", {}))
 
     async def _create_monitor(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:
         query = data.get("query")

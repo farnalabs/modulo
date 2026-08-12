@@ -214,7 +214,7 @@ class NotionConnector(ConnectorBase):
                     page_id = payload.data.get("id")
                     if not page_id:
                         raise ValueError("Notion page_update requires 'id' in data")
-                    properties = payload.data.get("properties", payload.data)
+                    properties = payload.data.get("properties", {})
                     r = await client.patch(
                         f"/pages/{page_id}",
                         json={"properties": properties},

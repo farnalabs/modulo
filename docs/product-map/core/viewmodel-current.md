@@ -9,7 +9,7 @@ unit-tests:
   - backend/tests/unit/api/test_viewmodel_endpoint.py
   - backend/tests/unit/api/test_viewmodel_view.py
   - backend/tests/unit/api/test_viewmodel_error_paths.py
-status: covered
+status: partial
 bdd: []
 ---
 
@@ -47,11 +47,14 @@ Aggregate endpoint returning the current user's full view of the system — org 
 - Plan limits are basic (daily_spend_limit only)
 - No Redis/response caching layer
 - No pagination on team memberships (truncated flag is always false)
-- No dedicated viewmodel BDD feature file — covered indirectly by view_as_team BDD
+- No dedicated viewmodel BDD feature file — covered indirectly by view_as_team BDD (2026-08-11: status demoted `covered` → `partial`; per the product map legend, `covered` requires all behaviours to be BDD-tested)
 - `/api/v1/license` route does not query DB, so no ProgrammingError catch needed (its `except Exception` is overly broad but harmless)
 
 
 ## QA History
+
+### 2026-08-11 — improve-architecture
+- Corrected `status: covered` → `partial`. This entry has no dedicated BDD feature file (`bdd: []`) and relies on indirect `view_as_team` BDD + unit tests, so `covered` (all behaviours BDD-tested) was inaccurate.
 
 ### 2026-07-05 — Cross-cutting QA pass (part 2)
 - Verified all 16 behaviours against code: all implemented and tested

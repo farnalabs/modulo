@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi import status as http_status
+from fastapi import status as http_status  # nosemgrep: loopvar-shadows-import
 from redis.asyncio import Redis
 from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -284,8 +284,8 @@ async def _compute_period_metrics(
     previous_eval = await _eval_rate_window(session, org_id, now - timedelta(days=2 * days), now - timedelta(days=days))
 
     status_metrics = {
-        status: _period_metric(current_status.get(status, 0), previous_status.get(status, 0))
-        for status in _TRACKED_STATUSES
+        run_status: _period_metric(current_status.get(run_status, 0), previous_status.get(run_status, 0))
+        for run_status in _TRACKED_STATUSES
     }
 
     return {

@@ -10,7 +10,8 @@ code:
   - frontend/src/views/LibraryView.vue
 bdd:
   - backend/tests/bdd/features/library/auto_update.feature
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/library_service/test_contribution_flow.py
 depends-on: [feat-core-contribution-update]
 status: covered
 ---
@@ -55,7 +56,7 @@ Users can disable auto-update on adapted community library primitives to pin a s
 
 ## Known Gaps
 
-- No integration test verifying that `notify_importers_of_update` actually skips auto_update=false copies in a real DB transaction
+- No integration test verifying that `notify_importers_of_update` actually skips auto_update=false copies in a real DB transaction (covered at unit level by `test_contribution_flow.py::TestNotifyImportersOfUpdate::test_updates_auto_update_copies`, which asserts only the `auto_update=True` copy is touched while the `auto_update=False` copy is skipped; wired into `unit-tests:` frontmatter on 2026-08-11)
 - No Playwright test for the frontend toggle interaction
 
 ## QA History

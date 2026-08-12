@@ -207,6 +207,23 @@ async def test_write_alert(connector):
     assert result["requestId"] == "req-1"
 
 
+@respx.mock
+async def test_write_alert_unwrapped_response_returns_empty(connector):
+    """A 2xx response without a 'data' wrapper must not be returned as-is.
+
+    Regression: `result.get("data", result)` silently returned the whole
+    response (e.g. an error envelope) as the created alert.
+    """
+    respx.post(f"{_BASE}/alerts").mock(return_value=httpx.Response(202, json={"message": "oops"}))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="alert",
+            data={"message": "Production down"},
+        ),
+    )
+    assert result == {}
+
+
 async def test_write_alert_missing_message(connector):
     with pytest.raises(ValueError, match="'message' in data"):
         await connector.write(ConnectorPayload(resource="alert", data={}))

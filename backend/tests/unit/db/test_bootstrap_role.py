@@ -23,6 +23,7 @@ from modulo.db.bootstrap_role import (
     REQUIRED_VARS,
     _apply_accounts_allow_list,
     _assert_role_posture,
+    _asyncpg_admin_connect,
     _bootstrap,
     _create_or_update_role,
     _existing_columns,
@@ -155,6 +156,52 @@ class TestUrlParsing:
 
     def test_parse_password_empty_when_none(self) -> None:
         assert _parse_password("postgres://modulo@db:5432/modulo") == ""
+
+
+class TestAsyncpgAdminConnect:
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            (
+                "postgresql+asyncpg://admin:pw@db:5432/modulo",
+                ("postgres://admin:pw@db:5432/modulo", False),
+            ),
+            (
+                "postgres://admin:pw@db/modulo",
+                ("postgres://admin:pw@db/modulo", False),
+            ),
+            (
+                "postgres://u:p@h/db?sslmode=require",
+                ("postgres://u:p@h/db", "require"),
+            ),
+            (
+                "postgres://u:p@h/db?sslmode=verify-ca",
+                ("postgres://u:p@h/db", "verify-ca"),
+            ),
+            (
+                "postgres://u:p@h/db?sslmode=verify-full",
+                ("postgres://u:p@h/db", "verify-full"),
+            ),
+            (
+                "postgres://u:p@h/db?sslmode=disable",
+                ("postgres://u:p@h/db", False),
+            ),
+            (
+                "postgres://u:p@h/db?sslmode=prefer",
+                ("postgres://u:p@h/db", False),
+            ),
+            (
+                "postgres://u:p@h/db?sslmode=require&application_name=modulo",
+                ("postgres://u:p@h/db", "require"),
+            ),
+            (
+                "postgres://u:p@h:5433/db?sslmode=require",
+                ("postgres://u:p@h:5433/db", "require"),
+            ),
+        ],
+    )
+    def test_asyncpg_admin_connect(self, url: str, expected: tuple[str, bool | str]) -> None:
+        assert _asyncpg_admin_connect(url) == expected
 
 
 # ---------------------------------------------------------------------------
