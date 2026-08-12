@@ -147,7 +147,9 @@ class TestHash:
             "__meta__": {"version": 1, "exported_at": "2024-01-01"},
             "users": [{"id": "u1", "display_name": "caf\u00e9 \u2014 snowman \u2603"}],
         }
-        assert _compute_hash(bundle) == _compute_hash(bundle)
+        # Golden value pins the exact digest so a change in sort_keys,
+        # ensure_ascii, or the hash algorithm fails loudly.
+        assert _compute_hash(bundle) == "3a21638f66936987992d7c5636672904f849b21cd68004ef4a1d17610a8b31f6"
         assert len(_compute_hash(bundle)) == 64
 
 

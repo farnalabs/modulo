@@ -35,7 +35,10 @@ class TestStrToLockKeys:
         assert isinstance(k2, int)
 
     def test_deterministic_same_input(self) -> None:
-        assert _str_to_lock_keys("hello") == _str_to_lock_keys("hello")
+        # Golden value pins the exact MD5-derived int pair so a change in the
+        # digest algorithm or byte ordering fails loudly instead of silently
+        # altering lock-key distribution.
+        assert _str_to_lock_keys("hello") == (1564557354, -1135924618)
 
     def test_different_inputs_differ(self) -> None:
         assert _str_to_lock_keys("abc") != _str_to_lock_keys("xyz")

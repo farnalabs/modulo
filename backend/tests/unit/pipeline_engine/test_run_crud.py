@@ -28,7 +28,9 @@ from modulo.db.crud.run import (
 
 def test_input_hash_is_deterministic():
     payload = {"key": "value", "num": 42}
-    assert _input_hash(payload) == _input_hash(payload)
+    # Golden value pins the exact digest so a change in sort_keys/separators
+    # or hash algorithm fails loudly instead of silently corrupting dedup.
+    assert _input_hash(payload) == "d81188885389ad7836eebf580ec0a1c85d4b987810edfa41df659ab13c2bc50b"
 
 
 def test_input_hash_is_order_independent():
@@ -68,7 +70,7 @@ def test_input_hash_default_str_for_non_serializable():
         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
     assert _input_hash(payload) == expected
-    assert _input_hash(payload) == _input_hash(payload)
+    assert _input_hash(payload) == "691064efc26716e470ce0fc328efa5c98e3b82c67d8456481b0255e47b8a5bda"
 
 
 # ---------------------------------------------------------------------------
