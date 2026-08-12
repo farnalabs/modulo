@@ -219,7 +219,7 @@
                       {{ s.passRate.toFixed(0) }}%
                       <span class="font-normal opacity-70">({{ s.passedCount }}/{{ s.totalEvals }})</span>
                     </span>
-                    <span v-else class="text-xs text-muted-foreground">�</span>
+                    <span v-else class="text-xs text-muted-foreground">—</span>
                   </td>
                 </tr>
                 <tr class="border-b hover:bg-muted/30">
@@ -230,7 +230,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.totalCost !== null">{{ formatMoney(Number(s.totalCost), currencyCode, 6) }}</span>
-                    <span v-else class="text-muted-foreground">�</span>
+                    <span v-else class="text-muted-foreground">—</span>
                   </td>
                 </tr>
                 <tr class="hover:bg-muted/30">
@@ -241,7 +241,7 @@
                     class="table-cell table-cell-numeric font-mono text-xs"
                   >
                     <span v-if="s.tokenTotal !== null">{{ s.tokenTotal.toLocaleString() }}</span>
-                    <span v-else class="text-muted-foreground">�</span>
+                    <span v-else class="text-muted-foreground">—</span>
                   </td>
                 </tr>
               </tbody>

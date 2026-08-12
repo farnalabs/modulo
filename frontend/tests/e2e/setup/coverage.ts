@@ -20,7 +20,8 @@ export async function startCoverage(page: Page): Promise<void> {
     await cdp.send('Profiler.enable')
     await cdp.send('Profiler.startPreciseCoverage', { callCount: true, detailed: true })
     ;(page as any).__cdpSession = cdp
-  } catch {
+  } catch (e) {
+    console.warn('[e2e-coverage] failed to start CDP coverage session', e)
   }
 }
 
@@ -49,6 +50,7 @@ export async function stopCoverage(page: Page): Promise<void> {
     const coverageFile = join(COVERAGE_DIR, `coverage-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
     if (!existsSync(COVERAGE_DIR)) mkdirSync(COVERAGE_DIR, { recursive: true })
     writeFileSync(coverageFile, JSON.stringify(coverageData))
-  } catch {
+  } catch (e) {
+    console.warn('[e2e-coverage] failed to persist coverage data', e)
   }
 }

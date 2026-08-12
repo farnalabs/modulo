@@ -7954,6 +7954,13 @@ export interface components {
         };
         /** ConnectorCreate */
         ConnectorCreate: {
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
             /** Name */
             name: string;
             /** Connector Type Id */
@@ -7966,13 +7973,6 @@ export interface components {
             };
             /** Allowed Operations */
             allowed_operations?: string[];
-            /**
-             * Visibility
-             * @default org
-             */
-            visibility: string;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
             /**
              * Tier
              * @default native
@@ -8055,6 +8055,10 @@ export interface components {
         };
         /** ConnectorUpdate */
         ConnectorUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
             /** Name */
             name?: string | null;
             /** Credentials */
@@ -8065,10 +8069,6 @@ export interface components {
             } | null;
             /** Allowed Operations */
             allowed_operations?: string[] | null;
-            /** Visibility */
-            visibility?: string | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
             /** Tier */
             tier?: ("native" | "preview" | "in_dev") | null;
         };
@@ -9508,6 +9508,13 @@ export interface components {
         };
         /** LibraryPrimitiveCreate */
         LibraryPrimitiveCreate: {
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
             /** Primitive Type */
             primitive_type: string;
             /** Name */
@@ -9522,13 +9529,6 @@ export interface components {
             content_json: {
                 [key: string]: unknown;
             };
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /**
-             * Visibility
-             * @default org
-             */
-            visibility: string;
             /**
              * Tier
              * @default native
@@ -9633,6 +9633,10 @@ export interface components {
         };
         /** LibraryPrimitiveUpdate */
         LibraryPrimitiveUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
             /** Name */
             name?: string | null;
             /** Description */
@@ -9643,10 +9647,6 @@ export interface components {
             content_json?: {
                 [key: string]: unknown;
             } | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /** Visibility */
-            visibility?: string | null;
             /** Auto Update */
             auto_update?: boolean | null;
             /** Tier */
@@ -9703,17 +9703,17 @@ export interface components {
         };
         /** LifecycleMapCreate */
         LifecycleMapCreate: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
             /**
              * Visibility
              * @default org
              */
             visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
             /**
              * Version
              * @default 1
@@ -9910,14 +9910,14 @@ export interface components {
         };
         /** LifecycleMapUpdate */
         LifecycleMapUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
             /** Name */
             name?: string | null;
             /** Description */
             description?: string | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /** Visibility */
-            visibility?: string | null;
             /** Content Json */
             content_json?: {
                 [key: string]: unknown;
@@ -10039,6 +10039,13 @@ export interface components {
         };
         /** ModelBackendCreate */
         ModelBackendCreate: {
+            /**
+             * Visibility
+             * @default org
+             */
+            visibility: string;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
             /** Name */
             name: string;
             /** Display Name */
@@ -10049,13 +10056,6 @@ export interface components {
             model_id: string;
             /** Api Key */
             api_key: string;
-            /**
-             * Visibility
-             * @default org
-             */
-            visibility: string;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
             /** Fallback Backend Ids */
             fallback_backend_ids?: string[] | null;
             /**
@@ -10128,6 +10128,10 @@ export interface components {
         };
         /** ModelBackendUpdate */
         ModelBackendUpdate: {
+            /** Visibility */
+            visibility?: string | null;
+            /** Owner Team Id */
+            owner_team_id?: string | null;
             /** Name */
             name?: string | null;
             /** Display Name */
@@ -10140,10 +10144,6 @@ export interface components {
             default_params?: {
                 [key: string]: unknown;
             } | null;
-            /** Visibility */
-            visibility?: string | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
             /** Fallback Backend Ids */
             fallback_backend_ids?: string[] | null;
             /** Tier */
@@ -10789,10 +10789,6 @@ export interface components {
         };
         /** PipelineCreate */
         PipelineCreate: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
             /**
              * Visibility
              * @default org
@@ -10800,6 +10796,10 @@ export interface components {
             visibility: string;
             /** Owner Team Id */
             owner_team_id?: string | null;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
             /**
              * Max Concurrent Runs
              * @default 5
@@ -11127,14 +11127,14 @@ export interface components {
         };
         /** PipelineUpdate */
         PipelineUpdate: {
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
             /** Visibility */
             visibility?: string | null;
             /** Owner Team Id */
             owner_team_id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
             /** Max Concurrent Runs */
             max_concurrent_runs?: number | null;
             /** Lock Wait Timeout Seconds */

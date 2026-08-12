@@ -6,12 +6,13 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
@@ -34,7 +35,7 @@ _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/lifecycle-maps", tags=["lifecycle_maps"])
 
 
-class LifecycleMapCreate(BaseModel):
+class LifecycleMapCreate(TeamVisibilityMixin):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     owner_team_id: uuid.UUID | None = None
@@ -42,25 +43,13 @@ class LifecycleMapCreate(BaseModel):
     version: int = Field(default=1, ge=1)
     content_json: dict[str, Any] = Field(default_factory=dict[str, Any])
 
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "LifecycleMapCreate":
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
-
-class LifecycleMapUpdate(BaseModel):
+class LifecycleMapUpdate(TeamVisibilityMixin):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     owner_team_id: uuid.UUID | None = None
     visibility: str | None = Field(None, pattern=r"^(org|team)$")
     content_json: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "LifecycleMapUpdate":
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
 
 class LifecycleMapResponse(BaseModel):

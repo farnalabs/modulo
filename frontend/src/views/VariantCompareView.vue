@@ -35,7 +35,7 @@
         </Button>
 
         <span v-if="selectedGroup" class="text-xs text-muted-foreground">
-          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} �
+          {{ $t('views.variantCompare.runs', { count: selectedGroup.run_count }) }} ·
           {{ selectedGroup.selection_strategy }}
         </span>
       </div>
@@ -95,7 +95,7 @@
                       <span
                         v-else
                         class="text-xs text-muted-foreground"
-                      >�</span>
+                      >—</span>
                     </div>
                     <div v-if="getNodeEvalResults(node, v.name).length > 0" class="flex flex-wrap gap-1">
                       <span
@@ -138,7 +138,7 @@
                       >
                         {{ s.passRate.toFixed(0) }}%
                       </span>
-                      <span v-else class="text-muted-foreground">�</span>
+                      <span v-else class="text-muted-foreground">—</span>
                       <span class="text-muted-foreground">{{ $t('views.variantCompare.pass') }}</span>
                     </div>
                     <div v-if="s.totalCost !== null" class="text-muted-foreground">

@@ -12,13 +12,14 @@ from typing import Any, Literal
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from httpx import HTTPStatusError, RequestError
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import mask_config_json
+from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
@@ -42,7 +43,7 @@ def _encrypt(credentials: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(credentials.encode())
 
 
-class ConnectorCreate(BaseModel):
+class ConnectorCreate(TeamVisibilityMixin):
     name: str = Field(..., min_length=1, max_length=255)
     connector_type_id: str = Field(..., min_length=1, max_length=128)
     credentials: str = Field(..., min_length=1)
@@ -52,14 +53,8 @@ class ConnectorCreate(BaseModel):
     owner_team_id: uuid.UUID | None = None
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "ConnectorCreate":
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
-
-class ConnectorUpdate(BaseModel):
+class ConnectorUpdate(TeamVisibilityMixin):
     name: str | None = Field(None, min_length=1, max_length=255)
     credentials: str | None = Field(None, min_length=1)
     config_json: dict[str, Any] | None = None
@@ -67,12 +62,6 @@ class ConnectorUpdate(BaseModel):
     visibility: str | None = None
     owner_team_id: uuid.UUID | None = None
     tier: Literal["native", "preview", "in_dev"] | None = None
-
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "ConnectorUpdate":
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
 
 class ConnectorResponse(BaseModel):

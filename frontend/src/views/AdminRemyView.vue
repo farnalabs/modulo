@@ -465,7 +465,7 @@
           </div>
           <div>
             <label for="adminremyview-field-5" class="mb-1 block text-sm font-medium">{{ $t('views.AdminRemyView.auto_execute_confidence_threshold') }}</label>
-            <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0�1.0) required for Remy to auto-execute an action without approval.</p>
+            <p class="mb-2 text-xs text-muted-foreground">Minimum confidence score (0.0–1.0) required for Remy to auto-execute an action without approval.</p>
             <div class="flex items-center gap-3">
               <input id="adminremyview-field-5"
                 v-model.number="safetyConfig.autoExecuteThreshold"
