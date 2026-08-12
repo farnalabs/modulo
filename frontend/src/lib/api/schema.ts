@@ -1500,9 +1500,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Dismiss Anomaly Endpoint */
         get?: never;
         put?: never;
+        /** Dismiss Anomaly Endpoint */
         post: operations["dismiss_anomaly_endpoint_api_v1_admin_costs_anomalies_dismiss__anomaly_id__post"];
         delete?: never;
         options?: never;
