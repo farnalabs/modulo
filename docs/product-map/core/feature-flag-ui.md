@@ -18,6 +18,8 @@ code:
   - frontend/src/router/index.ts
 bdd:
   - backend/tests/bdd/features/licensing/feature_flag_inspection.feature
+  - backend/tests/bdd/features/licensing/enterprise_gates.feature
+  - backend/tests/bdd/features/licensing/license_management.feature
 depends-on: [feat-core-db-abstraction-core]
 unit-tests:
   - backend/tests/unit/api/test_admin_feature_flags.py
