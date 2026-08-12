@@ -88,12 +88,12 @@ class TestDurationGuard:
     def test_no_limit_never_raises(self, clock: type[_Clock]) -> None:
         guard = RunawayGuard()
         clock.now_value = _T0.replace(hour=1)  # one hour later
-        guard.check_duration()
+        assert guard.check_duration() is None
 
     def test_exact_limit_does_not_raise(self, clock: type[_Clock]) -> None:
         guard = RunawayGuard(max_duration_seconds=10)
         clock.now_value = _T0.replace(second=10)  # exactly 10.0s elapsed
-        guard.check_duration()
+        assert guard.check_duration() is None
 
     def test_just_beyond_limit_raises(self, clock: type[_Clock]) -> None:
         guard = RunawayGuard(max_duration_seconds=10)
@@ -116,7 +116,7 @@ class TestDurationGuard:
 
     def test_no_elapsed_time_does_not_raise(self, clock: type[_Clock]) -> None:
         guard = RunawayGuard(max_duration_seconds=10)
-        guard.check_duration()  # now_value still == _T0
+        assert guard.check_duration() is None  # now_value still == _T0
 
     def test_zero_limit_fires_on_first_check(self, clock: type[_Clock]) -> None:
         guard = RunawayGuard(max_duration_seconds=0)

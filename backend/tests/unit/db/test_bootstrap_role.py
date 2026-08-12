@@ -416,7 +416,9 @@ class TestFindAllowListViolations:
 
 class TestAssertRolePosture:
     async def test_clean_posture_is_noop(self, conn: _FakeConn) -> None:
-        await _assert_role_posture(_clean_posture_conn(), "modulo_app")
+        clean = _clean_posture_conn()
+        assert await _find_allow_list_violations(clean, "modulo_app") == []
+        await _assert_role_posture(clean, "modulo_app")
 
     async def test_violation_raises_runtime_error(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}

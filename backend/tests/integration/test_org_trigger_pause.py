@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
@@ -504,6 +504,7 @@ async def test_validation_result_constraint_accepts_full_vocabulary(
 ) -> None:
     from modulo.db.models.trigger_event import VALIDATION_RESULT_VALUES
 
+    inserted_ids: list[str] = []
     async with db_engine.connect() as conn:
         for value in VALIDATION_RESULT_VALUES:
             stmt = text(
@@ -511,11 +512,12 @@ async def test_validation_result_constraint_accepts_full_vocabulary(
                 "raw_payload_hash, validation_result) "
                 "VALUES (:id, :oid, :tid, 'webhook', :hash, :vr)"
             )
+            event_id = str(uuid.uuid4())
             try:
                 await conn.execute(
                     stmt,
                     {
-                        "id": str(uuid.uuid4()),
+                        "id": event_id,
                         "oid": str(org_a),
                         "tid": str(trigger_a),
                         "hash": hashlib.sha256(value.encode()).hexdigest(),
@@ -523,9 +525,22 @@ async def test_validation_result_constraint_accepts_full_vocabulary(
                     },
                 )
                 await conn.commit()
+                inserted_ids.append(event_id)
             except IntegrityError:
                 await conn.rollback()
                 pytest.fail(f"validation_result '{value}' rejected by constraint")
+
+    # Every vocabulary value must actually have been accepted and persisted.
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT validation_result FROM trigger_events "
+                "WHERE id IN (:ids) ORDER BY validation_result"
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": inserted_ids},
+        )
+        persisted = {row[0] for row in result.fetchall()}
+    assert persisted == set(VALIDATION_RESULT_VALUES)
 
 
 async def test_validation_result_constraint_rejects_bogus(
