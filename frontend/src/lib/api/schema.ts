@@ -9589,6 +9589,11 @@ export interface components {
              * @default 0
              */
             run_count: number;
+            /**
+             * Unattributed
+             * @default false
+             */
+            unattributed: boolean;
             /** Latest Run Id */
             latest_run_id?: string | null;
             /**
@@ -9644,6 +9649,11 @@ export interface components {
              * @default 0
              */
             run_count: number;
+            /**
+             * Unattributed
+             * @default false
+             */
+            unattributed: boolean;
             /** Latest Run Id */
             latest_run_id?: string | null;
             /**
