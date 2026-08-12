@@ -61,7 +61,10 @@ def _get_engine() -> AsyncEngine:
                 settings = get_settings()
                 kw: dict[str, Any] = {"url": settings.database_url}
                 if settings.modulo_db.lower() == "postgres":
-                    kw["connect_args"] = {"timeout": 10, "ssl": False}
+                    kw["connect_args"] = {"timeout": 10, "ssl": False, "statement_cache_size": 0}
+                    kw["pool_pre_ping"] = True
+                    kw["pool_recycle"] = 3600
+                    kw["pool_timeout"] = 30
                 _ENGINE = create_async_engine(**kw)
     return _ENGINE
 

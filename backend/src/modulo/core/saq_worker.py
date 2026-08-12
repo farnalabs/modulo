@@ -616,6 +616,24 @@ async def analytics_facts_maintenance(ctx: dict[str, Any]) -> dict[str, Any]:
     return await run_maintenance(_make_session_factory())
 
 
+async def journey_reconcile(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — hourly bounded journey reconciliation sweep (FAR-143).
+
+    Re-derives ``journeys`` evidence from terminal runs whose journey rows are
+    MISSING or STALE (see ``modulo.core.lifecycle_map.reconcile``). Runs as ONE
+    plain modulo_app cron (no ``set_rls_org`` — BYPASSRLS, cross-org scans
+    work, matching every existing system cron). The sweep is batch-bounded and
+    idempotent, so an hourly tick simply drains whatever backlog remains.
+    """
+    from modulo.core.lifecycle_map.reconcile import reconcile_journeys
+
+    async with _make_session_factory()() as session, session.begin():
+        advanced = await reconcile_journeys(session)
+    if advanced:
+        _log.info("saq.journey_reconcile.advanced", extra={"advanced": advanced})
+    return {"advanced": advanced}
+
+
 async def check_missed_fire_alerts_cron(ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — hourly missed-fire probe for silent low-cadence triggers.
 
@@ -717,6 +735,7 @@ def _system_functions() -> list[Any]:
         stale_run_recovery,
         cost_probe,
         analytics_facts_maintenance,
+        journey_reconcile,
         check_missed_fire_alerts_cron,
     ]
 
@@ -813,6 +832,19 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
             heartbeat=60,
             retries=1,
             ttl=900,
+        ),
+        # journey_reconcile: hourly (bounded + idempotent — a second instance
+        # cannot double-advance because a reconciled ref is no longer drift),
+        # unique=True so overlapping ticks cannot interleave. The sweep drains
+        # oldest-first across ticks.
+        CronJob(
+            journey_reconcile,
+            cron="0 * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
         ),
         # check_missed_fire_alerts: hourly (the probe only targets triggers
         # with a >= 1h cadence, so an hourly tick with its own cooldown is

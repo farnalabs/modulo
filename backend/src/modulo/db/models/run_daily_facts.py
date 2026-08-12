@@ -5,6 +5,11 @@ path and backfilled/maintained by the ``analytics_facts_maintenance`` cron.
 The facts survive the 90-day run purge (``run_id`` is deliberately NOT a
 foreign key), so dimensioned run history outlives the ``runs`` rows it was
 derived from.
+
+``JourneyFact`` (FAR-143 part 4) is the per-writer self-report denominator
+table in the same file: one row per (run, finalize-writer path) carrying the
+parse-failure / finalise-attempt counts needed to compute a 7d self-report
+parse-failure ratio after the source ``runs`` rows are swept.
 """
 
 import uuid
@@ -12,7 +17,19 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Uuid
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -121,3 +138,37 @@ class RunDailyFact(OrgScoped):
     team: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_id])
     pipeline: Mapped[Optional["Pipeline"]] = relationship(foreign_keys=[pipeline_id])
     folder: Mapped[Optional["PipelineFolder"]] = relationship(foreign_keys=[folder_id])
+
+
+class JourneyFact(OrgScoped):
+    """Per-writer journey self-report denominators (FAR-143 part 4, migration 0085).
+
+    One row per ``(run_id, writer)`` — *writer* is the finalize write path that
+    drove the journey hook (``live`` / ``fallback`` / ``early_return``). The
+    counters are written from the journey finalise hook (fail-open) and are
+    enough to compute a 7d self-report parse-failure ratio
+    (``SUM(parse_failures) / SUM(finalise_attempts)``) after the ``runs`` rows
+    are purged. ``run_id`` is deliberately NOT a FK — like ``run_daily_facts``,
+    journey facts must survive the 90-day run purge (a future "fix" into an FK
+    breaks retention). ``created_at`` is the fact's own write instant.
+    """
+
+    __tablename__ = "modulo_journey_facts"
+    __table_args__ = (
+        # 7d ratio lookups — org + fact write instant (run-sweep independent).
+        Index("ix_modulo_journey_facts_org_created", "organisation_id", "created_at"),
+        # One fact per (run, writer) — the upsert target of the live writer.
+        UniqueConstraint("run_id", "writer", name="uq_modulo_journey_facts_run_writer"),
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(),
+        nullable=False,
+        comment=(
+            "deliberately NOT a FK to runs — journey facts must survive the 90-day "
+            "run purge; a future 'fix' into an FK breaks retention"
+        ),
+    )
+    writer: Mapped[str] = mapped_column(String(30), nullable=False)
+    parse_failures: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    finalise_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

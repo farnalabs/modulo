@@ -457,6 +457,28 @@ class TestGetEngine:
             rsched._ENGINE = saved_engine
             rsched._TEST_ENGINE = saved_test
 
+    def test_engine_created_with_pool_pre_ping(self) -> None:
+        import modulo.core.reports.scheduler as rsched
+
+        saved = rsched._ENGINE
+        try:
+            rsched._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.modulo_db = "postgres"
+            mock_engine = MagicMock()
+            with (
+                patch.object(rsched, "_ENGINE", None),
+                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch.object(rsched, "get_settings", return_value=settings_mock),
+            ):
+                _get_engine()
+            _, kwargs = mock_create.call_args
+            assert kwargs["pool_pre_ping"] is True
+            assert kwargs["connect_args"]["statement_cache_size"] == 0
+            assert kwargs["connect_args"]["ssl"] is False
+        finally:
+            rsched._ENGINE = saved
+
 
 # ---------------------------------------------------------------------------
 # compute_next_send tests

@@ -95,7 +95,18 @@ def _get_engine() -> AsyncEngine:
     if _ENGINE is None:
         with _ENGINE_LOCK:
             if _ENGINE is None:
-                _ENGINE = create_async_engine(get_settings().database_url)
+                settings = get_settings()
+                connect_args: dict[str, Any] = {"timeout": 10}
+                if settings.modulo_db.lower() == "postgres":
+                    connect_args["ssl"] = False
+                    connect_args["statement_cache_size"] = 0
+                _ENGINE = create_async_engine(
+                    settings.database_url,
+                    pool_pre_ping=True,
+                    connect_args=connect_args,
+                    pool_recycle=3600,
+                    pool_timeout=30,
+                )
     return _ENGINE
 
 

@@ -46,7 +46,6 @@ _TERMINAL_STATUSES = {"complete", "failed", "cancelled", "eval_failed", "stalled
 
 @router.websocket("/{run_id}/ws")
 @handle_db_errors("run_ws.run_websocket")
-@router.websocket("/{run_id}/ws")
 async def run_websocket(
     ws: WebSocket,
     run_id: uuid.UUID,
