@@ -208,6 +208,152 @@ class TestAuditWarning:
 
 
 # ---------------------------------------------------------------------------
+# Audit hook dispatch on violations (§8.18 audit_warning)
+# ---------------------------------------------------------------------------
+
+
+class TestAuditHookDispatch:
+    """The decorator invokes the audit hook when a non-context-setter writes run_context."""
+
+    async def test_violation_invokes_audit_hook(self):
+        """A non-context-setter violation should invoke the audit hook with the payload."""
+
+        from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+        received: dict[str, Any] = {}
+
+        async def audit_hook(payload: dict[str, Any]) -> None:
+            received.update(payload)
+
+        set_audit_hook(audit_hook)
+        try:
+
+            @cancellable_node(role="agent")
+            async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
+                return {"run_context": {"secret": "data"}}
+
+            with pytest.raises(ContextSetterViolationError):
+                await bad_node(_LIVE_STATE)
+        finally:
+            set_audit_hook(None)
+
+        assert received.get("node_id") == "bad_node"
+        assert received.get("role") == "agent"
+        assert received.get("attempted_keys") == ["secret"]
+
+    async def test_violation_with_no_role_reports_none_role(self):
+        """A node with no role still dispatches the audit hook with role=None."""
+
+        from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+        received: dict[str, Any] = {}
+
+        async def audit_hook(payload: dict[str, Any]) -> None:
+            received.update(payload)
+
+        set_audit_hook(audit_hook)
+        try:
+
+            @cancellable_node()
+            async def no_role_node(state: dict[str, Any]) -> dict[str, Any]:
+                return {"run_context": {"attempted": True}}
+
+            with pytest.raises(ContextSetterViolationError):
+                await no_role_node(_LIVE_STATE)
+        finally:
+            set_audit_hook(None)
+
+        assert received.get("node_id") == "no_role_node"
+        assert received.get("role") is None
+        assert received.get("attempted_keys") == ["attempted"]
+
+    async def test_violation_attempted_keys_are_preserved(self):
+        """The hook receives every attempted key in order."""
+
+        from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+        received: dict[str, Any] = {}
+
+        async def audit_hook(payload: dict[str, Any]) -> None:
+            received.update(payload)
+
+        set_audit_hook(audit_hook)
+        try:
+
+            @cancellable_node(role="runner")
+            async def runner_node(state: dict[str, Any]) -> dict[str, Any]:
+                return {"run_context": {"alpha": 1, "beta": 2, "gamma": 3}}
+
+            with pytest.raises(ContextSetterViolationError):
+                await runner_node(_LIVE_STATE)
+        finally:
+            set_audit_hook(None)
+
+        assert received.get("attempted_keys") == ["alpha", "beta", "gamma"]
+
+    async def test_context_setter_does_not_invoke_audit_hook(self):
+        """A context-setter write must not trigger the audit hook."""
+
+        from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+        called = False
+
+        async def audit_hook(payload: dict[str, Any]) -> None:
+            nonlocal called
+            called = True
+
+        set_audit_hook(audit_hook)
+        try:
+
+            @cancellable_node(role="context_setter")
+            async def setter(state: dict[str, Any]) -> dict[str, Any]:
+                return {"run_context": {"model_tier": "tier-2"}}
+
+            await setter(_LIVE_STATE)
+        finally:
+            set_audit_hook(None)
+
+        assert called is False
+
+    async def test_audit_hook_failure_does_not_mask_violation(self, caplog):
+        """A failing audit hook must not replace the ContextSetterViolationError."""
+
+        from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+        async def failing_hook(payload: dict[str, Any]) -> None:
+            raise ConnectionError("audit DB down")
+
+        set_audit_hook(failing_hook)
+        try:
+
+            @cancellable_node(role="agent")
+            async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
+                return {"run_context": {"secret": "data"}}
+
+            with caplog.at_level(logging.WARNING), pytest.raises(ContextSetterViolationError):
+                await bad_node(_LIVE_STATE)
+        finally:
+            set_audit_hook(None)
+
+        hook_failure_records = [r for r in caplog.records if "audit_hook_failed" in r.message]
+        assert len(hook_failure_records) == 1
+
+    async def test_unset_audit_hook_is_noop(self):
+        """With no audit hook registered the violation still raises normally."""
+
+        from modulo.core.pipeline_engine.decorator import set_audit_hook
+
+        set_audit_hook(None)
+
+        @cancellable_node(role="agent")
+        async def bad_node(state: dict[str, Any]) -> dict[str, Any]:
+            return {"run_context": {"secret": "data"}}
+
+        with pytest.raises(ContextSetterViolationError):
+            await bad_node(_LIVE_STATE)
+
+
+# ---------------------------------------------------------------------------
 # Write log is part of state (key existence)
 # ---------------------------------------------------------------------------
 
