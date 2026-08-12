@@ -1,13 +1,13 @@
-"""Migration tests for the ``ongoing`` trigger type (FAR-158, 0086/0087).
+"""Migration tests for the ``ongoing`` trigger type (FAR-158, 0087/0088).
 
 No live Postgres here (integration territory) — instead:
 
-* ``0086_ongoing_trigger_type`` is loaded and inspected directly: revision
+* ``0087_ongoing_trigger_type`` is loaded and inspected directly: revision
   chain, the Postgres NOT VALID + VALIDATE constraint-recreation pattern, the
   partial CHECK strings, and the downgrade restoring the pre-feature strings.
 * The ORM models' CHECK constraints are compared against the migration strings
   (drift guard): a CHECK edited on one side and not the other fails loudly.
-* ``0087_ongoing_trigger_flag`` is confirmed as the single head of the chain.
+* ``0088_ongoing_trigger_flag`` is confirmed as the single head of the chain.
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ from types import ModuleType
 import pytest
 from alembic.script import ScriptDirectory
 
-_MIGRATION_0086 = "0086_ongoing_trigger_type"
-_MIGRATION_0087 = "0087_ongoing_trigger_flag"
+_MIGRATION_0087 = "0087_ongoing_trigger_type"
+_MIGRATION_0088 = "0088_ongoing_trigger_flag"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
-# The pre-feature / post-feature vocabulary strings (hardcoded in 0086).
+# The pre-feature / post-feature vocabulary strings (hardcoded in 0087).
 _TRIGGERS_VALUES_PRE = "'manual', 'webhook', 'cron', 'polling', 'agent_signal'"
 _TRIGGERS_VALUES_POST = "'manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing'"
 _RUNS_VALUES_PRE = "'manual', 'webhook', 'cron', 'polling', 'agent_signal', 'correction'"
@@ -46,73 +46,73 @@ def _load_migration(name: str) -> ModuleType:
 
 
 @pytest.fixture(scope="module")
-def migration_0086() -> ModuleType:
-    return _load_migration(_MIGRATION_0086)
+def migration_0087() -> ModuleType:
+    return _load_migration(_MIGRATION_0087)
 
 
 @pytest.fixture(scope="module")
-def migration_0087() -> ModuleType:
-    return _load_migration(_MIGRATION_0087)
+def migration_0088() -> ModuleType:
+    return _load_migration(_MIGRATION_0088)
 
 
 def _script() -> ScriptDirectory:
     return ScriptDirectory(str(_VERSIONS_DIR.parent))
 
 
-class TestMigration0086OngoingTriggerType:
-    def test_revision_chain(self, migration_0086: ModuleType) -> None:
-        assert migration_0086.revision == "0086_ongoing_trigger_type"
-        assert migration_0086.down_revision == "0085_journey_facts"
-        assert migration_0086.branch_labels is None
+class TestMigration0087OngoingTriggerType:
+    def test_revision_chain(self, migration_0087: ModuleType) -> None:
+        assert migration_0087.revision == "0087_ongoing_trigger_type"
+        assert migration_0087.down_revision == "0086_seeded_alert_rules"
+        assert migration_0087.branch_labels is None
 
-    def test_upgrade_uses_not_valid_then_validate(self, migration_0086: ModuleType) -> None:
+    def test_upgrade_uses_not_valid_then_validate(self, migration_0087: ModuleType) -> None:
         """The wide enum CHECKs are recreated with the Postgres NOT VALID +
         VALIDATE pattern (mirrors 0069) so the DROP/ADD skips the long
         ACCESS EXCLUSIVE re-scan and the explicit VALIDATE catches offenders."""
-        source = _source(migration_0086)
+        source = _source(migration_0087)
         assert "NOT VALID" in source
         assert "VALIDATE CONSTRAINT" in source
         assert "ADD CONSTRAINT" in source
 
-    def test_upgrade_widens_both_checks_with_ongoing(self, migration_0086: ModuleType) -> None:
-        source = _source(migration_0086)
+    def test_upgrade_widens_both_checks_with_ongoing(self, migration_0087: ModuleType) -> None:
+        source = _source(migration_0087)
         assert _TRIGGERS_VALUES_POST in source
         assert _RUNS_VALUES_POST in source
 
-    def test_partial_ongoing_checks_present(self, migration_0086: ModuleType) -> None:
-        source = _source(migration_0086)
+    def test_partial_ongoing_checks_present(self, migration_0087: ModuleType) -> None:
+        source = _source(migration_0087)
         assert _SPEND_PARTIAL in source
         assert _TARGET_PARTIAL in source
 
-    def test_upgrade_creates_trigger_id_indexes(self, migration_0086: ModuleType) -> None:
-        source = _source(migration_0086)
+    def test_upgrade_creates_trigger_id_indexes(self, migration_0087: ModuleType) -> None:
+        source = _source(migration_0087)
         assert "ix_runs_trigger_id_status" in source
         assert "ix_runs_trigger_id_created_at" in source
         assert 'create_index("ix_runs_trigger_id_status"' in source
         assert 'create_index("ix_runs_trigger_id_created_at"' in source
 
-    def test_downgrade_restores_pre_strings_and_drops_indexes(self, migration_0086: ModuleType) -> None:
-        source = _source(migration_0086)
+    def test_downgrade_restores_pre_strings_and_drops_indexes(self, migration_0087: ModuleType) -> None:
+        source = _source(migration_0087)
         assert _TRIGGERS_VALUES_PRE in source
         assert _RUNS_VALUES_PRE in source
         assert 'drop_index("ix_runs_trigger_id_created_at"' in source
         assert 'drop_index("ix_runs_trigger_id_status"' in source
 
 
-class TestMigration0087OngoingFlag:
-    def test_revision_chain(self, migration_0087: ModuleType) -> None:
-        assert migration_0087.revision == "0087_ongoing_trigger_flag"
-        assert migration_0087.down_revision == "0086_ongoing_trigger_type"
+class TestMigration0088OngoingFlag:
+    def test_revision_chain(self, migration_0088: ModuleType) -> None:
+        assert migration_0088.revision == "0088_ongoing_trigger_flag"
+        assert migration_0088.down_revision == "0087_ongoing_trigger_type"
 
-    def test_single_head_chain(self, migration_0087: ModuleType) -> None:
+    def test_single_head_chain(self, migration_0088: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == ["0087_ongoing_trigger_flag"], f"expected a single head, got {heads}"
-        assert migration_0087.revision in heads
+        assert heads == ["0088_ongoing_trigger_flag"], f"expected a single head, got {heads}"
+        assert migration_0088.revision in heads
 
-    def test_flag_upserts_ongoing_trigger_inactive(self, migration_0087: ModuleType) -> None:
-        assert "ongoing_trigger" in migration_0087._FLAGS
-        assert migration_0087._FLAGS["ongoing_trigger"][0] == "community"
+    def test_flag_upserts_ongoing_trigger_inactive(self, migration_0088: ModuleType) -> None:
+        assert "ongoing_trigger" in migration_0088._FLAGS
+        assert migration_0088._FLAGS["ongoing_trigger"][0] == "community"
 
 
 class TestOrmCheckDriftGuard:

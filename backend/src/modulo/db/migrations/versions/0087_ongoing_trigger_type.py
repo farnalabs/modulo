@@ -1,7 +1,7 @@
 """Add the ``ongoing`` trigger type (FAR-158) — topped-up worker-pool semantics.
 
-Revision ID: 0086_ongoing_trigger_type
-Revises: 0085_journey_facts
+Revision ID: 0087_ongoing_trigger_type
+Revises: 0086_seeded_alert_rules
 Create Date: 2026-08-12
 
 The ``ongoing`` trigger keeps a pipeline topped up to ``max_concurrent_runs``
@@ -37,8 +37,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0086_ongoing_trigger_type"
-down_revision: str | None = "0085_journey_facts"
+revision: str = "0087_ongoing_trigger_type"
+down_revision: str | None = "0086_seeded_alert_rules"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
