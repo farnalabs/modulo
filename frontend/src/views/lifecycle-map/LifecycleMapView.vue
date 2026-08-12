@@ -68,10 +68,76 @@
         <div class="rounded-xl border border-border bg-card overflow-hidden" style="height: 600px">
           <LifecycleMapRenderer
             :map-data="mapData"
+            :journeys="store.journeys"
             :on-modulo-stage-click="handleModuloStageClick"
             :on-external-stage-click="handleExternalStageClick"
+            @journey-open="openJourneyDetail"
           />
         </div>
+
+        <ErrorAlert
+          v-if="journeysError"
+          :message="journeysError"
+          :on-retry="loadJourneys"
+          class="mt-4"
+        />
+
+        <section
+          v-if="selectedJourneyKey"
+          class="mt-4 rounded-xl border border-border bg-card p-4"
+          aria-label="Journey details"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="text-sm font-semibold text-foreground">
+              {{ $t('views.LifecycleMapView.journey.detail_title', { journey: selectedJourneyLabel }) }}
+            </h2>
+            <Button
+              variant="outline"
+              size="sm"
+              :aria-label="$t('views.LifecycleMapView.journey.close')"
+              @click="closeJourneyDetail"
+            >
+              {{ $t('views.LifecycleMapView.journey.close') }}
+            </Button>
+          </div>
+
+          <ErrorAlert
+            v-if="journeyDetailError"
+            :message="journeyDetailError"
+            :on-retry="retryJourneyDetail"
+            class="mt-3"
+          />
+
+          <p
+            v-else-if="journeyDetail && journeyDetail.runs.length === 0"
+            class="mt-3 text-sm text-muted-foreground"
+          >
+            {{ $t('views.LifecycleMapView.journey.no_runs') }}
+          </p>
+
+          <ul v-else-if="journeyDetail" class="mt-3 divide-y divide-border">
+            <li
+              v-for="run in journeyDetail.runs"
+              :key="run.run_id"
+              class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+            >
+              <span :class="statusBadgeClass(run.status ?? '')" class="badge capitalize">
+                {{ statusLabel(run.status ?? '') }}
+              </span>
+              <ProvenanceBadge :provenance="run.provenance" />
+              <span class="text-muted-foreground">{{ formatRunDate(run.completed_at) }}</span>
+            </li>
+          </ul>
+
+          <div
+            v-else
+            class="mt-3 flex items-center gap-2 text-sm text-muted-foreground"
+            role="status"
+          >
+            <div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            {{ $t('views.LifecycleMapView.journey.loading') }}
+          </div>
+        </section>
       </template>
 
       <div v-else class="text-center py-20 text-muted-foreground">
@@ -84,16 +150,22 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import PageHeader from '../../components/shared/PageHeader.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
+import ProvenanceBadge from '../../components/lifecycle-map/ProvenanceBadge.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
+import { formatRunDate } from '../../utils/runUtils'
+import { Button } from '@/components/ui/button'
+import type { JourneySummary } from '../../types/lifecycleMap'
 import type { LifecycleMapStage } from '../../stores/lifecycleMaps'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
 const route = useRoute()
 const router = useRouter()
 const store = useLifecycleMapsStore()
+const { t } = useI18n()
 
 const mapId = computed(() => route.params.id as string)
 const selectedVersion = ref<number | null>(null)
@@ -103,6 +175,16 @@ const isLoadingDetail = computed(() => store.isLoadingDetail)
 const detailError = computed(() => store.detailError)
 const graduatedCount = computed(() => store.graduatedCount)
 const manualCount = computed(() => store.manualCount)
+const journeysError = computed(() => store.journeysError)
+const selectedJourneyKey = computed(() => store.selectedJourneyKey)
+const journeyDetail = computed(() => store.journeyDetail)
+const journeyDetailError = computed(() => store.journeyDetailError)
+
+const selectedJourneyLabel = computed(() => {
+  const key = selectedJourneyKey.value
+  if (!key) return ''
+  return key.replace(':', ' ')
+})
 
 const sortedVersions = computed(() => {
   const versions = mapData.value?.versions ?? []
@@ -126,6 +208,55 @@ async function onVersionChange(): Promise<void> {
   }
 }
 
+async function loadJourneys(): Promise<void> {
+  if (!mapId.value) return
+  await store.fetchJourneys(mapId.value)
+}
+
+async function openJourneyDetail(journey: JourneySummary): Promise<void> {
+  if (!mapId.value) return
+  await store.fetchJourneyDetail(mapId.value, journey.kind, journey.ref)
+}
+
+function closeJourneyDetail(): void {
+  store.clearJourneyDetail()
+}
+
+async function retryJourneyDetail(): Promise<void> {
+  if (!mapId.value || !selectedJourneyKey.value) return
+  const idx = selectedJourneyKey.value.indexOf(':')
+  if (idx === -1) return
+  await store.fetchJourneyDetail(
+    mapId.value,
+    selectedJourneyKey.value.slice(0, idx),
+    selectedJourneyKey.value.slice(idx + 1)
+  )
+}
+
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case 'complete':
+      return 'badge-context-green'
+    case 'failed':
+    case 'stalled':
+    case 'eval_failed':
+      return 'badge-context-rose'
+    case 'running':
+      return 'badge-context-blue'
+    case 'awaiting_human':
+    case 'claimed':
+      return 'badge-context-amber'
+    default:
+      return 'badge-context-slate'
+  }
+}
+
+function statusLabel(status: string): string {
+  const key = `views.LifecycleMapView.journey.status.${status}`
+  const translated = t(key)
+  return translated === key ? status : translated
+}
+
 function handleModuloStageClick(stage: LifecycleMapStage): void {
   if (stage.pipeline_id) {
     router.push({ name: 'pipeline-editor', params: { id: stage.pipeline_id } })
@@ -144,6 +275,7 @@ onMounted(() => {
       if (store.currentMap) {
         selectedVersion.value = store.currentMap.current_version
       }
+      loadJourneys()
     })
   }
 })

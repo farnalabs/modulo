@@ -52,3 +52,39 @@ export interface PipelineSummary {
   visibility: string
   created_at: string
 }
+
+export interface JourneyCurrentStage {
+  map_id: string
+  version: number | null
+  stage_id: string
+  stage_name: string | null
+  position: number | null
+}
+
+export interface JourneySummary {
+  kind: string
+  ref: string
+  canonical_work_item_id: string
+  current_stage: JourneyCurrentStage | null
+  status: string | null
+  provenance: string | null
+  run_count: number
+  latest_run_id: string | null
+  updated_at: string
+}
+
+export interface JourneyRunHistoryItem {
+  run_id: string
+  status: string | null
+  completed_at: string | null
+  provenance: string | null
+}
+
+export interface JourneyDetail extends JourneySummary {
+  runs: JourneyRunHistoryItem[]
+}
+
+export interface JourneyListResponse {
+  items: JourneySummary[]
+  next_cursor: string | null
+}

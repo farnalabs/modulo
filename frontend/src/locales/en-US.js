@@ -2133,7 +2133,29 @@ export default {
       "description": "Description"
     },
     "LifecycleMapView": {
-      "version_label": "Version:"
+      "version_label": "Version:",
+      "journey": {
+        "detail_title": "Journey: {journey}",
+        "close": "Close",
+        "loading": "Loading journey...",
+        "no_runs": "No runs yet",
+        "run_count": "{count} run | {count} runs",
+        "provenance": {
+          "derived": "Derived",
+          "reported": "Reported"
+        },
+        "status": {
+          "complete": "Complete",
+          "failed": "Failed",
+          "stalled": "Stalled",
+          "running": "Running",
+          "pending": "Pending",
+          "awaiting_human": "Awaiting Human",
+          "cancelled": "Cancelled",
+          "eval_failed": "Eval Failed",
+          "claimed": "Claimed"
+        }
+      }
     },
     "EnvironmentProfileList": {
       "try_a_different_search_term": "Try a different search term.",
@@ -2523,7 +2545,11 @@ export default {
       "item_system_config": "System Config",
       "item_admin_pipelines": "Admin Pipelines",
       "item_housekeeping": "Housekeeping",
-      "item_parameter_schemas": "Parameter Schemas"
+      "item_parameter_schemas": "Parameter Schemas",
+      "group_collapsed_hint": "collapsed",
+      "group_expanded_hint": "expanded",
+      "click_to_expand": "click to expand",
+      "click_to_collapse": "click to collapse"
     },
     "NotificationCard": {
       "hide_from_dashboard_keep_in_notifications_page": "Hide from dashboard, keep in notifications page",

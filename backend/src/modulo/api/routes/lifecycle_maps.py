@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
@@ -14,6 +14,11 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.lifecycle_map.journeys import (
+    get_map_journey,
+    list_journey_runs,
+    list_map_journeys,
+)
 from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
     delete_lifecycle_map,
@@ -173,6 +178,47 @@ class LifecycleMapDetailResponse(BaseModel):
     archived_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class JourneyCurrentStage(BaseModel):
+    """The map stage a journey currently sits in (latest stage identity)."""
+
+    map_id: uuid.UUID
+    version: int | None = None
+    stage_id: str
+    stage_name: str | None = None
+    position: int | None = None
+
+
+class JourneySummaryResponse(BaseModel):
+    """One journey in the map-scoped list wire shape."""
+
+    kind: str
+    ref: str
+    canonical_work_item_id: uuid.UUID
+    current_stage: JourneyCurrentStage | None = None
+    status: str | None = None
+    provenance: str | None = None
+    run_count: int = 0
+    unattributed: bool = False
+    latest_run_id: uuid.UUID | None = None
+    updated_at: datetime
+
+
+class JourneyListResponse(BaseModel):
+    items: list[JourneySummaryResponse]
+    next_cursor: str | None = None
+
+
+class JourneyRunHistoryItem(BaseModel):
+    run_id: uuid.UUID
+    status: str | None = None
+    completed_at: datetime | None = None
+    provenance: str | None = None
+
+
+class JourneyDetailResponse(JourneySummaryResponse):
+    runs: list[JourneyRunHistoryItem] = Field(default_factory=list)
 
 
 def _content_dict(lm: Any) -> dict[str, Any]:
@@ -798,3 +844,172 @@ async def graduate_lifecycle_map_stage_endpoint(
     if lifecycle_map is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
     return _build_version_entry(lifecycle_map)
+
+
+def _build_journey_current_stage(j: Any) -> JourneyCurrentStage | None:
+    """Current map stage from the journey's latest stage identity (null when none)."""
+    if j.map_id is None or j.stage_id is None:
+        return None
+    return JourneyCurrentStage(
+        map_id=j.map_id,
+        version=j.map_version,
+        stage_id=j.stage_id,
+        stage_name=j.stage_name,
+        position=j.position,
+    )
+
+
+def _build_journey_summary(j: Any, unattributed: bool) -> JourneySummaryResponse:
+    return JourneySummaryResponse(
+        kind=j.kind,
+        ref=j.ref,
+        canonical_work_item_id=j.canonical_work_item_id,
+        current_stage=_build_journey_current_stage(j),
+        status=j.latest_status,
+        provenance=j.latest_provenance,
+        run_count=j.run_count or 0,
+        unattributed=unattributed,
+        latest_run_id=j.latest_terminal_run_id,
+        updated_at=j.updated_at,
+    )
+
+
+def _team_scope_filter(lifecycle_map: Any) -> uuid.UUID | None:
+    """owner_team_id filter for team-scoped maps; None for org-scoped maps."""
+    if lifecycle_map.visibility == "team" and lifecycle_map.owner_team_id is not None:
+        return cast(uuid.UUID, lifecycle_map.owner_team_id)
+    return None
+
+
+@handle_db_errors("lifecycle_maps.list_journeys_endpoint")
+@router.get("/{lifecycle_map_id}/journeys", response_model=JourneyListResponse)
+async def list_journeys_endpoint(
+    lifecycle_map_id: uuid.UUID,
+    kind: str | None = Query(default=None),
+    ref: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("run.list"),
+) -> JourneyListResponse:
+    """Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
+            if lifecycle_map is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+            owner_team_id = _team_scope_filter(lifecycle_map)
+            journeys, next_cursor = await list_map_journeys(
+                session,
+                map_id=lifecycle_map_id,
+                kind=kind,
+                ref=ref,
+                owner_team_id=owner_team_id,
+                cursor=cursor,
+                limit=limit,
+            )
+    except ValueError as exc:
+        _log.exception("lifecycle_maps.list_journeys_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid kind, ref, or pagination cursor.",
+        ) from exc
+    except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.list_journeys_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.list_journeys_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("lifecycle_maps.list_journeys")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    return JourneyListResponse(
+        items=[_build_journey_summary(j, unattributed) for j, unattributed in journeys],
+        next_cursor=next_cursor,
+    )
+
+
+@handle_db_errors("lifecycle_maps.get_journey_endpoint")
+@router.get("/{lifecycle_map_id}/journeys/{kind}/{ref}", response_model=JourneyDetailResponse)
+async def get_journey_endpoint(
+    lifecycle_map_id: uuid.UUID,
+    kind: str,
+    ref: str,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("run.list"),
+) -> JourneyDetailResponse:
+    """Single journey detail incl. recent run history.
+
+    ``kind`` and ``ref`` are path params: refs containing ``/`` must be
+    percent-encoded (``%2F``) so they survive URL routing.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
+            if lifecycle_map is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+            owner_team_id = _team_scope_filter(lifecycle_map)
+            journey_result = await get_map_journey(
+                session,
+                map_id=lifecycle_map_id,
+                kind=kind,
+                ref=ref,
+                owner_team_id=owner_team_id,
+            )
+            if journey_result is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Journey not found")
+            journey, unattributed = journey_result
+            runs = await list_journey_runs(session, journey=journey)
+    except ValueError as exc:
+        _log.exception("lifecycle_maps.get_journey_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid kind or ref.",
+        ) from exc
+    except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.get_journey_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.get_journey_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("lifecycle_maps.get_journey")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    return JourneyDetailResponse(
+        **_build_journey_summary(journey, unattributed).model_dump(),
+        runs=[
+            JourneyRunHistoryItem(
+                run_id=r.id,
+                status=r.status,
+                completed_at=r.completed_at,
+                provenance=r.trigger_type,
+            )
+            for r in runs
+        ],
+    )
