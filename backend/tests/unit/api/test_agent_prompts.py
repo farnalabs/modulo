@@ -194,8 +194,10 @@ class TestOptimizePrompt:
         assert resp.status_code == 404
 
     def test_optimize_returns_404_when_no_eval_results(self, client: TestClient) -> None:
+        agent = _make_agent()
+        agent.prompt_version_history = [{"version": "v1", "template": "Hello", "created_at": _NOW.isoformat()}]
         with (
-            patch("modulo.api.routes.agents.get_agent", return_value=_make_agent()),
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
             patch("modulo.api.routes.agents.get_eval_results_with_defs", return_value=([], {})),
             patch("modulo.api.routes.agents.set_rls_org"),
         ):
@@ -205,6 +207,158 @@ class TestOptimizePrompt:
             )
         assert resp.status_code == 404
         assert "No eval results found" in resp.json()["detail"]
+
+    def test_optimize_returns_404_when_version_not_found(self, client: TestClient) -> None:
+        agent = _make_agent()
+        agent.prompt_version_history = [{"version": "v1", "template": "Hello", "created_at": _NOW.isoformat()}]
+        mock_optimizer = MagicMock()
+        mock_optimizer.optimize = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch("modulo.api.routes.agents.get_eval_results_with_defs"),
+            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("modulo.api.routes.agents.create_secrets_backend"),
+            patch("modulo.core.model_backend_hub._build_backend"),
+            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+        ):
+            resp = client.post(
+                f"/api/v1/agents/{_AGENT_ID}/prompts/v99/optimize",
+                json={"eval_result_ids": [str(uuid.uuid4())]},
+            )
+        assert resp.status_code == 404
+        assert "Prompt version v99 not found" in resp.json()["detail"]
+        mock_optimizer.optimize.assert_not_called()
+
+    def test_optimize_uses_specified_version_template(self, client: TestClient) -> None:
+        agent = _make_agent()
+        agent.prompt_version_history = [
+            {"version": "v1", "template": "Old v1 template", "created_at": _NOW.isoformat()},
+            {"version": "v2", "template": "Newer v2 template", "created_at": _NOW.isoformat()},
+        ]
+        mock_optimizer = MagicMock()
+        mock_optimizer.optimize = AsyncMock(
+            return_value=MagicMock(
+                suggested_prompt="Improved: {{query}}",
+                rationale="More detail needed",
+                analysis="Brevity failures",
+            )
+        )
+
+        mock_backend = AsyncMock()
+        mock_backend.invoke = AsyncMock(return_value=MagicMock(content="Optimized suggestion"))
+
+        mock_mb = MagicMock()
+        mock_mb.id = _BACKEND_ID
+        mock_mb_result = MagicMock()
+        mock_mb_result.scalar_one_or_none.return_value = mock_mb
+
+        eval_results = [
+            {
+                "id": str(uuid.uuid4()),
+                "eval_id": str(_EVAL_ID),
+                "run_id": str(uuid.uuid4()),
+                "passed": False,
+                "score": 0.0,
+                "detail": "Too brief",
+            }
+        ]
+        eval_defs = {
+            str(_EVAL_ID): {
+                "id": str(_EVAL_ID),
+                "name": "Brevity Check",
+                "eval_type": "regex",
+                "config_json": {},
+            }
+        }
+
+        with (
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch(
+                "modulo.api.routes.agents.get_eval_results_with_defs",
+                return_value=(eval_results, eval_defs),
+            ),
+            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("modulo.api.routes.agents.create_secrets_backend") as mock_sb_factory,
+            patch("modulo.core.model_backend_hub._build_backend", return_value=mock_backend),
+            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+        ):
+            mock_sb = AsyncMock()
+            mock_sb.get_secret = AsyncMock(return_value=json.dumps({"api_key": "sk-test"}))
+            mock_sb_factory.return_value = mock_sb
+
+            resp = client.post(
+                _OPTIMIZE_URL,
+                json={"eval_result_ids": [str(uuid.uuid4())]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_optimizer.optimize.await_args.args[0] == "Old v1 template"
+        assert resp.json()["version"] == "v3"
+
+    def test_optimize_uses_current_template_when_version_current(self, client: TestClient) -> None:
+        agent = _make_agent()
+        agent.prompt_version_history = [
+            {"version": "v1", "template": "Old v1 template", "created_at": _NOW.isoformat()}
+        ]
+        mock_optimizer = MagicMock()
+        mock_optimizer.optimize = AsyncMock(
+            return_value=MagicMock(
+                suggested_prompt="Improved: {{query}}",
+                rationale="More detail needed",
+                analysis="Brevity failures",
+            )
+        )
+
+        mock_backend = AsyncMock()
+        mock_backend.invoke = AsyncMock(return_value=MagicMock(content="Optimized suggestion"))
+
+        mock_mb = MagicMock()
+        mock_mb.id = _BACKEND_ID
+        mock_mb_result = MagicMock()
+        mock_mb_result.scalar_one_or_none.return_value = mock_mb
+
+        eval_results = [
+            {
+                "id": str(uuid.uuid4()),
+                "eval_id": str(_EVAL_ID),
+                "run_id": str(uuid.uuid4()),
+                "passed": False,
+                "score": 0.0,
+                "detail": "Too brief",
+            }
+        ]
+        eval_defs = {
+            str(_EVAL_ID): {
+                "id": str(_EVAL_ID),
+                "name": "Brevity Check",
+                "eval_type": "regex",
+                "config_json": {},
+            }
+        }
+
+        with (
+            patch("modulo.api.routes.agents.get_agent", return_value=agent),
+            patch(
+                "modulo.api.routes.agents.get_eval_results_with_defs",
+                return_value=(eval_results, eval_defs),
+            ),
+            patch("modulo.api.routes.agents.set_rls_org"),
+            patch("modulo.api.routes.agents.create_secrets_backend") as mock_sb_factory,
+            patch("modulo.core.model_backend_hub._build_backend", return_value=mock_backend),
+            patch("modulo.api.routes.agents.PromptOptimizer", return_value=mock_optimizer),
+        ):
+            mock_sb = AsyncMock()
+            mock_sb.get_secret = AsyncMock(return_value=json.dumps({"api_key": "sk-test"}))
+            mock_sb_factory.return_value = mock_sb
+
+            resp = client.post(
+                f"/api/v1/agents/{_AGENT_ID}/prompts/current/optimize",
+                json={"eval_result_ids": [str(uuid.uuid4())]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_optimizer.optimize.await_args.args[0] == agent.prompt_template
 
     def test_optimize_returns_422_when_empty_ids(self, client: TestClient) -> None:
         resp = client.post(
