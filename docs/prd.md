@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.34
-**Date**: 2026-08-05
+**Version**: 0.35
+**Date**: 2026-08-12
 **Status**: Pre-development
 **Changelog**:
+- v0.35 — §8.31 Lifecycle Map Journeys: work-item journeys minted from run work_item_refs, map-scoped journey reads with keyset pagination, journey detail with run history + provenance badges, advancement service (compare-and-set stage resolution), self-report parse, reconciliation, persisted map version history, stage junction (one active map per pipeline), restore endpoint. §8.26.2 sidebar restructure to 4 flat groups (BUILD/MONITOR/CONFIGURE/ADMIN, no subgroups). Team Comparison + API Changelog features removed (PR #1018).
 - v0.34 — §8.32 Analytics: rolling-window run/cost/quality series (Last 24h/7d/30d/90d) over a retained `run_daily_facts` table, typed-params query surface (no query language in this delivery), per-org `analytics_page` feature gate. ADR 020.
 - v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (search_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
@@ -2491,82 +2492,74 @@ Each breadcrumb segment is a `<router-link>` to the parent page, except the curr
 
 The `Breadcrumb.vue` component walks the `parent` chain up to root, rendering each segment. Route definitions are updated with these two fields for all 50 non-auth routes.
 
-#### 8.26.2 Sidebar Hierarchical Groups
+#### 8.26.2 Sidebar Groups
 
-The sidebar supports nested subgroups inside groups. A new `SidebarSubgroup.vue` component renders a collapsible sub-header with indented children, visually nested under its parent group.
+The sidebar is a set of four flat groups — no subgroups. It is driven by `frontend/src/manifest.yaml` as the single source of truth for routes, group membership, ordering, and tier/permission gating (§8.28). Each route declares `sidebar_group` + `sidebar_order`; detail and editor pages (`type: detail_page` or without a `sidebar_group`) are excluded from the sidebar.
 
-**Sidebar structure after restructure:**
+**Sidebar structure:**
 
 ```
-Core (default expanded)
+BUILD (default expanded)
   Dashboard           /
-  Pipelines           (subgroup, default expanded)
-    Library           /library
-    Templates         /templates
-    Copy Pipeline     /pipelines/copy
-    Stages Board      /stages
-  Runs & Evaluation   (subgroup, default collapsed)
-    Run Detail        /runs/:id         (not in sidebar)
-    Output Diff       /runs/diff
-    Evals             /evals/editor
-    Eval Proposals    /evals/proposals
-    Variants          /variants/compare
-    AB Test Models    /variants/ab-test
-  Schemas             (subgroup, default collapsed)
-    Schemas           /schemas
-    Editor            /schemas/editor   (form page, reached via Schemas PageTabs — not a sidebar item)
-    Infer             /schemas/infer    (reached via Schemas PageTabs — not a sidebar item; publicly reachable)
+  Analytics           /analytics         (requires analytics.query permission)
+  Pipelines           /pipelines
+  Library             /library
+  Runs                /runs
+  Stages Board        /stages
+  Lifecycle Maps      /lifecycle-maps
 
-Remy (default collapsed, simple mode)
-  My Skills           /settings/remy
-  Admin Config        /admin/remy
+MONITOR (default expanded)
+  Output Diff         /runs/diff
+  Evals               /evals/editor
+  Eval Proposals      /evals/proposals
+  Variants            /variants/compare
+  AB Test Models      /variants/ab-test
+  Browser Monitoring  /settings/monitoring
+  Error Dashboard     /admin/errors
+  Notification Log    /admin/notification-delivery
 
-Settings (default collapsed, simple mode)
+CONFIGURE (default collapsed)
+  Schemas             /schemas
+  Parameter Schemas   /admin/parameter-schemas
+  Model Backends      /admin/model-backends
+  MCP                 /settings/mcp
+  Triggers            /settings/triggers
+  Connectors          /admin/connectors
+  Runtime Config      /settings/runtime-config
+  Rate Limits         /settings/rate-limits
+  Environment Profiles /environment-profiles
+
+ADMIN (default collapsed)
+  Remy Config         /admin/remy          (private_preview — dev mode only)
+  Remy Skills         /settings/remy       (private_preview — dev mode only)
   Teams               /settings/teams
   SSO                 /settings/sso
   License             /settings/license
-  MCP                 /settings/mcp
-  Triggers            /settings/triggers
-  Runtime Config      /settings/runtime-config
-  Rate Limits         /settings/rate-limits
+  Users               /admin/users
+  Org Settings        /admin/org
+  Audit Log           /admin/audit
+  Costs               /admin/costs
+  Node Categories     /admin/node-categories
+  Feature Flags       /admin/feature-flags
+  Environments        /admin/environments
+  Housekeeping        /admin/housekeeping
+  Run Retention       /admin/run-retention
+  Saved Views         /admin/views
+  Sandbox Concurrency /admin/sandbox-concurrency
   HITL Review         /settings/hitl-review
   Observability       /settings/observability
   Error Forwarders    /settings/error-forwarders
-
-Admin (advanced mode, default collapsed)
-  Access Control      (subgroup)
-    Users             /admin/users
-    Org Settings      /admin/org
-    Audit Log         /admin/audit
-  Cost Management     (single entry — in-page tabs)
-    Costs             /admin/costs   (tabs: Overview, Spend Limits, Cost Components, Cost Controls)
-  System              (subgroup)
-    Connectors        /admin/connectors
-    Model Backends    /admin/model-backends
-    Node Categories   /admin/node-categories
-    Feature Flags     /admin/feature-flags
-    Environments      /admin/environments
-    Run Retention     /admin/run-retention
-    Saved Views       /admin/views
-  Monitoring          (subgroup)
-    Error Dashboard   /admin/errors
-    Notification Log  /admin/notification-delivery
-  Extensions          (subgroup)
-    Plugins           /admin/plugins
-    Remy Config       (moved to Remy group above)
-    Feedback Inbox    /feedback/inbox
-
-System (advanced mode + system_admin, default collapsed)
-  Organisations       /admin/system/orgs
-  System Config       /admin/system/config
+  Email               /settings/email
+  Plugins             /admin/plugins
+  Feedback Inbox      /feedback/inbox
 ```
 
-Key structural changes:
-- Pipelines and Evaluation merged into Core as collapsible subgroups (removes duplicate Library entry)
-- Schemas demoted from standalone group to a subgroup under Core
-- New **Remy** group consolidates user-level skills (`/settings/remy`) and admin config (`/admin/remy`) — both previously scattered across Settings and Admin
-- Admin gets 4 visual subgroups (Access Control, System, Monitoring, Extensions) replacing a flat 20-item list; Cost Management is a single sidebar entry with in-page tabs
-- Sidebar active-state: exact path match wins; child routes no longer highlight parent links to avoid ambiguity
+Key structural points:
+- Four flat groups — BUILD, MONITOR, CONFIGURE, ADMIN — with no subgroups (`SidebarSubgroup.vue` removed). BUILD and MONITOR default expanded; CONFIGURE and ADMIN default collapsed.
+- Remy sits under ADMIN: Remy Config (`/admin/remy`) and Remy Skills (`/settings/remy`), both `private_preview` (dev mode only).
+- Settings/configure/admin pages are distributed across groups per the manifest (MCP, Triggers, Runtime Config, Rate Limits, Connectors, Model Backends under CONFIGURE; Teams, SSO, License, HITL Review, Observability, Error Forwarders, Email under ADMIN).
+- Detail and editor pages (e.g. `/runs/:id`, `/admin/errors/:id`, `/lifecycle-maps/:id`, schema editor/infer) are not sidebar items.
+- The sidebar is driven by `frontend/src/manifest.yaml` as the single source of truth (§8.28): group membership, ordering, tiers, permissions, and dev-mode visibility all come from the manifest.
 
 #### 8.26.3 Secondary Navigation (Page Tabs)
 
@@ -4006,7 +3999,7 @@ From the user's perspective: the Lifecycle Map is the first thing they see when 
 | **Transition Edge** | A directed connection between two stage nodes. Carries trigger metadata describing *how* work moves from one stage to the next — even if Modulo doesn't own the trigger. |
 | **Trigger Metadata** | A structured annotation on a transition edge: `trigger_type: "pipeline_completed" \| "webhook" \| "cron" \| "manual" \| "external"`, a human-readable description of who/what fires it, and optionally a link to the trigger definition if Modulo-managed. |
 | **Graduated Stage** | A stage node that started as `external` or `manual` and was later linked to a Modulo pipeline. The map preserves its history — previous versions show what it looked like before graduation. |
-| **Map Version** | An immutable snapshot of the entire map DAG. Versions are created on explicit save. Older versions remain viewable to track process evolution. V1: a save bumps the version counter and publishes the content as the active version; an immutable version-history table is a later slice. |
+| **Map Version** | A versioned snapshot of the entire map DAG. A version API surface is implemented (list versions, GET a version by number, POST save, PUT update) plus a restore endpoint (`POST /{id}/restore`) that revives a soft-deleted map and frees its pipelines. A save bumps the version counter and publishes the content as the active version; only the active version is served (GET of a non-current version returns 404). Immutable per-version snapshot history with browse-back remains a later slice. |
 
 #### 8.31.2 Stage Node Types
 
@@ -4083,7 +4076,7 @@ The Lifecycle Map editor is an interactive canvas (built on Vue Flow, same as th
 - **Click to configure** each node: type, name, pipeline link, external URL
 - **Draw transition edges** between nodes by dragging from one node's output port to another's input
 - **Edge properties panel**: trigger type picker, description field, condition expression, trigger link
-- **Version history browser**: time-machine slider to see how the map has evolved
+- **Version selector**: the map detail page renders a version dropdown (vN) that can re-fetch the active version; a time-machine browse-back slider over retained snapshots is a later slice
 - **Graduation indicator**: graduated stages show a small badge (shield icon) with the graduation date
 - **Map list page**: card grid of all maps in the org, searchable, filterable by team
 
@@ -4099,7 +4092,7 @@ The editor is available from `/lifecycle-maps` in the sidebar (Core group, or a 
 
 | Existing Concept | How It Relates |
 |---|---|
-| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. A pipeline may be a stage of **one active map at a time** — the lifecycle-map stage junction enforces this (a pipeline graduating into a new map must first be freed from its previous active map by deleting or un-linking it there). |
+| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. A pipeline may be a stage of **one active map at a time** — the lifecycle-map stage junction enforces this via a save-time uniqueness check backed by the partial unique index `uq_lifecycle_map_stages_active_pipeline`. A pipeline graduating into a new map must first be freed from its previous active map by deleting or un-linking it there; `restore` refuses when a stage pipeline is already registered in another active map. |
 | **Stage Board** (§8.4) | The Stage Board shows cards for pipelines. The Lifecycle Map shows the *logical flow* that those pipelines belong to. They are complementary views: the board is "what's running now"; the map is "what are all the steps." |
 | **Trigger** (§8.5) | A transition edge with `trigger_type: "webhook"` or `"cron"` can link to a Modulo Trigger entity. The trigger definition lives separately; the edge just references it. |
 | **Manual Node** (§8.4) | A `manual` stage node is the lifecycle-level equivalent of a Manual pipeline node — a human step with no automation. Manual stages document the handoff; Manual pipeline nodes pause execution for human input. They are independent concepts at different fractal levels. |
@@ -4138,7 +4131,7 @@ content_json:
       estimated_frequency: daily
 ```
 
-Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles. **V1 implementation note:** a save (POST/PUT on `/versions`) validates and canonicalises the content, replaces the active `content_json`, and bumps the version counter; the active map state is served as a single version entry. Immutable per-version snapshots with browse-back are a later slice.
+Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles. **Implementation note:** the version API surface is implemented — `GET /{id}/versions` (list), `GET /{id}/versions/{version}` (get; only the current version is served — a non-current version returns 404), `POST /{id}/versions` (save) and `PUT /{id}/versions/{version_id}` (update). A save validates and canonicalises the content, replaces the active `content_json`, and bumps the version counter; the active map state is served as a single version entry. `POST /{id}/restore` revives a soft-deleted map (freed pipelines re-register). Immutable per-version snapshots with browse-back are a later slice.
 
 #### 8.31.10 The 80% Target
 
@@ -4160,6 +4153,8 @@ Metrics surfaced in the map UI:
 7. `task-lm-bdd-tests` (M) — BDD feature files for map CRUD, rendering, navigation, graduation
 8. `task-lm-dogfood` (L) — Modulo's own Lifecycle Map defined, stages graduated to Modulo pipelines progressively, used as the primary onboarding example
 
+> The `task-lm-*` IDs above are from the retired delivery tracker. The feature shipped incrementally via Linear FAR-141 (version persistence + stage junction), FAR-142 (journey data model), FAR-143 (advancement / self-report / reconciliation), FAR-144 (journeys API + provenance badges), FAR-145 (unattributed flag).
+
 **Phase**: `phase-lm` (new — independent of alpha/v1 phases; can ship incrementally)
 
 #### 8.31.12 Flag / Gating
@@ -4176,6 +4171,27 @@ Metrics surfaced in the map UI:
 | Map diff view (version comparison) | Team |
 
 Lifecycle Maps are a core onboarding and documentation feature. The base feature (create, view, navigate stages) is Community-tier. Advanced features (version history, team scoping, analytics) are Team-tier.
+
+
+#### 8.31.13 Journeys
+
+A **journey** is a unit of work — a task, a ticket, a PR, a deploy — tracked as it moves across a lifecycle map's stages. Journeys are the runtime counterpart of the map's declarative stages: the map models the process; journeys observe real work flowing through it.
+
+**Minting (FAR-142):** journeys are minted org-wide at run create time from a run's `work_item_refs` — a JSONB array of canonical `{kind, ref, source, status?}` pairs stamped on the run (from the trigger payload's `work_item_ref_paths` or a node's self-report). Each canonical `(kind, ref)` pair becomes a `journeys` row via `INSERT ... ON CONFLICT (organisation_id, kind, ref) DO NOTHING`; the row's `canonical_work_item_id` is deterministic (`uuid5(org, kind, ref)`), so there is no mint race. Canonicalisation (`modulo.db.lifecycle_refs`) normalises refs (e.g. GitHub `#123` and `123` land on the same ref).
+
+**Map ownership:** a lifecycle map "owns" journeys whose latest-stage identity points at one of its stages, plus journeys whose canonical `(kind, ref)` has already run through one of the map's stage pipelines.
+
+**Map-scoped reads (FAR-144):** `GET /api/v1/lifecycle-maps/{id}/journeys` lists the map's journeys, keyset-paginated over `(updated_at, id)` with an opaque cursor, optionally narrowed to an exact `kind`/`ref`. Journey detail (`GET /api/v1/lifecycle-maps/{id}/journeys/{kind}/{ref}`) adds run history: per-run status, provenance, and completion date. Both endpoints gate on the `run.list` permission (not `lifecycle_map.list`) and are org-scoped via RLS. Journey runs render as provenance badges on the map canvas.
+
+**Advancement (FAR-143):** on run finalise, an advancement service (`core/lifecycle_map/advancement.py`) advances the journey for every canonical ref the run carried. Latest evidence is compare-and-set: only a strictly-newer evidence timestamp overwrites the row's `updated_at` (equal timestamps keep existing evidence — deterministic first-writer-wins). `run_count` increments for terminal advancing statuses (`complete` / `failed` / `eval_failed`); `awaiting_human` updates evidence without counting; non-advancing runs (`cancelled` / `stalled`, replays, variants) are mint-only. Stage columns are set only when the run's pipeline is a lifecycle-map stage (resolved org-scoped via `lifecycle_map_stages`).
+
+**Self-report parse (FAR-143):** `core/lifecycle_map/self_report.py` extracts work-item refs from merged pipeline output under `work_item_refs` / `modulo.work_item_refs` / `touched_work_items` (recursive walk, node-keyed placement supported). Reported entries are advisory: provenance is forced to `reported`, so a reported claim can confirm or match an existing journey but never mints one.
+
+**Reconciliation (FAR-143):** `core/lifecycle_map/reconcile.py` is a bounded, terminal-only safety net that re-derives journey evidence for runs whose journeys never advanced (post-deploy backlog, raw terminal writers skipping the hook, or a self-report confirm dropping a ref the create-time mint never saw). Drift is MISSING (no journey row) or STALE (row `updated_at` older than the run's evidence timestamp); only drifted refs are re-advanced, and the sweep is idempotent and fails open per run.
+
+**Data model (FAR-142):** `journeys` (migration 0084) + `journey_facts` (migration 0085), anchored on `runs.work_item_refs` / `runs.work_item_id` (migration 0083). Org-scoped with strict RLS (`rls_org_isolation`) plus the `enforce_same_organisation` tenant trigger, mirroring `lifecycle_map_stages`. `latest_terminal_run_id` is deliberately not an FK so journeys survive the 90-day run purge. The `unattributed` flag (FAR-145) marks journeys not referenced by any of the map's stage-pipeline runs.
+
+**Dogfooding:** a production lifecycle map "Farnalabs SDLC (dogfooding)" runs with stages Fix / Review / Merge / Deploy.
 
 ---
 
