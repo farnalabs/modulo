@@ -65,9 +65,10 @@ class TestResolveUrl:
 
 class TestFernetKeyHash:
     def test_deterministic(self) -> None:
-        h1 = _fernet_key_hash("test-key-1234")
-        h2 = _fernet_key_hash("test-key-1234")
-        assert h1 == h2
+        # Golden value pins the exact digest prefix so a change in the hash
+        # algorithm or truncation fails loudly instead of silently altering
+        # the key fingerprint used by the backup manifest.
+        assert _fernet_key_hash("test-key-1234") == "da742ddc966de5b0"
 
     def test_length(self) -> None:
         h = _fernet_key_hash("any-key")
