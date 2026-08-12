@@ -35,6 +35,7 @@ unit-tests:
   - backend/tests/unit/core/run_context/test_decorator_resilience.py
   - backend/tests/unit/core/run_context/test_run_context_bdd.py
   - backend/tests/unit/pipeline_engine/test_decorator.py
+  - backend/tests/unit/pipeline_engine/test_executor_audit_hook.py
 depends-on: [feat-core-agent-model, feat-core-pipeline-execution, feat-core-db-abstraction-core]
 status: partial
 ---
@@ -132,7 +133,7 @@ status: partial
 - [x] Frontend RunDetailView `formatTimestamp` uses `locale.value` from `useI18n()` — not hardcoded `en-US` (resolved 2026-07-09)
 - [ ] Invalid run_context_overrides type (non-dict) raises validation error
 - [ ] Retry with run_context_overrides merges correctly
-- [ ] Audit event emitted on context_write_by_non_setter violation with node_id and attempted_keys
+- [x] Audit event emitted on context_write_by_non_setter violation with node_id and attempted_keys — non-context-setter violations now dispatch a `context_write_by_non_setter` audit event (org-scoped, `resource_type="run"`) carrying `node_id`, `role`, and `attempted_keys` via a ContextVar-based hook plumbed through the executor (§8.18 audit_warning)
 
 ### Security
 
@@ -168,7 +169,7 @@ status: partial
 
 ## Known Gaps
 - **Non-context-setter guard strategy mismatch**: PRD 8.18 specifies silent discard + audit_warning event for non-context-setter writes to run_context. Current decorator code raises ContextSetterViolationError instead — a hard error, not silent discard. The PRD's non-breaking intent is deferred to v1. The product map now reflects the current code behaviour (hard error). Code path: `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
-- **Missing audit event dispatch on violation**: When a non-context-setter violation occurs, only `_log.warning()` is emitted. PRD specifies an `audit_warning` event with node_id and attempted_keys. The decorator lacks DB session access to dispatch to the `audit_events` table. Needs a ContextVar-based callback pattern (similar to the cancellation check) plumbed through the executor.
+- ~~**Missing audit event dispatch on violation**: When a non-context-setter violation occurs, only `_log.warning()` is emitted. PRD specifies an `audit_warning` event with node_id and attempted_keys. The decorator lacks DB session access to dispatch to the `audit_events` table. Needs a ContextVar-based callback pattern (similar to the cancellation check) plumbed through the executor.~~ **RESOLVED 2026-08-12**: the decorator now invokes a ContextVar-based audit hook (`set_audit_hook`, mirroring `set_cancellation_check`) with `{node_id, role, attempted_keys}` on every non-context-setter run_context write; the executor wires it (`_dispatch_context_write_audit`/`_do_context_write_audit`) to append a `context_write_by_non_setter` audit event (org-scoped via RLS, `resource_type="run"`, 5s timeout, failures logged + swallowed so they never mask the violation). Decorator unit tests (TestAuditHookDispatch ×6) + executor hook tests (`test_executor_audit_hook.py` ×4) + 1 BDD scenario in `run_context.feature`.
 - **Trigger override merging not wired through executor**: `run_context_overrides` from trigger events are not merged in `_seed_state` — only `snapshot.run_context_defaults` is used. The trigger override code path is not yet connected to the executor. Code path: `backend/src/modulo/core/pipeline_engine/executor.py:95-119`.
 - **No frontend UI for run_context inspection per-node**: The run detail view does not surface run_context state before/after each node, nor display the write-log. This is a frontend gap tracked separately from the backend implementation.
 - **No template rendering test for run_context**: The product map entry lists `{{ run_context.key }}` access as a behaviour, but there is no test verifying that run_context fields are interpolated in prompt templates.
@@ -188,6 +189,14 @@ status: partial
 - **No test for type coercion**: No test verifies behaviour when a run_context value is a different type than expected (e.g. number instead of string).
 
 ## QA History
+### 2026-08-12 — improve-architecture: audit event dispatch on context-write violation RESOLVED
+- **RESOLVED "Missing audit event dispatch on violation"** — non-context-setter writes to run_context now emit a `context_write_by_non_setter` audit event, closing the §8.18 `audit_warning` gap (previously only a `_log.warning()`).
+- `decorator.py`: new `set_audit_hook()`/`_get_audit_hook()` ContextVar hook (mirrors `set_cancellation_check`) + `_dispatch_audit_warning()` invoked on every violation with `{node_id, role, attempted_keys}`; hook failures are logged and swallowed so they can never mask `ContextSetterViolationError`.
+- `executor.py`: `_dispatch_context_write_audit(org_id, run_id)` (5s timeout, logged/swallowed on failure) → `_do_context_write_audit()` opens a fresh session, applies RLS, and appends `event_type="context_write_by_non_setter"`, `resource_type="run"`, `resource_id=run_id`, payload `{node_id, role, attempted_keys}`. Wired after `set_cancellation_check` in both `execute` and `resume`, cleared in all finally/cleanup blocks alongside `set_cancellation_check(None)`.
+- Tests: 6 decorator unit tests (`TestAuditHookDispatch` in `test_context_setter_enforcement.py`), 4 executor hook unit tests (`test_executor_audit_hook.py`), 1 BDD scenario ("Audit event dispatched on guard violation") in `run_context.feature` with 2 new step definitions.
+- 631/631 pipeline_engine + run_context unit tests pass; 14/14 `test_run_context.py` BDD scenarios pass; ruff check + format clean; mypy --strict clean.
+- Status: partial (trigger-override merging, template rendering, run-inspection UI, size-limit/type-coercion tests remain).
+
 ### 2026-07-03 — Cross-cutting architecture QA for feat-core-run-context
 - **Lens**: Cross-cutting (PRD vs product map vs code vs BDD vs unit tests)
 - **Findings**: Added dedicated BDD feature file to frontmatter; corrected HITL-paused resume checkbox; replaced Error states with structured Error Handling section; added 8 testing gaps; refined Known Gaps; flagged PRD §8.18 silent-discard mismatch with note.
