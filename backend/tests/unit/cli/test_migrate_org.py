@@ -103,12 +103,15 @@ class TestHash:
         # Golden value pins the exact digest so a change in sort_keys,
         # ensure_ascii, the __meta__ stripping, or the hash algorithm fails
         # loudly instead of silently altering org-migration integrity bundles.
-        assert _compute_hash(
-            {
-                "__meta__": {"version": 1, "exported_at": "2024-01-01"},
-                "users": [{"id": "u1", "email": "a@b.com"}],
-            }
-        ) == "60b826555c382021a9151e3b07327b3a458b917268619a9de745277f0a4e1941"
+        assert (
+            _compute_hash(
+                {
+                    "__meta__": {"version": 1, "exported_at": "2024-01-01"},
+                    "users": [{"id": "u1", "email": "a@b.com"}],
+                }
+            )
+            == "60b826555c382021a9151e3b07327b3a458b917268619a9de745277f0a4e1941"
+        )
 
     def test_verify_hash_ok(self) -> None:
         bundle: dict = {
