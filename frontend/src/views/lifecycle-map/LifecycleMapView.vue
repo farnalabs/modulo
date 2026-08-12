@@ -75,6 +75,28 @@
           />
         </div>
 
+        <section
+          v-if="unattributedJourneys.length"
+          class="mt-4 rounded-xl border border-dashed border-border bg-card p-4"
+          aria-label="Unattributed journeys"
+        >
+          <h2 class="text-sm font-semibold text-foreground">
+            {{ $t('views.LifecycleMapView.journey.unattributed_hint', { count: unattributedJourneys.length }) }}
+          </h2>
+          <p class="mt-1 text-xs text-muted-foreground">
+            {{ $t('views.LifecycleMapView.journey.unattributed_desc') }}
+          </p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <div
+              v-for="journey in unattributedJourneys"
+              :key="`${journey.kind}:${journey.ref}`"
+              class="w-[240px]"
+            >
+              <JourneyCard :journey="journey" @open="openJourneyDetail(journey)" />
+            </div>
+          </div>
+        </section>
+
         <ErrorAlert
           v-if="journeysError"
           :message="journeysError"
@@ -155,6 +177,7 @@ import PageHeader from '../../components/shared/PageHeader.vue'
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import LifecycleMapRenderer from '../../components/lifecycle-map/LifecycleMapRenderer.vue'
 import ProvenanceBadge from '../../components/lifecycle-map/ProvenanceBadge.vue'
+import JourneyCard from '../../components/lifecycle-map/JourneyCard.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import { formatRunDate } from '../../utils/runUtils'
 import { Button } from '@/components/ui/button'
@@ -176,6 +199,7 @@ const detailError = computed(() => store.detailError)
 const graduatedCount = computed(() => store.graduatedCount)
 const manualCount = computed(() => store.manualCount)
 const journeysError = computed(() => store.journeysError)
+const unattributedJourneys = computed(() => store.unattributedJourneys)
 const selectedJourneyKey = computed(() => store.selectedJourneyKey)
 const journeyDetail = computed(() => store.journeyDetail)
 const journeyDetailError = computed(() => store.journeyDetailError)
