@@ -169,6 +169,20 @@ async def test_write_event(connector):
     assert result["id"] == 1
 
 
+@respx.mock
+async def test_write_event_unwrapped_response_returns_empty(connector):
+    """A 2xx response without an 'event' wrapper must not be returned as-is.
+
+    Regression: `result.get("event", result)` silently returned the whole
+    response (e.g. an error envelope) as the created event.
+    """
+    respx.post(f"{_BASE}/api/v1/events").mock(return_value=httpx.Response(200, json={"error": "bad"}))
+    result = await connector.write(
+        ConnectorPayload(resource="event", data={"title": "Deploy", "text": "done"}),
+    )
+    assert result == {}
+
+
 async def test_write_event_missing_fields(connector):
     with pytest.raises(ValueError, match="'title' and 'text' in data"):
         await connector.write(ConnectorPayload(resource="event", data={"title": "Deploy"}))

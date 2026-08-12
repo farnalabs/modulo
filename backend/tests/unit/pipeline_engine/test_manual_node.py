@@ -290,6 +290,26 @@ async def test_manual_node_preserves_prior_artifacts():
     assert result["artifacts"][0]["human_output"] == {"data": "ok"}
 
 
+async def test_manual_node_decision_without_output_is_ignored():
+    """A decision with no 'output' key must not be treated as the manual output.
+
+    Regression: `decision.get("output", decision)` returned the whole decision
+    dict (gate metadata, etc.) as the human's output when 'output' was missing.
+    """
+    node_def = {"id": "manual-unit-11", "node_type": "manual"}
+    node_fn = make_manual_node_fn(node_def)
+
+    result = await node_fn(
+        {
+            "artifacts": [],
+            "_hitl_decision": {"approved": True, "reviewer": "alice"},
+        }
+    )
+
+    assert result.get("manual_output") is None
+    assert result["artifacts"][0]["human_output"] is None
+
+
 async def test_manual_node_handles_non_dict_decision():
     """If _hitl_decision output is not a dict, manual_output should be None."""
     node_def = {"id": "manual-unit-8", "node_type": "manual"}

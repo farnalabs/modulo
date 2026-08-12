@@ -136,6 +136,20 @@ async def test_query_search(connector):
 
 
 @respx.mock
+async def test_query_search_malformed_object_not_echoed_as_package(connector):
+    """A search object without a 'package' key must not be echoed as the record.
+
+    Regression: `o.get("package", o)` silently returned the whole search
+    object (including score/searchScore metadata) as the package record.
+    """
+    body = {"objects": [{"package": {"name": "react", "version": "18.2.0"}}, {"name": "malformed"}], "total": 2}
+    respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json=body))
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
+    assert result.records[0]["name"] == "react"
+    assert result.records[1] == {}
+
+
+@respx.mock
 async def test_query_search_with_from_offset(connector):
     body = {"objects": [{"package": {"name": "react-helmet", "version": "6.1.0"}}], "total": 1}
     respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json=body))
