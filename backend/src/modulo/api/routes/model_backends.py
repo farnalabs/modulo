@@ -11,13 +11,14 @@ from typing import Any, ClassVar, Literal
 
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import get_plugin_registry
 from modulo.db.crud.model_backend import (
@@ -41,7 +42,7 @@ def _encrypt(api_key: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(api_key.encode())
 
 
-class ModelBackendCreate(BaseModel):
+class ModelBackendCreate(TeamVisibilityMixin):
     name: str = Field(..., min_length=1, max_length=255)
     display_name: str = Field(..., min_length=1, max_length=255)
     provider: str = Field(..., min_length=1, max_length=128)
@@ -53,14 +54,8 @@ class ModelBackendCreate(BaseModel):
     fallback_backend_ids: list[uuid.UUID] | None = None
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "ModelBackendCreate":
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
-
-class ModelBackendUpdate(BaseModel):
+class ModelBackendUpdate(TeamVisibilityMixin):
     name: str | None = Field(None, min_length=1, max_length=255)
     display_name: str | None = Field(None, min_length=1, max_length=255)
     model_id: str | None = Field(None, min_length=1, max_length=128)
@@ -70,12 +65,6 @@ class ModelBackendUpdate(BaseModel):
     owner_team_id: uuid.UUID | None = None
     fallback_backend_ids: list[uuid.UUID] | None = None
     tier: Literal["native", "preview", "in_dev"] | None = None
-
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> "ModelBackendUpdate":
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
 
 class ModelBackendResponse(BaseModel):

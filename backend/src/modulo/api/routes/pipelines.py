@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission, require_team_membership_or_admin
+from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import resolve_pipeline_team_scope, team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
@@ -188,7 +189,7 @@ def _validate_retry_policy(value: dict[str, Any] | None) -> dict[str, Any] | Non
     return value
 
 
-class PipelineCreate(BaseModel):
+class PipelineCreate(TeamVisibilityMixin):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
@@ -225,14 +226,8 @@ class PipelineCreate(BaseModel):
     def _validate_retry_policy_field(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         return _validate_retry_policy(value)
 
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> PipelineCreate:
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
-
-class PipelineUpdate(BaseModel):
+class PipelineUpdate(TeamVisibilityMixin):
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     visibility: str | None = Field(None, pattern=r"^(org|team)$")
@@ -299,12 +294,6 @@ class PipelineUpdate(BaseModel):
         if v is None:
             raise ValueError("lock_wait_timeout_seconds cannot be set to null. Use a value >= 30.")
         return v
-
-    @model_validator(mode="after")
-    def _validate_team_visibility(self) -> PipelineUpdate:
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
 
 class PipelineResponse(BaseModel):

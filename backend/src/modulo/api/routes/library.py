@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service import (
@@ -141,7 +142,7 @@ class LibraryPrimitiveListResponse(BaseModel):
     has_more: bool = False
 
 
-class LibraryPrimitiveCreate(BaseModel):
+class LibraryPrimitiveCreate(TeamVisibilityMixin):
     primitive_type: str = Field(pattern=r"^(schema|workflow|agent|integration|test_fixture|composite)$")
     name: str = Field(min_length=1, max_length=255)
     slug: str = Field(min_length=1, max_length=255)
@@ -152,14 +153,8 @@ class LibraryPrimitiveCreate(BaseModel):
     visibility: str = Field(default="org", pattern=r"^(org|team)$")
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
-    @model_validator(mode="after")
-    def _require_team_id_for_team_visibility(self) -> Self:
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
-
-class LibraryPrimitiveUpdate(BaseModel):
+class LibraryPrimitiveUpdate(TeamVisibilityMixin):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     tags: list[str] | None = None
@@ -168,12 +163,6 @@ class LibraryPrimitiveUpdate(BaseModel):
     visibility: str | None = Field(default=None, pattern=r"^(org|team)$")
     auto_update: bool | None = None
     tier: Literal["native", "preview", "in_dev"] | None = None
-
-    @model_validator(mode="after")
-    def _require_team_id_for_team_visibility(self) -> Self:
-        if self.visibility == "team" and self.owner_team_id is None:
-            raise ValueError("owner_team_id is required when visibility is 'team'")
-        return self
 
 
 class RatingSubmit(BaseModel):

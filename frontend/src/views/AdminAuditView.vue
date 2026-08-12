@@ -33,8 +33,8 @@
     </header>
     <div v-if="chainResult" class="rounded-lg border px-4 py-3 text-sm" :class="chainResult.valid ? 'border-green-500 bg-green-50 text-green-800' : 'border-red-500 bg-red-50 text-red-800'" data-testid="admin-audit-chain-result">
       <strong>{{ chainResult.valid ? $t('views.AdminAuditView.chain_valid') : $t('views.AdminAuditView.chain_broken') }}</strong>
-      <span v-if="chainResult.event_count" class="ml-2">� {{ $t('views.AdminAuditView.events_verified', { count: chainResult.event_count }) }}</span>
-      <span v-if="chainResult.error" class="ml-2">� {{ chainResult.error }}</span>
+      <span v-if="chainResult.event_count" class="ml-2">— {{ $t('views.AdminAuditView.events_verified', { count: chainResult.event_count }) }}</span>
+      <span v-if="chainResult.error" class="ml-2">— {{ chainResult.error }}</span>
     </div>
 
     <div class="card p-4">
@@ -387,12 +387,12 @@ const verifying = ref(false)
 const chainResult = ref<{ valid: boolean; event_count?: number; error?: string } | null>(null)
 
 function formatActor(actorId: string | null): string {
-  if (!actorId) return '�'
+  if (!actorId) return '—'
   return 'usr_' + shortId(actorId).replace('#', '')
 }
 
 function formatTimestamp(ts: string | null): string {
-  if (!ts) return '�'
+  if (!ts) return '—'
   const d = new Date(ts)
   return d.toLocaleString(undefined, {
     month: 'short',
