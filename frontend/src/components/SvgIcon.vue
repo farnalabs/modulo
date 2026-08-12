@@ -49,6 +49,7 @@ import { FlaskConical } from "@lucide/vue";
 import { Map } from "@lucide/vue";
 import { Mail } from "@lucide/vue";
 import { File } from "@lucide/vue";
+import { Sparkles } from "@lucide/vue";
 
 const iconMap: Record<string, unknown> = {
   CirclePlay,
@@ -96,6 +97,9 @@ const iconMap: Record<string, unknown> = {
   Map,
   Mail,
   File,
+  // "Broom" is not exported by @lucide/vue 1.27.0 — housekeeping (cleanup) is
+  // represented by Sparkles ("sparkling clean") instead.
+  Broom: Sparkles,
 };
 
 const props = defineProps<{
@@ -107,6 +111,6 @@ const iconComponent = computed(() => {
   if (!icon) {
     console.warn(`SvgIcon: unknown icon "${props.name}"`);
   }
-  return icon;
+  return icon || iconMap.File;
 });
 </script>
