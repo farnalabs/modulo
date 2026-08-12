@@ -11,7 +11,7 @@ from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_forwarder_config import ErrorForwarderConfig
 from modulo.db.models.error_group import ErrorGroup
-from modulo.db.models.error_notification_rule import ErrorNotificationRule
+from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.feedback_record import FeedbackRecord
@@ -80,6 +80,7 @@ __all__ = [
     "ConnectorInstance",
     "CostComponent",
     "CostComponentKind",
+    "DeletedDefault",
     "Dismissal",
     "EnvironmentProfile",
     "ErrorEvent",

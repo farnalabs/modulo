@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from typing import Self
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -403,6 +404,61 @@ class TestDispatchWebhook:
         assert "[error]" in summary
         assert "Test Webhook" in summary
         assert "count=3" in summary
+
+    async def test_webhook_payload_carries_contract_fields(self) -> None:
+        """FAR-151 webhook payload must carry alert_id + group_id + elevation_signal
+        + attempt_n + run_group_id so downstream consumers can correlate a fired
+        alert with its run group and elevation."""
+        import json
+
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_webhook
+
+        group_id = uuid.uuid4()
+        run_group_id = uuid.uuid4()
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="Test Webhook",
+            action_type="webhook",
+            webhook_url="https://example.com/hook",
+            error_group_id=group_id,
+            fingerprint="fp123",
+            level="critical",
+            count=1,
+            environment="production",
+            signal="agent.failed",
+            elevation_signal="agent.failed",
+            attempt_n=2,
+            run_group_id=run_group_id,
+        )
+
+        captured: dict[str, object] = {}
+
+        class _FakeResponse:
+            is_success = True
+
+        class _FakeClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: object) -> _FakeResponse:
+                captured["body"] = json.loads(kwargs["content"].decode())
+                return _FakeResponse()
+
+        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient):
+            await _dispatch_webhook(alert, "Agent failed on retry", "/admin/errors/x")
+
+        body = captured["body"]
+        assert body["alert_id"] == str(alert.alert_id)
+        assert body["group_id"] == str(group_id)
+        assert body["elevation_signal"] == "agent.failed"
+        assert body["attempt_n"] == 2
+        assert body["run_group_id"] == str(run_group_id)
 
     async def test_dispatch_swallows_exception(self, caplog: pytest.LogCaptureFixture) -> None:
         from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
