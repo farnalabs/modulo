@@ -23,12 +23,16 @@ Part 3 wiring (FAR-143 part 3):
     terminal, and the legacy-fallback terminal paths
   * the raw writers (``mark_complete`` / ``fail_run_terminal``) advance
     journeys from stored refs via ``_advance_journeys_from_stored_refs``
+  * the stale-run recovery sweep advances journeys for every run it
+    terminalises to ``failed`` (never_dispatched / capacity_timeout /
+    worker_lost), and never for runs it merely re-dispatches
 """
 
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -36,12 +40,14 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core import pipeline_execution as pe
 from modulo.core.cost_controller.finalize import _advance_journeys_on_terminal, finalize_cost
 from modulo.core.lifecycle_map.advancement import advance_journeys
 from modulo.core.pipeline_execution import (
     _advance_journeys_from_stored_refs,
     fail_run_terminal,
     mark_complete,
+    stale_run_recovery_sweep,
 )
 from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
@@ -906,4 +912,122 @@ class TestRawWriterJourneyAdvance:
             error_detail="boom",
         )
         assert ok is False
+        advanced.assert_not_awaited()
+
+
+class TestStaleRunSweepJourneyAdvance:
+    """FAR-143 follow-up — stale_run_recovery_sweep advances journeys for every
+    run it terminalises to ``failed`` (never_dispatched / capacity_timeout /
+    worker_lost), fail-open per run, and never for runs it merely re-dispatches.
+
+    The wiring is proven by monkeypatching ``_advance_journeys_from_stored_refs``
+    and asserting it is invoked exactly once per terminalised run with the run's
+    id, org, and ``failed`` (the helper's own end-to-end behaviour is covered by
+    ``TestRawWriterJourneyAdvance.test_advance_from_stored_refs_real``).
+    """
+
+    _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
+    def _settings(self) -> MagicMock:
+        return MagicMock(saq_never_dispatched_window=300, saq_worker_lost_window=600)
+
+    async def _run_sweep(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        terminal_rows: dict[str, uuid.UUID],
+        stranded_row: tuple[uuid.UUID, uuid.UUID] | None = None,
+    ) -> tuple[dict[str, Any], AsyncMock]:
+        org_id = self._ORG
+
+        class _AsyncResult:
+            def __init__(self, rowcount: int = 0, rows: list[Any] | None = None) -> None:
+                self.rowcount = rowcount
+                self._rows = rows or []
+
+            def all(self) -> list[Any]:
+                return self._rows
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                sql = str(stmt)
+                if "SELECT id FROM organisations" in sql:
+                    return _AsyncResult(rows=[(org_id,)])
+                for marker, run_id in terminal_rows.items():
+                    if marker in sql:
+                        return _AsyncResult(rowcount=1, rows=[(run_id,)])
+                if stranded_row is not None and "RETURNING id, organisation_id" in sql:
+                    row = SimpleNamespace(id=str(stranded_row[0]), organisation_id=str(stranded_row[1]))
+                    return _AsyncResult(rowcount=1, rows=[row])
+                return _AsyncResult()
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        monkeypatch.setattr(pe, "get_settings", lambda: self._settings())
+        advanced = AsyncMock()
+        monkeypatch.setattr("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", advanced)
+        if stranded_row is not None:
+            monkeypatch.setattr(
+                "modulo.core.pipeline_execution._re_dispatch_capacity_blocked",
+                AsyncMock(return_value="enqueued"),
+            )
+        result = await stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
+        return result, advanced
+
+    async def test_terminalised_runs_advance_journeys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        nd_run = uuid.uuid4()
+        ct_run = uuid.uuid4()
+        wl_run = uuid.uuid4()
+        result, advanced = await self._run_sweep(
+            monkeypatch,
+            terminal_rows={
+                "never_dispatched": nd_run,
+                "capacity_timeout": ct_run,
+                "worker_lost": wl_run,
+            },
+        )
+        assert result["never_dispatched_swept"] == 1
+        assert result["capacity_timeout_swept"] == 1
+        assert result["worker_lost_swept"] == 1
+        assert advanced.await_count == 3
+        got = {a.args[1]: a.args[2] for a in advanced.await_args_list}
+        assert got == {
+            str(nd_run): str(self._ORG),
+            str(ct_run): str(self._ORG),
+            str(wl_run): str(self._ORG),
+        }
+        assert all(a.args[3] == "failed" for a in advanced.await_args_list)
+
+    async def test_run_without_refs_still_wires_advance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The sweep wires the helper for every terminalised run even when the
+        # run has no refs — the helper no-ops on empty refs (fail-open).
+        nd_run = uuid.uuid4()
+        result, advanced = await self._run_sweep(monkeypatch, terminal_rows={"never_dispatched": nd_run})
+        assert result["never_dispatched_swept"] == 1
+        assert advanced.await_count == 1
+
+    async def test_redispatched_runs_do_not_advance_journeys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A stranded capacity-blocked run is re-dispatched, not terminalised —
+        # its journey must NOT advance.
+        stranded_run = uuid.uuid4()
+        result, advanced = await self._run_sweep(
+            monkeypatch,
+            terminal_rows={},
+            stranded_row=(stranded_run, self._ORG),
+        )
+        assert result["stranded_capacity_redispatched"] == 1
+        assert result["never_dispatched_swept"] == 0
+        assert result["capacity_timeout_swept"] == 0
+        assert result["worker_lost_swept"] == 0
         advanced.assert_not_awaited()

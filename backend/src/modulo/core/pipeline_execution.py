@@ -913,6 +913,12 @@ async def stale_run_recovery_sweep(
       marked ``failed`` with ``capacity_timeout``.
     - Running runs with a heartbeat older than the worker-lost window and
       5+ claims are marked ``failed`` with ``worker_lost``.
+    - Every run terminalised by the sweep (never_dispatched / capacity_timeout
+      / worker_lost) has its journeys advanced from its CREATE-STAMPED refs
+      (FAR-143 follow-up) — the raw UPDATEs never run ``finalize_cost``, so
+      without this the swept runs' journeys would never move. Fail-open per
+      run; stranded capacity-blocked runs are re-dispatched, never terminal,
+      and so never advance.
 
     Legacy windows default to today's beat-sweep values — never_dispatched=300s
     (settings ``SAQ_NEVER_DISPATCHED_WINDOW``), worker_lost=600s (settings
@@ -951,6 +957,9 @@ async def stale_run_recovery_sweep(
         lost_count = 0
         capacity_timeout_count = 0
         stranded_count = 0
+        # Runs terminalised to ``failed`` by this sweep — (run_id, org_id) —
+        # whose journeys must advance once the UPDATEs commit (FAR-143 follow-up).
+        terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
                 await conn.execute(
@@ -967,11 +976,13 @@ async def stale_run_recovery_sweep(
                         "AND dispatched_at IS NULL "
                         "AND cancellation_requested = false "
                         "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
-                        "AND (dispatcher IS NULL OR dispatcher != 'saq')"
+                        "AND (dispatcher IS NULL OR dispatcher != 'saq') "
+                        "RETURNING id"
                     ),
                     {"oid": str(org_id), "nd_window": nd_window},
                 )
                 never_count += never_result.rowcount or 0
+                terminalised_run_ids.extend((row[0], org_id) for row in never_result.all())
 
                 stranded_result = await conn.execute(
                     text(
@@ -1003,11 +1014,13 @@ async def stale_run_recovery_sweep(
                         "AND organisation_id = :oid "
                         "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
                         "AND created_at < now() - (:ttl * interval '1 minute') "
-                        "AND cancellation_requested = false"
+                        "AND cancellation_requested = false "
+                        "RETURNING id"
                     ),
                     {"oid": str(org_id), "ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
                 )
                 capacity_timeout_count += capacity_timeout_result.rowcount or 0
+                terminalised_run_ids.extend((row[0], org_id) for row in capacity_timeout_result.all())
 
                 lost_result = await conn.execute(
                     text(
@@ -1017,11 +1030,13 @@ async def stale_run_recovery_sweep(
                         "AND organisation_id = :oid "
                         "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
                         "AND claim_count >= 5 "
-                        "AND (dispatcher IS NULL OR dispatcher != 'saq')"
+                        "AND (dispatcher IS NULL OR dispatcher != 'saq') "
+                        "RETURNING id"
                     ),
                     {"oid": str(org_id), "wl_window": wl_window},
                 )
                 lost_count += lost_result.rowcount or 0
+                terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
 
         # Re-dispatch AFTER each org's sweep transaction commits so dispatch_run's
         # own sessions (and the row lock the UPDATE held) never overlap a live
@@ -1030,6 +1045,16 @@ async def stale_run_recovery_sweep(
         for row in stranded_rows:
             outcome = await _re_dispatch_capacity_blocked(str(row.id), str(row.organisation_id))
             redispatch_outcomes[outcome] = redispatch_outcomes.get(outcome, 0) + 1
+
+        # FAR-143 follow-up — the sweep's raw terminal UPDATEs never run
+        # finalize_cost, so the swept runs' journeys would never advance. Advance
+        # each from its CREATE-STAMPED refs, fail-open per run (same pattern as
+        # mark_complete / fail_run_terminal). Runs only re-dispatched (stranded
+        # capacity-blocked) are NOT terminal — no advance. Each helper opens its
+        # own session after the UPDATEs have committed, so it reads the run as
+        # ``failed`` with ``completed_at`` set.
+        for run_id, run_org_id in terminalised_run_ids:
+            await _advance_journeys_from_stored_refs(async_engine, str(run_id), str(run_org_id), "failed")
 
         if never_count or lost_count or capacity_timeout_count or stranded_count:
             _log.info(
