@@ -10,6 +10,7 @@ with the cooldown; the ≥1-org / heartbeat-advance rules.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -17,12 +18,15 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from modulo.core.cost_controller.probe import (
     _assert_sample_query_index,
     _duplicate_flood_trigger,
     _evaluate_run,
     _evaluate_trigger,
     _org_row_watch,
+    _probe_org,
     _sample_runs,
     run_probe,
     set_duplicate_terminal_cooldown,
@@ -225,6 +229,18 @@ async def test_explain_gate_short_circuits_after_first_success() -> None:
     with patch("modulo.core.cost_controller.probe._explain_checked", True):
         await _assert_sample_query_index(session, _ORG_ID)
     session.execute.assert_not_awaited()
+
+
+async def test_explain_gate_cancelled_error_re_raised() -> None:
+    """A CancelledError inside the EXPLAIN path is never swallowed — it propagates."""
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=asyncio.CancelledError())
+    with (
+        patch("modulo.core.cost_controller.probe._explain_checked", False),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _assert_sample_query_index(session, _ORG_ID)
+    session.execute.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +474,143 @@ async def test_flood_ignores_malformed_events_and_missing_run_ids() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _probe_org — per-org sample, five signals, trigger evaluation
+# ---------------------------------------------------------------------------
+
+
+async def _probe_org_session_factory(session: AsyncMock) -> Any:
+    """A factory yielding a session whose ``begin()`` is a valid async CM.
+
+    ``_probe_org`` opens ``async with session_factory() as session,
+    session.begin():`` — the factory must yield a REAL session mock whose
+    ``begin()`` returns an async context manager (AsyncMock does this natively).
+    """
+
+    @asynccontextmanager
+    async def _ctx() -> Any:
+        yield session
+
+    return _ctx
+
+
+async def test_probe_org_happy_path_records_signals() -> None:
+    """A clean sample: mismatch runs counted, no clamped/missing signals, no rollback log."""
+    session = _make_session()
+    ok_run = _make_sampled_run(total="1.000000")
+    bad_run = _make_sampled_run(
+        run_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        total="2.000000",
+        breakdown=[{"component": "x", "amount_usd": "9.000000"}],
+    )
+    with (
+        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()) as mock_rls,
+        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch(
+            "modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[ok_run, bad_run])
+        ) as mock_sample,
+        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
+        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
+        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
+        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
+        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
+        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
+        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
+        patch("modulo.core.cost_controller.probe._log") as mock_log,
+    ):
+        await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
+    mock_rls.assert_awaited_once()
+    mock_sample.assert_awaited_once_with(session, _ORG_ID)
+    mock_mismatch.assert_called_once_with(1)
+    mock_eq.assert_called_once()
+    mock_clamped.assert_not_called()
+    mock_missing.assert_not_called()
+    mock_log.error.assert_not_called()
+    mock_log.info.assert_called_once()
+
+
+async def test_probe_org_records_clamped_skip_and_missing_rows() -> None:
+    """Marker runs bump the clamped counter; missing ledger rows bump the WATCH counter."""
+    session = _make_session()
+    clamped_run = _make_sampled_run(
+        total="99999999.999999", breakdown=[{"total_clamped": True, "amount_usd": "5.000000"}]
+    )
+    with (
+        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch("modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[clamped_run, clamped_run])),
+        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=2)),
+        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
+        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
+        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
+        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
+        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
+        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
+        patch("modulo.core.cost_controller.probe._log") as mock_log,
+    ):
+        await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
+    mock_mismatch.assert_called_once_with(0)
+    mock_eq.assert_not_called()
+    mock_clamped.assert_called_once_with(2)
+    mock_missing.assert_called_once_with(2)
+    mock_log.error.assert_not_called()
+
+
+async def test_probe_org_logs_rollback_trigger_on_rule_or_flood() -> None:
+    """Either trigger firing emits the rollback error log with both flags."""
+    session = _make_session()
+    bad_run = _make_sampled_run(
+        run_id=uuid.UUID("00000000-0000-0000-0000-000000000003"),
+        total="9.000000",
+        breakdown=[{"component": "x", "amount_usd": "1.000000"}],
+    )
+    with (
+        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch("modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[bad_run])),
+        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
+        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=True)),
+        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=True)),
+        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs"),
+        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch"),
+        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip"),
+        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row"),
+        patch("modulo.core.cost_controller.probe._log") as mock_log,
+    ):
+        await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
+    mock_log.error.assert_called_once()
+    extra = mock_log.error.call_args.kwargs["extra"]
+    assert extra["probe_rule"] is True
+    assert extra["duplicate_flood"] is True
+    assert extra["org_id"] == str(_ORG_ID)
+    assert extra["mismatch_run_ids"] == [str(bad_run.id)]
+
+
+async def test_probe_org_eval_failure_logged_and_skipped() -> None:
+    """A run whose evaluation raises is logged and skipped, never fatal."""
+    session = _make_session()
+    with (
+        patch("modulo.core.cost_controller.probe.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.cost_controller.probe._assert_sample_query_index", new=AsyncMock()),
+        patch("modulo.core.cost_controller.probe._sample_runs", new=AsyncMock(return_value=[_make_sampled_run()])),
+        patch("modulo.core.cost_controller.probe._evaluate_run", side_effect=RuntimeError("boom")),
+        patch("modulo.core.cost_controller.probe._org_row_watch", new=AsyncMock(return_value=0)),
+        patch("modulo.core.cost_controller.probe._evaluate_trigger", new=AsyncMock(return_value=False)),
+        patch("modulo.core.cost_controller.probe._duplicate_flood_trigger", new=AsyncMock(return_value=False)),
+        patch("modulo.core.cost_controller.probe.record_probe_mismatch_runs") as mock_mismatch,
+        patch("modulo.core.cost_controller.probe.record_probe_total_eq_mismatch") as mock_eq,
+        patch("modulo.core.cost_controller.probe.record_probe_clamped_skip") as mock_clamped,
+        patch("modulo.core.cost_controller.probe.record_probe_missing_ledger_row") as mock_missing,
+        patch("modulo.core.cost_controller.probe._log") as mock_log,
+    ):
+        await _probe_org(await _probe_org_session_factory(session), _ORG_ID)
+    mock_log.warning.assert_called_once()
+    mock_mismatch.assert_called_once_with(0)
+    mock_eq.assert_not_called()
+    mock_clamped.assert_not_called()
+    mock_missing.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # run_probe — org enumeration, ≥1-org gate, heartbeat advance
 # ---------------------------------------------------------------------------
 
@@ -541,6 +694,26 @@ async def test_run_probe_enumeration_failure_reports_error() -> None:
     mock_ts.assert_not_called()
 
 
+async def test_run_probe_enumeration_cancelled_error_propagates() -> None:
+    """A CancelledError during org enumeration is re-raised, never caught as a failure."""
+    session = _make_session()
+    session.execute = AsyncMock(side_effect=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await run_probe(_make_factory(session))
+
+
+async def test_run_probe_org_cancelled_error_propagates() -> None:
+    """A CancelledError inside one org's probe is re-raised (per-org isolation catches only Exception)."""
+    session = _make_session()
+    session.execute = AsyncMock(return_value=MagicMock())
+    session.execute.return_value.scalars.return_value.all.return_value = [_ORG_ID]
+    with (
+        patch("modulo.core.cost_controller.probe._probe_org", new=AsyncMock(side_effect=asyncio.CancelledError())),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await run_probe(_make_factory(session))
+
+
 async def test_run_probe_zero_org_enumerated_is_quiet_success() -> None:
     """A zero-org install returns before sampling with no heartbeat advance."""
     session = _make_session()
@@ -587,3 +760,13 @@ async def test_cooldown_survives_underlying_failure() -> None:
     ):
         await set_duplicate_terminal_cooldown(_make_factory(session))
     mock_log.exception.assert_called_once()
+
+
+async def test_cooldown_cancelled_error_propagates() -> None:
+    """A CancelledError during the cooldown write is re-raised, never swallowed."""
+    session = _make_session()
+    with (
+        patch("modulo.core.cost_controller.probe.write_system_config", side_effect=asyncio.CancelledError()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await set_duplicate_terminal_cooldown(_make_factory(session))

@@ -122,8 +122,6 @@ def _evaluate_run(run: Any) -> str:
     for entry in breakdown:
         if not isinstance(entry, dict):
             continue
-        if entry.get("total_clamped"):
-            continue
         amount = entry.get("amount_usd")
         if amount is None:
             continue
