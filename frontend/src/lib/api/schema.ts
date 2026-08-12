@@ -4464,7 +4464,7 @@ export interface paths {
         /**
          * Update Lifecycle Map Version Endpoint
          * @description Update a version. v1 semantics: the active map state is the only version,
-         *     so this behaves identically to save — ``version_id`` is validated as a UUID
+         *     so this behaves identically to save â€” ``version_id`` is validated as a UUID
          *     for contract compatibility but the save targets the map itself.
          */
         put: operations["update_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__put"];
@@ -4546,6 +4546,51 @@ export interface paths {
         get: operations["get_journey_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys__kind___ref__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/journeys/self-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Self Report Journeys Endpoint
+         * @description Ingest workflow-reported work-item refs to advance existing journeys.
+         *
+         *     Called by external workflows (merge queue, deploy agent) that completed a
+         *     lifecycle-map stage and want the journeys they touched to reflect it.
+         *     Per the FAR-143 spec v6 rule, self-report is ADVISORY: a reported ref can
+         *     only CONFIRM / MATCH an existing journey keyed by the same canonical
+         *     ``(org, kind, ref)`` â€” a ref with no journey row is dropped (counted as
+         *     unmatched) and is NEVER minted, and no runs are created or touched. Each
+         *     confirmed journey is advanced via ``advance_journeys`` with ``status``
+         *     ``"complete"`` (the workflow reached this endpoint, so its stage
+         *     completed), ``completed_at`` = now and no backing run (the run's
+         *     ``latest_terminal_run_id`` is preserved, not overwritten).
+         *
+         *     The request body is already the self-report wire shape, so entries flow
+         *     straight through ``validate_and_normalise_reported_refs`` â€” the same
+         *     per-entry validation/canonicalisation the run-finalise path applies to
+         *     merged run outputs (``parse_self_report_refs`` is only needed for nested
+         *     run-output trees). A malformed entry is rejected and counted, never a
+         *     whole-request 422 (fail-open per ref).
+         *
+         *     Auth: the documented CI/CD credential path (PRD Â§5.2) â€” a user JWT or an
+         *     org API key (``mk_...``). A GitHub Actions workflow calls this with
+         *     ``Authorization: Bearer mk_<key>`` for a key whose owner holds the
+         *     ``runner`` role. There is no ``run.create`` permission in the registry;
+         *     ``run.trigger`` (runner) is the least-privilege gate that accepts org API
+         *     keys, matching how workflows already trigger runs.
+         */
+        post: operations["self_report_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_self_report_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9624,6 +9669,39 @@ export interface components {
             completed_at?: string | null;
             /** Provenance */
             provenance?: string | null;
+        };
+        /**
+         * JourneySelfReportRequest
+         * @description Workflow-reported work-item refs (advisory self-report).
+         *
+         *     ``work_item_refs`` entries are arbitrary JSON (not strictly dicts) so a
+         *     malformed entry (non-dict, missing kind/ref, bad status) is REJECTED and
+         *     counted per-ref by ``validate_and_normalise_reported_refs`` instead of
+         *     failing the whole request with a 422 — fail-open per ref.
+         *     ``pipeline_id`` is the optional Modulo pipeline that completed the stage;
+         *     when it is a stage of this map, the matched journey advances into it.
+         */
+        JourneySelfReportRequest: {
+            /** Work Item Refs */
+            work_item_refs?: unknown[];
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+        };
+        /**
+         * JourneySelfReportResponse
+         * @description Per-ref outcome summary for one self-report request.
+         *
+         *     ``accepted`` refs matched an existing journey and were advanced;
+         *     ``unmatched`` refs were valid but had no journey row (dropped â€” never
+         *     minted); ``rejected`` refs were malformed or dropped by the 100-entry cap.
+         */
+        JourneySelfReportResponse: {
+            /** Accepted */
+            accepted: number;
+            /** Rejected */
+            rejected: number;
+            /** Unmatched */
+            unmatched: number;
         };
         /**
          * JourneySummaryResponse
@@ -25618,6 +25696,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JourneyDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    self_report_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_self_report_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JourneySelfReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneySelfReportResponse"];
                 };
             };
             /** @description Validation Error */
