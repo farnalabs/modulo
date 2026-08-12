@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import JsonViewer from '../components/shared/JsonViewer.vue'
@@ -22,6 +23,10 @@ const nestedFixture = {
   deep: { a: { b: { c: { d: 1 } } } },
 }
 
+// >500 chars so the long-string truncation path fires for every string.
+const longValue = 'A'.repeat(1200)
+const longFixture = { agent_stdout: longValue }
+
 function mountSimple() {
   return mount(JsonViewer, { props: { data: fixture } })
 }
@@ -36,6 +41,26 @@ function mountNested() {
       renderNodeActions: true,
     },
   })
+}
+
+function mountLong() {
+  return mount(JsonViewer, { props: { data: longFixture } })
+}
+
+/** A long raw (non-JSON) string hits the plain-string render path. */
+function mountPlainLong() {
+  return mount(JsonViewer, { props: { data: longValue } })
+}
+
+/** Stub `navigator.clipboard` so copyValue() can be asserted in jsdom. */
+function stubClipboard(): ReturnType<typeof vi.fn> {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText },
+    configurable: true,
+    writable: true,
+  })
+  return writeText
 }
 
 /** The rendered `.vjs-tree` element inside a mounted wrapper (or null). */
@@ -163,19 +188,26 @@ describe('JsonViewer override contract', () => {
     }
   })
 
-  it('every override selector matches an element in at least one mount', () => {
+  it('every override selector matches an element in at least one mount', async () => {
     const simple = mountSimple()
     const nested = mountNested()
+    const longCollapsed = mountLong()
+    const longExpanded = mountLong()
+    // Expand one long string so the expanded-state selectors have an element.
+    await longExpanded.get('[data-testid="json-viewer-string-expand"]').trigger('click')
+    await nextTick()
+    const plainLong = mountPlainLong()
     const sheet = findOverrideSheet()
     expect(sheet, 'expected our json-viewer override stylesheet to be mounted').not.toBeNull()
 
     const selectors = ruleSelectors(sheet)
     expect(selectors.length).toBeGreaterThan(0)
 
+    const wrappers = [simple, nested, longCollapsed, longExpanded, plainLong]
     for (const selector of selectors) {
       expect(
-        selectorMatches(selector, [simple, nested]),
-        `override selector "${selector}" matched no element in either mount`,
+        selectorMatches(selector, wrappers),
+        `override selector "${selector}" matched no element in any mount`,
       ).toBe(true)
     }
   })
@@ -197,5 +229,60 @@ describe('JsonViewer override contract', () => {
         `token "${token}" used in json-viewer.css is not defined in style.css`,
       ).toBe(true)
     }
+  })
+
+  it('truncates long string values by default and expands to the full value', async () => {
+    const wrapper = mountLong()
+
+    const truncated = wrapper.find('[data-testid="json-viewer-string-truncated"]')
+    expect(truncated.exists()).toBe(true)
+    expect(truncated.text()).toContain('Expand')
+    expect(truncated.text()).toContain('chars')
+    expect(truncated.text()).not.toContain(longValue)
+
+    await wrapper.get('[data-testid="json-viewer-string-expand"]').trigger('click')
+    await nextTick()
+
+    const expanded = wrapper.find('[data-testid="json-viewer-string-expanded"]')
+    expect(expanded.exists()).toBe(true)
+    expect(expanded.text()).toContain(longValue)
+    expect(wrapper.find('[data-testid="json-viewer-string-truncated"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="json-viewer-string-collapse"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="json-viewer-string-truncated"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="json-viewer-string-expanded"]').exists()).toBe(false)
+  })
+
+  it('truncates a long top-level plain string with an expand affordance', async () => {
+    const wrapper = mountPlainLong()
+
+    const truncated = wrapper.find('[data-testid="json-viewer-string-truncated"]')
+    expect(truncated.exists()).toBe(true)
+    expect(truncated.text()).not.toContain(longValue)
+
+    await wrapper.get('[data-testid="json-viewer-string-expand"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('.json-viewer pre').text()).toContain(longValue)
+  })
+
+  it('short string values are not truncated', () => {
+    const wrapper = mountSimple()
+    expect(wrapper.find('[data-testid="json-viewer-string-truncated"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="json-viewer-string-expand"]').exists()).toBe(false)
+  })
+
+  it('copy writes the FULL value to the clipboard even when a long string is truncated', async () => {
+    const writeText = stubClipboard()
+    const wrapper = mountLong()
+
+    await wrapper.get('[data-testid="json-viewer-copy"]').trigger('click')
+
+    expect(writeText).toHaveBeenCalledTimes(1)
+    const payload = writeText.mock.calls[0][0] as string
+    expect(payload).toContain(longValue)
+    expect(payload).not.toContain('…')
   })
 })

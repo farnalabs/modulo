@@ -2617,7 +2617,10 @@ export default {
       "copy": "Copy",
       "copied": "Copied",
       "expand_all": "Expand all",
-      "collapse_all": "Collapse all"
+      "collapse_all": "Collapse all",
+      "expand_string": "Expand",
+      "collapse_string": "Collapse",
+      "truncated_count": "… {count} chars"
     }
   },
   "common": {
