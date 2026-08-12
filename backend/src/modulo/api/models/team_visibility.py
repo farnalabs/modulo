@@ -7,12 +7,16 @@ library primitives, lifecycle maps, pipelines). Keeps the ``visibility`` /
 
 from __future__ import annotations
 
+import uuid
 from typing import Self
 
 from pydantic import BaseModel, model_validator
 
 
 class TeamVisibilityMixin(BaseModel):
+    visibility: str | None = None
+    owner_team_id: uuid.UUID | None = None
+
     @model_validator(mode="after")
     def _validate_team_visibility(self) -> Self:
         if self.visibility == "team" and self.owner_team_id is None:
