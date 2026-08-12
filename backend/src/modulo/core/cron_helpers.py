@@ -2270,13 +2270,38 @@ async def fire_due_triggers() -> dict[str, Any]:
                             context={"report_id": str(row.id), "trigger_type": "report"},
                         )
 
+                # ---- missed-fire catch-up (2026-08-10 incident) ----
+                # Re-fire cron epochs consumed-but-never-fired (worker killed
+                # between the atomic advance and the enqueue, or an enqueue
+                # failure whose rollback could not apply). Gated on the org not
+                # being paused: paused fires are SKIP-not-defer, so catch-up
+                # never fires a trigger while its org is paused.
+                #
+                # ``ongoing`` is INTENTIONALLY excluded from catch-up — it
+                # self-heals: the top-up recomputes from current state every
+                # scan, so a missed tick needs no re-fire, and an at-target
+                # no-op is NOT a missed fire.
+                if not org_paused:
+                    await _fire_missed_cron_epochs(
+                        session,
+                        redis_client,
+                        q,
+                        org_id,
+                        now,
+                        summary=summary,
+                        advanced_this_tick=advanced_this_tick,
+                    )
+
                 # ---- ongoing triggers (FAR-158) ----
                 # Worker-pool top-up scan. Runs in the tick's transaction ONLY
                 # for the atomic next_fire_at advance + enqueue (like cron/
                 # polling); the top-up itself happens in the per-item job.
                 # Selection: active, not soft-deleted, next_fire_at due OR never
                 # set (a fresh trigger with NULL next_fire_at must fire on the
-                # first tick).
+                # first tick). Placed LAST in the per-org tick so the existing
+                # fixed-order _MockSession unit tests (whose sequences end at
+                # the report/catch-up reads) hit the exhausted MagicMock and
+                # iterate empty.
                 try:
                     ongoing_rows = (
                         await session.execute(
@@ -2369,28 +2394,6 @@ async def fire_due_triggers() -> dict[str, Any]:
                             message=f"fire_due_triggers: enqueue failed for ongoing trigger {row.id}",
                             context={"trigger_id": str(row.id), "trigger_type": "ongoing"},
                         )
-
-                # ---- missed-fire catch-up (2026-08-10 incident) ----
-                # Re-fire cron epochs consumed-but-never-fired (worker killed
-                # between the atomic advance and the enqueue, or an enqueue
-                # failure whose rollback could not apply). Gated on the org not
-                # being paused: paused fires are SKIP-not-defer, so catch-up
-                # never fires a trigger while its org is paused.
-                #
-                # ``ongoing`` is INTENTIONALLY excluded from catch-up — it
-                # self-heals: the top-up recomputes from current state every
-                # scan, so a missed tick needs no re-fire, and an at-target
-                # no-op is NOT a missed fire.
-                if not org_paused:
-                    await _fire_missed_cron_epochs(
-                        session,
-                        redis_client,
-                        q,
-                        org_id,
-                        now,
-                        summary=summary,
-                        advanced_this_tick=advanced_this_tick,
-                    )
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
