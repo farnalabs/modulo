@@ -200,6 +200,7 @@ class JourneySummaryResponse(BaseModel):
     status: str | None = None
     provenance: str | None = None
     run_count: int = 0
+    unattributed: bool = False
     latest_run_id: uuid.UUID | None = None
     updated_at: datetime
 
@@ -867,6 +868,7 @@ def _build_journey_summary(j: Any) -> JourneySummaryResponse:
         status=j.latest_status,
         provenance=j.latest_provenance,
         run_count=j.run_count or 0,
+        unattributed=bool(getattr(j, "_unattributed", False)),
         latest_run_id=j.latest_terminal_run_id,
         updated_at=j.updated_at,
     )

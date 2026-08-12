@@ -29,6 +29,7 @@ from modulo.api.routes.lifecycle_maps import router as lifecycle_maps_router
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.journeys import (
+    _is_unattributed,
     decode_cursor,
     encode_cursor,
     get_map_journey,
@@ -322,6 +323,69 @@ class TestListPagination:
             decode_cursor("not-a-cursor")
 
 
+class TestUnattributedFlag:
+    """FAR-145: a journey is *unattributed* when a map stage pipeline has seen
+    its work item (a surviving run stamped its (kind, ref)) but the journey
+    never advanced into a map stage and has zero terminal runs."""
+
+    async def test_unattributed_when_run_stamped_but_no_stage(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="linear", ref="FAR-1", map_id=None, run_count=0)
+        await _seed_run(session, kind="linear", ref="FAR-1")
+
+        items, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert [j.id for j in items] == [journey.id]
+        assert journey._unattributed is True
+
+    async def test_not_unattributed_when_stage_identity_set(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(
+            session,
+            kind="github_issue",
+            ref="a/b#5",
+            map_id=_MAP,
+            stage_id="review",
+            run_count=0,
+        )
+        await _seed_run(session)
+
+        items, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert [j.id for j in items] == [journey.id]
+        assert journey._unattributed is False
+
+    async def test_not_unattributed_when_run_count_positive(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="linear", ref="FAR-1", map_id=None, run_count=1)
+        await _seed_run(session, kind="linear", ref="FAR-1")
+
+        items, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert [j.id for j in items] == [journey.id]
+        assert journey._unattributed is False
+
+    def test_is_unattributed_false_without_matching_surviving_run(self) -> None:
+        journey = Journey(
+            organisation_id=_ORG,
+            kind="github_issue",
+            ref="a/b#5",
+            canonical_work_item_id=uuid.uuid4(),
+            map_id=None,
+            stage_id=None,
+            run_count=0,
+        )
+        referenced = {("github_issue", "some-other-ref")}
+
+        assert _is_unattributed(journey, referenced) is False
+
+
 class TestGetMapJourney:
     async def test_get_stage_identity_journey(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -505,6 +569,7 @@ def _make_journey_mock(**overrides: Any) -> MagicMock:
     j.run_count = overrides.get("run_count", 3)
     j.latest_terminal_run_id = overrides.get("latest_terminal_run_id", uuid.uuid4())
     j.updated_at = overrides.get("updated_at", datetime(2026, 1, 1, tzinfo=UTC))
+    j._unattributed = overrides.get("_unattributed", False)
     return j
 
 
@@ -636,6 +701,7 @@ class TestRoutes:
         assert item["status"] == "running"
         assert item["provenance"] == "manual"
         assert item["run_count"] == 3
+        assert item["unattributed"] is False
         assert item["latest_run_id"] == str(journey.latest_terminal_run_id)
         assert item["current_stage"] == {
             "map_id": str(_MAP),
@@ -670,6 +736,29 @@ class TestRoutes:
         item = body["items"][0]
         assert item["current_stage"] is None
         assert item["status"] is None
+
+    def test_list_wire_shape_serializes_unattributed_true(self, mock_session: AsyncMock) -> None:
+        app = _make_app()
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        journey = _make_journey_mock(map_id=None, stage_id=None, run_count=0, _unattributed=True)
+        with (
+            patch(
+                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                new=AsyncMock(return_value=_make_map_mock()),
+            ),
+            patch("modulo.api.routes.lifecycle_maps.list_map_journeys", new=AsyncMock(return_value=([journey], None))),
+            TestClient(app) as c,
+        ):
+            resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["unattributed"] is True
 
     def test_detail_unknown_journey_404(self, mock_session: AsyncMock) -> None:
         app = _make_app()
