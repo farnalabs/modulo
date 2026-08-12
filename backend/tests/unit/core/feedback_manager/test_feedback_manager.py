@@ -626,11 +626,12 @@ class TestSpawnCorrectionRun:
         assert _call_kwargs["trigger_type"] == "correction"
         assert _call_kwargs["pipeline_id"] == original_run.pipeline_id
         assert _call_kwargs["snapshot_id"] == original_run.snapshot_id
-        injected = _call_kwargs["input_payload"].get("_feedback_correction", {})
+        injected = _call_kwargs["feedback_correction"]
         assert injected["rejection_reason"] == sample_record.rejection_reason
         assert injected["rejected_output"] == sample_record.rejected_output
         assert injected["producing_node_id"] == sample_record.producing_node_id
         assert injected["is_correction_run"] is True
+        assert "_feedback_correction" not in _call_kwargs["input_payload"]
 
         _mock_link.assert_called_once_with(sample_record.id, new_run.id)
 
@@ -657,7 +658,7 @@ class TestSpawnCorrectionRun:
 
         assert run_id == new_run.id
         _call_kwargs = _mock_create_run.call_args.kwargs
-        injected = _call_kwargs["input_payload"].get("_feedback_correction", {})
+        injected = _call_kwargs["feedback_correction"]
         assert injected["custom_key"] == "custom_value"
         assert injected["rejection_reason"] == sample_record.rejection_reason
 
@@ -721,7 +722,8 @@ class TestSpawnCorrectionRun:
         _call_kwargs = _mock_create_run.call_args.kwargs
         payload = _call_kwargs["input_payload"]
         assert payload["user_input"] == "hello"
-        assert "_feedback_correction" in payload
+        assert "_feedback_correction" not in payload
+        assert _call_kwargs["feedback_correction"]["is_correction_run"] is True
 
     async def test_handles_empty_input_payload(
         self,
@@ -744,7 +746,7 @@ class TestSpawnCorrectionRun:
 
         assert run_id == new_run.id
         _call_kwargs = _mock_create_run.call_args.kwargs
-        injected = _call_kwargs["input_payload"].get("_feedback_correction", {})
+        injected = _call_kwargs["feedback_correction"]
         assert injected["rejection_reason"] == sample_record.rejection_reason
 
 

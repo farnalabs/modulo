@@ -40,6 +40,7 @@ from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
+from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
@@ -224,10 +225,44 @@ def _apply_payload_mapping(raw_payload: dict[str, Any], mapping: dict[str, str])
     """Map raw webhook payload fields to input_payload using dot-notation paths.
 
     If mapping is empty, the raw payload is used as-is.
+
+    Reserved input-payload keys (see ``_RESERVED_INPUT_PAYLOAD_KEYS``) can never
+    be a mapping TARGET — a mapping that tries to write to a reserved key is a
+    misconfiguration and is rejected with ``ValueError`` so a trigger cannot
+    forge ``_work_item_id`` / ``_modulo.work_item`` / ``_feedback_correction``.
     """
     if not mapping:
         return dict(raw_payload)
+    reserved = [k for k in mapping if k in _RESERVED_INPUT_PAYLOAD_KEYS]
+    if reserved:
+        raise ValueError(f"payload_mapping target key(s) {reserved} are reserved and cannot be mapped")
     return {target_key: _extract_field(raw_payload, src_path) for target_key, src_path in mapping.items()}
+
+
+def _extract_work_item_refs(payload: dict[str, Any], ref_paths: Any) -> list[dict[str, Any]] | None:
+    """Extract raw work-item refs from the (mapped) payload via dot-notation.
+
+    ``ref_paths`` is a trigger-config list of ``{"kind": ..., "path": ...}``
+    entries (mirrors ``payload_mapping``'s dot-notation via ``_extract_field``).
+    Returns a list of raw ``{kind, ref, source: "derived"}`` entries
+    (canonicalised + validated inside ``create_run``), or ``None`` when nothing
+    is configured / found.
+    """
+    if not isinstance(ref_paths, list):
+        return None
+    entries: list[dict[str, Any]] = []
+    for item in ref_paths:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        path = item.get("path")
+        if not kind or not path:
+            continue
+        value = _extract_field(payload, path)
+        if value is None or str(value).strip() == "":
+            continue
+        entries.append({"kind": str(kind), "ref": str(value), "source": "derived"})
+    return entries or None
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +434,7 @@ class TriggerEngine:
                 rate_limit_key = None
 
             # Create run
+            refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
             run = await create_run(
                 session,
                 org_id=org_id,
@@ -408,6 +444,7 @@ class TriggerEngine:
                 input_payload=input_payload,
                 trigger_id=trigger_id,
                 rate_limit_key=rate_limit_key,
+                work_item_refs=refs,
             )
 
             # Audit log
@@ -585,7 +622,9 @@ class TriggerEngine:
             else:
                 rate_limit_key = None
 
-            # Create run
+            # Create run (a replay is flagged via is_replay so downstream
+            # consumers can distinguish re-fires from original deliveries).
+            refs = _extract_work_item_refs(input_payload, cfg.get("work_item_ref_paths"))
             run = await create_run(
                 session,
                 org_id=org_id,
@@ -595,6 +634,8 @@ class TriggerEngine:
                 input_payload=input_payload,
                 trigger_id=trigger.id,
                 rate_limit_key=rate_limit_key,
+                work_item_refs=refs,
+                is_replay=True,
             )
 
             trigger_event = await self._log_event(

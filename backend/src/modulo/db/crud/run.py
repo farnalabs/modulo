@@ -23,6 +23,11 @@ from modulo.core.exceptions import OrgDeletedError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.lifecycle_refs import (
+    _RESERVED_INPUT_PAYLOAD_KEYS,
+    canonical_work_item_id,
+    validate_ref_entry,
+)
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
@@ -79,6 +84,139 @@ def _input_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(serialised.encode()).hexdigest()
 
 
+def _strip_reserved_keys(input_payload: dict[str, Any]) -> dict[str, Any]:
+    """Remove reserved system keys from ``input_payload`` before hash + storage.
+
+    Reserved keys (``_work_item_id``, ``_modulo.work_item``,
+    ``_feedback_correction``) are system-managed and must never be forgeable
+    via webhook payloads or manual POST /runs bodies. Stripping centrally in
+    ``create_run`` (the single chokepoint all paths funnel through) BEFORE the
+    hash means an injected reserved key neither alters the run's hash nor
+    reaches the stored payload. System data flows through explicit
+    ``create_run`` kwargs, never ``input_payload``.
+    """
+    return {k: v for k, v in input_payload.items() if k not in _RESERVED_INPUT_PAYLOAD_KEYS}
+
+
+# Dedicated v5 namespace for floor work-item ids — DISTINCT from the journey
+# canonical namespace so a floor chain anchor can never collide with a
+# canonical journey id.
+_FLOOR_NAMESPACE = uuid.UUID("4a1c3f6d-9e4b-4a1e-b5d2-3f7c8a9b0c1d")
+
+
+def _floor_work_item_id(org_id: uuid.UUID, run_id: uuid.UUID) -> uuid.UUID:
+    """Deterministic floor work-item id for a fresh run (no parent to adopt).
+
+    Pure-Python, no DB round-trip — a stable function of (org, run) so the
+    chain anchor is set exactly once at create and is reproducible.
+    """
+    return uuid.uuid5(_FLOOR_NAMESPACE, f"run:{org_id}:{run_id}")
+
+
+async def _adopt_parent_work_item_id(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    parent_run_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """Adopt the parent run's ``work_item_id`` (agent_signal / correction children).
+
+    Org-scoped RLS lookup wrapped in its own SAVEPOINT so a lookup failure
+    rolls back only the read and cannot poison the caller's transaction.
+    Returns ``None`` when the parent is missing or has no ``work_item_id``.
+    """
+    try:
+        async with session.begin_nested():
+            result = await session.execute(
+                select(Run.work_item_id).where(Run.id == parent_run_id, Run.organisation_id == org_id)
+            )
+            return result.scalar_one_or_none()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("work_item adoption lookup failed for parent run %s", parent_run_id)
+        return None
+
+
+async def _resolve_work_item_id(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    parent_run_id: uuid.UUID | None,
+    explicit: uuid.UUID | None,
+) -> uuid.UUID | None:
+    """Resolve the run's ``work_item_id``: explicit > adopted-from-parent > floor.
+
+    The chain anchor is written ONCE at create and never mutated afterwards.
+    """
+    if explicit is not None:
+        return explicit
+    if parent_run_id is not None:
+        adopted = await _adopt_parent_work_item_id(session, org_id, parent_run_id)
+        if adopted is not None:
+            return adopted
+    return _floor_work_item_id(org_id, run_id)
+
+
+def _canonicalise_ref_entries(entries: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Canonicalise + validate a list of raw work-item ref entries.
+
+    Each entry goes through ``validate_ref_entry`` (canonical kind + ref, valid
+    source/status). A malformed entry is dropped with a warning — the stamp is
+    best-effort and must never abort run creation. Returns ``None`` for an
+    empty/None input.
+    """
+    if not entries:
+        return None
+    canonical: list[dict[str, Any]] = []
+    for entry in entries:
+        try:
+            canonical.append(validate_ref_entry(entry))
+        except (ValueError, TypeError) as exc:
+            _log.warning("dropping invalid work-item ref entry: %s", exc)
+    return canonical or None
+
+
+async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list[dict[str, Any]] | None) -> None:
+    """Mint journey rows for the run's canonical work-item refs (create-time).
+
+    ``INSERT ... ON CONFLICT (organisation_id, kind, ref) DO NOTHING`` — MINT
+    ONLY: ``latest_*`` / ``run_count`` are owned by the finalise path (FAR-143)
+    and are never touched here. Wrapped in its own SAVEPOINT and fail-open: a
+    journey write failure logs + continues — a lost create-stamp is recoverable
+    at finalise via the deterministic canonical id. A journey write failure
+    must NEVER abort ``create_run``.
+    """
+    if not refs:
+        return
+    try:
+        async with session.begin_nested():
+            for entry in refs:
+                canonical_id = canonical_work_item_id(org_id, entry["kind"], entry["ref"])
+                # Hex-form UUID bindings for the raw INSERT — the portable form
+                # that matches both Postgres (accepts 32-hex uuid input) and
+                # SQLite (the Uuid type stores 32-char hex).
+                await session.execute(
+                    text(
+                        "INSERT INTO journeys "
+                        "(id, organisation_id, kind, ref, canonical_work_item_id, created_at, updated_at) "
+                        "VALUES (:id, :org_id, :kind, :ref, :canonical_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+                        "ON CONFLICT (organisation_id, kind, ref) DO NOTHING"
+                    ),
+                    {
+                        "id": uuid.uuid4().hex,
+                        "org_id": org_id.hex,
+                        "kind": entry["kind"],
+                        "ref": entry["ref"],
+                        "canonical_id": canonical_id.hex,
+                    },
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("journey hydration failed for org %s", org_id)
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -92,6 +230,11 @@ async def create_run(
     owner_team_id: uuid.UUID | None = None,
     parent_run_id: uuid.UUID | None = None,
     rate_limit_key: str | None = None,
+    work_item_id: uuid.UUID | None = None,
+    work_item_refs: list[dict[str, Any]] | None = None,
+    is_replay: bool | None = None,
+    variant_group_id: uuid.UUID | None = None,
+    feedback_correction: dict[str, Any] | None = None,
 ) -> Run:
     # Soft-deleted-org guard (follow-up gap from the reconcile delivery): a run
     # must never be created in an org whose deletion flow has set status='deleted'
@@ -104,7 +247,11 @@ async def create_run(
     # map it to a structured 4xx instead of a generic 500.
     org_status_result = await session.execute(
         text("SELECT status FROM organisations WHERE id = :oid"),
-        {"oid": str(org_id)},
+        # ``org_id.hex`` (not ``str``) for raw text() UUID comparisons: SQLite's
+        # Uuid type stores 32-char hex and never matches a dashed ``str(uuid)``;
+        # Postgres accepts the bare 32-hex form as valid uuid input, so the
+        # binding is portable across the supported backends.
+        {"oid": org_id.hex},
     )
     org_status = org_status_result.scalar_one_or_none()
     if org_status is None or org_status == "deleted":
@@ -133,13 +280,43 @@ async def create_run(
 
         await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type=trigger_type)
 
+    # Reserved-key strip (FAR-142 security control, ALWAYS-ON): reserved keys
+    # are system-managed and must never be forgeable via input_payload. The
+    # strip happens BEFORE _input_hash() so an injected reserved key cannot
+    # alter the run's hash, and the STRIPPED payload is what gets stored.
+    stored_payload = _strip_reserved_keys(input_payload)
+
+    # Engine-only feedback-correction context (FAR-142): the
+    # ``_feedback_correction`` key is reserved and stripped above, so a user
+    # payload can never forge correction-run context. Correction runs flow the
+    # value through the explicit ``feedback_correction`` kwarg instead, which
+    # injects it AFTER the strip — the value still reaches the stored
+    # input_payload (and executor._seed_state's promotion to run_context), but
+    # only engine callers can set it.
+    if feedback_correction is not None:
+        stored_payload["_feedback_correction"] = feedback_correction
+
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
     result = await session.execute(
         text("SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id"),
-        {"org_id": org_id},
+        # ``org_id.hex`` — see the org-guard comment above (portable UUID binding).
+        {"org_id": org_id.hex},
     )
     run_number = int(result.scalar_one() or 1)
+
+    # Create-time journey stamping (FAR-142): resolve the chain anchor
+    # (explicit > adopted-from-parent > deterministic floor), canonicalise the
+    # work-item refs, and carry is_replay / variant_group_id verbatim. None of
+    # this is read back out of input_payload — system data flows via kwargs.
+    resolved_work_item_id = await _resolve_work_item_id(
+        session,
+        org_id=org_id,
+        run_id=run_id,
+        parent_run_id=parent_run_id,
+        explicit=work_item_id,
+    )
+    canonical_refs = _canonicalise_ref_entries(work_item_refs)
 
     run = Run(
         id=run_id,
@@ -147,8 +324,8 @@ async def create_run(
         pipeline_id=pipeline_id,
         snapshot_id=snapshot_id,
         trigger_type=trigger_type,
-        input_hash=_input_hash(input_payload),
-        input_payload=input_payload,
+        input_hash=_input_hash(stored_payload),
+        input_payload=stored_payload,
         account_id=account_id,
         trigger_id=trigger_id,
         owner_team_id=owner_team_id,
@@ -156,9 +333,18 @@ async def create_run(
         parent_run_id=parent_run_id,
         run_number=run_number,
         rate_limit_key=rate_limit_key,
+        work_item_id=resolved_work_item_id,
+        work_item_refs=canonical_refs,
+        is_replay=is_replay,
+        variant_group_id=variant_group_id,
     )
     session.add(run)
     await session.flush()
+
+    # Journey hydration (mint-only, fail-open). A journey write failure must
+    # NEVER abort create_run — a lost create-stamp is recoverable at finalise
+    # via the deterministic canonical id.
+    await _hydrate_journeys(session, org_id, canonical_refs)
     return run
 
 

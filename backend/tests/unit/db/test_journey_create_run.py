@@ -1,0 +1,328 @@
+"""create_run journey stamping + reserved-key strip matrix (FAR-142).
+
+These tests exercise the REAL ``create_run`` path against an in-memory SQLite
+database (no mocks of the function under test):
+
+  * reserved-key strip-before-hash â€” same logical payload with different
+    injected reserved keys produces IDENTICAL input_hash, and the keys never
+    reach the stored input_payload.
+  * forge prevention per input path â€” a payload carrying ``_work_item_id``
+    through the raw webhook passthrough (empty payload_mapping) or a manual
+    POST /runs body never results in a forged work_item_id (the run gets its
+    deterministic floor id instead).
+  * the create_run path matrix â€” manual / webhook / cron / agent_signal /
+    parent-adoption across mint modes (floor, adopted-from-parent, explicit,
+    no-refs), asserting work_item_id is set once and refs are stamped when
+    provided.
+  * journey hydration â€” a ref creates a journey row keyed by the deterministic
+    canonical id; a duplicate (org, kind, ref) is an ON CONFLICT no-op; no
+    refs means no journey row; the journey survives a run purge (no FK); a
+    forced stamp failure is fail-open (create_run still succeeds).
+"""
+
+import uuid
+from collections.abc import AsyncGenerator
+from typing import Any, cast
+
+import pytest
+from sqlalchemy import Table, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from modulo.core.trigger_engine import _apply_payload_mapping
+from modulo.db.crud.run import _floor_work_item_id, create_run
+from modulo.db.lifecycle_refs import canonical_work_item_id
+from modulo.db.models.base import Base
+from modulo.db.models.journey import Journey
+from modulo.db.models.organisation import Organisation
+from modulo.db.models.run import Run
+
+_ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+_SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
+
+_REF_ENTRIES = [{"kind": "GitHub Issue", "ref": "https://github.com/a/b/pull/5", "source": "derived"}]
+
+_TABLES: list[Table] = cast(
+    list[Table],
+    [Organisation.__table__, Run.__table__, Journey.__table__],
+)
+
+
+@pytest.fixture
+async def engine() -> AsyncGenerator[AsyncEngine, None]:
+    eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+    async with eng.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+        await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as s:
+        yield s
+
+
+async def _seed_org(session: AsyncSession, org_id: uuid.UUID = _ORG) -> None:
+    session.add(Organisation(id=org_id, name="test org", slug=f"test-{org_id}"))
+    await session.flush()
+
+
+async def _create(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID = _ORG,
+    trigger_type: str = "manual",
+    input_payload: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> Run:
+    return await create_run(
+        session,
+        org_id=org_id,
+        pipeline_id=_PIPELINE,
+        snapshot_id=_SNAPSHOT,
+        trigger_type=trigger_type,
+        input_payload=input_payload or {},
+        **kwargs,
+    )
+
+
+async def _journey_for(session: AsyncSession, kind: str, ref: str, org_id: uuid.UUID = _ORG) -> Journey | None:
+    return (
+        await session.execute(
+            select(Journey).where(
+                Journey.organisation_id == org_id,
+                Journey.kind == kind,
+                Journey.ref == ref,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+class TestReservedKeyStripBeforeHash:
+    async def test_injected_reserved_keys_produce_identical_hash(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        base = {"data": 1, "nested": {"k": "v"}}
+        forged = [
+            {**base, "_work_item_id": "forged"},
+            {**base, "_modulo.work_item": {"kind": "linear", "ref": "FAR-1"}},
+            {**base, "_feedback_correction": {"is_correction_run": True}},
+            base,
+        ]
+        hashes = set()
+        for payload in forged:
+            run = await _create(session, input_payload=payload)
+            hashes.add(run.input_hash)
+        assert len(hashes) == 1
+
+    async def test_reserved_keys_never_reach_stored_payload(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(
+            session,
+            input_payload={
+                "data": 1,
+                "_work_item_id": "forged",
+                "_modulo.work_item": {"kind": "linear", "ref": "FAR-1"},
+                "_feedback_correction": {"is_correction_run": True},
+            },
+        )
+        assert run.input_payload is not None
+        assert run.input_payload == {"data": 1}
+        for key in ("_work_item_id", "_modulo.work_item", "_feedback_correction"):
+            assert key not in run.input_payload
+
+    async def test_forged_work_item_id_never_survives(self, session: AsyncSession) -> None:
+        """A payload carrying _work_item_id must not forge the anchor â€” the run
+        gets its deterministic floor id, not the forged value."""
+        await _seed_org(session)
+        run = await _create(session, input_payload={"_work_item_id": "00000000-0000-0000-0000-00000000dead"})
+        assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
+        assert run.work_item_id != uuid.UUID("00000000-0000-0000-0000-00000000dead")
+
+    async def test_feedback_correction_kwarg_injected_post_strip(self, session: AsyncSession) -> None:
+        """A correction run spawned via create_run's ``feedback_correction``
+        kwarg stores the block in the run's input_payload (so
+        executor._seed_state can promote it to run_context), while a raw
+        payload carrying the same key is stripped first — the kwarg is
+        engine-only and wins over any user-supplied value."""
+        await _seed_org(session)
+
+        correction_block = {"rejection_reason": "bad output", "is_correction_run": True}
+        kwarg_run = await _create(
+            session,
+            input_payload={"user_input": "x", "_feedback_correction": {"is_correction_run": True}},
+            feedback_correction=correction_block,
+        )
+        assert kwarg_run.input_payload is not None
+        assert kwarg_run.input_payload["user_input"] == "x"
+        assert kwarg_run.input_payload["_feedback_correction"] == correction_block
+
+        raw_run = await _create(
+            session,
+            input_payload={"user_input": "x", "_feedback_correction": {"is_correction_run": True}},
+        )
+        assert raw_run.input_payload is not None
+        assert "_feedback_correction" not in raw_run.input_payload
+
+
+class TestForgePreventionPerInputPath:
+    def test_raw_webhook_passthrough_empty_mapping_keeps_forged_key_in_route_payload(
+        self,
+    ) -> None:
+        """The raw webhook passthrough (empty payload_mapping) copies the
+        payload verbatim at the route layer â€” the neutralisation happens at
+        the create_run chokepoint (covered by the strip tests above)."""
+        raw = {"event": "opened", "_work_item_id": "forged"}
+        assert _apply_payload_mapping(raw, {}) == raw
+
+    def test_payload_mapping_rename_to_reserved_target_rejected(self) -> None:
+        raw = {"github": {"number": 1}}
+        for target in ("_work_item_id", "_modulo.work_item", "_feedback_correction"):
+            with pytest.raises(ValueError, match=target):
+                _apply_payload_mapping(raw, {target: "github.number"})
+
+    async def test_manual_post_body_forged_key_is_stripped(self, session: AsyncSession) -> None:
+        """The manual POST /runs path funnels through create_run, so a body
+        carrying _work_item_id lands as the floor id with no forged key."""
+        await _seed_org(session)
+        run = await _create(session, input_payload={"user": "x", "_work_item_id": "forged"})
+        assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
+        assert run.input_payload is not None
+        assert "_work_item_id" not in run.input_payload
+
+
+class TestCreateRunPathMatrix:
+    async def test_manual_floor_mint(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session, trigger_type="manual")
+        assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
+
+    async def test_webhook_floor_mint(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session, trigger_type="webhook")
+        assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
+
+    async def test_cron_floor_mint(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session, trigger_type="cron")
+        assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
+
+    async def test_explicit_work_item_id_wins(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        explicit = uuid.uuid4()
+        run = await _create(session, work_item_id=explicit)
+        assert run.work_item_id == explicit
+
+    async def test_child_adopts_parent_work_item_id(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        parent = await _create(session, trigger_type="webhook", work_item_id=uuid.uuid4())
+        child = await _create(session, trigger_type="agent_signal", parent_run_id=parent.id)
+        assert child.work_item_id == parent.work_item_id
+        assert child.parent_run_id == parent.id
+
+    async def test_child_of_parent_without_work_item_id_gets_floor(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        parent = await _create(session)
+        parent.work_item_id = None
+        await session.flush()
+        child = await _create(session, trigger_type="correction", parent_run_id=parent.id)
+        assert child.work_item_id == _floor_work_item_id(_ORG, child.id)
+
+    async def test_refs_stamped_when_provided(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session, work_item_refs=_REF_ENTRIES)
+        assert run.work_item_refs == [{"kind": "github_issue", "ref": "a/b#5", "source": "derived"}]
+
+    async def test_no_refs_means_no_refs_stamped(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session)
+        assert run.work_item_refs is None
+
+    async def test_is_replay_and_variant_group_id_stored(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        group_id = uuid.uuid4()
+        run = await _create(session, is_replay=True, variant_group_id=group_id)
+        assert run.is_replay is True
+        assert run.variant_group_id == group_id
+
+    async def test_work_item_id_set_exactly_once(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session)
+        assert run.work_item_id is not None
+        assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
+        await session.flush()
+        stored = (await session.execute(select(Run.work_item_id).where(Run.id == run.id))).scalar_one()
+        assert stored == run.work_item_id
+
+
+class TestJourneyHydration:
+    async def test_create_with_ref_mints_journey_row(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session, work_item_refs=_REF_ENTRIES)
+        journey = await _journey_for(session, "github_issue", "a/b#5")
+        assert journey is not None
+        assert journey.canonical_work_item_id == canonical_work_item_id(_ORG, "github_issue", "a/b#5")
+        assert run.work_item_refs == [{"kind": "github_issue", "ref": "a/b#5", "source": "derived"}]
+
+    async def test_same_ref_is_on_conflict_noop(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _create(session, work_item_refs=_REF_ENTRIES)
+        await _create(session, work_item_refs=_REF_ENTRIES)
+        rows = (
+            (
+                await session.execute(
+                    select(Journey).where(Journey.organisation_id == _ORG, Journey.kind == "github_issue")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].run_count == 0
+        assert rows[0].latest_status is None
+
+    async def test_no_refs_means_no_journey_row(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _create(session)
+        count = (await session.execute(select(Journey))).scalars().all()
+        assert count == []
+
+    async def test_journey_row_survives_run_purge(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run = await _create(session, work_item_refs=_REF_ENTRIES)
+        await session.execute(select(Journey))
+        await session.delete(run)
+        await session.flush()
+        journey = await _journey_for(session, "github_issue", "a/b#5")
+        assert journey is not None
+        assert journey.canonical_work_item_id == canonical_work_item_id(_ORG, "github_issue", "a/b#5")
+
+
+class TestDeterministicId:
+    async def test_same_org_kind_ref_same_canonical_id_across_runs(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        run_a = await _create(session, work_item_refs=_REF_ENTRIES)
+        run_b = await _create(session, work_item_refs=_REF_ENTRIES)
+        journey_a = await _journey_for(session, "github_issue", "a/b#5")
+        journey_b = await _journey_for(session, "github_issue", "a/b#5")
+        assert journey_a is not None and journey_b is not None
+        assert journey_a.id == journey_b.id
+        assert journey_a.canonical_work_item_id == journey_b.canonical_work_item_id
+        assert run_a.work_item_refs == run_b.work_item_refs
+
+
+class TestFailOpen:
+    async def test_canonicalizer_failure_does_not_abort_create_run(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await _seed_org(session)
+
+        def _boom(*_args: Any, **_kwargs: Any) -> uuid.UUID:
+            raise RuntimeError("canonicalizer exploded")
+
+        monkeypatch.setattr("modulo.db.crud.run.canonical_work_item_id", _boom)
+        run = await _create(session, work_item_refs=_REF_ENTRIES)
+        assert run.id is not None
+        assert run.work_item_id == _floor_work_item_id(_ORG, run.id)
