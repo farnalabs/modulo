@@ -327,3 +327,28 @@ class TestAuthRateLimitMiddleware:
             resp = client.get("/health")
         assert resp.status_code == 200
         mock_limiter.check_login.assert_not_called()
+
+    def test_bypass_token_compared_via_constant_time_helper(self, monkeypatch):
+        """Bypass header must be routed through the constant-time comparison helper."""
+        import hmac
+
+        from modulo.api.middleware import rate_limiter as rate_limiter_module
+
+        seen: list[tuple[str, str]] = []
+
+        def fake_match(token: str, bypass: str) -> bool:
+            seen.append((token, bypass))
+            return hmac.compare_digest(token, bypass)
+
+        monkeypatch.setattr(rate_limiter_module, "_matches_bypass_token", fake_match)
+        mock_limiter = MagicMock(spec=AuthRateLimiter)
+        mock_limiter.check_login = AsyncMock(return_value=(False, 120))
+        app = _make_app(rate_limiter=mock_limiter)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/api/v1/auth/login",
+                headers={"MODULO_RATELIMIT_BYPASS_TOKEN": "test-bypass"},
+            )
+        assert resp.status_code == 200
+        mock_limiter.check_login.assert_not_called()
+        assert seen == [("test-bypass", "test-bypass")]

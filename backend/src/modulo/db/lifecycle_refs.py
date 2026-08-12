@@ -95,8 +95,6 @@ def _canonicalise_tracker_ref(raw: str) -> str:
     m = re.search(r"\b([A-Za-z]{1,12})[\s\-:](\d+)\b", bare)
     if m:
         return f"{m.group(1).upper()}-{m.group(2)}"
-    if re.fullmatch(r"[A-Za-z]{1,12}-\d+", bare):
-        return bare.upper()
     return bare.upper()
 
 
