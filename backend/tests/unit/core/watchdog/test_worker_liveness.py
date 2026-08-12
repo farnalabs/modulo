@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -709,3 +710,356 @@ class TestEdgeTriggeredAlertRecovery:
 
         assert post_a2.await_count + post_b2.await_count == 1
         assert wl._ALERT_STATE_KEY not in shared._data
+
+
+# ---------------------------------------------------------------------------
+# Webhook / email error paths
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookErrorPaths:
+    async def test_generic_webhook_no_url_logs_and_returns(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings()  # no webhook URL
+        with caplog.at_level(logging.WARNING, logger="modulo.watchdog"):
+            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+        assert "watchdog.webhook_no_url" in caplog.text
+
+    async def test_teams_webhook_no_url_logs_and_returns(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings()  # no Teams webhook URL
+        with caplog.at_level(logging.WARNING, logger="modulo.watchdog"):
+            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+        assert "watchdog.teams_webhook_no_url" in caplog.text
+
+    async def test_generic_webhook_http_error_status_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=False, status_code=500)
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+
+        assert "watchdog.webhook_http_error" in caplog.text
+        assert "500" in caplog.text
+
+    async def test_teams_webhook_http_error_status_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=False, status_code=503)
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+
+        assert "watchdog.teams_webhook_http_error" in caplog.text
+        assert "503" in caplog.text
+
+    async def test_teams_webhook_request_error_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.side_effect = httpx.ConnectError("boom")
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+
+        assert "watchdog.teams_webhook_request_failed" in caplog.text
+
+    async def test_generic_webhook_unknown_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.side_effect = RuntimeError("boom")
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+
+        assert "watchdog.webhook_unknown_failure" in caplog.text
+
+    async def test_teams_webhook_unknown_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.side_effect = RuntimeError("boom")
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+
+        assert "watchdog.teams_webhook_unknown_failure" in caplog.text
+
+
+class TestEmailErrorPaths:
+    async def test_send_email_alert_email_send_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="ops@example.com", smtp_host="smtp.example.com")
+        send = MagicMock(side_effect=EmailSendingError("smtp down"))
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+
+        assert "watchdog.email_send_failed" in caplog.text
+        assert "smtp down" in caplog.text
+
+    async def test_send_email_alert_unknown_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="ops@example.com", smtp_host="smtp.example.com")
+        send = MagicMock(side_effect=RuntimeError("boom"))
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+
+        assert "watchdog.email_unknown_failure" in caplog.text
+
+    async def test_send_email_alert_no_recipients_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(smtp_host="smtp.example.com")  # no recipients
+        send = MagicMock()
+        with (
+            patch.object(wl, "send_email", send),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+        send.assert_not_called()
+        assert "watchdog.email_no_recipients" in caplog.text
+
+    async def test_recovery_text_without_started_at_omits_duration(self) -> None:
+        text = wl._recovery_text({"conditions": ["no live SAQ worker"]})
+        assert "for" not in text
+
+
+class TestCancelledErrorReRaise:
+    """A cancellation must propagate, never be swallowed by the fail-open handlers."""
+
+    async def test_claim_alert_reraises_cancelled_error(self) -> None:
+        redis = AsyncMock()
+        redis.set.side_effect = asyncio.CancelledError()
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        with pytest.raises(asyncio.CancelledError):
+            await wl._claim_alert(redis, settings, ["no live SAQ worker"])
+
+    async def test_claim_recovery_reraises_cancelled_error(self) -> None:
+        redis = AsyncMock()
+        redis.getdel.side_effect = asyncio.CancelledError()
+        with pytest.raises(asyncio.CancelledError):
+            await wl._claim_recovery(redis)
+
+    async def test_generic_webhook_reraises_cancelled_error(self) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.side_effect = asyncio.CancelledError()
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+
+    async def test_teams_webhook_reraises_cancelled_error(self) -> None:
+        settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.side_effect = asyncio.CancelledError()
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+
+    async def test_send_email_alert_reraises_cancelled_error(self) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="ops@example.com", smtp_host="smtp.example.com")
+
+        async def _cancelled(*_args: Any, **_kwargs: Any) -> None:
+            raise asyncio.CancelledError
+
+        send = MagicMock(return_value=True)
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", _cancelled),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+
+
+# ---------------------------------------------------------------------------
+# Additional fail-open paths
+# ---------------------------------------------------------------------------
+
+
+class TestAdditionalFailOpenPaths:
+    async def test_claim_recovery_corrupt_state_returns_none(self) -> None:
+        redis = AsyncMock()
+        redis.getdel.return_value = "not-json"
+        assert await wl._claim_recovery(redis) is None
+
+    async def test_send_alerts_generic_channel_unknown_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        with (
+            patch.object(wl, "_post_generic_webhook", AsyncMock(side_effect=RuntimeError("boom"))),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+        assert "watchdog.channel_generic_failed" in caplog.text
+
+    async def test_send_alerts_teams_channel_unknown_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
+        with (
+            patch.object(wl, "_post_teams_webhook", AsyncMock(side_effect=RuntimeError("boom"))),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+        assert "watchdog.channel_teams_failed" in caplog.text
+
+    async def test_send_alerts_email_channel_unknown_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="ops@example.com", smtp_host="smtp.example.com")
+        with (
+            patch.object(wl, "_send_email_alert", AsyncMock(side_effect=RuntimeError("boom"))),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+        assert "watchdog.channel_email_failed" in caplog.text
+
+    async def test_worker_read_failure_fails_open_without_alert(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A Redis error reading worker liveness must not alert (fail-open)."""
+        fake = _FakeWatchdogRedis()
+        fake.add_live_worker("runs")
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        post = AsyncMock()
+
+        with (
+            patch.object(fake, "zrangebyscore", side_effect=RuntimeError("redis down")),
+            patch.object(wl, "_send_alerts", post),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            state = await wl._evaluate_once(settings, fake, None)
+
+        assert state is None  # workers were live the whole time
+        post.assert_not_awaited()
+        assert "watchdog.worker_read_failed" in caplog.text
+
+    async def test_workers_dead_first_detection_starts_timer(self) -> None:
+        """The first tick after death starts the stale-timer rather than alerting."""
+        fake = _FakeWatchdogRedis()
+        fake.set_cron_heartbeat(age_seconds=5)  # cron fresh -> no cron condition
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        post = AsyncMock()
+
+        with patch.object(wl, "_send_alerts", post):
+            state = await wl._evaluate_once(settings, fake, None)
+
+        assert state is not None  # all_dead_since now set, below the stale threshold
+        post.assert_not_awaited()
+
+    async def test_worker_read_cancelled_error_propagates(self) -> None:
+        fake = _FakeWatchdogRedis()
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        with (
+            patch.object(fake, "zrangebyscore", side_effect=asyncio.CancelledError()),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._evaluate_once(settings, fake, None)
+
+    async def test_cron_read_cancelled_error_propagates(self) -> None:
+        fake = _FakeWatchdogRedis()
+        fake.add_live_worker("runs")
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        with (
+            patch.object(fake, "keys", side_effect=asyncio.CancelledError()),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._evaluate_once(settings, fake, None)
+
+    async def test_watchdog_tick_failure_logs_and_continues(self, caplog: pytest.LogCaptureFixture) -> None:
+        fake = _FakeWatchdogRedis()
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        sleeps = {"n": 0}
+
+        async def _stop(_secs: float) -> None:
+            sleeps["n"] += 1
+            raise asyncio.CancelledError
+
+        with (
+            patch.object(wl.aioredis.Redis, "from_url", return_value=fake),
+            patch.object(wl.asyncio, "sleep", side_effect=_stop),
+            patch.object(wl, "_evaluate_once", AsyncMock(side_effect=RuntimeError("boom"))),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl.run_worker_liveness_watchdog(settings)
+
+        assert sleeps["n"] == 1  # the loop ticked (and survived the failure) before cancelling
+        assert "watchdog.tick_failed" in caplog.text
+
+    async def test_send_alerts_generic_channel_cancelled_propagates(self) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        with (
+            patch.object(wl, "_post_generic_webhook", AsyncMock(side_effect=asyncio.CancelledError())),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+    async def test_send_alerts_teams_channel_cancelled_propagates(self) -> None:
+        settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
+        with (
+            patch.object(wl, "_post_teams_webhook", AsyncMock(side_effect=asyncio.CancelledError())),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+    async def test_send_alerts_email_channel_cancelled_propagates(self) -> None:
+        settings = _make_settings(ALERT_EMAIL_TO="ops@example.com", smtp_host="smtp.example.com")
+        with (
+            patch.object(wl, "_send_email_alert", AsyncMock(side_effect=asyncio.CancelledError())),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+    async def test_watchdog_loop_reraises_cancelled_error(self) -> None:
+        fake = _FakeWatchdogRedis()
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        with (
+            patch.object(wl.aioredis.Redis, "from_url", return_value=fake),
+            patch.object(wl, "_evaluate_once", AsyncMock(side_effect=asyncio.CancelledError())),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl.run_worker_liveness_watchdog(settings)
+
+    async def test_watchdog_redis_connect_failure_fails_open(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        sleeps = {"n": 0}
+
+        async def _stop(_secs: float) -> None:
+            sleeps["n"] += 1
+            raise asyncio.CancelledError
+
+        with (
+            patch.object(wl.aioredis.Redis, "from_url", side_effect=ConnectionError("redis down")),
+            patch.object(wl.asyncio, "sleep", side_effect=_stop),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await wl.run_worker_liveness_watchdog(settings)
+
+        assert sleeps["n"] == 1  # the loop survived the connect failure and kept ticking
+        assert "watchdog.tick_failed" in caplog.text
