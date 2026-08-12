@@ -1,7 +1,7 @@
 """Add per-pipeline cost-control circuit breaker columns (FAR-105, spec §8.10)
 
-Revision ID: 0086_circuit_breaker
-Revises: 0085_journey_facts
+Revision ID: 0087_circuit_breaker
+Revises: 0086_seeded_alert_rules
 Create Date: 2026-08-12
 
 Three additive columns on ``pipelines``:
@@ -25,8 +25,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0086_circuit_breaker"
-down_revision: str | None = "0085_journey_facts"
+revision: str = "0087_circuit_breaker"
+down_revision: str | None = "0086_seeded_alert_rules"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
