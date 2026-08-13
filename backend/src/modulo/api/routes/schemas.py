@@ -801,7 +801,6 @@ async def infer_schema_endpoint(
     The returned *definition_json* is a draft for the user to review and
     save via the standard POST /api/v1/schemas endpoint.
     """
-
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

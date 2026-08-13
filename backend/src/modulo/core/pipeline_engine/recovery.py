@@ -87,6 +87,7 @@ async def recover_node(
         NodeNotFoundInGraphError — node_id does not exist in the graph.
         NodeAlreadyCompletedError — node has already been completed.
         ConcurrentRecoveryError — another recovery won the race.
+
     """
     # Serialise on the pipeline row to prevent concurrent recovery attempts
     # for runs on the same pipeline.

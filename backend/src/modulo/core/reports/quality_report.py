@@ -386,6 +386,7 @@ async def deliver_quality_report(
       - ``signing_secret``: when set, the payload is HMAC-SHA256 signed and the
         signature sent as ``X-Modulo-Signature`` (PRD 8.11 webhook signing).
       - ``timeout``: per-request timeout in seconds (default 30s).
+
     """
     slack_blocks_str = report_data if isinstance(report_data, str) else format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}

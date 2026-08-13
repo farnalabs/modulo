@@ -1,5 +1,6 @@
 """Schema Registry — LLM-based schema inference, generation, validation,
-and migration between schema versions."""
+and migration between schema versions.
+"""
 
 from modulo.core.schema_registry.generation import (
     SchemaGenerationError,

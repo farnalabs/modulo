@@ -57,6 +57,7 @@ async def detect_regressions(
 
     Returns:
         List of ``RegressionAlert`` for evals with significant drops.
+
     """
     if days < 1:
         raise ValueError(f"days must be >= 1, got {days}")

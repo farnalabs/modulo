@@ -544,6 +544,7 @@ async def get_cost_report(
         period: "day", "week", "month", "year"
 
     Returns a list of dicts with keys: entity_id, entity_name, total_spend_usd, total_runs.
+
     """
     valid_periods = frozenset({"day", "week", "month", "year"})
     if period not in valid_periods:
@@ -648,6 +649,7 @@ async def build_cost_report_buckets(
             REPORTING invariant, never a health gate.
         has_more: True when a component bucket was truncated at
             ``_REPORT_COMPONENT_LIMIT`` (bounded by design).
+
     """
     valid_periods = frozenset({"day", "week", "month", "year"})
     if period not in valid_periods:

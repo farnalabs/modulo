@@ -44,6 +44,7 @@ class AWSSecretsManagerBackend(SecretsBackend):
 
     Raises:
         RuntimeError: If *boto3* is not installed.
+
     """
 
     def __init__(self) -> None:

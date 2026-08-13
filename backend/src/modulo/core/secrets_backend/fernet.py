@@ -39,6 +39,7 @@ class FernetSecretsBackend(SecretsBackend):
         fernet_key: Base64-encoded 32-byte Fernet key.
         session: Optional SQLAlchemy async session for DB operations.
         old_key: Optional previous Fernet key for no-downtime rotation.
+
     """
 
     def __init__(
@@ -83,6 +84,7 @@ class FernetSecretsBackend(SecretsBackend):
             KeyError: If *key* is not found in the secrets table.
             ValueError: If the stored value cannot be decrypted (corrupted data
                 or wrong Fernet key).
+
         """
         key = validate_key(key)
         if self._session is None:
