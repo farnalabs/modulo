@@ -61,7 +61,6 @@ _KEY_CONFIG: dict[str, _KeyConfig] = {
 
 KNOWN_KEYS: tuple[str, ...] = tuple(_KEY_CONFIG.keys())
 HOT_RELOADABLE_KEYS: frozenset[str] = frozenset(k for k, v in _KEY_CONFIG.items() if v.hot_reloadable)
-_NO_DEFAULT_KEYS: frozenset[str] = frozenset(k for k, v in _KEY_CONFIG.items() if v.default is None)
 DEFAULT_VALUES: dict[str, str] = {k: v.default for k, v in _KEY_CONFIG.items() if v.default is not None}
 
 

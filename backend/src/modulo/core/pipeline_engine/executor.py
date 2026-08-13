@@ -508,10 +508,6 @@ class PipelineExecutor:
         self._stall_requested: asyncio.Event | None = None
         self._superseded: asyncio.Event | None = None
 
-    # Token pricing constants
-    _INPUT_TOKEN_RATE = Decimal("0.00001")
-    _OUTPUT_TOKEN_RATE = Decimal("0.00003")
-
     async def _check_capacity(
         self,
         *,
