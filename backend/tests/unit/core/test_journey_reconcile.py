@@ -454,6 +454,66 @@ class TestReconcileEdgeCases:
         assert await _drift_refs(session, _ORG, [], _T2, advancing=False) == []
 
 
+class TestAdvanceJourneysDirect:
+    """Direct ``advance_journeys`` fail-open + dedupe guard coverage.
+
+    The reconcile sweep pre-canonicalises refs via ``_canonical_refs``, so the
+    malformed-entry and duplicate-ref guards inside ``advance_journeys`` itself
+    are only reachable by calling it directly (its other consumers, e.g. the
+    run finalise hook, pass raw entries).
+    """
+
+    async def test_malformed_entry_is_dropped_with_warning(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        run_id = uuid.uuid4()
+        with caplog.at_level("WARNING", logger="modulo.core.lifecycle_map.advancement"):
+            advanced = await advance_journeys(
+                session,
+                _ORG,
+                run_id=run_id,
+                pipeline_id=None,
+                refs=[
+                    {"kind": "", "ref": "x", "source": "derived"},
+                    {"kind": "github_pr", "ref": "123", "source": "derived"},
+                ],
+                status="complete",
+                completed_at=_T2,
+                run_created_at=_T1,
+            )
+
+        assert advanced == 1
+        assert any("dropping invalid work-item ref entry" in m for m in caplog.messages)
+        journey = await _read_journey(session, "github_pr", "123")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.run_count == 1
+
+    async def test_duplicate_canonical_refs_advanced_once(self, session: AsyncSession) -> None:
+        run_id = uuid.uuid4()
+        advanced = await advance_journeys(
+            session,
+            _ORG,
+            run_id=run_id,
+            pipeline_id=None,
+            refs=[
+                {"kind": "github_pr", "ref": "123", "source": "derived"},
+                {"kind": "github_pr", "ref": "#123", "source": "derived"},
+            ],
+            status="complete",
+            completed_at=_T2,
+            run_created_at=_T1,
+        )
+
+        assert advanced == 1
+        journey = await _read_journey(session, "github_pr", "123")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.run_count == 1
+
+
 class TestJourneyFactModel:
     """The per-writer denominator model is registered, org-scoped and queryable."""
 
