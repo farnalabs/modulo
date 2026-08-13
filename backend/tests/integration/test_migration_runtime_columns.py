@@ -107,10 +107,7 @@ async def _seed_roundtrip_entities(
     snapshot_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
             {"id": str(org_id), "name": "Roundtrip Org", "slug": f"rt-{org_id.hex[:8]}"},
         )
         await conn.execute(
