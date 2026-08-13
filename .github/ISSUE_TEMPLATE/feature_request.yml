@@ -32,3 +32,16 @@ body:
         - label: Frontend
         - label: Documentation
         - label: Infrastructure
+  - type: dropdown
+    id: tshirt-size
+    attributes:
+      label: T-shirt Size
+      description: Estimated implementation size (XS = trivial, XL = cross-cutting)
+      options:
+        - XS
+        - S
+        - M
+        - L
+        - XL
+    validations:
+      required: true
