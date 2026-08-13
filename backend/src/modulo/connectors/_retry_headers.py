@@ -8,6 +8,7 @@ while letting each connector pass its own rate-limit header names.
 
 from __future__ import annotations
 
+import math
 import time
 
 import httpx
@@ -16,14 +17,19 @@ import httpx
 def parse_retry_after(response: httpx.Response) -> float | None:
     """Parse the ``Retry-After`` header (seconds) into a retry delay.
 
-    Returns ``None`` when the header is absent or not parseable as a float.
+    Returns ``None`` when the header is absent or not parseable as a finite
+    float (including ``nan``/``inf``, which would poison downstream retry
+    delays).
     """
     value = response.headers.get("Retry-After")
     if value:
         try:
-            return float(value)
+            parsed = float(value)
         except (ValueError, TypeError):
             pass
+        else:
+            if math.isfinite(parsed):
+                return parsed
     return None
 
 
@@ -47,6 +53,8 @@ def parse_rate_limit_reset(response: httpx.Response, reset_headers: tuple[str, .
     try:
         reset_epoch = float(value)
     except (ValueError, TypeError):
+        return None
+    if not math.isfinite(reset_epoch):
         return None
     delay = reset_epoch - time.time()
     return delay if delay > 0 else None
