@@ -371,6 +371,19 @@ jobs:
           TESTCONTAINERS_RYUK_DISABLED: "true"
         run: uv run --no-sync pytest tests/integration/test_break_glass_gate.py -q --tb=short --timeout=300 -p no:warnings
 
+  ci-scripts-test:
+    name: CI scripts tests
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run CI script unit tests
+        # Unit tests for .github/scripts (pr-review-dedup decision logic).
+        # The multi-line-body cases guard the parsing that previously joined
+        # commit_id|state|body and split on '|', which silently defeated the
+        # PR-Reviewer dedup for any review with a multi-line body.
+        shell: bash
+        run: bash .github/scripts/test-pr-review-dedup.sh
+
   notify-pr-failure:
     name: Trigger Branch Fixer
     # The `manual-delivery` label must only suppress the webhook dispatch step
@@ -381,7 +394,7 @@ jobs:
     # step so it keeps its documented meaning ("do not auto-dispatch the
     # Branch Fixer").
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate, ci-scripts-test]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -469,7 +482,7 @@ jobs:
     # reports success on pull_request events; the "only dispatch when all
     # needed checks are green" logic lives on the webhook step below.
     if: github.event_name == 'pull_request' && always()
-    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate, ci-scripts-test]
     runs-on: ubicloud-standard-2
     permissions:
       pull-requests: read
@@ -483,62 +496,27 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Trigger-side dedup for the PR Reviewer (2026-08-13):
+          # Trigger-side dedup for the PR Reviewer (2026-08-13).
+          # The decision logic lives in .github/scripts/pr-review-dedup.sh and
+          # is unit-tested in .github/scripts/test-pr-review-dedup.sh; this
+          # step only fetches the GitHub payloads and forwards them.
+          #
+          # Contract (fail-open - dispatch unless the head is proven already
+          # reviewed):
           # - skip when the head SHA was already reviewed (same-SHA guard)
-          # - skip when the head moved only via merge commits since the last review
-          #   (Branch Fixer "merge origin/main" churn) UNLESS the prior review was
-          #   a merge-conflict CHANGES_REQUESTED that the merge may have resolved
-          #   (fail-open so a resolved conflict still gets re-reviewed)
-          # - otherwise dispatch (first review, fix push, rebase)
+          # - skip when the head moved only via merge commits since the last
+          #   review (Branch Fixer "merge origin/main" churn) AND the prior
+          #   review is decisive (APPROVED, or CHANGES_REQUESTED with no
+          #   merge-conflict marker)
+          # - otherwise dispatch: first review, fix push, rebase, force-push,
+          #   API failure, merge-conflict CR the merge may have resolved, and
+          #   non-decisive COMMENTED/DISMISSED merge-only heads (the
+          #   reviewer-side contract fails open there and expects a fresh
+          #   formal decision after a mainline merge)
           REVIEWS=$(gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate 2>/dev/null || echo "[]")
-          LAST=$(echo "$REVIEWS" | jq -r '[.[] | select(.state != "PENDING")] | last | "\(.commit_id // empty)|\(.state // empty)|\(.body // empty)"' 2>/dev/null || true)
-          LAST_SHA=$(echo "$LAST" | cut -d'|' -f1)
-          LAST_STATE=$(echo "$LAST" | cut -d'|' -f2)
-          LAST_BODY=$(echo "$LAST" | cut -d'|' -f3-)
-
-          if [ -z "$LAST_SHA" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "No prior review on PR #${PR_NUMBER} - dispatching first review."
-            exit 0
-          fi
-
-          if [ "$LAST_SHA" = "$HEAD_SHA" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Head ${HEAD_SHA} already reviewed - skipping PR Reviewer webhook."
-            exit 0
-          fi
-
           COMMITS=$(gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate 2>/dev/null || echo "[]")
-          RESULT=$(echo "$COMMITS" | jq -r --arg last "$LAST_SHA" '
-            (reverse | . as $cs | reduce $cs[] as $c ({n:0, found:false};
-              if .found then . elif $c.sha == $last then .found = true
-              elif (($c.parents | length) == 1) then .n += 1 else . end)) | "\(.found) \(.n)"' 2>/dev/null || echo "false 1")
-          FOUND=$(echo "$RESULT" | cut -d' ' -f1)
-          NON_MERGE_SINCE=$(echo "$RESULT" | cut -d' ' -f2)
-
-          if [ "$FOUND" != "true" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Last review SHA ${LAST_SHA} not found in current history (force-push?) - dispatching (fail open)."
-            exit 0
-          fi
-
-          if [ "${NON_MERGE_SINCE:-1}" -gt 0 ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "${NON_MERGE_SINCE} non-merge commit(s) since last review ${LAST_SHA} - dispatching."
-            exit 0
-          fi
-
-          # Zero non-merge commits since the last review: merge-only head move.
-          # Skip unless the prior review was a merge-conflict CHANGES_REQUESTED
-          # that this merge may have just resolved (fail-open to avoid deadlock).
-          if [ "$LAST_STATE" = "CHANGES_REQUESTED" ] && echo "$LAST_BODY" | grep -qi "merge conflict"; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Prior review was a merge-conflict CR - merge may resolve it - dispatching."
-            exit 0
-          fi
-
-          echo "skip=true" >> "$GITHUB_OUTPUT"
-          echo "Only merge commits since last review ${LAST_SHA} - skipping PR Reviewer webhook."
+          REVIEWS_JSON="$REVIEWS" COMMITS_JSON="$COMMITS" HEAD_SHA="$HEAD_SHA" \
+            ./.github/scripts/pr-review-dedup.sh >> "$GITHUB_OUTPUT"
       - name: Send webhook to Modulo PR Review Agent
         if: success() && steps.review-check.outputs.skip != 'true'
         env:
