@@ -587,6 +587,8 @@ class TestApplyPerModuleLevels:
             assert logger.level == logging.ERROR
         finally:
             logger.setLevel(logging.NOTSET)
+
+
 def test_resolve_log_level_per_module_override_wins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
