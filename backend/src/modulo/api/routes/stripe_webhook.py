@@ -8,14 +8,15 @@ webhook secret, with a ±300s replay window. Verification is against the RAW
 request body bytes and FAILS CLOSED: any missing/invalid signature returns 400
 and never reaches fulfilment.
 
-Events:
-  * ``invoice.paid`` — the SINGLE fulfilment event (idempotent, keyed on the
-    Stripe event id). It is the authoritative "money received" signal: Stripe
-    sends both ``checkout.session.completed`` and ``invoice.paid`` for a
-    card-paid subscription, so fulfilling on both would generate two licence
-    keys for one purchase.
-  * ``checkout.session.completed`` — accepted (200) but a deliberate no-op;
-    kept only for observability.
+Events handled (all idempotent, keyed on the Stripe event id):
+  * ``invoice.paid`` — the authoritative "money received" signal. This is the
+    ONLY event that triggers fulfilment. For a card-paid subscription checkout
+    Stripe sends BOTH ``checkout.session.completed`` and ``invoice.paid`` for
+    the same purchase, so fulfilling on both would issue two licences/emails.
+    ``checkout.session.completed`` is therefore treated purely as an ack
+    (returns 200, awaits the corresponding ``invoice.paid``).
+  * ``checkout.session.completed`` — acknowledged but NEVER fulfilled; the
+    first payment is signalled by the matching ``invoice.paid``.
 
 The heavy work (license generation + email) runs as a FastAPI BackgroundTask so
 the response returns 200 immediately; Stripe treats a 2xx as delivered.
@@ -27,26 +28,26 @@ import hashlib
 import hmac
 import json
 import logging
-import time
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from modulo.core.stripe_fulfilment import fulfil_enterprise_purchase
+from modulo.core.trigger_engine import TimestampExpiredError, verify_timestamp
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["stripe-webhook"])
 
-# Stripe signs webhook payloads with a tolerance window of 5 minutes.
-_SIGNATURE_TOLERANCE_SECONDS = 300
+router = APIRouter(prefix="/api/v1/webhooks", tags=["stripe-webhook"])
 
-# The single fulfilment event: Stripe sends both checkout.session.completed and
-# invoice.paid for a card-paid subscription — fulfilling on both would generate
-# two licence keys for one purchase. invoice.paid is the authoritative "money
-# received" signal.
+# The ONLY event that triggers fulfilment. Stripe sends BOTH
+# ``checkout.session.completed`` and ``invoice.paid`` for a single card-paid
+# subscription checkout (distinct event ids), so fulfilling on both would
+# double-issue licences. ``invoice.paid`` is the authoritative "money received"
+# signal; ``checkout.session.completed`` is ack-only (see the route handler).
 _FULFILMENT_EVENTS = frozenset({"invoice.paid"})
 
 
@@ -59,14 +60,13 @@ def verify_stripe_signature(
     secret: str,
     signature_header: str | None,
     payload: bytes,
-    tolerance_seconds: int = _SIGNATURE_TOLERANCE_SECONDS,
 ) -> bool:
     """Verify a ``Stripe-Signature`` header against the raw request body.
 
     Header format: ``t=<unix_ts>,v1=<hex_hmac_sha256>`` where the HMAC input is
     ``"<unix_ts>.<raw_body>"`` keyed with *secret*. Returns True only when the
-    signature matches (constant-time) AND the timestamp is within the tolerance
-    window (replay protection). Fails closed on any malformed input.
+    signature matches (constant-time) AND the timestamp is within the ±300s
+    replay window (replay protection). Fails closed on any malformed input.
     """
     if not secret or not signature_header:
         return False
@@ -79,13 +79,13 @@ def verify_stripe_signature(
     signature = parts.get("v1")
     if not timestamp or not signature:
         return False
+    # Reuse the shared ±300s replay-window check from core/trigger_engine rather
+    # than re-implementing timestamp tolerance inline (see review feedback).
     try:
-        ts = int(timestamp)
-    except ValueError:
+        verify_timestamp(timestamp)
+    except TimestampExpiredError:
         return False
-    if abs(time.time() - ts) > tolerance_seconds:
-        return False
-    signed_payload = f"{ts}.".encode() + payload
+    signed_payload = f"{timestamp}.".encode() + payload
     expected = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
@@ -112,7 +112,19 @@ def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
     if not name:
         name = obj.get("customer_name") or None
 
-    org_name = f"Customer {email}" if not name and email else name or "Modulo Enterprise customer"
+    # Prefer a stable org identifier. The Stripe customer id never changes for a
+    # given buyer, whereas a display name or email can vary between purchases —
+    # build_enterprise_payload derives org_id from org_name, so an unstable name
+    # would fragment a customer into multiple orgs across purchases.
+    customer_id = obj.get("customer")
+    if name:
+        org_name = name
+    elif isinstance(customer_id, str) and customer_id:
+        org_name = f"Customer {customer_id}"
+    elif email:
+        org_name = f"Customer {email}"
+    else:
+        org_name = "Modulo Enterprise customer"
     return email, org_name
 
 
@@ -146,11 +158,11 @@ async def stripe_webhook(
 
     event_type = event["type"]
     if event_type == "checkout.session.completed":
-        # Deliberate no-op (FAR-180): checkout completion is NOT a fulfilment
-        # event — invoice.paid is the authoritative "money received" signal.
-        # Stripe sends both for a card-paid subscription; fulfilling on both
-        # would generate two licence keys for one purchase. Log for
-        # observability and return without dispatching.
+        # Deliberate no-op: checkout completion is NOT a fulfilment event —
+        # invoice.paid is the authoritative "money received" signal. Stripe
+        # sends both for a card-paid subscription; fulfilling on both would
+        # generate two licence keys for one purchase. Log for observability
+        # and return without dispatching.
         _log.info("stripe.webhook.checkout_completed_noop event_id=%s", event["id"])
         return StripeWebhookResponse(received=True, event_id=event["id"])
 

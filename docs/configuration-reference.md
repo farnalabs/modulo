@@ -62,8 +62,9 @@ The `POST /api/v1/webhooks/stripe` webhook verifies the `Stripe-Signature`
 header (HMAC-SHA256 over `t=<timestamp>.<body>` with the webhook secret,
 ±300s replay window), then idempotently generates an Ed25519-signed
 enterprise license and emails it to the customer on their first successful
-payment (`checkout.session.completed` with `payment_status=paid` and
-`invoice.paid`).
+payment (`invoice.paid`). `checkout.session.completed` is treated as a pure
+ack and never fulfils, so a single card-paid purchase (which emits both
+events) issues exactly one license.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|

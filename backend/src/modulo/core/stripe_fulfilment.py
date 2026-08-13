@@ -2,8 +2,8 @@
 
 Flow (FAR-178/180): Stripe webhook -> verify signature (in the route) ->
 generate an Ed25519-signed enterprise license -> email it to the customer ->
-claim the event id. Runs as a FastAPI BackgroundTask so the webhook responds
-200 immediately.
+claim the Stripe event id. Runs as a FastAPI BackgroundTask so the webhook
+responds 200 immediately.
 
 Only ``invoice.paid`` triggers fulfilment — the authoritative "money received"
 signal. ``checkout.session.completed`` is deliberately a no-op in the route:
@@ -149,7 +149,7 @@ async def email_enterprise_license(settings: Settings, to: str, license_key: str
     retries re-attempt the email.
     """
     try:
-        await asyncio.to_thread(
+        return await asyncio.to_thread(
             send_email,
             settings,
             [to],
@@ -157,7 +157,6 @@ async def email_enterprise_license(settings: Settings, to: str, license_key: str
             _licence_email_html(license_key, expires_at),
             _licence_email_text(license_key, expires_at),
         )
-        return True
     except EmailSendingError:
         _log.exception("stripe.fulfilment.email_failed to=%s", to)
         return False
@@ -179,15 +178,19 @@ async def fulfil_enterprise_purchase(
 ) -> str | None:
     """Idempotently fulfil a Stripe purchase: generate + email an enterprise license.
 
-    Ordering (FAR-180): generate -> duplicate-check -> email -> claim. The event
+    Ordering (FAR-180): duplicate-check -> generate -> email -> claim. The event
     id is claimed ONLY AFTER a successful email send, so a transient SMTP
     failure (``email_enterprise_license`` returns False) leaves the event
     unclaimed and Stripe's automatic retries re-attempt the fulfilment — the
     customer never permanently loses their key to an SMTP outage. A duplicate
-    delivery (already claimed) is detected BEFORE emailing and returns ``None``
-    without re-sending. Returns the generated license key, or ``None`` when the
-    event was already fulfilled or generation/email failed.
+    delivery (already claimed) is detected BEFORE generation/emailing and
+    returns ``None`` without re-sending. Returns the generated license key, or
+    ``None`` when the event was already fulfilled or generation/email failed.
     """
+    if await _is_event_claimed(settings, event_id):
+        _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
+        return None
+
     try:
         license_key = generate_enterprise_license(
             org_name,
@@ -196,10 +199,6 @@ async def fulfil_enterprise_purchase(
         )
     except (LicenseSigningError, ValueError):
         _log.exception("stripe.fulfilment.license_generation_failed event_id=%s", event_id)
-        return None
-
-    if await _is_event_claimed(settings, event_id):
-        _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
         return None
 
     validation = parse_and_verify(license_key)
