@@ -52,6 +52,23 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 |----------|----------|---------|-------------|
 | `MODULO_LICENSE_KEY` | No | – | Base64-encoded signed JSON payload enabling Team-tier features. Verified at startup using the embedded Ed25519 public key. |
 | `MODULO_LICENSE_PUBLIC_KEY` | No | – | Ed25519 public key (hex) for license signature verification. Defaults to dev/test key; set in production. |
+| `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN enterprise license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
+
+---
+
+## Stripe (Purchase Fulfilment)
+
+The `POST /api/v1/webhooks/stripe` webhook verifies the `Stripe-Signature`
+header (HMAC-SHA256 over `t=<timestamp>.<body>` with the webhook secret,
+±300s replay window), then idempotently generates an Ed25519-signed
+enterprise license and emails it to the customer on their first successful
+payment (`checkout.session.completed` with `payment_status=paid` and
+`invoice.paid`).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `STRIPE_SECRET_KEY` | For Stripe | – | Stripe secret key, used for customer email lookups. When both Stripe keys are empty the webhook is inactive. |
+| `STRIPE_WEBHOOK_SECRET` | For Stripe | – | Stripe webhook signing secret (`whsec_...`), used to verify `Stripe-Signature`. When both Stripe keys are empty the webhook is inactive. |
 
 ---
 
