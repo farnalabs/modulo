@@ -416,6 +416,30 @@ modulo:
 For `docker compose` development, use `pull_policy: always` to pick up newly
 built images.
 
+### 5.6 Signed Images, SBOM & Checksums
+
+Releases are signed and verified, and ship an SBOM plus SHA-256 checksums:
+
+- **cosign keyless signing** — the release workflow
+  (`.github/workflows/release.yml`, tag-driven `v*`) signs the pushed
+  `ghcr.io/farnalabs/modulo` image index with cosign using GitHub OIDC. No
+  private signing key is stored anywhere.
+- **SBOM** — syft scans the image and the SPDX SBOM is attested onto the image
+  with cosign, so the software bill of materials is retrievable from the
+  registry.
+- **Checksums** — the release attaches `SHA256SUMS` (wheel, sdist, SBOM files),
+  itself cosign blob-signed, plus the cosign signature bundles.
+
+Verify before deploying an image pulled from a release:
+
+```bash
+cosign verify ghcr.io/farnalabs/modulo@sha256:<digest> \
+  --certificate-identity-regexp '^https://github.com/farnalabs/modulo/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+Full process and verify instructions: `docs/release-signing.md`.
+
 ---
 
 ## 6. Logging & Monitoring

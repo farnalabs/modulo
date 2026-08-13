@@ -1,0 +1,208 @@
+name: "Release: Signed build (cosign + syft SBOM + checksums)"
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to release (e.g. v0.3.324). Uses the triggering ref if empty.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/farnalabs/modulo
+  ARTIFACT_DIR: dist
+
+jobs:
+  signed-release:
+    name: Build, sign, and publish release
+    runs-on: ubicloud-standard-2
+    # Multi-arch (amd64 + arm64) Docker build + frontend SPA build + signing.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.tag }}"
+          if [ -z "$VERSION" ]; then
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              VERSION="${GITHUB_REF_NAME#v}"
+            else
+              echo "::error::Release requires a v* tag ref or an explicit workflow_dispatch tag input."
+              exit 1
+            fi
+          fi
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::No release version available (no tag ref and no workflow_dispatch tag input)."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build the all-in-one image (backend + nginx-served frontend SPA) and
+      # push it to ghcr.io. provenance: mode=max attaches SLSA build
+      # provenance attestations to the image index.
+      - name: Build and push image (linux/amd64 + linux/arm64)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile.fly
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            GIT_BRANCH=main
+            BUILD_TIMESTAMP=${{ steps.version.outputs.tag }}
+            CI_JOB_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+
+      - name: Create artifact directory
+        shell: bash
+        run: mkdir -p ${{ env.ARTIFACT_DIR }}
+
+      # 1) SBOM — syft scan of the pushed image (SPDX, the cosign/OCI default).
+      - name: Generate SBOM with syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          output-file: ${{ env.ARTIFACT_DIR }}/sbom.spdx.json
+          format: spdx
+
+      # Collect any additional SBOM files the action emitted (e.g. CycloneDX)
+      # so checksums and the release always cover every generated SBOM. Prune
+      # the artifact dir to avoid "same file" cp errors from re-copying.
+      - name: Collect SBOM artifacts
+        shell: bash
+        run: |
+          find . -path "./${{ env.ARTIFACT_DIR }}" -prune -o -type f \
+            \( -name '*.spdx.json' -o -name '*.cyclonedx.json' \) -print | while read -r f; do
+            cp "$f" "${{ env.ARTIFACT_DIR }}/"
+          done
+          ls -la "${{ env.ARTIFACT_DIR }}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # 2) cosign keyless signing — GitHub OIDC (id-token: write). No private
+      # key is stored anywhere; the signature is tied to this workflow run.
+      - name: Sign Docker image (keyless via GitHub OIDC)
+        env:
+          IMAGE_REF: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          echo "Signing $IMAGE_REF"
+          cosign sign --yes "$IMAGE_REF"
+
+      # Attach the syft SBOM to the image as a signed attestation so consumers
+      # can pull the SBOM directly from the registry.
+      - name: Attach SBOM to image (cosign attest)
+        env:
+          IMAGE_REF: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          cosign attest --yes --predicate ${{ env.ARTIFACT_DIR }}/sbom.spdx.json --type spdx "$IMAGE_REF"
+
+      # 3) Python package (sdist + wheel) as a distributable release artifact.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Build Python package (sdist + wheel)
+        working-directory: backend
+        run: uv build --out-dir ../${{ env.ARTIFACT_DIR }}
+
+      # 4) Checksums — one SHA256SUMS file covering every release artifact
+      # (wheel, sdist, SBOMs), then cosign blob-signed.
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          cd ${{ env.ARTIFACT_DIR }}
+          sha256sum $(find . -maxdepth 1 -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.spdx.json' -o -name '*.cyclonedx.json' \) -printf '%f\n') > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Sign checksums + SBOM (cosign sign-blob)
+        shell: bash
+        run: |
+          cd ${{ env.ARTIFACT_DIR }}
+          cosign sign-blob --yes --bundle SHA256SUMS.bundle SHA256SUMS
+          cosign sign-blob --yes --bundle sbom.spdx.json.bundle sbom.spdx.json
+          ls -la
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > ${{ env.ARTIFACT_DIR }}/release-notes.md <<'EOF'
+          Modulo **${{ steps.version.outputs.tag }}** — cosign-signed release.
+
+          ## Images (ghcr.io/farnalabs/modulo)
+
+          - `ghcr.io/farnalabs/modulo:${{ steps.version.outputs.tag }}` (linux/amd64 + linux/arm64)
+          - `ghcr.io/farnalabs/modulo:latest`
+          - Image digest: `${{ steps.build.outputs.digest }}`
+
+          ## Signing & provenance
+
+          - **Docker image signed with cosign (keyless, GitHub OIDC)** — verify:
+            `cosign verify ghcr.io/farnalabs/modulo@${{ steps.build.outputs.digest }}`
+          - **SBOM (syft, SPDX)** generated from the pushed image and attested
+            onto the image (SLSA provenance attestations attached at build time):
+            `cosign verify-attestation ghcr.io/farnalabs/modulo@${{ steps.build.outputs.digest }}`
+          - **Release artifacts checksummed** in `SHA256SUMS` and cosign
+            blob-signed (`SHA256SUMS.bundle`, `sbom.spdx.json.bundle`).
+          - Python package: `farnalabs-modulo` sdist + wheel.
+
+          ## Verification
+
+          See `docs/release-signing.md` in the repo for the full verify workflow.
+          EOF
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "Modulo ${{ steps.version.outputs.tag }}" \
+            --notes-file ${{ env.ARTIFACT_DIR }}/release-notes.md \
+            ${{ env.ARTIFACT_DIR }}/*.whl \
+            ${{ env.ARTIFACT_DIR }}/*.tar.gz \
+            ${{ env.ARTIFACT_DIR }}/*.spdx.json \
+            ${{ env.ARTIFACT_DIR }}/*.cyclonedx.json \
+            ${{ env.ARTIFACT_DIR }}/SHA256SUMS \
+            ${{ env.ARTIFACT_DIR }}/SHA256SUMS.bundle \
+            ${{ env.ARTIFACT_DIR }}/sbom.spdx.json.bundle
