@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { nextTick, reactive } from 'vue'
 
 const mockGet = vi.hoisted(() => vi.fn())
 vi.mock('../lib/api/client', () => ({
@@ -145,6 +146,17 @@ describe('serializeFilters', () => {
     expect(bare.folder_id).toBeUndefined()
   })
 
+  it('emits error_code when set and omits it otherwise', () => {
+    const full = serializeFilters(
+      { timespan: '7d', groupBy: 'day', errorCode: 'executor_stalled' },
+      FIXED_NOW,
+    )
+    expect(full.error_code).toBe('executor_stalled')
+
+    const bare = serializeFilters({ timespan: '7d', groupBy: 'day' }, FIXED_NOW)
+    expect(bare.error_code).toBeUndefined()
+  })
+
   it('maps the 24h preset to a 24-hour UTC datetime window with hour granularity', () => {
     const day = serializeFilters({ timespan: '24h', groupBy: 'day' }, FIXED_NOW)
     expect(day.date_to).toContain('T')
@@ -265,6 +277,31 @@ describe('applyQueryParamsToFilters', () => {
     )
     expect(applied).toBe(false)
     expect(filters.dateFrom).toBeUndefined()
+  })
+
+  it('honours the error_code deep-link filter and dimension=error_code', () => {
+    const { filters, applied } = applyQueryParamsToFilters(
+      {
+        dimension: 'error_code',
+        error_code: 'executor_stalled',
+        date_from: '2026-06-01',
+        date_to: '2026-08-06',
+      },
+      base,
+    )
+    expect(applied).toBe(true)
+    expect(filters.dimension).toBe('error_code')
+    expect(filters.errorCode).toBe('executor_stalled')
+  })
+
+  it('round-trips an error_code deep link through applyQueryParamsToFilters + serializeFilters', () => {
+    const { filters } = applyQueryParamsToFilters(
+      { dimension: 'error_code', error_code: 'executor_stalled' },
+      base,
+    )
+    const params = serializeFilters(filters, FIXED_NOW)
+    expect(params.dimension).toBe('error_code')
+    expect(params.error_code).toBe('executor_stalled')
   })
 })
 
@@ -522,6 +559,37 @@ describe('analytics store', () => {
     store.setFilters({ timespan: '30d' })
     expect(store.filters.dateFrom).toBeUndefined()
     expect(store.filters.dateTo).toBeUndefined()
+  })
+
+  it('keeps the explicit deep-link range when a non-timespan filter changes', () => {
+    const store = useAnalyticsStore()
+    store.applyQueryParams({ date_from: '2026-06-01', date_to: '2026-08-06', group_by: 'day' })
+    expect(store.filters.dateFrom).toBe('2026-06-01')
+    // The filter bar always re-emits the current timespan; a same-timespan patch
+    // (e.g. only status changed) must NOT drop the deep-link date range.
+    store.setFilters({ timespan: '7d', status: 'failed' })
+    expect(store.filters.dateFrom).toBe('2026-06-01')
+    expect(store.filters.dateTo).toBe('2026-08-06')
+    expect(store.filters.status).toBe('failed')
+  })
+
+  it('applies an error_code deep link and re-serializes it into the query', async () => {
+    setupMocks(validResponse)
+    const store = useAnalyticsStore()
+    const applied = store.applyQueryParams({
+      dimension: 'error_code',
+      error_code: 'executor_stalled',
+      date_from: '2026-06-01',
+      date_to: '2026-08-06',
+    })
+    expect(applied).toBe(true)
+    expect(store.filters.errorCode).toBe('executor_stalled')
+    expect(store.filters.dimension).toBe('error_code')
+    await store.fetchQuery()
+    const queryCall = mockGet.mock.calls.find((c) => c[0] === '/api/v1/analytics/query')
+    const q = (queryCall?.[1] as { params: { query: Record<string, unknown> } } | undefined)?.params.query
+    expect(q?.error_code).toBe('executor_stalled')
+    expect(q?.dimension).toBe('error_code')
   })
 
   it('fetches and validates the query response', async () => {
@@ -828,6 +896,38 @@ describe('AnalyticsView', () => {
     expect(q?.group_by).toBe('week')
     expect(q?.date_from).toBe('2026-06-01')
     expect(q?.pipeline_id).toBe('p-1')
+    // Restore the shared useRoute mock for other tests.
+    routeMock.mockImplementation(() => ({ query: {} }) as never)
+  })
+
+  it('re-applies the deep-link query on same-route navigation (no remount)', async () => {
+    setupMocks()
+    const { useRoute } = await import('vue-router')
+    const routeMock = vi.mocked(useRoute)
+    const routeValue = reactive({ query: {} as Record<string, string> })
+    routeMock.mockImplementation(() => routeValue as never)
+    mount(AnalyticsView)
+    await flushPromises()
+    const store = useAnalyticsStore()
+    expect(store.filters.groupBy).toBe('day')
+    // Simulate a Remy deep-link navigation while already on /analytics: the
+    // component is reused, so only the route-query watcher can apply it.
+    routeValue.query = {
+      group_by: 'week',
+      date_from: '2026-06-01',
+      date_to: '2026-08-06',
+      error_code: 'executor_stalled',
+    }
+    await nextTick()
+    await flushPromises()
+    expect(store.filters.groupBy).toBe('week')
+    expect(store.filters.dateFrom).toBe('2026-06-01')
+    expect(store.filters.errorCode).toBe('executor_stalled')
+    const queryCalls = mockGet.mock.calls.filter((c) => c[0] === '/api/v1/analytics/query')
+    const lastQuery = (queryCalls.at(-1)?.[1] as { params: { query: Record<string, unknown> } } | undefined)
+      ?.params.query
+    expect(lastQuery?.error_code).toBe('executor_stalled')
+    expect(lastQuery?.group_by).toBe('week')
     // Restore the shared useRoute mock for other tests.
     routeMock.mockImplementation(() => ({ query: {} }) as never)
   })

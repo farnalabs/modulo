@@ -103,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PageHeader from "../components/shared/PageHeader.vue";
@@ -213,4 +213,18 @@ onMounted(async () => {
   }
   await store.fetchQuery();
 });
+
+// Remy's panel is a global overlay, so a deep link can be clicked while already
+// on /analytics: the component is reused, onMounted does not re-fire, and the
+// pre-filter would never apply. Watch the route query and re-apply + refetch on
+// same-route navigation with a new query.
+watch(
+  () => route.query,
+  async () => {
+    if (route.query && Object.keys(route.query).length > 0) {
+      store.applyQueryParams(route.query);
+    }
+    await store.fetchQuery();
+  },
+);
 </script>

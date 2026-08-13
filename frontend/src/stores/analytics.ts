@@ -19,7 +19,8 @@ export type AnalyticsDimension =
   | "status"
   | "pipeline"
   | "folder"
-  | "team";
+  | "team"
+  | "error_code";
 export type TrendDirection = "up" | "down" | "flat" | null;
 
 export interface AnalyticsBucket {
@@ -48,6 +49,10 @@ export interface AnalyticsFilters {
   status?: string | null;
   pipelineId?: string | null;
   folderId?: string | null;
+  /** Run failure code filter (e.g. `executor_stalled`) from a deep link or the
+   * filter bar. Round-trips through the backend's `error_code` query param.
+   */
+  errorCode?: string | null;
   /** Explicit range override from a deep link (e.g. /analytics?date_from=...).
    * When both are set they win over the timespan derivation in serializeFilters.
    */
@@ -62,6 +67,7 @@ export interface AnalyticsQueryParams {
   status?: string;
   pipeline_id?: string;
   folder_id?: string;
+  error_code?: string;
   date_from: string;
   date_to: string;
   limit: number;
@@ -80,6 +86,7 @@ export const DEFAULT_FILTERS: AnalyticsFilters = {
   status: null,
   pipelineId: null,
   folderId: null,
+  errorCode: null,
 };
 
 export const TRIGGER_TYPES = [
@@ -211,6 +218,7 @@ export function serializeFilters(
   if (filters.status) params.status = filters.status;
   if (filters.pipelineId) params.pipeline_id = filters.pipelineId;
   if (filters.folderId) params.folder_id = filters.folderId;
+  if (filters.errorCode) params.error_code = filters.errorCode;
   return params;
 }
 
@@ -230,6 +238,7 @@ const DIMENSION_VALUES: AnalyticsDimension[] = [
   "pipeline",
   "folder",
   "team",
+  "error_code",
 ];
 
 /**
@@ -260,6 +269,8 @@ export function applyQueryParamsToFilters(
   if (pipelineId) patch.pipelineId = pipelineId;
   const folderId = firstQueryParam(query.folder_id);
   if (folderId) patch.folderId = folderId;
+  const errorCode = firstQueryParam(query.error_code);
+  if (errorCode) patch.errorCode = errorCode;
   const dateFrom = firstQueryParam(query.date_from);
   const dateTo = firstQueryParam(query.date_to);
   if (dateFrom && dateTo && isValid(parseISO(dateFrom)) && isValid(parseISO(dateTo))) {
@@ -504,10 +515,12 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   });
 
   function setFilters(patch: Partial<AnalyticsFilters>): void {
-    // Any timespan interaction returns to timespan-derived ranges; the explicit
-    // deep-link override only applies until the user changes the window.
+    // Only a timespan VALUE change returns to timespan-derived ranges. The
+    // filter bar always includes the current timespan in every emitted patch,
+    // so comparing values (not key presence) keeps the explicit deep-link
+    // range intact when the user tweaks another filter.
     const next = { ...filters.value, ...patch };
-    if ("timespan" in patch) {
+    if ("timespan" in patch && patch.timespan !== filters.value.timespan) {
       next.dateFrom = undefined;
       next.dateTo = undefined;
     }
