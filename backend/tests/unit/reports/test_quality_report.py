@@ -403,11 +403,12 @@ class TestSlackBlockKitSchema:
         for report in (_REPORT_WITH_DATA, _REPORT_EMPTY):
             for block in self._blocks(report):
                 if block["type"] != "context":
-                    elements = block.get("elements", [])
-                    assert len(elements) <= self._MAX_CONTEXT_ELEMENTS, "too many context elements"
-                    for element in elements:
-                        assert element["type"] in {"mrkdwn", "plain_text"}
-                        assert len(element.get("text", "")) <= self._MAX_ELEMENT_TEXT, "context element too long"
+                    continue
+                elements = block.get("elements", [])
+                assert len(elements) <= self._MAX_CONTEXT_ELEMENTS, "too many context elements"
+                for element in elements:
+                    assert element["type"] in {"mrkdwn", "plain_text"}
+                    assert len(element.get("text", "")) <= self._MAX_ELEMENT_TEXT, "context element too long"
 
     def test_expected_structure_for_populated_report(self) -> None:
         blocks = self._blocks(_REPORT_WITH_DATA)

@@ -292,10 +292,11 @@ def _serialize_json_body(body: dict[str, Any] | list[Any]) -> bytes:
 def _sign_payload(secret: str, body_bytes: bytes) -> str:
     """Compute the HMAC-SHA256 signature of a serialized payload.
 
-    Returns ``sha256=<hex digest>`` (Slack-style signature scheme) so the
-    recipient can verify authenticity against a shared secret.
+    Returns ``sha256=<hex digest>`` so the recipient can verify authenticity
+    against a shared secret. This is a plain HMAC-SHA256 over the raw body
+    bytes (not Slack's ``v0:timestamp:body`` signing scheme).
     """
-    digest = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+    digest = hmac.new(str(secret).encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
 
 
