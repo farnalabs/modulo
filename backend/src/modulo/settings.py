@@ -714,25 +714,3 @@ def validate_break_glass_boot(settings: Settings) -> None:
             raise RuntimeError("Break-glass boot config assertion FAILED:\n  " + "\n".join(blocking))
     for _is_blocking, message in findings:
         _log.warning("break_glass.boot_config %s", message)
-
-
-def run_cost_settings_self_test() -> None:
-    """Boot self-test for the cost knobs — operator-facing surface.
-
-    The guards themselves live in the Settings LOAD path (every process that
-    constructs Settings fails fast identically). This function exists for the
-    interactive-boot surface: it constructs Settings and prints a CLEAR
-    recovery message (the offending knob + the valid range) before exiting
-    when a violating env combination is present, so the operator sees the
-    exact fix rather than a bare pydantic trace.
-    """
-    try:
-        Settings()
-    except Exception as exc:
-        _log.error("cost_settings_self_test.failed")
-        # Operator-facing recovery surface: the plain-print is deliberate so the
-        # offending knob + valid range reach the console even when JSON logs are
-        # not rendered (Fly logs lesson).
-        print(f"ERROR: cost Settings validation failed: {exc}", flush=True)  # noqa: T201
-        raise
-    _log.info("cost_settings_self_test.ok")
