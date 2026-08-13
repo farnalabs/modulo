@@ -77,16 +77,6 @@ async def update_membership_role(
     return membership
 
 
-async def get_primary_membership(session: AsyncSession, account_id: uuid.UUID) -> OrgMembership | None:
-    result = await session.execute(
-        select(OrgMembership)
-        .where(OrgMembership.account_id == account_id, OrgMembership.deactivated_at.is_(None))
-        .order_by(OrgMembership.joined_at)
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
-
-
 async def resolve_role_from_membership(session: AsyncSession, account_id: str, organisation_id: str) -> str | None:
     """Return the LIVE org role for the account in the org, or None if no active membership.
 

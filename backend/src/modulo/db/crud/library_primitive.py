@@ -261,12 +261,3 @@ async def restore_library_primitive(session: AsyncSession, primitive_id: uuid.UU
     )
     await session.flush()
     return result.scalar_one_or_none()
-
-
-async def delete_library_primitive(session: AsyncSession, primitive_id: uuid.UUID) -> bool:
-    primitive = await get_library_primitive(session, primitive_id)
-    if primitive is None:
-        return False
-    await session.delete(primitive)
-    await session.flush()
-    return True
