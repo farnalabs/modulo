@@ -326,3 +326,45 @@ def test_connector_no_credentials_shows_false(client: TestClient) -> None:
 def test_list_connectors_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
     resp = unauth_client.get("/api/v1/connectors")
     assert resp.status_code in (401, 403)
+
+
+def test_list_connectors_default_excludes_in_dev(client: TestClient) -> None:
+    """The list endpoint defaults to the CRUD in_dev exclusion (excluded_tiers=None)."""
+    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors")
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None
+
+
+def test_list_connectors_include_in_dev_passes_empty_exclusions(client: TestClient) -> None:
+    """?include_in_dev=true bypasses the in_dev tier exclusion."""
+    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors", params={"include_in_dev": "true"})
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] == []
+
+
+def test_list_connectors_include_in_dev_false_keeps_exclusion(client: TestClient) -> None:
+    """?include_in_dev=false behaves exactly like omitting the parameter."""
+    page_result = MagicMock(items=[_make_connector()], total=1, page=1, page_size=20, next_cursor=None)
+    with (
+        patch("modulo.api.routes.connectors.list_connector_instances", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/connectors", params={"include_in_dev": "false"})
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None

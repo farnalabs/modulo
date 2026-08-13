@@ -283,6 +283,7 @@ async def list_library_primitives_endpoint(
     primitive_types: str | None = None,
     search: str | None = None,
     source: str | None = None,
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("library.search"),
 ) -> LibraryPrimitiveListResponse:
@@ -303,6 +304,7 @@ async def list_library_primitives_endpoint(
                     include_community=include_community,
                     source=source,
                     cursor=cursor,
+                    excluded_tiers=[] if include_in_dev else None,
                 )
         except ProgrammingError:
             _log.exception("library.list_library_primitives_endpoint")

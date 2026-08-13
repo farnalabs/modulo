@@ -152,6 +152,7 @@ async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(default=None),
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("connector.list"),
 ) -> ConnectorListResponse:
@@ -159,7 +160,13 @@ async def list_connectors_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
+            result = await list_connector_instances(
+                session,
+                page=page,
+                page_size=page_size,
+                cursor=cursor,
+                excluded_tiers=[] if include_in_dev else None,
+            )
     except IntegrityError:
         logger.exception("connectors.list_connectors_endpoint")
         raise HTTPException(

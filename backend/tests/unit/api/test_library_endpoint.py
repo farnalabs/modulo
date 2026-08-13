@@ -250,6 +250,48 @@ def test_list_libraries_backwards_compatible_single_primitive_type(client: TestC
     assert call_kwargs["primitive_types"] is None
 
 
+def test_list_libraries_default_excludes_in_dev(client: TestClient) -> None:
+    """The list endpoint defaults to the service in_dev exclusion (excluded_tiers=None)."""
+    result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get("/api/v1/libraries")
+    assert resp.status_code == 200, resp.text
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None
+
+
+def test_list_libraries_include_in_dev_passes_empty_exclusions(client: TestClient) -> None:
+    """?include_in_dev=true bypasses the in_dev tier exclusion in the service."""
+    result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get("/api/v1/libraries", params={"include_in_dev": "true"})
+    assert resp.status_code == 200, resp.text
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] == []
+
+
+def test_list_libraries_include_in_dev_false_keeps_exclusion(client: TestClient) -> None:
+    """?include_in_dev=false behaves exactly like omitting the parameter."""
+    result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get("/api/v1/libraries", params={"include_in_dev": "false"})
+    assert resp.status_code == 200, resp.text
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/libraries/{id}/create-pipeline
 # ---------------------------------------------------------------------------

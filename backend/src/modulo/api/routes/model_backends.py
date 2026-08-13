@@ -123,6 +123,7 @@ def _to_response(mb: Any) -> ModelBackendResponse:
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("model_backend.list"),
 ) -> ModelBackendListResponse:
@@ -131,7 +132,11 @@ async def list_model_backends_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_model_backends(
-                session, org_id=principal.organisation_id, page=page, page_size=page_size
+                session,
+                org_id=principal.organisation_id,
+                page=page,
+                page_size=page_size,
+                excluded_tiers=[] if include_in_dev else None,
             )
     except IntegrityError:
         logger.exception("model_backends.list_model_backends_endpoint")

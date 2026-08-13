@@ -127,6 +127,48 @@ def test_list_model_backends_returns_200(client: TestClient) -> None:
     assert resp.json()["total"] == 1
 
 
+def test_list_model_backends_default_excludes_in_dev(client: TestClient) -> None:
+    """The list endpoint defaults to the CRUD in_dev exclusion (excluded_tiers=None)."""
+    page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/model-backends")
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None
+
+
+def test_list_model_backends_include_in_dev_passes_empty_exclusions(client: TestClient) -> None:
+    """?include_in_dev=true bypasses the in_dev tier exclusion."""
+    page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/model-backends", params={"include_in_dev": "true"})
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] == []
+
+
+def test_list_model_backends_include_in_dev_false_keeps_exclusion(client: TestClient) -> None:
+    """?include_in_dev=false behaves exactly like omitting the parameter."""
+    page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/model-backends", params={"include_in_dev": "false"})
+    assert resp.status_code == 200
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["excluded_tiers"] is None
+
+
 def test_create_model_backend_does_not_expose_credentials(client: TestClient) -> None:
     backend = _make_backend(credentials_ciphertext=b"encrypted_bytes")
     with (

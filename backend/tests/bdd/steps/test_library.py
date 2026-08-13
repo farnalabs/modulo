@@ -542,7 +542,7 @@ def _make_primitive_dict(*, name: str, slug: str, tier: str) -> dict[str, Any]:
 
 
 @when("the user creates a library primitive with body")
-def _post_create_library_primitive(client, docstring, ctx: dict[str, Any]) -> None:
+def _post_create_library_primitive(client, docstring, ctx: dict[str, Any], request) -> None:
     data = json.loads(docstring)
     tier = data.get("tier", "native")
     created = _make_primitive_dict(name=data["name"], slug=data["slug"], tier=tier)
@@ -553,12 +553,94 @@ def _post_create_library_primitive(client, docstring, ctx: dict[str, Any]) -> No
         patch("modulo.api.routes.library.set_rls_user_context"),
     ):
         ctx["response"] = client.post("/api/v1/libraries", json=data)
+    request.node._resp = ctx["response"]
 
 
 @then(parsers.parse('the response has tier "{expected_tier}"'))
 def _response_has_tier(ctx: dict[str, Any], expected_tier: str) -> None:
     data = ctx["response"].json()
     assert data.get("tier") == expected_tier, f"Expected tier '{expected_tier}', got '{data.get('tier')}'"
+
+
+def _make_tiered_primitive(*, name: str, slug: str, tier: str) -> Any:
+    """Build a real LibraryPrimitive with an explicit tier, mirroring _make_modulo."""
+    from modulo.core.library_service import MODULO_ORG_ID
+    from modulo.db.models.library_primitive import LibraryPrimitive
+
+    now = datetime(2025, 1, 1, tzinfo=UTC)
+    return LibraryPrimitive(
+        id=uuid.uuid4(),
+        organisation_id=MODULO_ORG_ID,
+        source="modulo",
+        primitive_type="schema",
+        name=name,
+        slug=slug,
+        description=f"Tiered ({tier}) schema.",
+        author="modulo",
+        version="1.0",
+        tags=["schema", "tier"],
+        content_json={},
+        source_url=None,
+        forked_from=None,
+        checksum=None,
+        ed25519_signature=None,
+        verified=None,
+        download_count=None,
+        average_rating=None,
+        review_count=None,
+        owner_team_id=None,
+        visibility="community",
+        tier=tier,
+        auto_update=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@given("an in_dev primitive exists in the built-in library")
+def _builtin_library_has_in_dev(ctx: dict[str, Any]) -> None:
+    ctx["tier_primitives"] = [
+        _make_tiered_primitive(name="Native Tier Example", slug="native-tier-example", tier="native"),
+        _make_tiered_primitive(name="In-Dev Tier Example", slug="in-dev-tier-example", tier="in_dev"),
+    ]
+
+
+def _list_libraries_with_primitives(client: Any, ctx: dict[str, Any], params: dict[str, str]) -> None:
+    tiered = ctx.get("tier_primitives")
+    assert tiered is not None, "No tiered primitives in context — use the Given step"
+    with (
+        patch("modulo.core.library_service._filter_modulo", return_value=tiered),
+        patch("modulo.core.library_service._filter_community", return_value=[]),
+    ):
+        ctx["response"] = client.get("/api/v1/libraries", params=params)
+
+
+@when("the user lists library primitives without include_in_dev")
+def _list_libraries_default(client: Any, ctx: dict[str, Any]) -> None:
+    _list_libraries_with_primitives(client, ctx, {})
+
+
+@when(parsers.parse("the user lists library primitives with include_in_dev={value}"))
+def _list_libraries_with_include_in_dev(client: Any, ctx: dict[str, Any], value: str) -> None:
+    _list_libraries_with_primitives(client, ctx, {"include_in_dev": value})
+
+
+@then("the response contains no in_dev primitives")
+def _response_has_no_in_dev(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    assert items, "Expected at least one primitive in the response"
+    in_dev = [p for p in items if p.get("tier") == "in_dev"]
+    assert not in_dev, f"Expected no in_dev primitives, got: {[p['name'] for p in in_dev]}"
+
+
+@then("the response contains the in_dev primitive")
+def _response_contains_in_dev(ctx: dict[str, Any]) -> None:
+    items = ctx["response"].json()["items"]
+    in_dev = [p for p in items if p.get("tier") == "in_dev"]
+    assert in_dev, "Expected the in_dev primitive to be present"
+    assert any(p.get("name") == "In-Dev Tier Example" for p in in_dev), (
+        f"Expected 'In-Dev Tier Example' among in_dev items, got: {[p['name'] for p in in_dev]}"
+    )
 
 
 # ============================================================================
