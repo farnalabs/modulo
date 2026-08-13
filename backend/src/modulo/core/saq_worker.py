@@ -259,7 +259,9 @@ def _probe_database() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[str, Any]:
+async def execute_run(
+    ctx: dict[str, Any], *, run_id: str, org_id: str, claim_token: str | None = None
+) -> dict[str, Any]:
     """SAQ ``execute_run`` job — claim + execute + complete (SAQ claim window).
 
     Zombie protection (2026-08-05): the heartbeat loop starts BEFORE
@@ -271,6 +273,12 @@ async def execute_run(ctx: dict[str, Any], *, run_id: str, org_id: str) -> dict[
     2. ``run_executor_with_watchdog`` starts a zombie watchdog that fails the
        run (``executor_stalled``) if no node dispatches within the setup grace
        window, and cancels the hung executor.
+
+    The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
+    by a previous attempt (PR #1003). SAQ retries re-invoke this function with
+    ``**job.kwargs``, so the kwarg is accepted and intentionally IGNORED here —
+    a fresh claim is taken inside via ``claim_run_async`` and the fresh token is
+    re-stamped.
     """
     from modulo.core.pipeline_execution import (
         EXECUTOR_SETUP_FAILED_ERROR_CODE,
@@ -351,8 +359,15 @@ async def resume_run(
     run_id: str,
     org_id: str,
     resume_data: dict[str, Any] | None = None,
+    claim_token: str | None = None,
 ) -> dict[str, Any]:
-    """SAQ ``resume_run`` job — claim (awaiting_human/claimed or stale-running) + resume."""
+    """SAQ ``resume_run`` job — claim (awaiting_human/claimed or stale-running) + resume.
+
+    The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
+    by a previous attempt (PR #1003). SAQ retries re-invoke this function with
+    ``**job.kwargs``, so the kwarg is accepted and intentionally IGNORED here —
+    the core claim (``claim_resume_run_async``) generates its own fresh token.
+    """
     from modulo.core.pipeline_execution import resume_run as resume_run_core
 
     aeng = _get_async_engine()
