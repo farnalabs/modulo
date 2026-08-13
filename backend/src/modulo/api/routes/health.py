@@ -698,14 +698,14 @@ async def _check_system_crons() -> CheckResult:
     return CheckResult(status="ok", detail="system-cron heartbeat stale (SAQ_HARD_GATE=false, alert-only)")
 
 
-@handle_db_errors("health.liveness")
 @router.get("/healthz")
+@handle_db_errors("health.liveness")
 async def liveness() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@handle_db_errors("health.readiness")
 @router.get("/healthz/ready")
+@handle_db_errors("health.readiness")
 async def readiness(response: Response) -> ReadinessResponse:
     db_check, redis_check, cp_check, mig_check, saq_check, cron_check, dr_check, srr_check = await asyncio.gather(
         _check_database(),

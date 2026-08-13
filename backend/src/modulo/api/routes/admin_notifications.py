@@ -137,8 +137,8 @@ class TestResult(BaseModel):
 # ── Non-webhook-scoped routes (MUST precede {webhook_id} routes) ────────
 
 
-@handle_db_errors("admin.notifications.list_all_deliveries")
 @router.get("/deliveries", response_model=DeliveryLogResponse)
+@handle_db_errors("admin.notifications.list_all_deliveries")
 async def list_all_deliveries(
     cursor: str | None = Query(None, description="Cursor from previous response (ISO datetime)"),
     limit: int = Query(default=25, ge=1, le=100),
@@ -296,8 +296,8 @@ async def _list_deliveries(
     return DeliveryLogResponse(items=items, next_cursor=next_cursor, total=total)
 
 
-@handle_db_errors("admin.notifications.retry_all_failed_deliveries")
 @router.post("/deliveries/retry-all-failed")
+@handle_db_errors("admin.notifications.retry_all_failed_deliveries")
 async def retry_all_failed_deliveries(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("admin.notification.manage"),
@@ -482,8 +482,8 @@ async def retry_all_failed_deliveries(
     return {"retried": retried, "errors": errors, "success": len(errors) == 0}
 
 
-@handle_db_errors("admin.notifications.list_available_events")
 @router.get("/available-events", response_model=list[str])
+@handle_db_errors("admin.notifications.list_available_events")
 async def list_available_events(
     principal: TenantPrincipal = require_permission("admin.notification.manage"),
 ) -> list[str]:
@@ -493,8 +493,8 @@ async def list_available_events(
 # ── Webhook CRUD ────────────────────────────────────────────────────────
 
 
-@handle_db_errors("admin.notifications.list_webhooks")
 @router.get("", response_model=list[WebhookResponse])
+@handle_db_errors("admin.notifications.list_webhooks")
 async def list_webhooks(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("admin.notification.manage"),
@@ -532,8 +532,8 @@ async def list_webhooks(
     return [_ep_to_response(ep) for ep in endpoints]
 
 
-@handle_db_errors("admin.notifications.create_webhook")
 @router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.notifications.create_webhook")
 async def create_webhook(
     req: WebhookCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -584,8 +584,8 @@ async def create_webhook(
     return _ep_to_response(ep)
 
 
-@handle_db_errors("admin.notifications.get_webhook")
 @router.get("/{webhook_id}", response_model=WebhookResponse)
+@handle_db_errors("admin.notifications.get_webhook")
 async def get_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -625,8 +625,8 @@ async def get_webhook(
     return _ep_to_response(ep)
 
 
-@handle_db_errors("admin.notifications.update_webhook")
 @router.put("/{webhook_id}", response_model=WebhookResponse)
+@handle_db_errors("admin.notifications.update_webhook")
 async def update_webhook(
     webhook_id: uuid.UUID,
     req: WebhookUpdate,
@@ -681,8 +681,8 @@ async def update_webhook(
     return _ep_to_response(ep)
 
 
-@handle_db_errors("admin.notifications.delete_webhook")
 @router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.notifications.delete_webhook")
 async def delete_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -725,8 +725,8 @@ async def delete_webhook(
 # ── Test ───────────────────────────────────────────────────────────────
 
 
-@handle_db_errors("admin.notifications.test_webhook")
 @router.post("/{webhook_id}/test", response_model=TestResult)
+@handle_db_errors("admin.notifications.test_webhook")
 async def test_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -805,8 +805,8 @@ async def test_webhook(
 # ── Re-enable ──────────────────────────────────────────────────────────
 
 
-@handle_db_errors("admin.notifications.re_enable_webhook")
 @router.post("/{webhook_id}/re-enable", response_model=WebhookResponse)
+@handle_db_errors("admin.notifications.re_enable_webhook")
 async def re_enable_webhook(
     webhook_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -853,8 +853,8 @@ async def re_enable_webhook(
 # ── Delivery log ───────────────────────────────────────────────────────
 
 
-@handle_db_errors("admin.notifications.list_deliveries")
 @router.get("/{webhook_id}/deliveries", response_model=DeliveryLogResponse)
+@handle_db_errors("admin.notifications.list_deliveries")
 async def list_deliveries(
     webhook_id: uuid.UUID,
     cursor: str | None = Query(None, description="Cursor from previous response (ISO datetime)"),
@@ -958,8 +958,8 @@ async def list_deliveries(
 # ── Manual retry ───────────────────────────────────────────────────────
 
 
-@handle_db_errors("admin.notifications.retry_delivery")
 @router.post("/{webhook_id}/deliveries/{delivery_id}/retry", response_model=TestResult)
+@handle_db_errors("admin.notifications.retry_delivery")
 async def retry_delivery(
     webhook_id: uuid.UUID,
     delivery_id: uuid.UUID,

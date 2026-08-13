@@ -100,8 +100,8 @@ def _variant_to_response(group: Any) -> dict[str, Any]:
     }
 
 
-@handle_db_errors("variants.create_group")
 @router.post("", response_model=VariantGroupResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("variants.create_group")
 async def create_group(
     req: CreateVariantGroupRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -151,8 +151,8 @@ async def create_group(
     return _variant_to_response(group)
 
 
-@handle_db_errors("variants.list_groups")
 @router.get("", response_model=list[VariantGroupResponse])
+@handle_db_errors("variants.list_groups")
 async def list_groups(
     pipeline_id: uuid.UUID | None = Query(None),
     page: int = Query(1, ge=1),
@@ -193,8 +193,8 @@ async def list_groups(
     return [_variant_to_response(g) for g in items]
 
 
-@handle_db_errors("variants.get_group")
 @router.get("/{group_id}", response_model=VariantGroupResponse)
+@handle_db_errors("variants.get_group")
 async def get_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -235,8 +235,8 @@ async def get_group(
     return _variant_to_response(group)
 
 
-@handle_db_errors("variants.update_group")
 @router.put("/{group_id}", response_model=VariantGroupResponse)
+@handle_db_errors("variants.update_group")
 async def update_group(
     group_id: uuid.UUID,
     req: CreateVariantGroupRequest,
@@ -287,8 +287,8 @@ async def update_group(
     return _variant_to_response(group)
 
 
-@handle_db_errors("variants.delete_group")
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("variants.delete_group")
 async def delete_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -328,8 +328,8 @@ async def delete_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant group not found")
 
 
-@handle_db_errors("variants.restore_group")
 @router.post("/{group_id}/restore", response_model=VariantGroupResponse)
+@handle_db_errors("variants.restore_group")
 async def restore_group(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -370,8 +370,8 @@ async def restore_group(
     return _variant_to_response(group)
 
 
-@handle_db_errors("variants.run_variant")
 @router.post("/{group_id}/run", response_model=RunVariantResponse)
+@handle_db_errors("variants.run_variant")
 async def run_variant(
     group_id: uuid.UUID,
     req: RunVariantRequest,
@@ -447,8 +447,8 @@ async def run_variant(
     }
 
 
-@handle_db_errors("variants.coverage_gaps")
 @router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
+@handle_db_errors("variants.coverage_gaps")
 async def coverage_gaps(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -493,8 +493,8 @@ async def coverage_gaps(
     return gaps
 
 
-@handle_db_errors("variants.prompt_diffs")
 @router.get("/{group_id}/prompt-diffs", response_model=list[PromptDiffEntry])
+@handle_db_errors("variants.prompt_diffs")
 async def prompt_diffs(
     group_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

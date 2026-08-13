@@ -354,8 +354,8 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
     )
 
 
-@handle_db_errors("lifecycle_maps.list_lifecycle_maps_endpoint")
 @router.get("", response_model=LifecycleMapListResponse)
+@handle_db_errors("lifecycle_maps.list_lifecycle_maps_endpoint")
 async def list_lifecycle_maps_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -403,8 +403,8 @@ async def list_lifecycle_maps_endpoint(
     )
 
 
-@handle_db_errors("lifecycle_maps.create_lifecycle_map_endpoint")
 @router.post("", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("lifecycle_maps.create_lifecycle_map_endpoint")
 async def create_lifecycle_map_endpoint(
     req: LifecycleMapCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -458,8 +458,8 @@ async def create_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@handle_db_errors("lifecycle_maps.get_lifecycle_map_endpoint")
 @router.get("/{lifecycle_map_id}", response_model=LifecycleMapDetailResponse)
+@handle_db_errors("lifecycle_maps.get_lifecycle_map_endpoint")
 async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -495,8 +495,8 @@ async def get_lifecycle_map_endpoint(
     return _build_detail(lifecycle_map)
 
 
-@handle_db_errors("lifecycle_maps.update_lifecycle_map_endpoint")
 @router.put("/{lifecycle_map_id}", response_model=LifecycleMapResponse)
+@handle_db_errors("lifecycle_maps.update_lifecycle_map_endpoint")
 async def update_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: LifecycleMapUpdate,
@@ -548,8 +548,8 @@ async def update_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@handle_db_errors("lifecycle_maps.delete_lifecycle_map_endpoint")
 @router.delete("/{lifecycle_map_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("lifecycle_maps.delete_lifecycle_map_endpoint")
 async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -584,8 +584,8 @@ async def delete_lifecycle_map_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
 
 
-@handle_db_errors("lifecycle_maps.restore_lifecycle_map_endpoint")
 @router.post("/{lifecycle_map_id}/restore", response_model=LifecycleMapResponse)
+@handle_db_errors("lifecycle_maps.restore_lifecycle_map_endpoint")
 async def restore_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -629,8 +629,8 @@ async def restore_lifecycle_map_endpoint(
     return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
-@handle_db_errors("lifecycle_maps.list_versions_endpoint")
 @router.get("/{lifecycle_map_id}/versions", response_model=list[LifecycleMapVersionResponse])
+@handle_db_errors("lifecycle_maps.list_versions_endpoint")
 async def list_lifecycle_map_versions_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -666,12 +666,12 @@ async def list_lifecycle_map_versions_endpoint(
     return [_build_version_entry(lifecycle_map)]
 
 
-@handle_db_errors("lifecycle_maps.save_version_endpoint")
 @router.post(
     "/{lifecycle_map_id}/versions",
     response_model=LifecycleMapVersionResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@handle_db_errors("lifecycle_maps.save_version_endpoint")
 async def save_lifecycle_map_version_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: VersionSaveRequest,
@@ -726,8 +726,8 @@ async def save_lifecycle_map_version_endpoint(
     return _build_version_entry(lifecycle_map)
 
 
-@handle_db_errors("lifecycle_maps.update_version_endpoint")
 @router.put("/{lifecycle_map_id}/versions/{version_id}", response_model=LifecycleMapVersionResponse)
+@handle_db_errors("lifecycle_maps.update_version_endpoint")
 async def update_lifecycle_map_version_endpoint(
     lifecycle_map_id: uuid.UUID,
     version_id: uuid.UUID,
@@ -787,8 +787,8 @@ async def update_lifecycle_map_version_endpoint(
     return _build_version_entry(lifecycle_map)
 
 
-@handle_db_errors("lifecycle_maps.get_version_endpoint")
 @router.get("/{lifecycle_map_id}/versions/{version}", response_model=LifecycleMapDetailResponse)
+@handle_db_errors("lifecycle_maps.get_version_endpoint")
 async def get_lifecycle_map_version_endpoint(
     lifecycle_map_id: uuid.UUID,
     version: int = Path(ge=1),
@@ -825,11 +825,11 @@ async def get_lifecycle_map_version_endpoint(
     return _build_detail(lifecycle_map)
 
 
-@handle_db_errors("lifecycle_maps.graduate_stage_endpoint")
 @router.patch(
     "/{lifecycle_map_id}/versions/{version_id}/stages/{stage_id}/graduate",
     response_model=LifecycleMapVersionResponse,
 )
+@handle_db_errors("lifecycle_maps.graduate_stage_endpoint")
 async def graduate_lifecycle_map_stage_endpoint(
     lifecycle_map_id: uuid.UUID,
     version_id: uuid.UUID,
@@ -920,8 +920,8 @@ def _team_scope_filter(lifecycle_map: Any) -> uuid.UUID | None:
     return None
 
 
-@handle_db_errors("lifecycle_maps.list_journeys_endpoint")
 @router.get("/{lifecycle_map_id}/journeys", response_model=JourneyListResponse)
+@handle_db_errors("lifecycle_maps.list_journeys_endpoint")
 async def list_journeys_endpoint(
     lifecycle_map_id: uuid.UUID,
     kind: str | None = Query(default=None),
@@ -981,8 +981,8 @@ async def list_journeys_endpoint(
     )
 
 
-@handle_db_errors("lifecycle_maps.get_journey_endpoint")
 @router.get("/{lifecycle_map_id}/journeys/{kind}/{ref}", response_model=JourneyDetailResponse)
+@handle_db_errors("lifecycle_maps.get_journey_endpoint")
 async def get_journey_endpoint(
     lifecycle_map_id: uuid.UUID,
     kind: str,
@@ -1054,8 +1054,8 @@ async def get_journey_endpoint(
     )
 
 
-@handle_db_errors("lifecycle_maps.self_report_journeys_endpoint")
 @router.post("/{lifecycle_map_id}/journeys/self-report", response_model=JourneySelfReportResponse)
+@handle_db_errors("lifecycle_maps.self_report_journeys_endpoint")
 async def self_report_journeys_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: JourneySelfReportRequest,

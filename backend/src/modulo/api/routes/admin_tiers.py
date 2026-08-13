@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin/tiers", tags=["admin-tiers"])
 
 
-@handle_db_errors("admin.tiers.list_tiers_endpoint")
 @router.get("")
+@handle_db_errors("admin.tiers.list_tiers_endpoint")
 async def list_tiers_endpoint(
     settings: Settings = Depends(get_settings),
     current_user: TenantPrincipal = Depends(get_current_tenant_user),

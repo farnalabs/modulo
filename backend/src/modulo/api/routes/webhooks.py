@@ -135,8 +135,8 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
         await _ingest_webhook_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
-@handle_db_errors("webhooks.receive_webhook")
 @router.post("/{trigger_id}/webhook", status_code=status.HTTP_202_ACCEPTED)
+@handle_db_errors("webhooks.receive_webhook")
 async def receive_webhook(
     trigger_id: uuid.UUID,
     request: Request,
@@ -315,8 +315,8 @@ async def receive_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
-@handle_db_errors("webhooks.replay_webhook")
 @router.post("/{trigger_id}/webhook/replay/{event_id}", status_code=status.HTTP_202_ACCEPTED)
+@handle_db_errors("webhooks.replay_webhook")
 async def replay_webhook(
     trigger_id: uuid.UUID,
     event_id: uuid.UUID,
@@ -507,8 +507,8 @@ async def replay_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
-@handle_db_errors("webhooks.cleanup_expired")
 @router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
+@handle_db_errors("webhooks.cleanup_expired")
 async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("trigger.cleanup"),
