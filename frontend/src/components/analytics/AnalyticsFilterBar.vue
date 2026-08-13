@@ -153,6 +153,18 @@
           <option v-for="s in statuses" :key="s" :value="s">{{ s }}</option>
         </select>
       </label>
+
+      <label class="block">
+        <span class="text-xs font-medium text-muted-foreground">{{ $t("views.AnalyticsView.filter_error_code") }}</span>
+        <input
+          :value="filters.errorCode ?? ''"
+          type="text"
+          class="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+          data-testid="analytics-filter-error-code"
+          :placeholder="$t('views.AnalyticsView.filter_error_code_placeholder')"
+          @input="onErrorCodeInput"
+        />
+      </label>
     </div>
   </div>
 </template>
@@ -206,6 +218,7 @@ const dimensions: { value: AnalyticsDimension; labelKey: string }[] = [
   { value: "pipeline", labelKey: "views.AnalyticsView.dimension_pipeline" },
   { value: "folder", labelKey: "views.AnalyticsView.dimension_folder" },
   { value: "team", labelKey: "views.AnalyticsView.dimension_team" },
+  { value: "error_code", labelKey: "views.AnalyticsView.dimension_error_code" },
 ];
 
 const measures = MEASURES;
@@ -239,5 +252,10 @@ function onTriggerTypeChange(e: Event): void {
 
 function onStatusChange(e: Event): void {
   emitFilters({ status: selectValue(e) || null });
+}
+
+function onErrorCodeInput(e: Event): void {
+  const value = (e.target as HTMLInputElement).value.trim();
+  emitFilters({ errorCode: value || null });
 }
 </script>

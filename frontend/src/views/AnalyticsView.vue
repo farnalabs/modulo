@@ -103,7 +103,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, watch } from "vue";
+import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PageHeader from "../components/shared/PageHeader.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
@@ -125,6 +126,7 @@ import {
 } from "../stores/analytics";
 
 const { t } = useI18n();
+const route = useRoute();
 const store = useAnalyticsStore();
 
 interface TableRow {
@@ -182,14 +184,45 @@ const tableRows = computed<TableRow[]>(() => {
   });
 });
 
+// The error-code filter is free-text: a full analytics query (two backend calls:
+// current + previous window) must not fire per keystroke, or typing a code like
+// `executor_stalled` trips the backend's 60-queries/org/60s rate limit mid-typing.
+// Mirror RunsListView's SEARCH_DEBOUNCE_MS: debounce the fetch for text-input
+// changes while keeping select-based filter changes on immediate fetch.
+const ERROR_CODE_DEBOUNCE_MS = 300;
+let errorCodeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 function onFiltersChanged(filters: AnalyticsFilters): void {
+  const prevErrorCode = store.filters.errorCode ?? null;
   store.setFilters(filters);
+  const errorCodeChanged = (filters.errorCode ?? null) !== prevErrorCode;
+  if (errorCodeChanged) {
+    if (errorCodeDebounceTimer) clearTimeout(errorCodeDebounceTimer);
+    errorCodeDebounceTimer = setTimeout(() => {
+      errorCodeDebounceTimer = null;
+      void store.fetchQuery();
+    }, ERROR_CODE_DEBOUNCE_MS);
+    return;
+  }
+  // A select-based change supersedes any pending error-code debounce: the
+  // immediate fetch below already reads the latest errorCode from the store.
+  if (errorCodeDebounceTimer) {
+    clearTimeout(errorCodeDebounceTimer);
+    errorCodeDebounceTimer = null;
+  }
   void store.fetchQuery();
 }
 
 function onMeasureChanged(measure: AnalyticsMeasure): void {
   store.setMeasure(measure);
 }
+
+onBeforeUnmount(() => {
+  if (errorCodeDebounceTimer) {
+    clearTimeout(errorCodeDebounceTimer);
+    errorCodeDebounceTimer = null;
+  }
+});
 
 function arrowGlyph(direction: TrendDirection): string {
   if (direction === "up") return "▲";
@@ -204,6 +237,25 @@ function arrowClass(direction: TrendDirection): string {
 }
 
 onMounted(async () => {
-  await Promise.all([store.fetchOptions(), store.fetchQuery()]);
+  await store.fetchOptions();
+  // Pre-filter from a deep link (e.g. Remy's /analytics?group_by=day&date_from=...).
+  if (route.query && Object.keys(route.query).length > 0) {
+    store.applyQueryParams(route.query);
+  }
+  await store.fetchQuery();
 });
+
+// Remy's panel is a global overlay, so a deep link can be clicked while already
+// on /analytics: the component is reused, onMounted does not re-fire, and the
+// pre-filter would never apply. Watch the route query and re-apply + refetch on
+// same-route navigation with a new query.
+watch(
+  () => route.query,
+  async () => {
+    if (route.query && Object.keys(route.query).length > 0) {
+      store.applyQueryParams(route.query);
+    }
+    await store.fetchQuery();
+  },
+);
 </script>
