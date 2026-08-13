@@ -44,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
+from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
@@ -394,7 +395,7 @@ async def _log_event(
         raw_payload_hash=payload_hash,
         validation_result=result,
         run_id=run_id,
-        error_detail=error_detail,
+        error_detail=None if error_detail is None else sanitize_error_text(error_detail),
     )
     session.add(event)
     await session.flush()
@@ -420,7 +421,7 @@ async def _log_poll_event(
         raw_payload_hash=payload_hash,
         validation_result=result,
         run_id=run_id,
-        error_detail=error_detail,
+        error_detail=None if error_detail is None else sanitize_error_text(error_detail),
     )
     session.add(event)
     await session.flush()
