@@ -91,6 +91,68 @@ def _run_migration(config: Config, sync_url: str, revision: str, *, downgrade: b
         engine.dispose()
 
 
+async def _seed_roundtrip_entities(
+    engine: AsyncEngine,
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+    """Create a dedicated org/account/pipeline/snapshot for the round-trip.
+
+    The shared session-scoped ``test_org`` owns counter-allocated runs (per-org
+    ``run_number`` from migration 0093), so seeding the fixed run_numbers 1/2/3
+    into it would collide with the shared counter. A fresh org keeps the
+    migration-mechanics test fully isolated.
+    """
+    org_id = uuid.uuid4()
+    account_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) "
+                "VALUES (:id, :name, :slug, '{}'::json)"
+            ),
+            {"id": str(org_id), "name": "Roundtrip Org", "slug": f"rt-{org_id.hex[:8]}"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO accounts (id, email, display_name, password_hash, "
+                "auth_provider, active) "
+                "VALUES (:id, :email, :name, 'hash', 'local', true)"
+            ),
+            {
+                "id": str(account_id),
+                "email": f"rt-{org_id.hex[:8]}@test.local",
+                "name": "Roundtrip User",
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
+                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
+                "run_context_defaults, graph_nodes_json) "
+                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
+            ),
+            {
+                "id": str(pipeline_id),
+                "oid": str(org_id),
+                "name": "Roundtrip Pipeline",
+                "uid": str(account_id),
+            },
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO pipeline_snapshots (id, pipeline_id, organisation_id, "
+                "snapshot_version, graph_json, connector_bindings_json, "
+                "schema_pins_json, prompt_pins_json, model_backend_pins_json, "
+                "run_context_defaults, config_json) "
+                "VALUES (:id, :pid, :oid, 1, '{}'::json, '[]'::json, "
+                "'[]'::json, '[]'::json, '[]'::json, '{}'::json, '{}'::json)"
+            ),
+            {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
+        )
+    return org_id, account_id, pipeline_id, snapshot_id
+
+
 async def _seed_run(
     engine: AsyncEngine,
     *,
@@ -132,22 +194,23 @@ async def _current_revision(engine: AsyncEngine) -> str:
 async def test_0074_migration_round_trip(
     migrated_db_url: str,
     db_engine: AsyncEngine,
-    test_org: uuid.UUID,
-    test_pipeline: uuid.UUID,
-    test_snapshot: uuid.UUID,
 ) -> None:
     config = _make_alembic_config()
     sync_url = _sync_url()
     await asyncio.to_thread(_run_migration, config, sync_url, _REVISION_BEFORE, downgrade=True)
+
+    # Dedicated org: seeding fixed run_numbers into the shared session-scoped
+    # test_org would collide with its counter-allocated runs (FAR-168).
+    org_id, _account_id, pipeline_id, snapshot_id = await _seed_roundtrip_entities(db_engine)
 
     seeded_run_ids: list[uuid.UUID] = []
     try:
         # Seed rows that only exist under the OLD schema.
         null_token_run = await _seed_run(
             db_engine,
-            org_id=test_org,
-            pipeline_id=test_pipeline,
-            snapshot_id=test_snapshot,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
             status="running",
             run_number=1,
             claim_token=None,
@@ -155,9 +218,9 @@ async def test_0074_migration_round_trip(
         seeded_run_ids.append(null_token_run)
         waiting_run = await _seed_run(
             db_engine,
-            org_id=test_org,
-            pipeline_id=test_pipeline,
-            snapshot_id=test_snapshot,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            snapshot_id=snapshot_id,
             status="waiting_for_lock",
             run_number=2,
             claim_token="seed-token",
@@ -250,11 +313,11 @@ async def test_0074_migration_round_trip(
                     ),
                     {
                         "id": str(uuid.uuid4()),
-                        "oid": str(test_org),
-                        "pid": str(test_pipeline),
-                        "sid": str(test_snapshot),
+                        "oid": str(org_id),
+                        "pid": str(pipeline_id),
+                        "sid": str(snapshot_id),
                         "hash": "0" * 64,
-                        "thread": f"{test_org}:rejected-{uuid.uuid4()}",
+                        "thread": f"{org_id}:rejected-{uuid.uuid4()}",
                     },
                 )
     finally:

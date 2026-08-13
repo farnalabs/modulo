@@ -597,11 +597,20 @@ async def test_pause_does_not_mutate_running_run(
     run_id = uuid.uuid4()
     snapshot_id = await _seed_snapshot(db_engine, org_a, pipeline_a)
     async with db_engine.connect() as conn, conn.begin():
+        # Allocate run_number via the per-org atomic counter (FAR-168), matching
+        # production create_run. MAX(run_number)+1 here desyncs the counter, so
+        # the later API-created run collides with this seed (uq_runs_org_run_number).
         run_number_row = await conn.execute(
-            text("SELECT COALESCE(MAX(run_number), 0) FROM runs WHERE organisation_id = :oid"),
+            text(
+                "INSERT INTO run_number_counters (organisation_id, next_run_number) "
+                "VALUES (:oid, 1) "
+                "ON CONFLICT (organisation_id) "
+                "DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1 "
+                "RETURNING next_run_number"
+            ),
             {"oid": str(org_a)},
         )
-        run_number = int(run_number_row.scalar_one()) + 1
+        run_number = int(run_number_row.scalar_one())
         await conn.execute(
             text(
                 "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, "

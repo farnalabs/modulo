@@ -286,18 +286,31 @@ async def _create_seed_run(
             "uid": str(user_id),
         },
     )
+    # Allocate run_number via the same per-org atomic counter the production
+    # create_run path uses (FAR-168). The old MAX(run_number)+1 here could hand
+    # out a number already consumed by a counter-allocated run in the same org,
+    # tripping uq_runs_org_run_number.
+    run_number_row = await session.execute(
+        text(
+            "INSERT INTO run_number_counters (organisation_id, next_run_number) "
+            "VALUES (:org_id, 1) "
+            "ON CONFLICT (organisation_id) "
+            "DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1 "
+            "RETURNING next_run_number"
+        ),
+        {"org_id": str(org_id)},
+    )
+    run_number = int(run_number_row.scalar_one())
     await session.execute(
         text(
             "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
             "  trigger_type, status, input_hash, langgraph_thread_id, account_id, run_number) "
             "VALUES (:id, :org_id, :pipeline_id, :snapshot_id, "
-            "  :trigger_type, :status, :input_hash, :thread_id, :uid, "
-            "  (SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id2))",
+            "  :trigger_type, :status, :input_hash, :thread_id, :uid, :rn)",
         ),
         {
             "id": str(run_id),
             "org_id": str(org_id),
-            "org_id2": str(org_id),
             "pipeline_id": str(pipeline_id),
             "snapshot_id": str(snapshot_id),
             "trigger_type": "manual",
@@ -305,6 +318,7 @@ async def _create_seed_run(
             "input_hash": "abc123",
             "thread_id": thread_id,
             "uid": str(user_id),
+            "rn": run_number,
         },
     )
     return run_id

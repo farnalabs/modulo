@@ -312,6 +312,15 @@ async def non_superuser_role(db_engine: AsyncEngine) -> str:
         await conn.execute(text(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO "{role}"'))
+        # Default privileges for future tables: the schema round-trip in
+        # test_0074_migration_round_trip downgrades past migration 0093 (dropping
+        # run_number_counters and other tables) and re-runs `alembic upgrade heads`
+        # as the testcontainer superuser. A dropped-and-recreated table loses the
+        # snapshot grant above, so later counter/run writes under this role would
+        # fail with "permission denied". Setting default privileges for the
+        # migration-running superuser keeps recreated tables accessible.
+        await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "{role}"'))
+        await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{role}"'))
         await conn.execute(text("COMMIT"))
     yield role
     async with db_engine.connect() as conn:
