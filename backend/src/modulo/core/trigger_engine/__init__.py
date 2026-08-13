@@ -37,7 +37,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors.base import ConnectorQuery
-from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+from modulo.core.connector_hub.locking import _uuid_to_lock_keys as _uuid_to_lock_keys
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.run import create_run
 from modulo.db.lifecycle_refs import _RESERVED_INPUT_PAYLOAD_KEYS
@@ -956,11 +956,12 @@ class TriggerEngine:
         result: str,
         run_id: uuid.UUID | None = None,
         error_detail: str | None = None,
+        trigger_type: str | None = None,
     ) -> TriggerEvent:
         event = TriggerEvent(
             organisation_id=org_id,
             trigger_id=trigger.id,
-            trigger_type="webhook",
+            trigger_type=trigger_type or trigger.trigger_type,
             raw_payload_hash=payload_hash,
             validation_result=result,
             run_id=run_id,

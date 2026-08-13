@@ -23,7 +23,7 @@ class Trigger(SoftDeleteMixin, OrgScoped):
     __tablename__ = "triggers"
     __table_args__ = (
         CheckConstraint(
-            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing')",
+            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'slack_app_mention')",
             name="ck_triggers_type",
         ),
         CheckConstraint("max_concurrent_runs > 0", name="ck_triggers_max_concurrent_runs"),
