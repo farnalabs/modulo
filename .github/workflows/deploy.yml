@@ -427,7 +427,6 @@ jobs:
 
       - name: Clean up stray machines (no process group)
         shell: bash
-        continue-on-error: true
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -728,7 +727,6 @@ jobs:
 
       - name: Clean up stray machines (no process group)
         shell: bash
-        continue-on-error: true
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
