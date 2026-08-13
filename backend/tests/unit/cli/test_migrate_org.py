@@ -1,15 +1,22 @@
 """Tests for the modulo export-org / import-org CLI (argparse-based)."""
 
 import json
+import runpy
 import uuid
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from modulo.cli.migrate_org import (
+    ENTITY_ORDER,
+    PAGE_SIZE,
     _compute_hash,
+    _do_export,
+    _do_import,
+    _export_entity,
+    _export_organisation,
     _load_bundle,
     _parse_uuid,
     _remap_fk,
@@ -19,6 +26,7 @@ from modulo.cli.migrate_org import (
     _write_bundle,
     main,
 )
+from modulo.db.models import Account, Team
 from tests.unit.cli.conftest import MockModel
 
 # ── Pure function tests ─────────────────────────────────────────────────────
@@ -38,7 +46,7 @@ class TestParseUuid:
         # uuid.UUID() on a non-string raises AttributeError, which must also be
         # converted into a SystemExit rather than escaping as a raw traceback.
         with pytest.raises(SystemExit) as exc:
-            _parse_uuid(12345, "test")
+            _parse_uuid(12345, "test")  # type: ignore[arg-type]  # non-str is deliberate
         assert "Invalid" in str(exc.value)
 
 
@@ -114,7 +122,7 @@ class TestHash:
         )
 
     def test_verify_hash_ok(self) -> None:
-        bundle: dict = {
+        bundle: dict[str, Any] = {
             "__meta__": {"version": 1, "exported_at": "2024-01-01"},
             "organisation": {"id": "o1"},
         }
@@ -122,14 +130,14 @@ class TestHash:
         assert _verify_hash(bundle) is True
 
     def test_verify_hash_mismatch(self) -> None:
-        bundle: dict = {
+        bundle: dict[str, Any] = {
             "__meta__": {"version": 1, "exported_at": "2024-01-01", "hash": "wrong"},
             "organisation": {"id": "o1"},
         }
         assert _verify_hash(bundle) is False
 
     def test_verify_hash_missing_key(self) -> None:
-        bundle: dict = {
+        bundle: dict[str, Any] = {
             "__meta__": {"version": 1, "exported_at": "2024-01-01"},
             "organisation": {"id": "o1"},
         }
@@ -139,7 +147,7 @@ class TestHash:
         # The stored hash must never feed back into itself: _compute_hash strips
         # the "hash" meta key, so recomputing over a bundle that already carries
         # its hash must yield the identical value.
-        bundle: dict = {
+        bundle: dict[str, Any] = {
             "__meta__": {"version": 1, "exported_at": "2024-01-01"},
             "organisation": {"id": "o1"},
         }
@@ -148,7 +156,7 @@ class TestHash:
         assert _compute_hash(bundle) == without
 
     def test_compute_hash_unicode_stable(self) -> None:
-        bundle: dict = {
+        bundle: dict[str, Any] = {
             "__meta__": {"version": 1, "exported_at": "2024-01-01"},
             "users": [{"id": "u1", "display_name": "caf\u00e9 \u2014 snowman \u2603"}],
         }
@@ -202,7 +210,7 @@ class TestRemapFk:
 
 class TestLoadBundle:
     def test_loads_valid_bundle(self, tmp_path: Path) -> None:
-        bundle: dict = {"__meta__": {"version": 1}, "organisation": {"id": "o1"}}
+        bundle: dict[str, Any] = {"__meta__": {"version": 1}, "organisation": {"id": "o1"}}
         bundle["__meta__"]["hash"] = _compute_hash(bundle)
         path = tmp_path / "bundle.json"
         path.write_text(json.dumps(bundle))
@@ -256,6 +264,16 @@ class TestWriteBundle:
         with pytest.raises(SystemExit) as exc:
             _write_bundle({"a": 1}, tmp_path)
         assert "already exists" in str(exc.value)
+
+    def test_unwritable_path_exits(self, tmp_path: Path) -> None:
+        # A regular file blocking the output's parent directory makes mkdir
+        # fail, which must surface as a clean SystemExit rather than a raw OSError.
+        blocker = tmp_path / "blocker.txt"
+        blocker.write_text("x")
+        out = blocker / "nested" / "export.json"
+        with pytest.raises(SystemExit) as exc:
+            _write_bundle({"a": 1}, out)
+        assert "Failed to write export" in str(exc.value)
 
 
 # ── Export command tests ────────────────────────────────────────────────────
@@ -320,7 +338,7 @@ class TestExport:
 
 
 class TestImport:
-    HASHED_BUNDLE: ClassVar[dict] = {
+    HASHED_BUNDLE: ClassVar[dict[str, Any]] = {
         "__meta__": {
             "version": 1,
             "exported_at": "2024-01-01",
@@ -329,7 +347,7 @@ class TestImport:
     }
 
     @staticmethod
-    def _make_bundle_file(bundle: dict, path: Path) -> None:
+    def _make_bundle_file(bundle: dict[str, Any], path: Path) -> None:
         bundle["__meta__"]["hash"] = _compute_hash(bundle)
         path.write_text(json.dumps(bundle, indent=2))
 
@@ -369,3 +387,358 @@ class TestImport:
         assert called_bundle["organisation"]["id"] == "o1"
         assert called_org == uuid.UUID("00000000-0000-0000-0000-000000000001")
         assert called_strategy == "skip"
+
+
+# ── DB-layer helpers used by the export/import flow ─────────────────────────
+
+
+class _Existing:
+    """Minimal stand-in for a pre-existing ORM row already in the database."""
+
+    def __init__(self, **kwargs: object) -> None:
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+_UNSET = object()
+
+
+class _ScalarResult:
+    """Doubles for ``result.scalars()`` so ``.first()`` / ``.all()`` work."""
+
+    def __init__(self, rows: list[Any] | None = None, first: object | None = _UNSET) -> None:
+        self._rows = list(rows or [])
+        self._first = first
+
+    def scalars(self) -> "_ScalarResult":
+        return self
+
+    def first(self) -> object | None:
+        if self._first is not _UNSET:
+            return self._first
+        return self._rows[0] if self._rows else None
+
+    def all(self) -> list[Any]:
+        return list(self._rows)
+
+
+class _NestedTx:
+    async def __aenter__(self) -> "Self":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _FakeSession:
+    """Scripted async SQLAlchemy session for exercising the DB-layer helpers.
+
+    ``execute()`` pops results from ``results`` in call order, so tests can
+    script the exact sequence of "find existing" / "rename probe" queries the
+    import loop makes.
+    """
+
+    def __init__(
+        self,
+        results: list[_ScalarResult] | None = None,
+        *,
+        flush_error: BaseException | None = None,
+        execute_error: BaseException | None = None,
+    ) -> None:
+        self._queue = list(results or [])
+        self.flush_error = flush_error
+        self.execute_error = execute_error
+        self.added: list[Any] = []
+        self.flushed = 0
+        self.committed = False
+
+    def begin_nested(self) -> _NestedTx:
+        return _NestedTx()
+
+    async def execute(self, stmt: object) -> _ScalarResult:
+        if self.execute_error is not None:
+            raise self.execute_error
+        if not self._queue:
+            return _ScalarResult()
+        return self._queue.pop(0)
+
+    def add(self, obj: object) -> None:
+        self.added.append(obj)
+
+    async def flush(self) -> None:
+        self.flushed += 1
+        if self.flush_error is not None:
+            raise self.flush_error
+
+    async def commit(self) -> None:
+        self.committed = True
+
+
+# ── _export_entity ──────────────────────────────────────────────────────────
+
+
+class TestExportEntity:
+    async def test_returns_serialised_rows(self, org_id: uuid.UUID) -> None:
+        uid = uuid.uuid4()
+        session = _FakeSession([_ScalarResult(rows=[MockModel(id=uid, name="Platform")]), _ScalarResult()])
+        rows = await _export_entity(session, Team, org_id)
+        assert rows == [{"id": str(uid), "name": "Platform"}]
+
+    async def test_paginates_across_batches(self, org_id: uuid.UUID) -> None:
+        first = [MockModel(id=uuid.uuid4(), name=f"t{i}") for i in range(PAGE_SIZE)]
+        second = [
+            MockModel(id=uuid.uuid4(), name=f"t{PAGE_SIZE}"),
+            MockModel(id=uuid.uuid4(), name=f"t{PAGE_SIZE + 1}"),
+        ]
+        session = _FakeSession([_ScalarResult(rows=first), _ScalarResult(rows=second), _ScalarResult()])
+        rows = await _export_entity(session, Team, org_id)
+        assert len(rows) == PAGE_SIZE + 2
+
+    async def test_empty_table_returns_empty_list(self, org_id: uuid.UUID) -> None:
+        rows = await _export_entity(_FakeSession([_ScalarResult()]), Team, org_id)
+        assert rows == []
+
+    async def test_accounts_exported_without_org_filter(self, org_id: uuid.UUID) -> None:
+        # Account has no organisation_id column (org membership is via
+        # OrgMembership) — the export must not build a broken where clause.
+        uid = uuid.uuid4()
+        session = _FakeSession([_ScalarResult(rows=[MockModel(id=uid, email="a@b.com")]), _ScalarResult()])
+        rows = await _export_entity(session, Account, org_id)
+        assert rows == [{"id": str(uid), "email": "a@b.com"}]
+
+
+# ── _export_organisation ────────────────────────────────────────────────────
+
+
+class TestExportOrganisation:
+    async def test_serialises_found_org(self, org_id: uuid.UUID) -> None:
+        class _OrgSession:
+            async def get(self, model: object, pk: object) -> MockModel:
+                return MockModel(id=org_id, name="Acme", slug="acme")
+
+        result = await _export_organisation(_OrgSession(), org_id)
+        assert result == {"id": str(org_id), "name": "Acme", "slug": "acme"}
+
+    async def test_missing_org_exits(self, org_id: uuid.UUID) -> None:
+        class _OrgSession:
+            async def get(self, model: object, pk: object) -> None:
+                return None
+
+        with pytest.raises(SystemExit) as exc:
+            await _export_organisation(_OrgSession(), org_id)
+        assert "not found" in str(exc.value)
+
+
+# ── _do_export ──────────────────────────────────────────────────────────────
+
+
+class TestDoExport:
+    @patch("modulo.cli.migrate_org._export_entity", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate_org._export_organisation", new_callable=AsyncMock)
+    async def test_builds_hashed_bundle(
+        self,
+        mock_export_org: AsyncMock,
+        mock_export_entity: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        mock_export_org.return_value = {"id": str(org_id), "name": "Acme", "slug": "acme"}
+        mock_export_entity.return_value = [{"id": "u1", "email": "a@b.com"}]
+        session = MagicMock()
+        mock_local = MagicMock()
+        mock_local.__aenter__ = AsyncMock(return_value=session)
+        mock_local.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+            bundle = await _do_export(org_id, Path("out.json"))
+
+        assert bundle["organisation"] == {"id": str(org_id), "name": "Acme", "slug": "acme"}
+        assert bundle["__meta__"]["version"] == 1
+        assert bundle["__meta__"]["org_id"] == str(org_id)
+        assert bundle["__meta__"]["org_name"] == "Acme"
+        assert bundle["users"] == [{"id": "u1", "email": "a@b.com"}]
+        assert bundle["__meta__"]["hash"] == _compute_hash(bundle)
+        assert mock_export_entity.call_count == len(ENTITY_ORDER)
+
+    @patch("modulo.cli.migrate_org._export_entity", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate_org._export_organisation", new_callable=AsyncMock)
+    async def test_db_connection_failure_exits(
+        self,
+        mock_export_org: AsyncMock,
+        mock_export_entity: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        mock_local = MagicMock()
+        mock_local.__aenter__ = AsyncMock(side_effect=RuntimeError("db down"))
+        mock_local.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            pytest.raises(SystemExit) as exc,
+        ):
+            await _do_export(org_id, Path("out.json"))
+        assert "Database connection failed" in str(exc.value)
+
+    @patch("modulo.cli.migrate_org._export_entity", new_callable=AsyncMock)
+    @patch("modulo.cli.migrate_org._export_organisation", new_callable=AsyncMock)
+    async def test_cancellation_propagates(
+        self,
+        mock_export_org: AsyncMock,
+        mock_export_entity: AsyncMock,
+        org_id: uuid.UUID,
+    ) -> None:
+        # A task cancellation must not be swallowed and converted into the
+        # generic "Database connection failed" SystemExit.
+        import asyncio
+
+        mock_local = MagicMock()
+        mock_local.__aenter__ = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_local.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _do_export(org_id, Path("out.json"))
+
+
+# ── _do_import ──────────────────────────────────────────────────────────────
+
+
+class TestDoImport:
+    def _patched_session(
+        self,
+        results: list[_ScalarResult],
+        *,
+        flush_error: BaseException | None = None,
+        execute_error: BaseException | None = None,
+    ) -> tuple[_FakeSession, MagicMock]:
+        session = _FakeSession(results, flush_error=flush_error, execute_error=execute_error)
+        mock_local = MagicMock()
+        mock_local.__aenter__ = AsyncMock(return_value=session)
+        mock_local.__aexit__ = AsyncMock(return_value=False)
+        return session, mock_local
+
+    async def test_creates_new_records(self, org_id: uuid.UUID) -> None:
+        session, mock_local = self._patched_session([_ScalarResult()])
+        bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
+        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+            counts = await _do_import(bundle, org_id, "skip")
+        assert counts == {"created": 1, "overwritten": 0, "skipped": 0, "errors": 0}
+        assert len(session.added) == 1
+        assert session.committed is True
+        assert session.added[0].name == "Platform"
+        assert session.added[0].organisation_id == org_id
+
+    async def test_creates_accounts_without_org_id(self, org_id: uuid.UUID) -> None:
+        # Regression: Account has no organisation_id column, so the create
+        # path must not inject one (mirrors the guard in the click-based CLI).
+        session, mock_local = self._patched_session([_ScalarResult()])
+        bundle = {"users": [{"id": "u1", "email": "a@b.com", "display_name": "A"}]}
+        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+            counts = await _do_import(bundle, org_id, "skip")
+        assert counts["created"] == 1
+        assert counts["errors"] == 0
+        assert isinstance(session.added[0], Account)
+        assert not hasattr(session.added[0], "organisation_id")
+
+    async def test_skip_existing_records(self, org_id: uuid.UUID) -> None:
+        existing = _Existing(id=uuid.uuid4(), name="Platform")
+        session, mock_local = self._patched_session([_ScalarResult(first=existing)])
+        bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
+        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+            counts = await _do_import(bundle, org_id, "skip")
+        assert counts == {"created": 0, "overwritten": 0, "skipped": 1, "errors": 0}
+        assert session.added == []
+
+    async def test_overwrite_existing_records(self, org_id: uuid.UUID) -> None:
+        existing: Any = _Existing(id=uuid.uuid4(), name="Platform", description="old")
+        _, mock_local = self._patched_session([_ScalarResult(first=existing)])
+        bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "new desc"}]}
+        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+            counts = await _do_import(bundle, org_id, "overwrite")
+        assert counts == {"created": 0, "overwritten": 1, "skipped": 0, "errors": 0}
+        assert existing.description == "new desc"
+
+    async def test_rename_existing_records(self, org_id: uuid.UUID) -> None:
+        existing = _Existing(id=uuid.uuid4(), name="Platform")
+        session, mock_local = self._patched_session([_ScalarResult(first=existing), _ScalarResult()])
+        bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
+        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+            counts = await _do_import(bundle, org_id, "rename")
+        assert counts["created"] == 1
+        assert counts["errors"] == 0
+        assert session.added[0].name == "Platform_imported"
+
+    async def test_rename_exhaustion_exits(self, org_id: uuid.UUID) -> None:
+        existing = _Existing(id=uuid.uuid4(), name="Platform")
+        # Every candidate name from Platform_imported .. Platform_imported_9999
+        # is already taken, so the probe loop runs out of candidates.
+        results = [_ScalarResult(first=existing)]
+        results.extend(_ScalarResult(first=existing) for _ in range(9999))
+        _, mock_local = self._patched_session(results)
+        bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
+        with (
+            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            pytest.raises(SystemExit) as exc,
+        ):
+            await _do_import(bundle, org_id, "rename")
+        assert "Could not find available name" in str(exc.value)
+
+    async def test_row_error_is_counted(self, org_id: uuid.UUID) -> None:
+        session, mock_local = self._patched_session([_ScalarResult()], flush_error=RuntimeError("boom"))
+        bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
+        with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
+            counts = await _do_import(bundle, org_id, "skip")
+        assert counts == {"created": 0, "overwritten": 0, "skipped": 0, "errors": 1}
+        assert session.committed is True
+
+    async def test_row_cancellation_propagates(self, org_id: uuid.UUID) -> None:
+        import asyncio
+
+        _, mock_local = self._patched_session([_ScalarResult()], flush_error=asyncio.CancelledError())
+        bundle = {"teams": [{"id": "t1", "name": "Platform", "description": "core team"}]}
+        with (
+            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _do_import(bundle, org_id, "skip")
+
+    async def test_db_connection_cancellation_propagates(self, org_id: uuid.UUID) -> None:
+        import asyncio
+
+        mock_local = MagicMock()
+        mock_local.__aenter__ = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_local.__aexit__ = AsyncMock(return_value=False)
+        bundle: dict[str, Any] = {"teams": []}
+        with (
+            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _do_import(bundle, org_id, "skip")
+
+    async def test_db_connection_failure_exits(self, org_id: uuid.UUID) -> None:
+        mock_local = MagicMock()
+        mock_local.__aenter__ = AsyncMock(side_effect=RuntimeError("db down"))
+        mock_local.__aexit__ = AsyncMock(return_value=False)
+        bundle: dict[str, Any] = {"teams": []}
+        with (
+            patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local),
+            pytest.raises(SystemExit) as exc,
+        ):
+            await _do_import(bundle, org_id, "skip")
+        assert "Database connection failed" in str(exc.value)
+
+
+# ── Module guard ────────────────────────────────────────────────────────────
+
+
+class TestModuleMain:
+    def test_main_guard_parses_args(self) -> None:
+        # Running the module as __main__ with no subcommand must exit(2)
+        # rather than traceback, exercising the `if __name__ == "__main__"`
+        # guard.
+        from modulo.cli import migrate_org as _mod
+
+        with pytest.raises(SystemExit) as exc:
+            runpy.run_path(str(Path(_mod.__file__)), run_name="__main__")
+        assert exc.value.code == 2
