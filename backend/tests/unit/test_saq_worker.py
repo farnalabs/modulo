@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -502,6 +502,55 @@ class TestExecuteResumeWrappers:
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_setup_failed"
         complete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_run_setup_failure_records_terminal_facts(self) -> None:
+        """FAR-162 (P6'): the executor_setup_failed terminal path routes through
+        the REAL ``fail_run_terminal``, which records a compensating daily fact
+        for the failed run — a setup-failed run must be visible in analytics."""
+
+        class _FakeConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> _FakeConn:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> MagicMock:
+                result = MagicMock()
+                result.fetchone.return_value = ("id",)
+                return result
+
+        class _FakeEngine:
+            def connect(self) -> _FakeConn:
+                return _FakeConn()
+
+        with (
+            patch.object(sw, "_get_async_engine", return_value=_FakeEngine()),
+            patch("modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value=True),
+            patch(
+                "modulo.core.pipeline_execution.load_and_setup",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("OperationalError: FK corrupt"),
+            ),
+            patch("modulo.core.pipeline_execution._advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch(
+                "modulo.core.pipeline_execution._record_fact_for_terminal_failed_run", new_callable=AsyncMock
+            ) as record_facts,
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+        ):
+            result = await sw.execute_run(
+                {}, run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f", org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70"
+            )
+
+        assert result == {"status": "setup_failed"}
+        complete.assert_not_awaited()
+        # The REAL fail_run_terminal runs (not patched) and records the fact
+        # after the terminal UPDATE.
+        assert record_facts.await_count == 1
 
     @pytest.mark.asyncio
     async def test_resume_run_delegates(self) -> None:
