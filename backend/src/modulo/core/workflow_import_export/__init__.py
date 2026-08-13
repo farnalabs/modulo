@@ -649,17 +649,27 @@ def suggest_import_name(
     proposed_name: str,
     *,
     suffix: str = "(imported)",
+    max_length: int = 255,
 ) -> str:
-    """Suggest a non-colliding name by appending a suffix."""
+    """Suggest a non-colliding name by appending a suffix.
+
+    When a suffix must be added, the base name is clamped so the candidate
+    always fits *max_length* (the name-column width, e.g. ``String(255)``) —
+    otherwise a max-width imported name would overflow the column after
+    suffixing. Reserved counter room keeps the numbered form within bounds too.
+    """
     if proposed_name not in existing_names:
         return proposed_name
-    candidate = f"{proposed_name} {suffix}"
+    # Reserve room for " <suffix>" and up to a 4-digit dedupe counter.
+    reserved = len(suffix) + 2 + 4
+    base = proposed_name[: max_length - reserved]
+    candidate = f"{base} {suffix}"
     if candidate not in existing_names:
         return candidate
     idx = 2
-    while f"{proposed_name} {suffix} {idx}" in existing_names:
+    while f"{base} {suffix} {idx}" in existing_names and idx < 10000:
         idx += 1
-    return f"{proposed_name} {suffix} {idx}"
+    return f"{base} {suffix} {idx}"
 
 
 def _sanitize_retry_policy(imported: Any) -> dict[str, Any]:

@@ -123,7 +123,7 @@ async def import_lifecycle_map_envelope(
         name=map_name,
         slug=_slugify(map_name),
         description=description or "",
-        author=account_id.hex[:8],
+        author=account_id.hex,
         version=_DEFAULT_LIBRARY_VERSION,
         tags=["imported"],
         content_json={"lifecycle_map_id": str(lifecycle_map.id), "export": build_export_envelope(lifecycle_map)},

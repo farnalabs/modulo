@@ -159,16 +159,21 @@ describe('LifecycleMapView', () => {
     await wrapper.find('[data-testid="lifecycle-map-import"]').trigger('click')
     await flushPromises()
 
-    const payload = wrapper.find('[data-testid="lifecycle-map-import-payload"]')
-    expect(payload.exists()).toBe(true)
-    await payload.setValue(JSON.stringify({
+    // reka-ui Dialog teleports content to document.body.
+    const payload = document.body.querySelector('[data-testid="lifecycle-map-import-payload"]') as HTMLTextAreaElement | null
+    expect(payload).not.toBeNull()
+    payload!.value = JSON.stringify({
       primitive_type: 'lifecycle_map',
       format_version: '1',
       name: 'Imported SDLC',
       content_json: { stages: [], edges: [] },
-    }))
+    })
+    await payload!.dispatchEvent(new Event('input'))
+    await flushPromises()
 
-    await wrapper.find('[data-testid="lifecycle-map-import-confirm"]').trigger('click')
+    const confirmBtn = document.body.querySelector('[data-testid="lifecycle-map-import-confirm"]') as HTMLButtonElement | null
+    expect(confirmBtn).not.toBeNull()
+    await confirmBtn!.click()
     await flushPromises()
 
     expect(routerPushMock).toHaveBeenCalledWith({ name: 'lifecycle-map-detail', params: { id: 'map-1' } })
@@ -181,10 +186,18 @@ describe('LifecycleMapView', () => {
     await wrapper.find('[data-testid="lifecycle-map-import"]').trigger('click')
     await flushPromises()
 
-    await wrapper.find('[data-testid="lifecycle-map-import-payload"]').setValue('not-json{')
-    await wrapper.find('[data-testid="lifecycle-map-import-confirm"]').trigger('click')
+    // reka-ui Dialog teleports content to document.body.
+    const payload = document.body.querySelector('[data-testid="lifecycle-map-import-payload"]') as HTMLTextAreaElement | null
+    expect(payload).not.toBeNull()
+    payload!.value = 'not-json{'
+    await payload!.dispatchEvent(new Event('input'))
     await flushPromises()
 
-    expect(wrapper.text()).toContain('The pasted content is not valid JSON.')
+    const confirmBtn = document.body.querySelector('[data-testid="lifecycle-map-import-confirm"]') as HTMLButtonElement | null
+    expect(confirmBtn).not.toBeNull()
+    await confirmBtn!.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('The pasted content is not valid JSON.')
   })
 })

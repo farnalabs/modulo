@@ -207,19 +207,14 @@
     </main>
 
     <!-- Import dialog -->
-    <div
-      role="presentation"
-      v-if="showImportDialog"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      @click.self="showImportDialog = false"
-    >
-      <div role="dialog" aria-modal="true" aria-labelledby="lifecyclemapview-import-title" class="w-full max-w-lg rounded-lg border bg-card p-6 shadow-lg">
-        <h3 id="lifecyclemapview-import-title" class="mb-1 text-base font-semibold">
-          {{ $t('views.LifecycleMapView.import_dialog_title') }}
-        </h3>
-        <p class="mb-3 text-sm text-muted-foreground">
-          {{ $t('views.LifecycleMapView.import_paste_hint') }}
-        </p>
+    <Dialog :open="showImportDialog" @update:open="showImportDialog = $event">
+      <DialogContent class="sm:max-w-lg" data-testid="lifecycle-map-import-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.LifecycleMapView.import_dialog_title') }}</DialogTitle>
+          <DialogDescription>
+            {{ $t('views.LifecycleMapView.import_paste_hint') }}
+          </DialogDescription>
+        </DialogHeader>
         <textarea
           v-model="importPayload"
           rows="10"
@@ -235,7 +230,7 @@
         >
           {{ importError }}
         </div>
-        <div class="mt-4 flex justify-end gap-2">
+        <DialogFooter>
           <Button variant="outline" size="sm" @click="showImportDialog = false">
             {{ $t('views.LifecycleMapView.cancel') }}
           </Button>
@@ -247,9 +242,9 @@
           >
             {{ importing ? $t('views.LifecycleMapView.importing') : $t('views.LifecycleMapView.import_map') }}
           </Button>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -265,6 +260,7 @@ import JourneyCard from '../../components/lifecycle-map/JourneyCard.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import { formatRunDate } from '../../utils/runUtils'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { JourneySummary } from '../../types/lifecycleMap'
 import type { LifecycleMapStage } from '../../stores/lifecycleMaps'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
