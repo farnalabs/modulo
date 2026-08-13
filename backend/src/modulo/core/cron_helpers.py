@@ -2559,6 +2559,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                         # execute_run, and these pipelines create PRs).
                         summary["nodeless_failed"] += 1
                         await _fail_nodeless_run(session, row.id, org_id)
+                        # FAR-162 (P6'): the nodeless terminalizer writes a raw
+                        # ORM UPDATE (never finalize_cost) — add the run so its
+                        # compensating daily fact is recorded once the per-org
+                        # transaction commits, like the other terminalizers.
+                        terminalized_run_ids.append((row.id, org_id))
                         continue
 
                     # B3 enqueue-failed branch: pending + dispatched + dispatcher

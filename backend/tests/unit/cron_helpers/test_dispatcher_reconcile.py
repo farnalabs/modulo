@@ -310,7 +310,7 @@ class TestReconcilePredicateMatrix:
         output after the nodeless window) is terminal-failed, never re-dispatched.
         The fresh heartbeat keeps it invisible to the stale branch — that is the
         primary hang mechanism this branch closes."""
-        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
             [_run_row(RUN_RUNNING, "running", stale=False, nodeless=True)],
         )
@@ -318,6 +318,9 @@ class TestReconcilePredicateMatrix:
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
+        # FAR-162 (P6'): the nodeless-failed run gets a compensating daily fact,
+        # like every other dispatcher_reconcile terminalizer.
+        session.record_facts.assert_awaited_once_with(RUN_RUNNING, ORG)
 
     @pytest.mark.asyncio
     async def test_running_with_node_output_not_nodeless(self, monkeypatch: pytest.MonkeyPatch) -> None:
