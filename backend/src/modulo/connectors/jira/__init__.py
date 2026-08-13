@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import json
-import math
 import random
 from typing import Any
 
@@ -15,6 +14,7 @@ from modulo.connectors._retry_headers import (
     parse_rate_limit_reset,
     parse_retry_after,
 )
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -38,24 +38,6 @@ _RATE_LIMIT_HEADERS = (
 
 # Preferred header (epoch seconds) for the quota-reset retry delay.
 _RATE_LIMIT_RESET_HEADERS = ("X-RateLimit-Reset",)
-
-
-def _safe_int(value: object, default: int = 0) -> int:
-    """Coerce *value* to int, returning *default* for None, non-finite, or unparseable values.
-
-    Guards against non-finite floats (``inf``/``nan``) which otherwise raise
-    ``OverflowError``/``ValueError`` on ``int()`` — Python's json parser
-    produces ``inf`` for overflowing literals such as ``1e999``, so a corrupt
-    or hostile Jira response must not be able to crash pagination.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        return default
-    if isinstance(value, float) and not math.isfinite(value):
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
 
 
 def _compute_delay(attempt: int, response: httpx.Response | None = None) -> float:

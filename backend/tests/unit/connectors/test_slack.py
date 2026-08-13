@@ -13,6 +13,7 @@ from modulo.connectors.slack import (
     SlackNetworkError,
     SlackRateLimitError,
     _parse_retry_after,
+    _safe_int,
 )
 
 TOKEN = "xoxb-test-token"
@@ -1292,6 +1293,41 @@ def test_parse_retry_after_invalid():
     assert _parse_retry_after(resp) is None
 
 
+# -- _safe_int coercion edge cases --
+
+
+def test_safe_int_non_finite_float_returns_default():
+    """inf/nan floats must not crash pagination (int(inf) raises OverflowError)."""
+    assert _safe_int(float("inf"), 7) == 7
+    assert _safe_int(float("-inf"), 7) == 7
+    assert _safe_int(float("nan"), 7) == 7
+
+
+def test_safe_int_rejects_bool_and_wrong_types():
+    """Booleans and non-numeric types fall back to default (True == 1 is a footgun)."""
+    assert _safe_int(True, 7) == 7
+    assert _safe_int(False, 7) == 7
+    assert _safe_int(None, 7) == 7
+    assert _safe_int([1], 7) == 7
+    assert _safe_int({}, 7) == 7
+
+
+def test_safe_int_rejects_unparseable_strings():
+    """Garbage strings (incl. 'inf'/'nan') fall back to default."""
+    assert _safe_int("not-a-number", 7) == 7
+    assert _safe_int("inf", 7) == 7
+    assert _safe_int("nan", 7) == 7
+
+
+def test_safe_int_coerces_valid_values():
+    """Numeric strings, ints, and finite floats coerce to int."""
+    assert _safe_int("42", 7) == 42
+    assert _safe_int(42, 7) == 42
+    assert _safe_int(42.9, 7) == 42
+    assert _safe_int(-3, 7) == -3
+    assert _safe_int(0, 7) == 0
+
+
 # -- query: message_search (search.messages) --
 
 
@@ -1339,6 +1375,47 @@ async def test_query_message_search_multi_page(connector):
     )
     assert result.next_cursor == "2"
     assert respx.calls.last.request.url.params.get("count") == "100"
+
+
+@respx.mock
+async def test_query_message_search_non_finite_paging_does_not_crash(connector):
+    """A corrupt 'page: 1e999' (json parses to inf) must not crash pagination."""
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                '{"ok": true, "messages": {"matches": [{"ts": "123456", "text": "match", "user": "U001"}],'
+                ' "paging": {"count": 100, "total": 1, "page": 1e999, "pages": 1}}}'
+            ),
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="message_search", filters={"query": "match"}),
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_message_search_garbage_paging_does_not_crash(connector):
+    """Non-numeric paging values fall back to page 1/1 and disable pagination."""
+    respx.get("https://slack.com/api/search.messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": {
+                    "matches": [{"ts": "123456", "text": "match", "user": "U001"}],
+                    "paging": {"count": 100, "total": 1, "page": "abc", "pages": []},
+                },
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="message_search", filters={"query": "match"}),
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor is None
 
 
 @respx.mock
