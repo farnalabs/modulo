@@ -50,7 +50,7 @@ class StripeWebhookResponse(BaseModel):
 
 def verify_stripe_signature(
     secret: str,
-    signature_header: str,
+    signature_header: str | None,
     payload: bytes,
     tolerance_seconds: int = _SIGNATURE_TOLERANCE_SECONDS,
 ) -> bool:
