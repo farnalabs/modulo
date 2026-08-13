@@ -1065,13 +1065,17 @@ async def _terminalize_count(
     fn: Any,
     **kwargs: Any,
 ) -> int:
-    """Run a cron_helpers terminalizer under the non-superuser RLS engine."""
+    """Run a cron_helpers terminalizer under the non-superuser RLS engine.
+
+    Terminalizers return the terminalized run ids (``UPDATE ... RETURNING id``),
+    so the count is ``len(...)`` of that list.
+    """
     from modulo.db.rls import set_rls_org
 
     factory = async_sessionmaker(app_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
-        return await fn(session, org_id, **kwargs)
+        return len(await fn(session, org_id, **kwargs))
 
 
 async def test_claim_cap_terminalizes_stale_capped_run_under_rls(
