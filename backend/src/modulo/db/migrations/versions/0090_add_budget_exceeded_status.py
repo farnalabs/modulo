@@ -1,7 +1,7 @@
 """Add 'budget_exceeded' as a terminal run status (FAR-104)
 
 Revision ID: 0090_add_budget_exceeded_status
-Revises: 0088_drop_stages
+Revises: 0089_agents_nullable_schema_fields
 Create Date: 2026-08-12
 
 FAR-104 implements per-agent token budget enforcement in the cost controller:
@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "0090_add_budget_exceeded_status"
-down_revision: str | None = "0088_drop_stages"
+down_revision: str | None = "0089_agents_nullable_schema_fields"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
