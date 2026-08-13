@@ -14,6 +14,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.models.error_forwarder_config import (
     ForwarderConfigResponse,
     ForwarderConfigUpdate,
@@ -219,7 +220,18 @@ async def configure_forwarder(
             if req.enabled is not None:
                 cfg.enabled = req.enabled
             if req.config_json is not None:
-                cfg.config_json = req.config_json
+                current_cfg = cfg.config_json or {}
+                merged_cfg = dict(current_cfg)
+                for k, v in req.config_json.items():
+                    if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+                        # A masked placeholder must never clobber the stored secret
+                        # (read-modify-write round-trip guard). Keep the existing value.
+                        continue
+                    if v is None:
+                        merged_cfg.pop(k, None)
+                    else:
+                        merged_cfg[k] = v
+                cfg.config_json = merged_cfg
 
             cfg.updated_at = datetime.now(UTC)
             await session.flush()

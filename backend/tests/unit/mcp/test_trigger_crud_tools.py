@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.api.mcp_server import create_trigger, delete_trigger, get_trigger, update_trigger
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
@@ -401,6 +402,78 @@ class TestUpdateTriggerSuccess(_AuthContext):
         assert trigger.config_json == new_config
         assert result["active"] is False
         assert result["config_json"] == new_config
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_masked_secret_round_trip_preserves_stored_value(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        trigger = _make_mock_trigger(config_json={"hmac_secret": "real-secret"})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": SENSITIVE_VALUE_MASK})
+
+        assert result.get("error") is None
+        assert trigger.config_json["hmac_secret"] == "real-secret"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_new_secret_value_is_written_through(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        trigger = _make_mock_trigger(config_json={"hmac_secret": "old-secret"})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": "new-secret"})
+
+        assert result.get("error") is None
+        assert trigger.config_json["hmac_secret"] == "new-secret"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_null_secret_clears_key(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        trigger = _make_mock_trigger(config_json={"hmac_secret": "real-secret"})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": None})
+
+        assert result.get("error") is None
+        assert "hmac_secret" not in trigger.config_json
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_masked_secret_preserved_while_other_keys_merge(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        trigger = _make_mock_trigger(config_json={"hmac_secret": "real-secret", "work_item_ref_paths": [".agents"]})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(
+            trigger_id=str(trigger.id),
+            config_json={"hmac_secret": SENSITIVE_VALUE_MASK, "work_item_ref_paths": ["backend", "frontend"]},
+        )
+
+        assert result.get("error") is None
+        assert trigger.config_json["hmac_secret"] == "real-secret"
+        assert trigger.config_json["work_item_ref_paths"] == ["backend", "frontend"]
 
 
 # ---------------------------------------------------------------------------
