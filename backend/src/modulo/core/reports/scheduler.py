@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
+import hmac
+import json
 import logging
 import threading
 import uuid
@@ -258,7 +261,12 @@ async def _deliver_via_config(
 
     if config_type == "slack_webhook":
         urls = recipient_config.get("webhook_urls", [])
-        return await _deliver_slack_webhook(payload, urls)
+        return await _deliver_slack_webhook(
+            payload,
+            urls,
+            signing_secret=recipient_config.get("signing_secret"),
+            request_timeout=recipient_config.get("timeout"),
+        )
 
     _log.warning("Unknown recipient config type '%s', falling back to generic webhook", config_type)
     return await _deliver_webhook(payload, recipient_config)
@@ -269,25 +277,80 @@ _REPORT_MAX_RETRIES = 3
 _REPORT_BACKOFF_BASE = 2.0
 _REPORT_MAX_BACKOFF = 30.0
 
+_SIGNATURE_HEADER = "X-Modulo-Signature"
+
+
+def _serialize_json_body(body: dict[str, Any] | list[Any]) -> bytes:
+    """Serialize a payload to the exact bytes that will be sent on the wire.
+
+    Compact separators are used so the signed bytes match what the recipient
+    receives byte-for-byte.
+    """
+    return json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _sign_payload(secret: str, body_bytes: bytes) -> str:
+    """Compute the HMAC-SHA256 signature of a serialized payload.
+
+    Returns ``sha256=<hex digest>`` (Slack-style signature scheme) so the
+    recipient can verify authenticity against a shared secret.
+    """
+    digest = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+def _coerce_timeout(value: object) -> float | None:
+    """Validate a caller-supplied timeout, falling back to ``None`` (default)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
 
 async def _deliver_to_urls(
     urls: list[str],
     body: dict[str, Any] | list[Any],
     headers: dict[str, str] | None = None,
+    *,
+    request_timeout: float | None = None,
+    signing_secret: str | None = None,
 ) -> list[dict[str, Any]]:
     """POST JSON body to each URL, returning per-URL results.
 
     Retries transient failures (5xx, connection errors, 429) per URL
     with exponential backoff. Non-transient 4xx errors are not retried.
+
+    When ``signing_secret`` is provided, the body is serialized once, signed
+    with HMAC-SHA256, and sent byte-for-byte with an ``X-Modulo-Signature``
+    header so the recipient can verify authenticity. ``request_timeout``
+    overrides the per-request timeout (default ``_REPORT_HTTP_TIMEOUT``).
     """
+    if signing_secret:
+        body_bytes = _serialize_json_body(body)
+        merged_headers = {**(headers or {}), _SIGNATURE_HEADER: _sign_payload(signing_secret, body_bytes)}
+        merged_headers.setdefault("Content-Type", "application/json")
+    else:
+        body_bytes = None
+        merged_headers = headers or {}
+    effective_timeout = _coerce_timeout(request_timeout) if request_timeout is not None else None
+    request_timeout_seconds = effective_timeout if effective_timeout is not None else _REPORT_HTTP_TIMEOUT
+
     results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=_REPORT_HTTP_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=request_timeout_seconds) as client:
         for url in urls:
             result: dict[str, Any] = {"url": url, "status": "failed", "status_code": None, "error": None}
             last_resp_or_exc: httpx.Response | Exception | None = None
             for attempt in range(_REPORT_MAX_RETRIES):
                 try:
-                    resp = await client.post(url, json=body, headers=headers or {})
+                    if body_bytes is not None:
+                        resp = await client.post(url, content=body_bytes, headers=merged_headers)
+                    else:
+                        resp = await client.post(url, json=body, headers=merged_headers)
                     last_resp_or_exc = resp
                     if resp.is_success:
                         result.update({"status": "delivered", "status_code": resp.status_code, "error": None})
@@ -362,13 +425,30 @@ def _parse_retry_after(resp: httpx.Response) -> float:
         return 5.0
 
 
-async def _deliver_slack_webhook(payload: Any, webhook_urls: list[str]) -> list[dict[str, Any]]:
+async def _deliver_slack_webhook(
+    payload: Any,
+    webhook_urls: list[str],
+    *,
+    signing_secret: str | None = None,
+    request_timeout: float | None = None,
+) -> list[dict[str, Any]]:
     body = payload if isinstance(payload, (dict, list)) else {"text": str(payload)}
-    return await _deliver_to_urls(webhook_urls, body)
+    return await _deliver_to_urls(webhook_urls, body, signing_secret=signing_secret, request_timeout=request_timeout)
 
 
-async def _deliver_webhook(payload: Any, recipient_config: dict[str, Any]) -> list[dict[str, Any]]:
+async def _deliver_webhook(
+    payload: Any,
+    recipient_config: dict[str, Any],
+) -> list[dict[str, Any]]:
     urls = recipient_config.get("urls", [])
     headers = recipient_config.get("headers", {})
+    signing_secret = recipient_config.get("signing_secret")
+    request_timeout = recipient_config.get("timeout")
     body = payload if isinstance(payload, (dict, list)) else {"data": str(payload)}
-    return await _deliver_to_urls(urls, body, headers=headers)
+    return await _deliver_to_urls(
+        urls,
+        body,
+        headers=headers,
+        signing_secret=signing_secret,
+        request_timeout=request_timeout,
+    )

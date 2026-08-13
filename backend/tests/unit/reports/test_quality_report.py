@@ -143,6 +143,22 @@ class TestTrendSymbol:
         assert _trend_symbol(-5.0) == "\u2192"
         assert _trend_symbol(-5.1) == "\u2193"
 
+    def test_invert_flips_arrows_for_lower_is_better_metrics(self) -> None:
+        # With invert=True a negative delta (improvement) renders an up arrow.
+        assert _trend_symbol(-10.0, invert=True) == "\u2191"
+        assert _trend_symbol(10.0, invert=True) == "\u2193"
+
+    def test_invert_preserves_threshold_and_none(self) -> None:
+        assert _trend_symbol(3.0, invert=True) == "\u2192"
+        assert _trend_symbol(-3.0, invert=True) == "\u2192"
+        assert _trend_symbol(5.0, invert=True) == "\u2192"
+        assert _trend_symbol(-5.0, invert=True) == "\u2192"
+        assert _trend_symbol(None, invert=True) == "\u2192"
+
+    def test_invert_default_off(self) -> None:
+        assert _trend_symbol(10.0) == "\u2191"
+        assert _trend_symbol(-10.0) == "\u2193"
+
 
 # ---------------------------------------------------------------------------
 # _fmt_delta
@@ -279,6 +295,36 @@ class TestFormatTrendSection:
         block = _format_trend_section(wow, summary)
         assert "\u2014" in block["text"]["text"]
 
+    def test_cost_line_uses_inverted_trend_semantics(self) -> None:
+        summary = {"total_runs": 100, "avg_eval_pass_rate": 85.0, "total_cost_usd": 50.0}
+        wow = {
+            "runs_delta_pct": -10.0,
+            "eval_pass_rate_delta_pct": 5.0,
+            "cost_delta_pct": 12.0,
+            "previous_week_runs": 90,
+            "previous_week_avg_pass_rate": 80.0,
+            "previous_week_cost_usd": 44.6,
+        }
+        block = _format_trend_section(wow, summary)
+        text = block["text"]["text"]
+        cost_line = next(line for line in text.split("\n") if "*Cost*" in line)
+        assert cost_line.startswith("\u2193 *Cost*"), f"cost increase should render DOWN arrow: {cost_line}"
+
+    def test_cost_decrease_renders_up_arrow(self) -> None:
+        summary = {"total_runs": 100, "avg_eval_pass_rate": 85.0, "total_cost_usd": 50.0}
+        wow = {
+            "runs_delta_pct": 10.0,
+            "eval_pass_rate_delta_pct": 5.0,
+            "cost_delta_pct": -12.0,
+            "previous_week_runs": 90,
+            "previous_week_avg_pass_rate": 80.0,
+            "previous_week_cost_usd": 56.8,
+        }
+        block = _format_trend_section(wow, summary)
+        text = block["text"]["text"]
+        cost_line = next(line for line in text.split("\n") if "*Cost*" in line)
+        assert cost_line.startswith("\u2191 *Cost*"), f"cost decrease should render UP arrow: {cost_line}"
+
 
 # ---------------------------------------------------------------------------
 # format_slack_message
@@ -306,11 +352,111 @@ class TestFormatSlackMessage:
 
 
 # ---------------------------------------------------------------------------
+# format_slack_message — Slack Block Kit schema compliance
+# ---------------------------------------------------------------------------
+
+
+class TestSlackBlockKitSchema:
+    _MAX_BLOCKS = 50
+    _MAX_HEADER_TEXT = 150
+    _MAX_SECTION_TEXT = 3000
+    _MAX_SECTION_FIELDS = 10
+    _MAX_FIELD_TEXT = 2000
+    _MAX_CONTEXT_ELEMENTS = 10
+    _MAX_ELEMENT_TEXT = 3000
+
+    def _blocks(self, report: dict) -> list[dict]:
+        return json.loads(format_slack_message(report))
+
+    def test_block_count_within_limit(self) -> None:
+        for report in (_REPORT_WITH_DATA, _REPORT_EMPTY, _REPORT_DELIVERY):
+            blocks = self._blocks(report)
+            assert len(blocks) <= self._MAX_BLOCKS, f"block count {len(blocks)} exceeds {self._MAX_BLOCKS}"
+
+    def test_blocks_are_valid_types(self) -> None:
+        allowed = {"section", "divider", "context", "header"}
+        for report in (_REPORT_WITH_DATA, _REPORT_EMPTY):
+            for block in self._blocks(report):
+                assert block["type"] in allowed, f"unexpected block type {block['type']}"
+
+    def test_header_text_within_limit(self) -> None:
+        for report in (_REPORT_WITH_DATA, _REPORT_EMPTY):
+            for block in self._blocks(report):
+                if block["type"] == "header":
+                    assert block["text"]["type"] == "plain_text"
+                    text = block["text"]["text"]
+                    assert len(text) <= self._MAX_HEADER_TEXT, f"header too long ({len(text)} chars)"
+
+    def test_section_text_and_fields_within_limits(self) -> None:
+        for report in (_REPORT_WITH_DATA, _REPORT_EMPTY):
+            for block in self._blocks(report):
+                if block["type"] != "section":
+                    continue
+                text = block.get("text", {}).get("text", "")
+                assert len(text) <= self._MAX_SECTION_TEXT, f"section text too long ({len(text)} chars)"
+                fields = block.get("fields", [])
+                assert len(fields) <= self._MAX_SECTION_FIELDS, f"too many fields: {len(fields)}"
+                for field in fields:
+                    assert len(field.get("text", "")) <= self._MAX_FIELD_TEXT, "section field too long"
+
+    def test_context_elements_within_limits(self) -> None:
+        for report in (_REPORT_WITH_DATA, _REPORT_EMPTY):
+            for block in self._blocks(report):
+                if block["type"] != "context":
+                    elements = block.get("elements", [])
+                    assert len(elements) <= self._MAX_CONTEXT_ELEMENTS, "too many context elements"
+                    for element in elements:
+                        assert element["type"] in {"mrkdwn", "plain_text"}
+                        assert len(element.get("text", "")) <= self._MAX_ELEMENT_TEXT, "context element too long"
+
+    def test_expected_structure_for_populated_report(self) -> None:
+        blocks = self._blocks(_REPORT_WITH_DATA)
+        types = [b["type"] for b in blocks]
+        assert types == [
+            "header",
+            "context",
+            "divider",
+            "section",
+            "divider",
+            "section",
+            "divider",
+            "section",
+            "divider",
+            "section",
+            "context",
+        ]
+
+    def test_slack_payload_wrapper_round_trip(self) -> None:
+        blocks = self._blocks(_REPORT_WITH_DATA)
+        payload = {"blocks": blocks}
+        assert json.dumps(payload) == json.dumps(json.loads(json.dumps(payload)))
+
+
+# ---------------------------------------------------------------------------
 # deliver_quality_report
 # ---------------------------------------------------------------------------
 
 # Patch _REPORT_MAX_RETRIES down to 1 to avoid retry delays in tests
 _SCHEDULER_PATH = "modulo.core.reports.scheduler"
+
+
+class TestWebhookSigning:
+    def test_serialize_json_body_is_byte_stable(self) -> None:
+        from modulo.core.reports.scheduler import _serialize_json_body
+
+        body = {"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "hi"}}]}
+        assert _serialize_json_body(body) == b'{"blocks":[{"text":{"text":"hi","type":"mrkdwn"},"type":"section"}]}'
+
+    def test_sign_payload_matches_known_vector(self) -> None:
+        import hashlib
+        import hmac
+
+        from modulo.core.reports.scheduler import _sign_payload
+
+        secret = "secret-key"
+        body = b'{"a":1}'
+        expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        assert _sign_payload(secret, body) == f"sha256={expected}"
 
 
 class TestDeliverQualityReport:
@@ -416,6 +562,177 @@ class TestDeliverQualityReport:
         assert results[0]["status"] == "failed"
         assert results[0]["error"] is not None
         assert results[1]["status"] == "delivered"
+
+    # --- HMAC-SHA256 webhook signing (PRD 8.11) ---
+
+    async def test_signed_delivery_sends_signature_header_and_bytes(self) -> None:
+        from modulo.core.reports.scheduler import _serialize_json_body, _sign_payload
+
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        secret = "super-secret"
+        recipient_config = {"webhook_urls": [url], "signing_secret": secret}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        call = mock_client.post.await_args
+        assert call is not None
+        kwargs = call.kwargs
+        assert "content" in kwargs, "signed payload must be sent as raw bytes"
+        assert "json" not in kwargs, "signed payload must not be sent via json= (bytes would differ)"
+        assert kwargs["headers"].get("Content-Type") == "application/json"
+
+        expected_blocks = {"blocks": json.loads(format_slack_message(_REPORT_DELIVERY))}
+        body_bytes = _serialize_json_body(expected_blocks)
+        assert kwargs["content"] == body_bytes, "sent bytes must match signed bytes exactly"
+
+        expected_sig = _sign_payload(secret, body_bytes)
+        assert kwargs["headers"]["X-Modulo-Signature"] == expected_sig
+
+    async def test_unsigned_delivery_sends_json_without_signature(self) -> None:
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        recipient_config = {"webhook_urls": [url]}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        call = mock_client.post.await_args
+        assert call is not None
+        kwargs = call.kwargs
+        assert "json" in kwargs
+        assert "content" not in kwargs
+        assert "X-Modulo-Signature" not in kwargs["headers"]
+
+    async def test_signature_is_verifiable_from_raw_body(self) -> None:
+        import hashlib
+        import hmac
+
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        secret = "verify-me"
+        recipient_config = {"webhook_urls": [url], "signing_secret": secret}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        call = mock_client.post.await_args
+        assert call is not None
+        kwargs = call.kwargs
+        received_signature = kwargs["headers"]["X-Modulo-Signature"]
+        # Recipient recomputes the signature over the exact bytes they received.
+        recomputed = hmac.new(secret.encode("utf-8"), kwargs["content"], hashlib.sha256).hexdigest()
+        assert received_signature == f"sha256={recomputed}"
+
+    async def test_empty_signing_secret_treated_as_unsigned(self) -> None:
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        recipient_config = {"webhook_urls": [url], "signing_secret": ""}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        call = mock_client.post.await_args
+        assert call is not None
+        assert "X-Modulo-Signature" not in call.kwargs["headers"]
+        assert "json" in call.kwargs
+
+    # --- Configurable delivery timeout ---
+
+    async def test_custom_timeout_used(self) -> None:
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        recipient_config = {"webhook_urls": [url], "timeout": 5.0}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        assert mock_client_cls.call_args.kwargs["timeout"] == 5.0
+
+    async def test_default_timeout_used_when_absent(self) -> None:
+        from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
+
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        recipient_config = {"webhook_urls": [url]}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        assert mock_client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
+
+    async def test_invalid_timeout_falls_back_to_default(self) -> None:
+        from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
+
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        recipient_config = {"webhook_urls": [url], "timeout": "abc"}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        assert mock_client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
+
+    async def test_zero_timeout_falls_back_to_default(self) -> None:
+        from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
+
+        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        recipient_config = {"webhook_urls": [url], "timeout": 0}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=_mock_resp())
+
+            await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
+
+        assert mock_client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
