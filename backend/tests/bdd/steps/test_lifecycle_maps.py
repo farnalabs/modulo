@@ -137,6 +137,57 @@ def post_import_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, clie
     ctx["imported_map"] = mock_lm
 
 
+@given("a lifecycle map primitive exists")
+def lifecycle_map_primitive_exists(ctx: dict[str, Any]) -> None:
+    p = MagicMock()
+    p.id = uuid.uuid4()
+    p.primitive_type = "lifecycle_map"
+    p.name = "SDLC Workflow"
+    p.description = "shared"
+    p.content_json = {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []}
+    ctx["primitive"] = p
+
+
+@given("a non-lifecycle-map primitive exists")
+def non_lifecycle_map_primitive_exists(ctx: dict[str, Any]) -> None:
+    p = MagicMock()
+    p.id = uuid.uuid4()
+    p.primitive_type = "workflow"
+    p.name = "Some Workflow"
+    p.content_json = {}
+    ctx["primitive"] = p
+
+
+@when("I create a lifecycle map from the primitive")
+def post_create_lifecycle_map_from_primitive(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    prim = ctx.get("primitive") or MagicMock(id=uuid.uuid4(), primitive_type="lifecycle_map")
+    from modulo.core.lifecycle_map.import_export import LifecycleMapBundleError
+    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+
+    async def _fake_materialize(session, *, org_id, account_id, primitive, owner_team_id=None, visibility="org"):
+        if prim.primitive_type != "lifecycle_map":
+            raise LifecycleMapBundleError(f"Primitive type '{prim.primitive_type}' is not 'lifecycle_map'")
+        if not isinstance(prim.content_json, dict) or "stages" not in prim.content_json:
+            raise LifecycleMapContentError("content_json.stages must be an array")
+        return _make_lifecycle_map(name=prim.name)
+
+    with (
+        patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
+        patch("modulo.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
+    ):
+        resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
+    _store_response(request, ctx, resp)
+    ctx["created_map"] = _make_lifecycle_map(name=prim.name)
+
+
+@when("I create a lifecycle map from missing primitive")
+def post_create_lifecycle_map_from_missing_primitive(request: Any, client: Any) -> None:
+    missing_id = uuid.uuid4()
+    with patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=None)):
+        resp = client.post(f"/api/v1/libraries/{missing_id}/create-lifecycle-map")
+    _store_response(request, ctx={}, resp=resp)
+
+
 @when("I import a lifecycle map with invalid content")
 def post_import_lifecycle_map_invalid(ctx: dict[str, Any], request: Any, client: Any) -> None:
     envelope = {

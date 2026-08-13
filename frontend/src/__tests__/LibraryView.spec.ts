@@ -9,10 +9,12 @@ async function nextTick() {
 }
 
 const getMock = vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
+const postMock = vi.fn()
 
 vi.mock('../lib/api/client', () => ({
   api: {
     GET: vi.fn(async (...args: unknown[]) => ({ data: await getMock(...args), error: undefined })),
+    POST: vi.fn(async (...args: unknown[]) => ({ data: await postMock(...args), error: undefined })),
     PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
   },
 }))
@@ -24,6 +26,7 @@ const router = createRouter({
   routes: [
     { path: '/library', name: 'library', component: LibraryView },
     { path: '/library/:id/create-pipeline', name: 'library-pipeline-wizard', component: { template: '<div/>' } },
+    { path: '/lifecycle-maps/:id', name: 'lifecycle-map-detail', component: { template: '<div/>' } },
   ],
 })
 
@@ -172,5 +175,35 @@ describe('LibraryView', () => {
     const opts = lastCall[1] as { params: { query: Record<string, unknown> } }
     expect(opts.params.query.primitive_types).toBe('workflow,agent')
     expect(opts.params.query.primitive_type).toBeUndefined()
+  })
+
+  it('creates a lifecycle map from a primitive and navigates to it', async () => {
+    getMock.mockResolvedValue({
+      items: [
+        { id: 'lm-prim-1', organisation_id: 'org-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', slug: 'sdlc-map', description: null, author: 'modulo', version: '1.0', tags: [], visibility: 'community', forked_from: null, auto_update: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 12,
+    })
+    postMock.mockResolvedValue({ id: 'map-created-1', name: 'SDLC Map' })
+
+    await router.push('/library')
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="library-create-lifecycle-map"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(postMock).toHaveBeenCalledWith('/api/v1/libraries/{primitive_id}/create-lifecycle-map', {
+      params: { path: { primitive_id: 'lm-prim-1' } },
+    })
+    await vi.waitFor(() => {
+      expect(router.push).toHaveBeenCalledWith({ name: 'lifecycle-map-detail', params: { id: 'map-created-1' } })
+    })
   })
 })

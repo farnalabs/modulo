@@ -2146,7 +2146,7 @@ export default {
       "import_map": "Import",
       "import_dialog_title": "Import Lifecycle Map",
       "import_paste_hint": "Paste an exported lifecycle map (JSON) to create a new map in this organisation.",
-      "import_placeholder": '{"primitive_type":"lifecycle_map","name":"...","content_json":{...}}',
+      "import_placeholder": "Paste the exported lifecycle map JSON here",
       "import_payload_label": "Lifecycle map export JSON",
       "import_invalid_json": "The pasted content is not valid JSON.",
       "importing": "Importing...",

@@ -16,6 +16,7 @@ const i18n = createI18n({
           create_pipeline: 'Create Pipeline',
           view_details: 'View Details',
           auto_update: 'Auto update',
+          copy_to_adapt: 'Copy to Adapt',
         },
       },
     },
@@ -103,5 +104,24 @@ describe('LibraryPrimitiveCard', () => {
   it('does not render the create-pipeline button for non-pipeline primitive types', () => {
     const wrapper = mountCard({ prim: { id: 'prim-1', source: 'modulo', primitive_type: 'schema', name: 'S', description: null, tags: [], forked_from: null, auto_update: false } })
     expect(wrapper.find('[data-testid="library-create-pipeline"]').exists()).toBe(false)
+  })
+
+  it('renders a copy-to-adapt button for lifecycle_map primitives', () => {
+    const wrapper = mountCard({ prim: { id: 'prim-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', description: null, tags: [], forked_from: null, auto_update: false } })
+    expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="library-create-pipeline"]').exists()).toBe(false)
+  })
+
+  it('emits create-lifecycle-map when the copy-to-adapt button is clicked', async () => {
+    const prim = { id: 'prim-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', description: null, tags: [], forked_from: null, auto_update: false }
+    const wrapper = mountCard({ prim })
+    await wrapper.find('[data-testid="library-create-lifecycle-map"]').trigger('click')
+    expect(wrapper.emitted('create-lifecycle-map')).toHaveLength(1)
+    expect(wrapper.emitted('create-lifecycle-map')![0]).toEqual([prim])
+  })
+
+  it('does not render the copy-to-adapt button for non-lifecycle-map primitives', () => {
+    const wrapper = mountCard()
+    expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
   })
 })

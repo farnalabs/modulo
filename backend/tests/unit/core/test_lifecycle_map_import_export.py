@@ -79,7 +79,24 @@ async def test_get_existing_lifecycle_map_names(session: AsyncMock) -> None:
 
     assert names == {"A", "B"}
     statement = session.execute.await_args.args[0]
-    assert "lifecycle_maps.name" in str(statement.compile(compile_kwargs={"literal_binds": True}))
+    compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
+    assert "lifecycle_maps.name" in compiled
+    assert "lifecycle_maps.organisation_id" in compiled
+    assert _ORG_ID.hex in compiled
+
+
+async def test_get_existing_lifecycle_map_names_is_scoped_to_org(session: AsyncMock) -> None:
+    """Names are read only from the caller's org — org B names never leak into org A dedupe."""
+    session.execute.return_value = _name_rows("Org B Map")
+    other_org_id = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+    names = await get_existing_lifecycle_map_names(session, other_org_id)
+
+    assert names == {"Org B Map"}
+    statement = session.execute.await_args.args[0]
+    compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
+    assert "lifecycle_maps.organisation_id" in compiled
+    assert other_org_id.hex in compiled
 
 
 # ---------------------------------------------------------------------------
