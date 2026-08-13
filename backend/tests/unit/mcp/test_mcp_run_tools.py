@@ -445,6 +445,29 @@ class TestCancelRun(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.db.crud.run.get_run")
     @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server._session")
+    async def test_budget_exceeded_status_returns_cannot_cancel(
+        self,
+        mock_session: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = _make_mock_run(status="budget_exceeded")
+
+        run_id = str(uuid.uuid4())
+        result = await cancel_run(run_id=run_id)
+
+        assert result["error"] == "cannot_cancel"
+        assert result["run_id"] == run_id
+        assert "terminal" in result["detail"]
+        mock_request_cancellation.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
     @patch("modulo.api.mcp_server.finalize_cancelled_run")
     @patch("modulo.api.mcp_server._session")
     async def test_run_not_found_when_request_cancellation_returns_none(

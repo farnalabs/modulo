@@ -1,6 +1,6 @@
 /**
  * Centralized filter value constants for run statuses.
- * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled')
+ * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded')
  * These are used across DashboardView, RunsListView, etc.
  */
 export const RUN_STATUS = {
@@ -13,6 +13,7 @@ export const RUN_STATUS = {
   CANCELLED: 'cancelled',
   EVAL_FAILED: 'eval_failed',
   STALLED: 'stalled' as const,
+  BUDGET_EXCEEDED: 'budget_exceeded' as const,
 } as const;
 
 export type RunStatus = typeof RUN_STATUS[keyof typeof RUN_STATUS];

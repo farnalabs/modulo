@@ -2127,6 +2127,7 @@ export default {
           "complete": "Complete",
           "failed": "Failed",
           "stalled": "Stalled",
+          "budget_exceeded": "Budget exceeded",
           "running": "Running",
           "pending": "Pending",
           "awaiting_human": "Awaiting Human",

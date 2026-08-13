@@ -117,6 +117,7 @@ from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
+from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
@@ -1935,8 +1936,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
-            if run.status in terminal_statuses:
+            if run.status in TERMINAL_STATUSES:
                 detail = f"Run is already in terminal status: {run.status}"
                 return {"error": "cannot_cancel", "run_id": str(run_id), "detail": detail}
             # PAUSED-then-cancelled class (awaiting_human/claimed) runs NO
@@ -1972,7 +1972,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
 
         from modulo.db.models.run import Run
 
-        terminal_statuses = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
+        terminal_statuses = TERMINAL_STATUSES
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
             base_where = (
