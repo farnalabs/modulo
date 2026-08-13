@@ -16,11 +16,6 @@ def connector():
     return BitbucketConnector(token=TOKEN)
 
 
-@pytest.fixture
-def connector_app_password():
-    return BitbucketConnector(username="myuser", app_password="app_pass")
-
-
 @respx.mock
 async def test_health_check_ok(connector):
     respx.get(f"{_API}/user").mock(

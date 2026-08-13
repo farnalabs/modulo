@@ -42,29 +42,6 @@ def admin_user_id() -> uuid.UUID:
 
 
 @pytest.fixture
-def mock_organisation(org_id: uuid.UUID) -> MockModel:
-    return MockModel(
-        id=org_id,
-        name="Test Org",
-        slug="test-org",
-        status="active",
-        created_at="2024-01-01T00:00:00+00:00",
-    )
-
-
-@pytest.fixture
-def mock_admin_user(admin_user_id: uuid.UUID, org_id: uuid.UUID) -> MockModel:
-    return MockModel(
-        id=admin_user_id,
-        organisation_id=org_id,
-        email="admin@test.com",
-        display_name="Admin",
-        org_role="admin",
-        active=True,
-    )
-
-
-@pytest.fixture
 def mock_pipeline(org_id: uuid.UUID) -> MockModel:
     return MockModel(
         id=uuid.UUID("00000000-0000-0000-0000-000000000010"),
