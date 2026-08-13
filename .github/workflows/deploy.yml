@@ -321,20 +321,27 @@ jobs:
           # --process-group flag that flyctl v0.4.x removed from `machine run`.
           read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
           import json
+
+          def _pg(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
           try:
               with open("/tmp/worker-machines.json") as f:
                   machines = json.load(f)
           except Exception:
               machines = []
-          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          started = [m for m in machines if _pg(m) == "worker" and m.get("state") == "started"]
           worker_id = ""
           for m in machines:
-              if m.get("process_group") == "worker":
+              if _pg(m) == "worker":
                   worker_id = m.get("id") or ""
                   break
           image = ""
           for m in machines:
-              if m.get("process_group") == "app" and m.get("state") == "started":
+              if _pg(m) == "app" and m.get("state") == "started":
                   image = (m.get("config") or {}).get("image") or m.get("image") or ""
                   break
           print(len(started), worker_id, image)
@@ -417,6 +424,48 @@ jobs:
           done
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
           exit 1
+
+      - name: Clean up stray machines (no process group)
+        shell: bash
+        continue-on-error: true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # flyctl v0.4.82 nests the process group under config.metadata.fly_process_group.
+          # Machines with NO process group are strays created by the old broken
+          # worker-ensure parse (fly machine run without a group) and must be
+          # destroyed or they accumulate and hit the Fly machine limit.
+          fly machine list --app staging-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
+          python3 - <<'PYEOF' || true
+          import json
+          app = "staging-modulo"
+          try:
+              with open("/tmp/cleanup-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          removed = 0
+          for m in machines:
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              pg = (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+              if pg == "":
+                  mid = m.get("id")
+                  if not mid:
+                      continue
+                  import subprocess
+                  r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                     capture_output=True, text=True, timeout=60)
+                  if r.returncode == 0:
+                      removed += 1
+                      print(f"  destroyed stray {mid} ({m.get('name','')})")
+                  else:
+                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
+          print(f"stray machines destroyed: {removed}")
+          PYEOF
 
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
@@ -573,20 +622,27 @@ jobs:
           # --process-group flag that flyctl v0.4.x removed from `machine run`.
           read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
           import json
+
+          def _pg(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
           try:
               with open("/tmp/worker-machines.json") as f:
                   machines = json.load(f)
           except Exception:
               machines = []
-          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          started = [m for m in machines if _pg(m) == "worker" and m.get("state") == "started"]
           worker_id = ""
           for m in machines:
-              if m.get("process_group") == "worker":
+              if _pg(m) == "worker":
                   worker_id = m.get("id") or ""
                   break
           image = ""
           for m in machines:
-              if m.get("process_group") == "app" and m.get("state") == "started":
+              if _pg(m) == "app" and m.get("state") == "started":
                   image = (m.get("config") or {}).get("image") or m.get("image") or ""
                   break
           print(len(started), worker_id, image)
@@ -669,6 +725,48 @@ jobs:
           done
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
           exit 1
+
+      - name: Clean up stray machines (no process group)
+        shell: bash
+        continue-on-error: true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # flyctl v0.4.82 nests the process group under config.metadata.fly_process_group.
+          # Machines with NO process group are strays created by the old broken
+          # worker-ensure parse (fly machine run without a group) and must be
+          # destroyed or they accumulate and hit the Fly machine limit.
+          fly machine list --app app-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
+          python3 - <<'PYEOF' || true
+          import json
+          app = "app-modulo"
+          try:
+              with open("/tmp/cleanup-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          removed = 0
+          for m in machines:
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              pg = (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+              if pg == "":
+                  mid = m.get("id")
+                  if not mid:
+                      continue
+                  import subprocess
+                  r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                     capture_output=True, text=True, timeout=60)
+                  if r.returncode == 0:
+                      removed += 1
+                      print(f"  destroyed stray {mid} ({m.get('name','')})")
+                  else:
+                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
+          print(f"stray machines destroyed: {removed}")
+          PYEOF
 
   prod-smoke:
     name: Prod smoke tests
