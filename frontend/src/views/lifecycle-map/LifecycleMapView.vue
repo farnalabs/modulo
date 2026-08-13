@@ -18,19 +18,31 @@
             v{{ mapData.current_version }}
           </span>
         </div>
-        <div v-if="mapData?.versions && mapData.versions.length > 1" class="flex items-center gap-2">
-          <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
-          <Select :aria-label="$t('views.LifecycleMapView.version_label')" v-model="selectedVersion" @update:model-value="onVersionChange">
-            <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
-              <SelectValue placeholder="Select version" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
-                v{{ v.version }}
-                <template v-if="v.created_by"> — {{ v.created_by }}</template>
-              </SelectItem>
-            </SelectContent>
-          </Select>
+        <div v-if="mapData" class="flex items-center gap-2">
+          <template v-if="mapData.versions && mapData.versions.length > 1">
+            <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
+            <Select :aria-label="$t('views.LifecycleMapView.version_label')" v-model="selectedVersion" @update:model-value="onVersionChange">
+              <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
+                <SelectValue placeholder="Select version" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
+                  v{{ v.version }}
+                  <template v-if="v.created_by"> — {{ v.created_by }}</template>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </template>
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="lifecycle-map-view-edit"
+            :aria-label="$t('views.LifecycleMapView.edit')"
+            @click="editMap"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+            {{ $t('views.LifecycleMapView.edit') }}
+          </Button>
         </div>
       </div>
     </header>
@@ -279,6 +291,10 @@ function statusLabel(status: string): string {
   const key = `views.LifecycleMapView.journey.status.${status}`
   const translated = t(key)
   return translated === key ? status : translated
+}
+
+function editMap(): void {
+  if (mapId.value) router.push({ name: 'lifecycle-map-editor', params: { id: mapId.value } })
 }
 
 function handleModuloStageClick(stage: LifecycleMapStage): void {
