@@ -53,8 +53,6 @@ _HLTH_REGISTERED_IN_TREE = "Registered in-tree"
 _HLTH_METADATA_FOUND = "Package metadata found"
 _HLTH_PACKAGE_NOT_FOUND = "Package not found in installed packages"
 _HLTH_UNKNOWN_PLUGIN = "Unknown plugin"
-_HLTH_FAILED_LOAD = "Failed to load entry point"
-_HLTH_BUILD_FAILED = "Plugin builder raised an error"
 
 _CAP_CONNECTOR = "connector_type"
 _CAP_MODEL_BACKEND = "model_backend"
