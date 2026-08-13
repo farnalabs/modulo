@@ -13,7 +13,7 @@ middleware. Previously untested, this suite locks the full contract:
   request metadata (method/path/correlation_id/user_id) into the ingest event;
 - the ingest helper is itself exception-safe: an ingest failure is logged as
   ``middleware.error_ingest_failed`` and never aborts the 500 response;
-- the counter is observable via ``get_unhandled_exception_count``;
+- the counter is observable under lock;
 - the 500 response falls back to a plain JSON body if even ProblemDetail
   construction fails.
 """
@@ -33,7 +33,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from modulo.api.middleware.catch_all import (
     CatchAllMiddleware,
     _make_500_response,
-    get_unhandled_exception_count,
 )
 
 _PATH = "modulo.api.middleware.catch_all"
@@ -45,6 +44,13 @@ def _request(method: str = "GET", path: str = "/boom", **state: Any) -> SimpleNa
         url=SimpleNamespace(path=path),
         state=SimpleNamespace(**state),
     )
+
+
+def _get_unhandled_exception_count() -> int:
+    import modulo.api.middleware.catch_all as module
+
+    with module._unhandled_count_lock:
+        return module._unhandled_exception_count
 
 
 def _reset_counter() -> None:
@@ -70,7 +76,7 @@ class TestDispatch:
 
         response = await middleware.dispatch(_request(), ok)
         assert response.status_code == 200
-        assert get_unhandled_exception_count() == 0
+        assert _get_unhandled_exception_count() == 0
 
     async def test_http_exception_is_re_raised_untouched(self, caplog: pytest.LogCaptureFixture) -> None:
         middleware = CatchAllMiddleware(app=object())
@@ -80,7 +86,7 @@ class TestDispatch:
 
         with pytest.raises(HTTPException):
             await middleware.dispatch(_request(), boom)
-        assert get_unhandled_exception_count() == 0
+        assert _get_unhandled_exception_count() == 0
         assert not any("middleware.unhandled_exception" in rec.message for rec in caplog.records)
 
     async def test_swallows_starlette_http_exception_too(self) -> None:
@@ -96,7 +102,7 @@ class TestDispatch:
 
         response = await middleware.dispatch(_request(), boom)
         assert response.status_code == 500
-        assert get_unhandled_exception_count() == 1
+        assert _get_unhandled_exception_count() == 1
 
     async def test_unhandled_exception_returns_500_problem_detail(self) -> None:
         import json
@@ -122,7 +128,7 @@ class TestDispatch:
 
         await middleware.dispatch(_request(), boom)
         await middleware.dispatch(_request(), boom)
-        assert get_unhandled_exception_count() == 2
+        assert _get_unhandled_exception_count() == 2
 
     async def test_response_without_request_id_omits_header(self) -> None:
         middleware = CatchAllMiddleware(app=object())
@@ -295,14 +301,14 @@ class TestMake500Response:
 
 class TestCounterAccessor:
     def test_counter_starts_at_zero(self) -> None:
-        assert get_unhandled_exception_count() == 0
+        assert _get_unhandled_exception_count() == 0
 
     def test_counter_exposed_after_increment(self) -> None:
         import modulo.api.middleware.catch_all as module
 
         with module._unhandled_count_lock:
             module._unhandled_exception_count = 7
-        assert get_unhandled_exception_count() == 7
+        assert _get_unhandled_exception_count() == 7
 
 
 class TestAsgiIntegration:
@@ -333,4 +339,4 @@ class TestAsgiIntegration:
         assert boom_resp.status_code == 500
         payload = boom_resp.json()
         assert payload["type"] == "urn:problem:modulo:internal_error"
-        assert get_unhandled_exception_count() == 1
+        assert _get_unhandled_exception_count() == 1
