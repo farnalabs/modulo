@@ -31,8 +31,8 @@ class OrgSettingsResponse(BaseModel):
     currency: str = "USD"
 
 
-@handle_db_errors("org.get_settings")
 @router.get("/settings", response_model=OrgSettingsResponse)
+@handle_db_errors("org.get_settings")
 async def get_org_settings(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),

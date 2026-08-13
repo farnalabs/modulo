@@ -235,8 +235,8 @@ def _to_response(component: CostComponent) -> CostComponentResponse:
     return CostComponentResponse.model_validate(component)
 
 
-@handle_db_errors("costs.components.list")
 @router.get("", response_model=list[CostComponentResponse])
+@handle_db_errors("costs.components.list")
 async def get_components(
     _: object = require_feature("admin_cost_breakdown"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
@@ -253,8 +253,8 @@ async def get_components(
         raise _map_validation_error(exc) from None
 
 
-@handle_db_errors("costs.components.create")
 @router.post("", response_model=CostComponentResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("costs.components.create")
 async def create_component(
     req: CostComponentCreate,
     _: object = require_feature("admin_cost_breakdown"),
@@ -295,8 +295,8 @@ async def create_component(
         raise _map_validation_error(exc) from None
 
 
-@handle_db_errors("costs.components.update")
 @router.put("/{component_id}", response_model=CostComponentResponse)
+@handle_db_errors("costs.components.update")
 async def update_component(
     component_id: uuid.UUID,
     req: CostComponentUpdate,
@@ -341,8 +341,8 @@ async def update_component(
         raise _map_validation_error(exc) from None
 
 
-@handle_db_errors("costs.components.delete")
 @router.delete("/{component_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("costs.components.delete")
 async def delete_component(
     component_id: uuid.UUID,
     _: object = require_feature("admin_cost_breakdown"),

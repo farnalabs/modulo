@@ -31,8 +31,8 @@ class BatchDetailRequest(BaseModel):
     event_ids: list[str]
 
 
-@handle_db_errors("audit.list_audit_events_endpoint")
 @router.get("", response_model=dict[str, object])
+@handle_db_errors("audit.list_audit_events_endpoint")
 async def list_audit_events_endpoint(
     cursor: str | None = Query(None, max_length=256, description="Cursor: JSON {c:created_at, i:id}"),
     limit: int = Query(50, ge=1, le=200, description="Number of events per page"),
@@ -138,8 +138,8 @@ async def batch_detail_endpoint(
     return result
 
 
-@handle_db_errors("audit.verify_chain_endpoint")
 @router.get("/verify", response_model=dict[str, object])
+@handle_db_errors("audit.verify_chain_endpoint")
 async def verify_chain_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("audit.manage"),

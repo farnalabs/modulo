@@ -25,8 +25,8 @@ class ConfigEntry(BaseModel):
     updated_at: str | None = None
 
 
-@handle_db_errors("admin.system_config.admin_list_config")
 @router.get("")
+@handle_db_errors("admin.system_config.admin_list_config")
 async def admin_list_config(
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
@@ -65,8 +65,8 @@ class SetConfigRequest(BaseModel):
     value: Any = Field(..., description="JSON value to store")
 
 
-@handle_db_errors("admin.system_config.admin_set_config")
 @router.put("/{key}")
+@handle_db_errors("admin.system_config.admin_set_config")
 async def admin_set_config(
     key: str,
     req: SetConfigRequest,
@@ -106,8 +106,8 @@ async def admin_set_config(
         raise HTTPException(status_code=500, detail="Internal server error") from None
 
 
-@handle_db_errors("admin.system_config.admin_delete_config")
 @router.delete("/{key}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.system_config.admin_delete_config")
 async def admin_delete_config(
     key: str,
     current_user: AuthenticatedPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]

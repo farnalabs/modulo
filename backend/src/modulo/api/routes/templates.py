@@ -72,8 +72,8 @@ class FromTemplateResponse(BaseModel):
     edge_count: int
 
 
-@handle_db_errors("templates.list_templates_endpoint")
 @router.get("/templates", response_model=TemplateListResponse)
+@handle_db_errors("templates.list_templates_endpoint")
 async def list_templates_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -117,12 +117,12 @@ async def list_templates_endpoint(
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
-@handle_db_errors("templates.create_pipeline_from_template_endpoint")
 @router.post(
     "/pipelines/from-template/{template_id}",
     response_model=FromTemplateResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@handle_db_errors("templates.create_pipeline_from_template_endpoint")
 async def create_pipeline_from_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
