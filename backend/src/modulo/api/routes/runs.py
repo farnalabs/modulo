@@ -58,7 +58,7 @@ from modulo.db.crud.run import (
 )
 from modulo.db.models.agent import Agent
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
-from modulo.db.models.run import Run
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -76,8 +76,6 @@ _RETRY_TRANSIENT = retry(
 
 
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
-
-_TERMINAL_STATUSES = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
 
 # Child-run cost rollup. `total_cost_usd` keeps its own-run semantics; the
 # aggregate is a derived display value and never mutates the stored field.
@@ -676,7 +674,7 @@ async def cancel_run(
             if run is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
 
-            if run.status in _TERMINAL_STATUSES:
+            if run.status in TERMINAL_STATUSES:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Run is already in terminal status: {run.status}",

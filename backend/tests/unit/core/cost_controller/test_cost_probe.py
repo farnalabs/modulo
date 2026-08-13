@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.cost_controller.probe import (
+    PROBE_TERMINAL_STATUSES,
     _assert_sample_query_index,
     _duplicate_flood_trigger,
     _evaluate_run,
@@ -167,6 +168,11 @@ async def test_sample_runs_returns_all_rows() -> None:
     session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
     assert await _sample_runs(session, _ORG_ID) == rows
     session.execute.assert_awaited_once()
+
+
+def test_probe_terminal_statuses_include_budget_exceeded() -> None:
+    """A budget-breached run with a breakdown is part of the cost-accuracy sample."""
+    assert "budget_exceeded" in PROBE_TERMINAL_STATUSES
 
 
 # ---------------------------------------------------------------------------

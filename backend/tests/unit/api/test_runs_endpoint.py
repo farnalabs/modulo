@@ -450,6 +450,18 @@ def test_cancel_run_already_terminal_returns_409(client: TestClient) -> None:
     assert resp.status_code == 409
 
 
+def test_cancel_run_budget_exceeded_returns_409(client: TestClient) -> None:
+    run = _make_run(status="budget_exceeded")
+
+    with (
+        patch("modulo.api.routes.runs.get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.post(f"/api/v1/runs/{_RUN_ID}/cancel")
+
+    assert resp.status_code == 409
+
+
 def test_cancel_run_not_found_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.runs.get_run", return_value=None),

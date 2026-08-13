@@ -33,15 +33,12 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.db.crud.run import get_run
+from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.rls import set_rls_org
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
-
-# The canonical terminal-status set (spec §4.2) — reconciled so an eval_failed
-# run is detected as terminal at WS connect time instead of subscribing forever.
-_TERMINAL_STATUSES = {"complete", "failed", "cancelled", "eval_failed", "stalled"}
 
 
 @router.websocket("/{run_id}/ws")
@@ -127,7 +124,7 @@ async def run_websocket(
         await ws.close(code=4004)
         return
 
-    if run.status in _TERMINAL_STATUSES:
+    if run.status in TERMINAL_STATUSES:
         await ws.send_json({"status": "terminal", "run_status": run.status, "run_id": str(run_id)})
         await ws.close()
         return
