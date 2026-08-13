@@ -135,6 +135,10 @@ PERMISSIONS: dict[str, str] = {
     # housekeeping
     "housekeeping.list": "runner",
     "housekeeping.perform": "operator",
+    # determination — SDLC scan + pipeline draft generation read all of the
+    # org's connected tool data (repos, PRs, issues), so it is operator-scoped
+    # like schema.infer rather than viewer/runner.
+    "determination.scan": "operator",
     # teams
     "team.create": "admin",
     "team.update": "admin",

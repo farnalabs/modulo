@@ -11,8 +11,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session
-from modulo.auth.dependencies import get_current_user
+from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
@@ -117,7 +117,7 @@ def _sample_to_response(s: ScanSample) -> SampleResponse:
 @handle_db_errors("determination.run_determination")
 async def run_determination(
     session: AsyncSession = Depends(get_db_session),
-    _: str = Depends(get_current_user),
+    _: TenantPrincipal = require_permission("determination.scan"),
     settings: Settings = Depends(get_settings),
 ) -> DeterminationResponse:
     """Scan all connected tools and produce an SDLC maturity assessment."""
@@ -190,7 +190,7 @@ async def run_determination(
 @handle_db_errors("determination.create_determination_draft")
 async def create_determination_draft(
     session: AsyncSession = Depends(get_db_session),
-    _: str = Depends(get_current_user),
+    _: TenantPrincipal = require_permission("determination.scan"),
     settings: Settings = Depends(get_settings),
 ) -> DraftResponse:
     """Run determination scan and produce an editable pipeline draft.
