@@ -61,6 +61,20 @@ class TestCreateWsToken:
         t2 = await create_ws_token(mock_redis, _PRINCIPAL)
         assert t1 != t2
 
+    async def test_propagates_redis_error(self, mock_redis: AsyncMock) -> None:
+        from redis.exceptions import RedisError
+
+        mock_redis.setex.side_effect = RedisError("connection refused")
+
+        with pytest.raises(RedisError):
+            await create_ws_token(mock_redis, _PRINCIPAL)
+
+    async def test_propagates_serialization_error(self, mock_redis: AsyncMock) -> None:
+        mock_redis.setex.side_effect = TypeError("not json serializable")
+
+        with pytest.raises(TypeError):
+            await create_ws_token(mock_redis, {"sub": object()})
+
 
 class TestConsumeWsToken:
     async def test_returns_principal_for_valid_token(self, mock_redis: AsyncMock) -> None:
@@ -120,8 +134,22 @@ class TestConsumeWsToken:
         with pytest.raises(WsTokenConsumeError):
             await consume_ws_token(mock_redis, "some-token")
 
+    async def test_raises_consume_error_on_redis_timeout(self, mock_redis: AsyncMock) -> None:
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
+        mock_redis.getdel.side_effect = RedisTimeoutError("timeout")
+
+        with pytest.raises(WsTokenConsumeError):
+            await consume_ws_token(mock_redis, "some-token")
+
     async def test_raises_consume_error_on_corrupt_data(self, mock_redis: AsyncMock) -> None:
         mock_redis.getdel.return_value = "not-valid-json"
+
+        with pytest.raises(WsTokenConsumeError):
+            await consume_ws_token(mock_redis, "some-token")
+
+    async def test_raises_consume_error_on_non_dict_payload(self, mock_redis: AsyncMock) -> None:
+        mock_redis.getdel.return_value = json.dumps(["not", "an", "object"])
 
         with pytest.raises(WsTokenConsumeError):
             await consume_ws_token(mock_redis, "some-token")

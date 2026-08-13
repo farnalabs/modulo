@@ -17,6 +17,7 @@ from modulo.auth.jwt import (
     create_ws_token,
     decode_claim_token,
     decode_principal,
+    decode_refresh_token_claims,
     refresh_access_token,
 )
 
@@ -35,6 +36,43 @@ def test_create_access_token_and_decode_principal_roundtrip() -> None:
     token = _make_access_token()
     principal = decode_principal(token, _KEY)
     assert principal.username == "alice"
+
+
+def test_decode_principal_user_id_proxies_account_id() -> None:
+    token = _make_access_token()
+    principal = decode_principal(token, _KEY)
+    assert principal.user_id == principal.account_id
+
+
+def test_decode_principal_coerces_non_bool_is_system_admin_to_false() -> None:
+    future = int(time.time()) + 3600
+    claims = {
+        "sub": "alice",
+        "org_id": _ORG,
+        "account_id": _ACCOUNT,
+        "org_role": "admin",
+        "is_system_admin": "yes",
+        "iat": future - 3600,
+        "exp": future,
+    }
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    principal = decode_principal(token, _KEY)
+    assert principal.is_system_admin is False
+
+
+def test_decode_principal_rejects_malformed_account_uuid() -> None:
+    future = int(time.time()) + 3600
+    claims = {
+        "sub": "alice",
+        "org_id": _ORG,
+        "account_id": "not-a-uuid",
+        "org_role": "admin",
+        "iat": future - 3600,
+        "exp": future,
+    }
+    token = pyjwt.encode(claims, _KEY, algorithm=_ALGORITHM)
+    with pytest.raises(JWTError, match="malformed identity UUID"):
+        decode_principal(token, _KEY)
 
 
 def test_decode_principal_rejects_wrong_key() -> None:
@@ -232,6 +270,27 @@ def test_refresh_token_has_refresh_purpose() -> None:
     assert 167 <= (exp - iat).total_seconds() / 3600 <= 168
 
 
+def test_decode_refresh_token_claims_roundtrip() -> None:
+    token = create_refresh_token(
+        "alice",
+        _KEY,
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role="admin",
+        token_family="f",
+        token_sequence=1,
+    )
+    payload = decode_refresh_token_claims(token, _KEY)
+    assert payload["purpose"] == "refresh"
+    assert payload["token_family"] == "f"
+    assert payload["token_sequence"] == 1
+
+
+def test_decode_refresh_token_claims_rejects_access_token() -> None:
+    with pytest.raises(JWTError, match="not a refresh token"):
+        decode_refresh_token_claims(_make_access_token(), _KEY)
+
+
 def test_refresh_access_token_returns_valid_access_token() -> None:
     refresh = create_refresh_token(
         "alice",
@@ -367,6 +426,33 @@ def test_decode_claim_token_wrong_gate_id_raises() -> None:
     )
     with pytest.raises(JWTError, match="gate_id"):
         decode_claim_token(token, _KEY, run_id=_RUN, gate_id="wrong-step")
+
+
+def test_decode_claim_token_client_id_mismatch_raises() -> None:
+    token = create_claim_token(
+        str(_ACCOUNT),
+        _KEY,
+        run_id=_RUN,
+        gate_id=_GATE,
+        client_id=str(_ACCOUNT),
+    )
+    other = "99999999-9999-9999-9999-999999999999"
+    with pytest.raises(JWTError, match="client_id"):
+        decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE, expected_client_id=other)
+
+
+def test_decode_claim_token_accepts_matching_client_id() -> None:
+    token = create_claim_token(
+        str(_ACCOUNT),
+        _KEY,
+        run_id=_RUN,
+        gate_id=_GATE,
+        client_id=str(_ACCOUNT),
+    )
+    payload = decode_claim_token(
+        token, _KEY, run_id=_RUN, gate_id=_GATE, expected_client_id=str(_ACCOUNT)
+    )
+    assert payload["client_id"] == _ACCOUNT
 
 
 def test_decode_claim_token_expired_raises() -> None:

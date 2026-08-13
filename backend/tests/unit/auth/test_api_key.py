@@ -11,9 +11,11 @@ import pytest
 from modulo.auth.api_key import (
     ApiKeyInvalidError,
     _hash_key,
+    _serialize_key,
     _validate_team_key_role,
     create_api_key,
     generate_api_key,
+    list_api_keys,
     revoke_api_key,
     update_api_key,
     validate_api_key,
@@ -219,6 +221,123 @@ async def test_create_api_key_with_team_id_rejects_admin() -> None:
             account_id=user_id,
             team_id=team_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# _serialize_key
+# ---------------------------------------------------------------------------
+
+
+def _make_serializable_key(**overrides: object) -> MagicMock:
+    k = MagicMock()
+    k.id = uuid.uuid4()
+    k.name = "Ops Key"
+    k.role = "operator"
+    k.team_id = None
+    k.lookup_prefix = "abcdefgh"
+    k.last_used_at = None
+    k.created_at = datetime.now(UTC)
+    k.expires_at = datetime.now(UTC) + timedelta(days=30)
+    k.revoked_at = None
+    for attr, value in overrides.items():
+        setattr(k, attr, value)
+    return k
+
+
+def test_serialize_key_masks_secret_and_reports_active() -> None:
+    key = _make_serializable_key()
+    serialized = _serialize_key(key)
+
+    assert serialized["id"] == str(key.id)
+    assert serialized["name"] == "Ops Key"
+    assert serialized["role"] == "operator"
+    assert serialized["lookup_prefix"] == "mk_abcdefgh****"
+    assert serialized["team_id"] is None
+    assert serialized["last_used_at"] is None
+    assert serialized["created_at"] == key.created_at.isoformat()
+    assert serialized["expires_at"] == key.expires_at.isoformat()
+    assert serialized["is_active"] is True
+
+
+def test_serialize_key_expired_is_inactive() -> None:
+    key = _make_serializable_key(expires_at=datetime.now(UTC) - timedelta(days=1))
+    assert _serialize_key(key)["is_active"] is False
+
+
+def test_serialize_key_revoked_is_inactive() -> None:
+    key = _make_serializable_key(revoked_at=datetime.now(UTC))
+    assert _serialize_key(key)["is_active"] is False
+
+
+def test_serialize_key_with_team_and_last_used() -> None:
+    team_id = uuid.uuid4()
+    last_used = datetime.now(UTC) - timedelta(hours=1)
+    key = _make_serializable_key(team_id=team_id, last_used_at=last_used)
+
+    serialized = _serialize_key(key)
+    assert serialized["team_id"] == str(team_id)
+    assert serialized["last_used_at"] == last_used.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# list_api_keys
+# ---------------------------------------------------------------------------
+
+
+def _make_list_session(rows: list[object]) -> AsyncMock:
+    scalar_result = MagicMock()
+    scalar_result.scalars.return_value = rows
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=scalar_result)
+    return session
+
+
+@pytest.mark.asyncio
+async def test_list_api_keys_serializes_keys() -> None:
+    org_id = uuid.uuid4()
+    key = _make_serializable_key()
+    session = _make_list_session([key])
+
+    keys = await list_api_keys(session, org_id)
+
+    assert keys == [_serialize_key(key)]
+
+
+@pytest.mark.asyncio
+async def test_list_api_keys_excludes_revoked_by_default() -> None:
+    org_id = uuid.uuid4()
+    session = _make_list_session([])
+
+    await list_api_keys(session, org_id)
+
+    stmt = session.execute.await_args.args[0]
+    where = str(stmt.whereclause.compile(compile_kwargs={"literal_binds": True}))
+    assert "revoked_at IS NULL" in where
+
+
+@pytest.mark.asyncio
+async def test_list_api_keys_include_revoked_omits_filter() -> None:
+    org_id = uuid.uuid4()
+    session = _make_list_session([])
+
+    await list_api_keys(session, org_id, include_revoked=True)
+
+    stmt = session.execute.await_args.args[0]
+    where = str(stmt.whereclause.compile(compile_kwargs={"literal_binds": True}))
+    assert "revoked_at" not in where
+
+
+@pytest.mark.asyncio
+async def test_list_api_keys_orders_by_created_desc() -> None:
+    org_id = uuid.uuid4()
+    session = _make_list_session([])
+
+    await list_api_keys(session, org_id)
+
+    stmt = session.execute.await_args.args[0]
+    compiled = str(stmt)
+    assert "created_at" in compiled
+    assert "DESC" in compiled.upper()
 
 
 # ---------------------------------------------------------------------------
