@@ -69,7 +69,7 @@ work without acting as a pipeline execution engine.
 - [x] Team visibility without owner_team_id — rejected on create
 - [x] Map with single stage — displayed correctly
 - [ ] Map with circular stage transitions — no cycle detection
-- [ ] Concurrent map content update while version history is being read
+- [x] Concurrent map content update while version history is being read — **decided (FAR-176): last-write-wins on the single active version; version-bumping write paths fetch the map row with `SELECT ... FOR UPDATE` so the counter is strictly increasing with no duplicates under concurrent saves; version-list reads always observe one consistent committed snapshot (never a half-written map).**
 
 ## Security
 
@@ -80,7 +80,7 @@ work without acting as a pipeline execution engine.
 
 ## Known Gaps
 
-- Immutable per-version snapshot history with browse-back is not retained — only the active version is served (GET of a non-current version returns 404); the version counter and version API surface exist.
+- Immutable per-version snapshot history with browse-back is not retained — only the active version is served (GET of a non-current version returns 404); the version counter and version API surface exist. Concurrency semantics (FAR-176): concurrent saves are last-write-wins on the active version, serialised by a row lock (`SELECT ... FOR UPDATE`) so the version counter is atomic and never produces duplicates; version-list reads always see one consistent committed snapshot.
 - Export is active-version-only: the envelope carries the current stages/edges/notes graph, not full version history. Importing an envelope creates a NEW map; there is no in-place version restore or version-history import.
 - The library browser exposes lifecycle maps via the `lifecycle_map` primitive type and copy-to-adapt, but there is no community contribution path for maps yet (the community-contribute primitive_type regex does not include `lifecycle_map`).
 

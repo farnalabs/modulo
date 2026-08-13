@@ -624,12 +624,9 @@ async def update_lifecycle_map_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            current = await get_lifecycle_map(session, lifecycle_map_id)
-            if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
-            if "content_json" in updates:
-                updates["version"] = current.version + 1
             lifecycle_map = await update_lifecycle_map(session, lifecycle_map_id, updates)
+            if lifecycle_map is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
             await session.refresh(lifecycle_map)
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None

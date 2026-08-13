@@ -65,6 +65,33 @@ async def get_lifecycle_map(session: AsyncSession, lifecycle_map_id: uuid.UUID) 
     return result.scalar_one_or_none()
 
 
+async def get_lifecycle_map_for_update(session: AsyncSession, lifecycle_map_id: uuid.UUID) -> LifecycleMap | None:
+    """Row-locked fetch for version-bumping write paths.
+
+    ``SELECT ... FOR UPDATE`` serialises concurrent saves of the same map so the
+    version counter increments atomically: two agents saving concurrently cannot
+    both read version N and both write N+1. Under READ COMMITTED the later
+    transaction blocks on the row lock, re-reads N+1 after the earlier one
+    commits, and writes N+2 — the active version is last-write-wins and the
+    counter is strictly increasing with no duplicates.
+    """
+    result = await session.execute(
+        select(LifecycleMap)
+        .where(
+            LifecycleMap.id == lifecycle_map_id,
+            LifecycleMap.archived_at.is_(None),
+            LifecycleMap.deleted_at.is_(None),
+        )
+        .with_for_update()
+        # populate_existing: if the row is already in the session identity map
+        # (e.g. a caller pre-fetched it), the re-executed FOR UPDATE must still
+        # refresh its attributes from the freshly committed row — otherwise the
+        # version bump below would compute from a stale pre-commit value.
+        .execution_options(populate_existing=True)
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_lifecycle_maps(
     session: AsyncSession,
     *,
@@ -99,14 +126,23 @@ async def update_lifecycle_map(
     lifecycle_map_id: uuid.UUID,
     updates: dict[str, Any],
 ) -> LifecycleMap | None:
-    lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
+    content_changing = "content_json" in updates
+    lifecycle_map = (
+        await get_lifecycle_map_for_update(session, lifecycle_map_id)
+        if content_changing
+        else await get_lifecycle_map(session, lifecycle_map_id)
+    )
     if lifecycle_map is None:
         return None
-    if "content_json" in updates:
+    if content_changing:
         updates = dict(updates)
         updates["content_json"] = normalize_content(updates["content_json"])
+        # The version counter is bumped here under the row lock so concurrent
+        # content saves of the same map can never produce duplicate numbers.
+        updates.pop("version", None)
+        updates["version"] = lifecycle_map.version + 1
     apply_updates(lifecycle_map, updates)
-    if "content_json" in updates:
+    if content_changing:
         await _check_pipeline_uniqueness(session, lifecycle_map)
         await derive_lifecycle_map_stages(session, lifecycle_map)
     await session.flush()
@@ -153,9 +189,10 @@ async def save_map_version(
 
     Simplified v1 semantics: the payload replaces ``content_json``, the version
     counter bumps, and the junction projection is re-derived. No immutable
-    version history is retained yet.
+    version history is retained yet. The row is locked (``FOR UPDATE``) so the
+    version increment is atomic under concurrent saves.
     """
-    lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
+    lifecycle_map = await get_lifecycle_map_for_update(session, lifecycle_map_id)
     if lifecycle_map is None:
         return None
     lifecycle_map.content_json = normalize_content({"stages": stages, "edges": edges, "notes": notes})
@@ -177,9 +214,10 @@ async def graduate_stage(
 
     v1: records the graduation on the active version (sets ``graduated``,
     flips the stage ``type`` to ``modulo`` and links ``pipeline_id``). Full
-    reclassification + history semantics are deferred to a later slice.
+    reclassification + history semantics are deferred to a later slice. The
+    row is locked (``FOR UPDATE``) so the version increment is atomic.
     """
-    lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
+    lifecycle_map = await get_lifecycle_map_for_update(session, lifecycle_map_id)
     if lifecycle_map is None:
         return None
     content: dict[str, Any] = lifecycle_map.content_json or {}
