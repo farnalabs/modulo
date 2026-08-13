@@ -306,3 +306,210 @@ def test_scan_pipeline_config_files_ignores_good_json(monkeypatch, tmp_path):
     with patch.object(vpc, "_fail") as fail:
         vpc._scan_pipeline_config_files()
     fail.assert_not_called()
+
+
+def test_check_node_config_empty_template_id_not_failed(tmp_path):
+    """A missing/empty template_id must not be flagged — the lint only rejects
+    non-empty template_ids outside the known-good set."""
+    node = _good_node()
+    node["template_id"] = ""
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    fail.assert_not_called()
+
+
+def test_check_node_config_missing_timeout_fails_with_default(tmp_path):
+    """timeout_seconds omitted entirely falls back to the 600 default and is flagged."""
+    node = _good_node()
+    node.pop("timeout_seconds")
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    fail.assert_called_once()
+    assert "timeout_seconds is 600 (default)" in fail.call_args.args[0]
+
+
+def test_check_node_config_type_alias_flagged(tmp_path):
+    """The 'type' alias (used by pipeline JSON) must be recognised, not just 'node_type'."""
+    node = _good_node()
+    node.pop("node_type")
+    node["type"] = "sandbox_agent"
+    node["agent_prompt"] = ""
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), node)
+    fail.assert_called_once()
+    assert "agent_prompt is empty" in fail.call_args.args[0]
+
+
+def test_check_node_config_recurses_into_edges(tmp_path):
+    tree = {
+        "node_type": "pipeline",
+        "edges": [
+            {
+                "node_type": "sandbox_agent",
+                "agent_prompt": "",
+                "template_id": "opencode",
+                "timeout_seconds": 1200,
+            }
+        ],
+    }
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), tree)
+    fail.assert_called_once()
+    assert "[0]" in fail.call_args.args[0]
+
+
+def test_check_node_config_recurses_into_steps(tmp_path):
+    tree = {
+        "node_type": "pipeline",
+        "steps": [
+            {
+                "node_type": "sandbox_agent",
+                "agent_prompt": "",
+                "template_id": "opencode",
+                "timeout_seconds": 1200,
+            }
+        ],
+    }
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), tree)
+    fail.assert_called_once()
+    assert "[0]" in fail.call_args.args[0]
+
+
+def test_check_node_config_skips_non_dict_children(tmp_path):
+    """Non-dict entries in a child list must be skipped without crashing, while
+    dict children are still scanned."""
+    tree = {
+        "node_type": "pipeline",
+        "nodes": [
+            42,
+            "string",
+            None,
+            {
+                "node_type": "sandbox_agent",
+                "agent_prompt": "",
+                "template_id": "opencode",
+                "timeout_seconds": 1200,
+            },
+        ],
+    }
+    with patch.object(vpc, "_fail") as fail:
+        vpc._check_node_config(Path(tmp_path), tree)
+    fail.assert_called_once()
+    assert "[3]" in fail.call_args.args[0]
+
+
+def test_scan_node_runner_ignores_get_without_default(tmp_path):
+    src = tmp_path / "node_runner.py"
+    src.write_text('node_def.get("timeout_seconds")\n')
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_node_runner(src)
+    fail.assert_not_called()
+
+
+def test_scan_node_runner_ignores_non_constant_default(tmp_path):
+    src = tmp_path / "node_runner.py"
+    src.write_text('node_def.get("template_id", some_var)\n')
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_node_runner(src)
+    fail.assert_not_called()
+
+
+def test_scan_pipeline_config_files_flags_bad_yaml(monkeypatch, tmp_path):
+    pipeline_dir = tmp_path / "pipelines"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "bad.yaml").write_text(
+        "node_type: sandbox_agent\nagent_prompt: ''\ntemplate_id: base\ntimeout_seconds: 600\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_pipeline_config_files()
+    assert fail.call_count == 3
+    messages = " ".join(c.args[0] for c in fail.call_args_list)
+    assert "agent_prompt is empty" in messages
+    assert "template_id is 'base'" in messages
+    assert "timeout_seconds is 600" in messages
+
+
+def test_scan_pipeline_config_files_flags_bad_yml(monkeypatch, tmp_path):
+    pipeline_dir = tmp_path / "pipelines"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "bad.yml").write_text(
+        "node_type: sandbox_agent\nagent_prompt: 'do it'\ntemplate_id: opencode\ntimeout_seconds: 600\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_pipeline_config_files()
+    fail.assert_called_once()
+    assert "timeout_seconds is 600" in fail.call_args.args[0]
+
+
+def test_scan_pipeline_config_files_tolerates_malformed_yaml(monkeypatch, tmp_path):
+    """A malformed YAML pipeline file must be skipped, not crash the whole scan."""
+    pipeline_dir = tmp_path / "pipelines"
+    pipeline_dir.mkdir()
+    (pipeline_dir / "broken.yaml").write_text(":: not: [valid\n")
+    monkeypatch.chdir(tmp_path)
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_pipeline_config_files()
+    fail.assert_not_called()
+
+
+def test_scan_pipeline_config_files_tolerates_falsy_content(monkeypatch, tmp_path):
+    pipeline_dir = tmp_path / "pipelines"
+    pipeline_dir.mkdir()
+    import json
+
+    (pipeline_dir / "empty.json").write_text("{}")
+    (pipeline_dir / "null.json").write_text("null")
+    (pipeline_dir / "list.json").write_text(json.dumps([]))
+    monkeypatch.chdir(tmp_path)
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_pipeline_config_files()
+    fail.assert_not_called()
+
+
+def test_scan_pipeline_config_files_handles_list_of_pipelines(monkeypatch, tmp_path):
+    pipeline_dir = tmp_path / "pipelines"
+    pipeline_dir.mkdir()
+    import json
+
+    (pipeline_dir / "list.json").write_text(
+        json.dumps(
+            [
+                {"nodes": []},
+                {
+                    "node_type": "sandbox_agent",
+                    "agent_prompt": "",
+                    "template_id": "opencode",
+                    "timeout_seconds": 1200,
+                },
+            ]
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_pipeline_config_files()
+    fail.assert_called_once()
+    assert "agent_prompt is empty" in fail.call_args.args[0]
+
+
+def test_scan_pipeline_config_files_matches_pipeline_config_glob(monkeypatch, tmp_path):
+    """The pipeline*config*.json glob (outside pipelines/) must be scanned too."""
+    import json
+
+    (tmp_path / "pipeline_config_extra.json").write_text(
+        json.dumps(
+            {
+                "node_type": "sandbox_agent",
+                "agent_prompt": "",
+                "template_id": "opencode",
+                "timeout_seconds": 1200,
+            }
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch.object(vpc, "_fail") as fail:
+        vpc._scan_pipeline_config_files()
+    fail.assert_called_once()
+    assert "pipeline_config_extra.json" in fail.call_args.args[0]
