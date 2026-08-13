@@ -75,11 +75,6 @@ class RegistryEntryResponse(BaseModel):
     model_config = {"from_attributes": True, "arbitrary_types_allowed": True}
 
 
-class RegistryListResponse(BaseModel):
-    items: list[RegistryEntryResponse]
-    total: int
-
-
 class RegistryRankedItemResponse(BaseModel):
     entry: RegistryEntryResponse
     publisher_status: str
