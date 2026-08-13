@@ -133,6 +133,17 @@ Weekly quality report generated from run volume, eval pass rate, and cost data, 
 
 ## QA History
 
+### 2026-08-13 — improve-tests: QA lens pass on the reports scheduler test package
+
+**Closed the remaining branch gaps in `core/reports/scheduler.py`** (the shared report fire/delivery engine also imported by `cron_helpers` fire jobs) with 19 new tests in `tests/unit/reports/test_report_scheduler.py`. The caller-supplied timeout validation gate `_coerce_timeout` had **zero direct coverage** — the gate exists to reject bools/zeros/negatives/non-numerics that would otherwise silently become a 1s timeout (`float(True) == 1.0`). Coverage after the pass: `scheduler.py` **100% line coverage**, only the intentionally-unreachable double-checked-lock race branch (`_get_engine` 100->113) remains partial (99% branch).
+
+**Lens findings locked:**
+- `_coerce_timeout` truth table: positive int/float/numeric-string accepted; bool `True`/`False`, `0`, negatives, `"0"`, `"abc"`, `None`, and arbitrary objects all rejected → `None`.
+- End-to-end through `_deliver_to_urls`: a `request_timeout` of `True`, `0`, `-5`, `"abc"`, or `None` must fall back to the default `_REPORT_HTTP_TIMEOUT` (30s) on the underlying `httpx.AsyncClient` — never `1.0` from `float(True)`. Valid `2.5`/`15` honored exactly.
+- End-to-end through `_deliver_via_config`: `{"timeout": true}` in a recipient config reaches the client as the 30s default, while `{"timeout": 4.25}` is honored — proving the bool guard holds on the config path, not just on the direct helper.
+
+**Tests:** 19 new tests in `tests/unit/reports/test_report_scheduler.py` (`TestCoerceTimeout` ×11, `TestDeliverToUrlsTimeout` ×7, `TestDeliverViaConfig::test_timeout_passes_through_recipient_config` ×1). 129/129 reports unit tests pass; ruff check + format clean.
+
 ### 2026-08-13 — improve-architecture (product-map walk)
 
 **RESOLVED 4 known gaps / unchecked behaviours in `feat-core-quality-report-slack`:**
