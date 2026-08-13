@@ -28,9 +28,9 @@
 - v0.7 — OAuth 2.0 deferred to v1 (API key only in alpha MCP); review_hitl tool merged; human_only HITL flag; SSE conflation fixed; MCP onboarding page; accessibility spec; dual-layer scope enforcement; per-event SSE org validation; pipeline writes browser-only until v2
 - v0.8 — Team entity and team-scoped RBAC; pipeline ownership (team vs org visibility); team-scoped HITL gates; team-scoped connector and model backend access; multi-workspace pattern via teams
 - v0.9 — Ownership picker on all resource creation; team deletion policy; privilege cap on team operators; JWT stale membership documented + immediate revocation path; DB-live check for required_team_id HITL; view_as_team server-enforced (IDOR fix); human_only + required_team_id additive; Stage spec team ownership; post-snapshot ownership change rules; team notification endpoints; team audit events; owner_team_id stripped on bundle export; copy-to-adapt ownership picker; library primitive visibility; alpha schema includes team columns; team cost attribution moved to v1
-- v0.10 — Credential-in-state rule; webhook timestamp in HMAC; FilesystemConnector base_path chroot; schema validation ≠ sanitisation documented; eval injection surface documented; §6.18 API rate limiting; Ed25519 key rotation mechanism; checkpoint blob self-hosted gap documented; JWT algorithm pinning + SECRET_KEY entropy; ConnectorInstance visibility vocabulary unified (private/team-shared → org/team); §7.16 Eval System (new); Error UX spec; stage board search/filter; agent picker + schema picker; run inspection UI; bundle import schema conflict resolution; community library trust tiers; plugin installation mechanism clarified; org/team-level admin spend limits
+- v0.10 — Credential-in-state rule; webhook timestamp in HMAC; FilesystemConnector base_path chroot; schema validation ≠ sanitisation documented; eval injection surface documented; §6.18 API rate limiting; Ed25519 key rotation mechanism; checkpoint blob self-hosted gap documented; JWT algorithm pinning + SECRET_KEY entropy; ConnectorInstance visibility vocabulary unified (private/team-shared → org/team); §7.16 Eval            System (new); Error UX spec; agent picker + schema picker; run inspection UI;     bundle import schema conflict resolution; community library trust tiers; plugin installation mechanism clarified; org/team-level admin spend limits
 - v0.20 — §7.19 Break-glass Admin Recovery (consolidated): prevention (org-wide last-admin guard on REST/SCIM mutation surfaces), recovery via operator CLI `modulo-break-glass` (activate/deactivate/status/force-last-admin/smoke) synthesising a single-use TTL-bounded credential consumed by the login-hook compare-and-swap, deny surfaces (API-key mint deny, webhook use-time revalidation, login deny), dedicated `modulo_breakglass` role + `MODULO_BREAK_GLASS_DATABASE_URL`, operator-secret auth, exit-code table 0-9, startup-validated settings, boot-time watchdog + daily `status --all` sweep, trust-anchor residual
-- v0.11 — StateGraph compile caching; WebSocket fan-out broker; LangGraph generic dict state (no dynamic TypedDict); ConnectorHub one-decrypt-per-run; StubModelBackend BaseChatModel interface; Alembic+LangGraph startup order; webhook flood protection Postgres-backed; pipeline edge data model; OTel bridge elevated as blocking dependency; AsyncPostgresSaver mandate; claim_token alpha = opaque token; teams/ tests moved to v1; alpha rating system moved to v1; MODULO_DEMO_MODE; alpha exit criteria; V1 split into V1 Core + V1 Extended; alpha documentation requirements; API key item moved to Infrastructure; eval JSON column in alpha schema; stage board alpha filter-by-status only
+- v0.11 — StateGraph compile caching; WebSocket fan-out broker; LangGraph generic dict state (no dynamic TypedDict); ConnectorHub one-decrypt-per-run; StubModelBackend BaseChatModel interface; Alembic+LangGraph startup order; webhook flood protection Postgres-backed; pipeline edge data model; OTel bridge elevated as blocking dependency; AsyncPostgresSaver mandate; claim_token alpha = opaque token; teams/ tests moved to v1; alpha rating system moved to v1; MODULO_DEMO_MODE; alpha exit criteria; V1 split into V1 Core + V1 Extended;            alpha documentation requirements; API key item moved to Infrastructure; eval JSON column in alpha
 - v0.12 — Organisation entity fields; PlanContext interface fully specified; Run entity fields; Trigger entity fields; PipelineSnapshot fields; YAML bundle edges block; token counting mechanism; cancelled state mechanics; ConnectorType registration (in-memory entry_points); local vs community library data model discriminator; claim_token inconsistency fixed in Glossary and §5.4; WebSocket reconnection + event replay spec; Pinia store hydration path; HITL claim failure UX; Vue Flow canvas serialisation note; MCP server URL via MODULO_PUBLIC_URL; Playwright agent theme test strategy; agent output sensitive data caveat; copy-to-adapt ownership picker cross-reference fixed
 - v0.13 — WebSocket event typed patch payloads (hitl_claimed/hitl_reviewed added; Pinia patch strategy); CSS custom property theme mechanism (semantic tokens only; [data-theme] layers); focus ring CSS custom properties (--focus-ring-width/color; never suppressed; agent theme high-visibility); Playwright data-loading attribute convention; modulo-state script block removed (replaced by GET /api/v1/viewmodel/current); CopyToAdaptWizard component spec (multi-step modal with configurable steps); canvas viewport state preserved per drill-down level via Vue Router state
 - v0.16 — Vision rewritten around implement+improve dual job; governance/audit/observability named as enterprise table stakes; off-the-shelf library and evals named as primary selling points; existing SDLC onboarding named as third major selling point; ICP sharpened (DevX/software engineer who wants control not SaaS black box); Product Goals restructured into three tiers; competitive positioning section added (§3); §7.16 Schema Inference added (v1 — LLM-assisted schema draft from connected tool data; SDLC onboarding path)
@@ -930,13 +930,6 @@ An agent definition contains:
 
 ### 8.4 Pipeline Builder
 
-#### Stage Board
-Left-to-right kanban of user-defined Stages. Each card: name, active run count, status, trigger indicator, team badge (if team-owned). Users see only stages and pipelines they have access to — team-private resources do not appear for non-members (no "N hidden" count). Admins see all resources across all teams.
-
-**Stage entity**: carries `owner_team_id` (nullable FK) and `visibility` (`org` | `team`, default `org`). A team-visibility Stage may only contain pipelines owned by the same team. Adding a pipeline from a different team to a team Stage is blocked at the ViewModel layer (`stage_team_mismatch` error).
-
-**Stage board controls**: search by pipeline name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort by last run (default) / name / status. Filter by team added in v1 when team management ships. The `awaiting_human` filter is surfaced prominently — time-sensitive items should be easy to reach.
-
 #### Pipeline Folders
 The pipeline library supports organisation-scoped, nested folders for grouping pipelines. Users can create, rename, reorder, and delete folders, filter the pipeline list by folder, and move a pipeline into a folder or back to the unfiled list. Folder access uses the same organisation RLS context as pipeline access.
 
@@ -1245,7 +1238,8 @@ Removing or weakening an existing HITL gate is a security-sensitive write guarde
 
 #### Long-Running Pipeline Retention
 Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints accumulate:
-- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled)`. Action: delete the entire `runs` metadata row. LangGraph checkpoint rows (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do NOT cascade on run deletion — the saver schema defines no foreign keys — so the retention job also purges them separately via `batch_delete_langgraph_checkpoints` (same retention window, batch of 500). Job failure is logged to the application logger; does not affect active runs.
+- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled, stalled)` (the `TERMINAL_STATUSES` set, §8.32.4). Action: delete the entire `runs` metadata row. LangGraph checkpoint rows (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do NOT cascade on run deletion — the saver schema defines no foreign keys — so the retention job also purges them separately via `batch_delete_langgraph_checkpoints` (same retention window, batch of 500). Job failure is logged to the application logger; does not affect active runs.
+- **Analytics facts are EXEMPT from the run purge**: `run_daily_facts` (ADR 020) is NOT deleted by the run-retention job — `run_daily_facts.run_id` has no FK to `runs`, so facts survive the 90-day purge and keep dimensioned analytics history alive (see §8.32). Facts have their own retention: **13 months by default**, config-driven via `analytics_facts_retention_months`, enforced by the analytics maintenance cron's `retention_facts` step using **chunked day-slice deletion** (7-day slices, one bounded DELETE per slice) so each statement stays small.
 - **HITL overdue warning**: configurable per-gate. If a run remains in `awaiting_human` beyond N hours, a new notification fires and the UI surfaces a warning badge.
 - **Admin purge action**: admins can force-terminate and archive stale runs.
 
@@ -2505,7 +2499,6 @@ BUILD (default expanded)
   Pipelines           /pipelines
   Library             /library
   Runs                /runs
-  Stages Board        /stages
   Lifecycle Maps      /lifecycle-maps
 
 MONITOR (default expanded)
@@ -3187,12 +3180,6 @@ Each of the following entities carries `owner_team_id` (nullable) and `visibilit
 - Clearing `owner_team_id` while keeping `visibility: team` is rejected (a team-visible resource must have an owner team).
 - Org `admin` bypasses all team-transition gates (RLS parity).
 
-#### Stage Board and Team Filtering
-
-The Stage board respects team visibility. A user sees only the pipelines and stages they have access to. The board does not reveal the existence of team-private resources to non-members (no "N hidden" indicator — total absence, preventing resource enumeration).
-
-Admins see all resources. An admin "View as: All / Team: X" toggle allows admins to inspect what a specific team sees. **`view_as_team` is server-enforced**: any request carrying this parameter from a non-admin identity returns 403 at the ViewModel command layer. UI hiding is defence-in-depth only (see §6 Security).
-
 #### Team-Scoped Connectors and Model Backends
 
 A connector instance or model backend with `visibility: team` is only usable within pipelines owned by the same team. Connector bindings at pipeline-save time enforce this: binding a team-private connector to a pipeline owned by a different team is blocked at the ViewModel command layer with a named error (`connector_team_mismatch`).
@@ -3220,8 +3207,6 @@ API keys (§5.2) carry an optional `team_id`. A team-scoped API key is restricte
 - Member management: invite by email, set team role, remove member
 - Bulk "Reassign all resources to org-wide" action (admin only, required before deletion)
 - Team notification endpoint config
-
-Team badge on pipeline and stage cards in the Stage board: tooltip shows team name on hover.
 
 User profile panel: "My Teams" — list of teams the user belongs to and their role in each.
 
@@ -3376,7 +3361,7 @@ features/
   mcp/ trigger.feature, review_hitl.feature, human_only.feature, library_browse.feature, onboarding.feature
 
 V1 Feature Tests (separate suite, not in alpha CI — these features do not exist in alpha):
-  teams/ team_create.feature, team_membership.feature, team_pipeline_visibility.feature, team_hitl_gate.feature, cross_team_isolation.feature, admin_override.feature, team_deletion_blocked.feature, ownership_picker.feature, stale_jwt_revocation.feature, view_as_team_non_admin_rejected.feature
+  teams/ team_create.feature, team_membership.feature, team_pipeline_visibility.feature, team_hitl_gate.feature, cross_team_isolation.feature, admin_override.feature, team_deletion_blocked.feature, stale_jwt_revocation.feature, view_as_team_non_admin_rejected.feature
   evals/ eval_llm_judge.feature, eval_regex.feature, eval_block.feature, conditional_hitl.feature
   library/ rating.feature (v1 — community ratings require multiple users)
 ```
@@ -3494,7 +3479,6 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 - [ ] HITL review UI: full context, claim button, approve/reject, claimed-by indicator, overdue badge
 - [ ] Run list + detail: state badge, per-node status, error detail (named code + user-facing message, never raw exception), recovery actions, TriggerEvent log; per-node expandable: input payload, rendered prompt, model response, output payload, eval results (if any), error detail; "Copy as test fixture" action; "Copy error details" redacted report
 - [ ] Library browser: list, preview, copy-to-adapt; rating UI
-- [ ] Stage board: search by name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort; `awaiting_human` quick filter. Filter by team added in v1.
 - [ ] Demo pipeline pre-loaded; guided first-run walkthrough
 - [ ] Real-time progress via WebSocket
 
@@ -4093,7 +4077,6 @@ The editor is available from `/lifecycle-maps` in the sidebar (Core group, or a 
 | Existing Concept | How It Relates |
 |---|---|
 | **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. A pipeline may be a stage of **one active map at a time** — the lifecycle-map stage junction enforces this via a save-time uniqueness check backed by the partial unique index `uq_lifecycle_map_stages_active_pipeline`. A pipeline graduating into a new map must first be freed from its previous active map by deleting or un-linking it there; `restore` refuses when a stage pipeline is already registered in another active map. |
-| **Stage Board** (§8.4) | The Stage Board shows cards for pipelines. The Lifecycle Map shows the *logical flow* that those pipelines belong to. They are complementary views: the board is "what's running now"; the map is "what are all the steps." |
 | **Trigger** (§8.5) | A transition edge with `trigger_type: "webhook"` or `"cron"` can link to a Modulo Trigger entity. The trigger definition lives separately; the edge just references it. |
 | **Manual Node** (§8.4) | A `manual` stage node is the lifecycle-level equivalent of a Manual pipeline node — a human step with no automation. Manual stages document the handoff; Manual pipeline nodes pause execution for human input. They are independent concepts at different fractal levels. |
 | **Pipeline Template** (library) | A Pipeline Template can be "slotted into" a stage node as a starting point. "Use template" in the stage config creates a new pipeline from the template and links it. |
@@ -4219,7 +4202,7 @@ Three distinct run-count denominators exist and are never conflated:
 
 | Denominator | Source | Meaning |
 |---|---|---|
-| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed) |
+| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed / stalled — the `TERMINAL_STATUSES` set) |
 | **Ledger count** | `org_daily_run_counts` | Terminal runs with `total_cost_usd > 0` that passed the spend ledger |
 | **Summary count** | `runs` | All runs (including pending/running/awaiting_human) |
 
@@ -4377,7 +4360,6 @@ A dedicated `GET /api/v1/analytics/concurrency` endpoint (and the `query_analyti
 | ConnectorInstance visibility unified | `private`/`team-shared` removed; replaced with `owner_team_id` + `visibility: org|team` consistent with all other resource types. User-private connectors not supported — single-person team is the mechanism. |
 | Eval System scope | v1 feature. Not in alpha. Architecture diagram is forward-looking. Conditional HITL requires Eval Engine — both must ship together in v1. |
 | Error UX | Named error codes map to user-facing messages and suggested actions. Raw exceptions never in UI. "Copy error details" action produces redacted report. |
-| Stage board controls | Search, filter by team/status, sort. `awaiting_human` quick filter prominently surfaced. Alpha scope. |
 | Agent/schema pickers | Slide-out panel with search, description, schema summary. Schema compatibility warning on add. Alpha scope. |
 | Run inspection UI | Per-node input/output/prompt/response/eval viewer. Sensitive payloads masked per DOM rule. "Copy as test fixture" action. Alpha scope. |
 | Bundle import schema conflict | Same abstract_name + same structure → reuse. Same abstract_name + different structure → import with disambiguation suffix + warning. No auto-merge. |

@@ -1009,7 +1009,8 @@ async def stale_run_recovery_sweep(
                 capacity_timeout_result = await conn.execute(
                     text(
                         "UPDATE runs "
-                        "SET status = 'failed', error_code = 'capacity_timeout', completed_at = now() "
+                        "SET status = 'failed', error_code = 'capacity_timeout', "
+                        "error_detail = :detail, completed_at = now() "
                         "WHERE status = 'pending' "
                         "AND organisation_id = :oid "
                         "AND error_code IN ('org_capacity_limited', 'pipeline_capacity') "
@@ -1017,7 +1018,11 @@ async def stale_run_recovery_sweep(
                         "AND cancellation_requested = false "
                         "RETURNING id"
                     ),
-                    {"oid": str(org_id), "ttl": CAPACITY_TIMEOUT_TTL_MINUTES},
+                    {
+                        "oid": str(org_id),
+                        "ttl": CAPACITY_TIMEOUT_TTL_MINUTES,
+                        "detail": "Waited in capacity queue past the TTL.",
+                    },
                 )
                 capacity_timeout_count += capacity_timeout_result.rowcount or 0
                 terminalised_run_ids.extend((row[0], org_id) for row in capacity_timeout_result.all())

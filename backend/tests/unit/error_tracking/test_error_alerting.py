@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import ValidationError
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.models.error_notification_rule import ErrorNotificationRuleCreate, ErrorNotificationRuleUpdate
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.email_service import EmailSendingError
 from modulo.core.error_tracking.alert_dispatcher import _format_slack_payload
 from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
@@ -69,6 +72,68 @@ def _make_session_with_rules(
 
     session.execute = AsyncMock(side_effect=_execute)
     return session
+
+
+class _FakeSettings:
+    """Minimal stand-in for ``Settings`` with the SMTP fields the dispatcher reads."""
+
+    def __init__(
+        self,
+        *,
+        smtp_host: str = "smtp.default.example.com",
+        smtp_port: int = 587,
+        smtp_username: str = "user",
+        smtp_password: str = "pass",
+        email_from: str = "alerts@example.com",
+    ) -> None:
+        self.smtp_host = smtp_host
+        self.smtp_port = smtp_port
+        self.smtp_username = smtp_username
+        self.smtp_password = smtp_password
+        self.email_from = email_from
+
+    def model_copy(self, update: dict[str, object] | None = None, **kwargs: object) -> _FakeSettings:
+        merged = {
+            "smtp_host": self.smtp_host,
+            "smtp_port": self.smtp_port,
+            "smtp_username": self.smtp_username,
+            "smtp_password": self.smtp_password,
+            "email_from": self.email_from,
+        }
+        merged.update(update or {})
+        return _FakeSettings(**merged)  # type: ignore[arg-type]
+
+
+def _make_dispatch_session(
+    *,
+    org: object | None = None,
+    memberships: list[MagicMock] | None = None,
+    accounts: list[MagicMock] | None = None,
+) -> AsyncMock:
+    """Session whose ``get(Organisation, ...)`` returns *org* and whose two
+    ``execute`` calls (memberships, then active accounts) drain the queues."""
+    session = _make_session()
+    session.get = AsyncMock(return_value=org)
+    result_queue = [memberships or [], accounts or []]
+
+    def _execute(_stmt: object) -> MagicMock:
+        return MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=result_queue.pop(0)))))
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _make_membership(account_id: uuid.UUID) -> MagicMock:
+    m = MagicMock()
+    m.account_id = account_id
+    return m
+
+
+def _make_account(email: str) -> MagicMock:
+    a = MagicMock()
+    a.email = email
+    a.active = True
+    return a
 
 
 def _make_rules_app_with_count(rule_count: int) -> FastAPI:
@@ -481,6 +546,584 @@ class TestDispatchWebhook:
             await dispatch_alert(_ORG_ID, alert, session, error_group)
 
         assert any("alert.webhook_request_failed" in rec.message for rec in caplog.records)
+
+
+class TestDispatchWebhookNoUrl:
+    async def test_webhook_without_url_warns_and_skips(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
+
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="No URL",
+            action_type="webhook",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+        session = _make_session()
+
+        with caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"):
+            await dispatch_alert(_ORG_ID, alert, session)
+
+        assert any("alert.webhook_no_url" in rec.message for rec in caplog.records)
+
+    async def test_slack_webhook_payload_is_formatted_for_slack(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_webhook
+
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="Slack Rule",
+            action_type="webhook",
+            webhook_url="https://hooks.slack.com/services/T000/B000/XXXX",
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="critical",
+            count=2,
+            environment="prod",
+        )
+        captured: dict[str, object] = {}
+
+        class _FakeResponse:
+            is_success = True
+
+        class _FakeClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: object) -> _FakeResponse:
+                captured["body"] = json.loads(kwargs["content"].decode())
+                return _FakeResponse()
+
+        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient):
+            await _dispatch_webhook(alert, "Service down", "/admin/errors/x")
+
+        body = captured["body"]
+        assert "text" in body
+        assert "\U0001f534" in body["text"]
+        assert "Slack Rule" in body["text"]
+
+    async def test_webhook_http_error_records_failed_delivery(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_webhook
+
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="HTTP Fail",
+            action_type="webhook",
+            webhook_url="https://example.com/hook",
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        class _FakeResponse:
+            is_success = False
+            status_code = 500
+
+        class _FakeClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: object) -> _FakeResponse:
+                return _FakeResponse()
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient),
+            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as record_failed,
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await _dispatch_webhook(alert, "boom", "/admin/errors/x")
+
+        record_failed.assert_called_once_with(str(alert.rule_id), "webhook")
+        assert any("alert.webhook_http_error" in rec.message for rec in caplog.records)
+
+
+# =========================================================================
+# In-app dispatch
+# =========================================================================
+
+
+class TestDispatchInApp:
+    async def test_in_app_records_delivery_log(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
+
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="In App Rule",
+            action_type="in_app",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+        session = _make_session()
+        error_group = MagicMock()
+        error_group.sample_event = MagicMock()
+        error_group.sample_event.message = "DB slow"
+
+        await dispatch_alert(_ORG_ID, alert, session, error_group)
+
+        session.add.assert_called_once()
+        entry = session.add.call_args[0][0]
+        assert entry.organisation_id == _ORG_ID
+        assert entry.event_type == "error_alert"
+        assert entry.status == "in_app"
+        assert entry.last_error == "[error] In App Rule: DB slow (count=1)"
+
+    async def test_unknown_action_type_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
+
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="Unknown",
+            action_type="pagerduty",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+        session = _make_session()
+
+        with caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"):
+            await dispatch_alert(_ORG_ID, alert, session)
+
+        assert any("alert.unknown_action_type" in rec.message for rec in caplog.records)
+        assert any(getattr(rec, "action_type", None) == "pagerduty" for rec in caplog.records)
+
+
+# =========================================================================
+# Email dispatch
+# =========================================================================
+
+
+class TestDispatchEmail:
+    async def test_email_sends_to_active_admins_with_org_smtp(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        org = MagicMock()
+        org.settings_json = {
+            "email": {"smtp_host": "smtp.org.example.com", "smtp_port": 465, "email_from": "org@example.com"}
+        }
+        account_id = uuid.uuid4()
+        session = _make_dispatch_session(
+            org=org,
+            memberships=[_make_membership(account_id)],
+            accounts=[_make_account("admin@example.com")],
+        )
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="Email Rule",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="critical",
+            count=3,
+            environment="prod",
+        )
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_FakeSettings()),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send_email,
+        ):
+            await _dispatch_email(_ORG_ID, alert, "sample <&> message", "/admin/errors/x", session)
+
+        send_email.assert_called_once()
+        effective_settings = send_email.call_args[0][0]
+        to_emails = send_email.call_args[0][1]
+        assert effective_settings.smtp_host == "smtp.org.example.com"
+        assert effective_settings.smtp_port == 465
+        assert effective_settings.email_from == "org@example.com"
+        assert to_emails == ["admin@example.com"]
+        subject = send_email.call_args[0][2]
+        assert subject == "[Modulo Alert] critical: Email Rule"
+
+    async def test_email_falls_back_to_settings_smtp_when_org_has_none(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        org = MagicMock()
+        org.settings_json = {}
+        account_id = uuid.uuid4()
+        session = _make_dispatch_session(
+            org=org,
+            memberships=[_make_membership(account_id)],
+            accounts=[_make_account("admin@example.com")],
+        )
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="Fallback",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        with (
+            patch(
+                "modulo.core.error_tracking.alert_dispatcher.get_settings",
+                return_value=_FakeSettings(smtp_host="smtp.default.example.com"),
+            ),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send_email,
+        ):
+            await _dispatch_email(_ORG_ID, alert, "msg", "/admin/errors/x", session)
+
+        assert send_email.call_args[0][0].smtp_host == "smtp.default.example.com"
+
+    async def test_email_no_smtp_host_warns_and_skips(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        org = MagicMock()
+        org.settings_json = {}
+        session = _make_dispatch_session(org=org)
+
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="No SMTP",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_FakeSettings(smtp_host="")),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send_email,
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await _dispatch_email(_ORG_ID, alert, "msg", "/admin/errors/x", session)
+
+        send_email.assert_not_called()
+        assert any("alert.email_disabled_no_smtp_host" in rec.message for rec in caplog.records)
+
+    async def test_email_no_org_falls_back_to_settings_host(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        session = _make_dispatch_session(
+            org=None,
+            memberships=[_make_membership(uuid.uuid4())],
+            accounts=[_make_account("admin@example.com")],
+        )
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="No Org",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        with (
+            patch(
+                "modulo.core.error_tracking.alert_dispatcher.get_settings",
+                return_value=_FakeSettings(smtp_host="smtp.global.example.com"),
+            ),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send_email,
+        ):
+            await _dispatch_email(_ORG_ID, alert, "msg", "/admin/errors/x", session)
+
+        assert send_email.call_args[0][0].smtp_host == "smtp.global.example.com"
+
+    async def test_email_no_admins_warns_and_skips(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        org = MagicMock()
+        org.settings_json = {"email": {"smtp_host": "smtp.org.example.com"}}
+        session = _make_dispatch_session(org=org, memberships=[])
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="No Admins",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_FakeSettings()),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send_email,
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await _dispatch_email(_ORG_ID, alert, "msg", "/admin/errors/x", session)
+
+        send_email.assert_not_called()
+        assert any("alert.email_no_admins" in rec.message for rec in caplog.records)
+
+    async def test_email_no_active_admins_warns_and_skips(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        org = MagicMock()
+        org.settings_json = {"email": {"smtp_host": "smtp.org.example.com"}}
+        session = _make_dispatch_session(org=org, memberships=[_make_membership(uuid.uuid4())], accounts=[])
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="No Active",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_FakeSettings()),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send_email,
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await _dispatch_email(_ORG_ID, alert, "msg", "/admin/errors/x", session)
+
+        send_email.assert_not_called()
+        assert any("alert.email_no_active_admins" in rec.message for rec in caplog.records)
+
+    async def test_email_send_error_records_failed_delivery(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        org = MagicMock()
+        org.settings_json = {"email": {"smtp_host": "smtp.org.example.com"}}
+        session = _make_dispatch_session(
+            org=org,
+            memberships=[_make_membership(uuid.uuid4())],
+            accounts=[_make_account("admin@example.com")],
+        )
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="Send Fail",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_FakeSettings()),
+            patch(
+                "modulo.core.error_tracking.alert_dispatcher.send_email",
+                side_effect=EmailSendingError("relay refused"),
+            ),
+            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as record_failed,
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await _dispatch_email(_ORG_ID, alert, "msg", "/admin/errors/x", session)
+
+        record_failed.assert_called_once_with(str(alert.rule_id), "email")
+        assert any("alert.email_send_failed" in rec.message for rec in caplog.records)
+
+    async def test_email_unexpected_db_error_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import _dispatch_email
+
+        session = _make_session()
+        session.get = AsyncMock(side_effect=RuntimeError("db connection lost"))
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="DB Down",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_FakeSettings()),
+            caplog.at_level("ERROR", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await _dispatch_email(_ORG_ID, alert, "msg", "/admin/errors/x", session)
+
+        assert any("alert.email_dispatch_error" in rec.message for rec in caplog.records)
+
+    async def test_dispatch_routes_email_action_type(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
+
+        org = MagicMock()
+        org.settings_json = {"email": {"smtp_host": "smtp.org.example.com"}}
+        session = _make_dispatch_session(
+            org=org,
+            memberships=[_make_membership(uuid.uuid4())],
+            accounts=[_make_account("admin@example.com")],
+        )
+        alert = TriggeredAlert(
+            rule_id=uuid.uuid4(),
+            rule_name="Via Dispatch",
+            action_type="email",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+        error_group = MagicMock()
+        error_group.sample_event = MagicMock()
+        error_group.sample_event.message = "DB slow"
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_FakeSettings()),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send_email,
+        ):
+            await dispatch_alert(_ORG_ID, alert, session, error_group)
+
+        send_email.assert_called_once()
+        assert send_email.call_args[0][1] == ["admin@example.com"]
+
+
+# =========================================================================
+# Resolved lifecycle event dispatch
+# =========================================================================
+
+
+class TestDispatchResolved:
+    async def test_resolved_records_in_app_without_webhook(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert_resolved
+
+        session = _make_session()
+
+        await dispatch_alert_resolved(
+            _ORG_ID,
+            group_id=_GROUP_ID,
+            signal="agent.failed",
+            reason="retried",
+            session=session,
+        )
+
+        session.add.assert_called_once()
+        entry = session.add.call_args[0][0]
+        assert entry.event_type == "alert_resolved"
+        assert entry.status == "in_app"
+        assert entry.last_error == "agent.failed resolved: retried"
+
+    async def test_resolved_posts_webhook_payload(self) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert_resolved
+
+        session = _make_session()
+        captured: dict[str, object] = {}
+
+        class _FakeResponse:
+            is_success = True
+
+        class _FakeClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: object) -> _FakeResponse:
+                captured["body"] = json.loads(kwargs["content"].decode())
+                return _FakeResponse()
+
+        with patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient):
+            await dispatch_alert_resolved(
+                _ORG_ID,
+                group_id=_GROUP_ID,
+                signal="agent.failed",
+                reason="retried",
+                session=session,
+                webhook_url="https://example.com/resolved",
+            )
+
+        assert captured["body"]["event"] == "alert_resolved"
+        assert captured["body"]["group_id"] == str(_GROUP_ID)
+        assert captured["body"]["signal"] == "agent.failed"
+        assert captured["body"]["reason"] == "retried"
+
+    async def test_resolved_webhook_http_error_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert_resolved
+
+        session = _make_session()
+
+        class _FakeResponse:
+            is_success = False
+            status_code = 502
+
+        class _FakeClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: object) -> _FakeResponse:
+                return _FakeResponse()
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient),
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await dispatch_alert_resolved(
+                _ORG_ID,
+                group_id=_GROUP_ID,
+                signal="agent.failed",
+                reason="retried",
+                session=session,
+                webhook_url="https://example.com/resolved",
+            )
+
+        assert any("alert.resolved_webhook_http_error" in rec.message for rec in caplog.records)
+
+    async def test_resolved_webhook_request_error_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        from modulo.core.error_tracking.alert_dispatcher import dispatch_alert_resolved
+
+        session = _make_session()
+
+        class _FakeClient:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: object) -> None:
+                raise httpx.RequestError("connection refused")
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.httpx.AsyncClient", _FakeClient),
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await dispatch_alert_resolved(
+                _ORG_ID,
+                group_id=_GROUP_ID,
+                signal="agent.failed",
+                reason="retried",
+                session=session,
+                webhook_url="https://example.com/resolved",
+            )
+
+        assert any("alert.resolved_webhook_request_failed" in rec.message for rec in caplog.records)
 
 
 # =========================================================================

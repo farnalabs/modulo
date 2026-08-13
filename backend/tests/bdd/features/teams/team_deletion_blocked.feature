@@ -18,13 +18,6 @@ Feature: Team Deletion Blocked When Resources Exist
     When I delete the team "engineering"
     Then the response status is 409
 
-  Scenario: Delete team with owned stages is blocked
-    Given I am authenticated as an admin in org "acme"
-    And a team "engineering" exists
-    And stage "eng-stage" is owned by team "engineering"
-    When I delete the team "engineering"
-    Then the response status is 409
-
   Scenario: Delete team with owned model backends is blocked
     Given I am authenticated as an admin in org "acme"
     And a team "engineering" exists

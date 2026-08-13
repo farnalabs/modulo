@@ -106,11 +106,13 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.core.pipeline_engine.error_codes import present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.db.crud.hitl_gate_guard import HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import get_run
+from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
@@ -1021,6 +1023,7 @@ async def list_runs(
             child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
             child_cost = _quantize_mcp_cost_rollup(child_cost)
             own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+            _error_code, error_detail = present_error(r.error_code, r.error_detail, limit=200)
             items.append(
                 {
                     "id": str(r.id),
@@ -1032,7 +1035,7 @@ async def list_runs(
                     "started_at": r.started_at.isoformat() if r.started_at else None,
                     "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                     "error_code": r.error_code,
-                    "error_detail": r.error_detail,
+                    "error_detail": error_detail,
                     "total_cost_usd": float(r.total_cost_usd) if r.total_cost_usd is not None else None,
                     "child_runs_cost_usd": float(child_cost),
                     "child_runs_count": child_count,
@@ -1700,6 +1703,9 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             result["completed_at"] = run.completed_at.isoformat()
         if run.error_code:
             result["error_code"] = run.error_code
+        if run.error_detail is not None:
+            _, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
+            result["error_detail"] = error_detail
         if detail:
             from modulo.api.routes.runs import _clamp_node_token_usage_union
 
@@ -3098,9 +3104,9 @@ async def create_agent(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else uuid.UUID(int=0)
-        parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else uuid.UUID(int=0)
-        parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else uuid.UUID(int=0)
+        parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else None
+        parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else None
+        parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else None
 
         async with _session(org_id) as s:
             agent = await db_create_agent(
@@ -3388,6 +3394,71 @@ async def get_available_features() -> dict[str, Any]:
     except Exception:
         _log.exception("get_available_features failed")
         return _tool_error("Failed to get available features")
+
+
+@mcp.tool(
+    description="Create a new schema. Creates the schema record plus a "
+    "'latest' version placeholder so agents can reference the schema "
+    "immediately. Returns the created schema details.",
+)
+@_RETRY_DB
+async def create_schema(
+    name: str,
+    description: str | None = None,
+    abstract_name: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_schema")
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+
+        async with _session(org_id) as s:
+            schema = await db_create_schema(
+                s,
+                org_id=org_id,
+                name=name,
+                account_id=account_id,
+                description=description,
+                abstract_name=abstract_name,
+            )
+
+            from modulo.db.models.schema import SchemaVersion
+
+            s.add(
+                SchemaVersion(
+                    organisation_id=org_id,
+                    schema_id=schema.id,
+                    version="latest",
+                    version_number=0,
+                    definition_json={"type": "object", "properties": {}, "additionalProperties": True},
+                    account_id=account_id,
+                )
+            )
+
+        return {
+            "id": str(schema.id),
+            "name": schema.name,
+            "description": schema.description,
+            "abstract_name": schema.abstract_name,
+            "created_at": schema.created_at.isoformat() if schema.created_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except IntegrityError as exc:
+        _log.exception("create_schema failed")
+        return {"error": "conflict", "detail": f"A schema with this name already exists: {exc.orig}"}
+    except ProgrammingError:
+        _log.exception("create_schema failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except SQLAlchemyError:
+        _log.exception("create_schema failed")
+        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+    except Exception:
+        _log.exception("create_schema failed")
+        return _tool_error("Failed to create schema")
 
 
 @mcp.tool(

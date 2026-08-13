@@ -2,9 +2,11 @@
 
 ``record_run_facts`` is the LIVE writer: called from every terminal finalize
 path (``cost_controller.finalize``) INSIDE the same transaction as the run
-status write. It NEVER raises (fail-open), NEVER feeds ``_fallback_write`` /
-``_reduced_escape``, and NEVER influences the cost result. A facts-write
-failure rolls back only the fact (a savepoint), not the run's finalization.
+status write, AND — as a compensating row — from the SAQ task_failure hook
+(``saq_hooks``) in its own separate session after the run is marked failed. It
+NEVER raises (fail-open), NEVER feeds ``_fallback_write`` / ``_reduced_escape``,
+and NEVER influences the cost result. A facts-write failure rolls back only the
+fact (a savepoint), not the run's finalization.
 """
 
 from __future__ import annotations
