@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { nextTick as vueNextTick } from 'vue'
@@ -67,6 +67,10 @@ describe('LibraryView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 12 })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('renders without crashing', async () => {
@@ -172,5 +176,47 @@ describe('LibraryView', () => {
     const opts = lastCall[1] as { params: { query: Record<string, unknown> } }
     expect(opts.params.query.primitive_types).toBe('workflow,agent')
     expect(opts.params.query.primitive_type).toBeUndefined()
+  })
+
+  it('reloads primitives with the search term after typing (debounced), resetting to page 1', async () => {
+    getMock.mockResolvedValue({ items: [], total: 24, page: 1, page_size: 12 })
+    router.push('/library')
+    await router.isReady()
+    const wrapper = mount(LibraryView, {
+      global: { plugins: [router] },
+    })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.get('[data-testid="library-next-page"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    let lastCall = getMock.mock.calls.at(-1)!
+    let opts = lastCall[1] as { params: { query: Record<string, unknown> } }
+    expect(opts.params.query.page).toBe('2')
+
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
+    expect(searchInput.exists()).toBe(true)
+
+    vi.useFakeTimers()
+    await searchInput.setValue('foo')
+    await vueNextTick()
+
+    // Debounce window has not elapsed yet — no request carries the search term.
+    lastCall = getMock.mock.calls.at(-1)!
+    opts = lastCall[1] as { params: { query: Record<string, unknown> } }
+    expect(opts.params.query.search).toBeUndefined()
+
+    vi.advanceTimersByTime(300)
+    vi.useRealTimers()
+    await nextTick()
+    await nextTick()
+
+    lastCall = getMock.mock.calls.at(-1)!
+    opts = lastCall[1] as { params: { query: Record<string, unknown> } }
+    expect(opts.params.query.search).toBe('foo')
+    expect(opts.params.query.page).toBe('1')
+    wrapper.unmount()
   })
 })
