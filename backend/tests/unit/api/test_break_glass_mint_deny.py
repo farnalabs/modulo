@@ -34,10 +34,11 @@ EXPECTED_MINT_MARKED: dict[str, set[str]] = {
         "delete_endpoint",
         "restore_endpoint",
     },
-    # trigger webhook HMAC secrets + scheduled (cron/polling) triggers
+    # trigger webhook HMAC secrets + scheduled (cron/polling/ongoing) triggers
     "triggers.py": {
         "update_cron_config",
         "update_polling_config",
+        "update_ongoing_config",
         "create_trigger",
         "update_trigger",
         "delete_trigger",

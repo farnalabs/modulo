@@ -970,3 +970,336 @@ def test_list_pipeline_triggers_returns_daily_spend_limit(client: TestClient) ->
     body = resp.json()
     assert body["items"][0]["daily_spend_limit"] == 7.5
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+# ---------------------------------------------------------------------------
+# ongoing trigger type (FAR-158)
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_cap(cap: int):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(max_concurrent_runs=cap, is_break_glass=False)
+
+
+def _ongoing_create_payload(**overrides):
+    payload = {
+        "trigger_type": "ongoing",
+        "active": True,
+        "max_concurrent_runs": 3,
+        "daily_spend_limit": 25.0,
+        "config_json": {"scan_interval_seconds": 120, "input_template": {"topic": "x"}},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_create_ongoing_without_spend_limit_returns_422(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.get = AsyncMock(return_value=_pipeline_cap(10))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
+            json=_ongoing_create_payload(daily_spend_limit=None),
+        )
+
+    assert resp.status_code == 422
+    assert "daily_spend_limit" in resp.json()["detail"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_create_ongoing_target_above_20_returns_422(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
+            json=_ongoing_create_payload(max_concurrent_runs=21),
+        )
+
+    assert resp.status_code == 422
+    assert "between 1 and 20" in resp.json()["detail"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_create_ongoing_target_above_pipeline_cap_returns_422(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.get = AsyncMock(return_value=_pipeline_cap(2))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
+            json=_ongoing_create_payload(max_concurrent_runs=5),
+        )
+
+    assert resp.status_code == 422
+    assert "cannot exceed" in resp.json()["detail"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_create_ongoing_scan_interval_below_60_returns_422(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.get = AsyncMock(return_value=_pipeline_cap(10))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
+            json=_ongoing_create_payload(config_json={"scan_interval_seconds": 30}),
+        )
+
+    assert resp.status_code == 422
+    assert "at least 60" in resp.json()["detail"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_create_ongoing_valid_returns_201_with_next_fire_at(client: TestClient) -> None:
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.get = AsyncMock(return_value=_pipeline_cap(10))
+        session.execute = AsyncMock(return_value=_make_trigger_result([]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
+            json=_ongoing_create_payload(),
+        )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["trigger_type"] == "ongoing"
+    assert body["next_fire_at"] is not None, "a fresh ongoing trigger must fire on the first tick"
+    assert body["max_concurrent_runs"] == 3
+    assert body["daily_spend_limit"] == 25.0
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_ongoing_cannot_clear_spend_limit_returns_422(client: TestClient) -> None:
+    trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"daily_spend_limit": None},
+        )
+
+    assert resp.status_code == 422
+    assert "clearing it is not allowed" in resp.json()["detail"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_ongoing_target_above_pipeline_cap_returns_422(client: TestClient) -> None:
+    trigger = _make_mock_trigger(trigger_type="ongoing", max_concurrent_runs=3, daily_spend_limit=Decimal(25))
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+        session.get = AsyncMock(return_value=_pipeline_cap(5))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"max_concurrent_runs": 20},
+        )
+
+    assert resp.status_code == 422
+    assert "cannot exceed" in resp.json()["detail"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_ongoing_merges_config_json(client: TestClient) -> None:
+    trigger = _make_mock_trigger(
+        trigger_type="ongoing",
+        max_concurrent_runs=3,
+        daily_spend_limit=Decimal(25),
+        config_json={"scan_interval_seconds": 300, "input_template": {"a": 1}},
+    )
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+        session.get = AsyncMock(return_value=_pipeline_cap(10))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"config_json": {"input_template": {"b": 2}}},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    merged = body["config_json"]
+    assert merged["scan_interval_seconds"] == 300, "PUT must merge config, never wipe the cadence"
+    assert merged["input_template"] == {"b": 2}
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_patch_ongoing_updates_scan_interval_and_recomputes_next_fire_at(client: TestClient) -> None:
+    trigger = _make_mock_trigger(
+        trigger_type="ongoing",
+        max_concurrent_runs=3,
+        daily_spend_limit=Decimal(25),
+        config_json={"scan_interval_seconds": 60},
+        next_fire_at=_NOW,
+    )
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/ongoing",
+            json={"scan_interval_seconds": 300},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert trigger.config_json["scan_interval_seconds"] == 300
+    assert body["next_fire_at"] is not None
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_patch_ongoing_invalid_interval_returns_422(client: TestClient) -> None:
+    trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/ongoing",
+            json={"scan_interval_seconds": 30},
+        )
+
+    assert resp.status_code == 422
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_patch_ongoing_on_non_ongoing_returns_400(client: TestClient) -> None:
+    trigger = _make_mock_trigger(trigger_type="cron")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/ongoing",
+            json={"scan_interval_seconds": 300},
+        )
+
+    assert resp.status_code == 400
+    assert "Only ongoing triggers" in resp.json()["detail"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_toggle_on_ongoing_resets_next_fire_at(client: TestClient) -> None:
+    trigger = _make_mock_trigger(trigger_type="ongoing", active=False, daily_spend_limit=Decimal(25))
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/toggle", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["active"] is True
+    assert trigger.next_fire_at is not None, "an ongoing trigger turned back ON must fire on the next tick"
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_list_triggers_includes_in_flight_for_ongoing(client: TestClient) -> None:
+    trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal(25))
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.get("/api/v1/triggers")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["in_flight"] == 1
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_trigger_type_regex_accepts_ongoing_and_agent_signal() -> None:
+    from pydantic import ValidationError
+
+    from modulo.api.routes.triggers import TriggerCreate
+
+    assert TriggerCreate(trigger_type="ongoing").trigger_type == "ongoing"
+    assert TriggerCreate(trigger_type="agent_signal").trigger_type == "agent_signal"
+    with pytest.raises(ValidationError):
+        TriggerCreate(trigger_type="not_a_trigger")
