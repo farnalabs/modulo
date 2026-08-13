@@ -147,6 +147,46 @@ def _verify_hash(bundle: dict[str, Any]) -> bool:
     return True
 
 
+def _validate_bundle(bundle: Any) -> list[str]:
+    """Structural validation for an import bundle.
+
+    Returns a list of human-readable problems; an empty list means the bundle
+    is structurally well-formed. The hash check (``_verify_hash``) detects
+    tampering, but says nothing about shape — a hand-edited file can carry a
+    recomputed hash while its tables/rows are malformed. Validating before
+    import means corrupt files are rejected up front with a clear message
+    instead of being accepted and failing unpredictably mid-import (iterating a
+    dict's keys as rows, crashing on a non-object root, etc.).
+    """
+    errors: list[str] = []
+
+    if not isinstance(bundle, dict):
+        return [f"Import bundle must be a JSON object, got {type(bundle).__name__}"]
+
+    if not isinstance(bundle.get("__meta__"), dict):
+        errors.append("Bundle missing '__meta__' object (export metadata)")
+
+    if not isinstance(bundle.get("organisation"), dict):
+        errors.append("Bundle 'organisation' must be a JSON object")
+
+    for table_name, _model_cls in ENTITY_ORDER:
+        rows = bundle.get(table_name)
+        if rows is None:
+            continue
+        if not isinstance(rows, list):
+            errors.append(f"Bundle '{table_name}' must be a JSON array, got {type(rows).__name__}")
+            continue
+        for idx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                errors.append(f"Bundle '{table_name}' row {idx} must be a JSON object, got {type(row).__name__}")
+                continue
+            rid = row.get("id")
+            if rid is not None and not isinstance(rid, str):
+                errors.append(f"Bundle '{table_name}' row {idx} 'id' must be a string, got {type(rid).__name__}")
+
+    return errors
+
+
 # ── Export ─────────────────────────────────────────────────────────────────────
 
 
@@ -237,6 +277,11 @@ def _load_bundle(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         msg = f"Failed to read import file {path}: {exc}"
         raise SystemExit(msg) from exc
+    errors = _validate_bundle(bundle)
+    if errors:
+        details = "\n  - ".join(errors)
+        msg = f"Import aborted: invalid bundle structure:\n  - {details}"
+        raise SystemExit(msg)
     if not _verify_hash(bundle):
         msg = "Import aborted: file hash verification failed"
         raise SystemExit(msg)
