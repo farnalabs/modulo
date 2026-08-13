@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import uuid
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -313,7 +314,7 @@ def model_with_func_now(ctx) -> None:
     from datetime import datetime
 
     model = MagicMock()
-    now = datetime.now()
+    now = datetime.now(UTC)
     model.created_at = now
     ctx["model_now"] = model
     ctx["reference_now"] = now

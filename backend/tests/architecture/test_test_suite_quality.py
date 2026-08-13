@@ -11,6 +11,7 @@ regression that silently weakens the suite:
 - bare ``except:`` handlers (swallow BaseException, hide KeyboardInterrupt)
 - debugger remnants (``breakpoint``/``pdb``) committed by accident
 - deprecated ``datetime.utcnow()`` / ``datetime.utcfromtimestamp()``
+- naive ``datetime.now()`` (no timezone argument) fed into tz-aware code
 - ``== True`` / ``== False`` equality on booleans (type confusion + E712)
 - ``== None`` / ``!= None`` equality (identity vs. equality on singletons, E711)
 - same-scope ``test_*`` redefinition (silently drops the earlier test)
@@ -345,6 +346,52 @@ def test_no_deprecated_utcnow():
     assert not violations, (
         f"Found {len(violations)} deprecated utcnow()/utcfromtimestamp() usage(s).\n"
         "Use timezone-aware datetime.now(datetime.timezone.utc).\n" + "\n".join(violations)
+    )
+
+
+def test_no_naive_datetime_now():
+    """``datetime.now()`` with no timezone argument produces a *naive*
+    timestamp. When that value is fed into a ``DateTime(timezone=True)``
+    column, a ``pydantic`` aware-datetime field, or any code that later
+    compares against a tz-aware timestamp, the comparison is undefined —
+    Python raises ``TypeError`` on aware/naive comparison, or worse the two
+    silently disagree around UTC. Test fixtures should always pin the zone
+    explicitly: ``datetime.now(UTC)``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+
+        def _is_datetime_receiver(value: ast.AST) -> bool:
+            # datetime.now()  (from datetime import datetime)
+            return (
+                (isinstance(value, ast.Name) and value.id == "datetime")
+                # datetime.datetime.now()  (import datetime)
+                or (
+                    isinstance(value, ast.Attribute)
+                    and value.attr == "datetime"
+                    and isinstance(value.value, ast.Name)
+                    and value.value.id == "datetime"
+                )
+            )
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "now"):
+                continue
+            if node.args or node.keywords:
+                continue
+            if not _is_datetime_receiver(func.value):
+                continue
+            violations.append(f"  {rel}:{node.lineno}  datetime.now() with no timezone (naive datetime)")
+    assert not violations, (
+        f"Found {len(violations)} naive datetime.now() call(s) (no timezone argument).\n"
+        "Use timezone-aware datetime.now(UTC) so the value is\n"
+        "comparable with DateTime(timezone=True) columns and aware datetimes.\n" + "\n".join(violations)
     )
 
 
