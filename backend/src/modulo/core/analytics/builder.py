@@ -31,6 +31,8 @@ from typing import Any
 
 import sqlalchemy as sa
 
+from modulo.db.crud.team_scope import team_scope_clause
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
 
 __all__ = [
@@ -129,6 +131,7 @@ class AnalyticsQuery:
     trigger_type: AnalyticsTriggerType | None = None
     status: AnalyticsStatus | None = None
     pipeline_ids: tuple[uuid.UUID, ...] = ()
+    team_id: uuid.UUID | None = None
     error_code: str | None = None
     folder_id: uuid.UUID | None = None
     date_from: date | None = None
@@ -234,6 +237,16 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     if query.pipeline_ids:
         params["pipeline_ids"] = list(query.pipeline_ids)
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+    if query.team_id is not None:
+        # A team-scoped caller sees its own team's facts plus org-level facts
+        # (no owner team) — the same boundary the MCP guard applies. The fact's
+        # stamped team is the source of truth; facts predating the create-time
+        # run stamp (NULL) fall back to the pipeline's owner so a NULL stamp
+        # can never widen the boundary.
+        params["team_id"] = query.team_id
+        stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
+        stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
         params["error_code"] = query.error_code
         stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
@@ -297,6 +310,16 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
     if query.pipeline_ids:
         params["pipeline_ids"] = list(query.pipeline_ids)
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+    if query.team_id is not None:
+        # A team-scoped caller sees its own team's facts plus org-level facts
+        # (no owner team) — the same boundary the MCP guard applies. The fact's
+        # stamped team is the source of truth; facts predating the create-time
+        # run stamp (NULL) fall back to the pipeline's owner so a NULL stamp
+        # can never widen the boundary.
+        params["team_id"] = query.team_id
+        stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
+        stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
         params["error_code"] = query.error_code
         stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
