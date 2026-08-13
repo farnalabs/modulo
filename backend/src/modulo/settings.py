@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
     modulo_license_public_key: str = Field("")
+    # Ed25519 private key (hex) used to SIGN enterprise license keys issued via
+    # the admin license-issue endpoint and the Stripe purchase fulfilment
+    # webhook (FAR-179). Empty (default) disables issuance — signing fails
+    # closed until the operator configures it.
+    modulo_license_private_key: str = Field(default="", repr=False)
+
+    # Stripe billing — purchase fulfilment webhook (FAR-178). Empty defaults
+    # keep the app bootable without Stripe configured; when both keys are set,
+    # ``stripe_enabled`` is True and the /api/v1/webhooks/stripe webhook is
+    # active. Stored repr=False so they never leak into logs/settings dumps.
+    # Field names uppercase to STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET.
+    stripe_secret_key: str = Field(default="", repr=False)
+    stripe_webhook_secret: str = Field(default="", repr=False)
 
     # SSO / OIDC — JSON array of {provider_id, client_id, client_secret, discovery_url}
     modulo_oidc_providers: str = Field("[]")
@@ -333,7 +346,11 @@ class Settings(BaseSettings):
 
     # CSRF protection
     modulo_csrf_enabled: bool = Field(True)
-    modulo_csrf_exempt_paths: str = Field("/api/v1/health,/api/v1/triggers,/api/v1/auth")
+    # /api/v1/webhooks is exempt because it hosts the Stripe purchase webhook,
+    # which authenticates via the Stripe-Signature header (signed payload) —
+    # cookie-independent, so a CSRF cookie check would 403 it for the same
+    # reason the /api/v1/triggers HMAC webhooks are exempt.
+    modulo_csrf_exempt_paths: str = Field("/api/v1/health,/api/v1/triggers,/api/v1/auth,/api/v1/webhooks")
 
     # Space-separated list of additional CSP source expressions for connect-src.
     # Used for custom Grafana Faro collectors, self-hosted Sentry instances, etc.
@@ -635,6 +652,11 @@ class Settings(BaseSettings):
     def effective_max_rate_usd(self) -> Decimal:
         """The write-path rate_usd bound: min-capped at the Numeric(18,6) column cap."""
         return min(Decimal(str(self.max_rate_usd)), Decimal("999999999999.999999"))
+
+    @property
+    def stripe_enabled(self) -> bool:
+        """True when both Stripe keys are configured (purchase fulfilment active)."""
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret)
 
 
 @lru_cache

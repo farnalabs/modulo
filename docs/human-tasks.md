@@ -17,15 +17,10 @@ Things that need a human. No agent can do these.
 
 ## License / Commercial
 
-- [ ] **Create license signing key pair** — Ed25519 key pair for signing license tokens. The app already has `Ed25519SigningService` wired in. You need:
-  ```
-  openssl genpkey -algorithm Ed25519 -out modulo-license.pem
-  openssl pkey -in modulo-license.pem -pubout -out modulo-license.pub
-  ```
-  The public key goes in the codebase. The private key stays off-network.
-- [ ] **Back up the license private key** — print the hex + paper wallet? Bitwarden? Hardware security key? Pick a strategy and do it before any customer depends on it.
-- [ ] **Register for Stripe** — stripe.com, create account, fill out business details. You'll need the API keys for the billing integration.
-- [ ] **Set up Stripe billing** — create product + pricing tiers. The app will call Stripe APIs to create subscriptions, handle webhooks, etc. We'll wire this up later.
+- [x] **Create license signing key pair** — DONE (2026-08-13). Ed25519 key pair generated and stored in the KeePassXC vault (`license-signing-private-key`, `modulo-license-public-key`). The app signs issued licenses with `MODULO_LICENSE_PRIVATE_KEY` (see `core/license_signing.py`) and verifies against `MODULO_LICENSE_PUBLIC_KEY`.
+- [x] **Back up the license private key** — DONE (2026-08-13). The private key is stored in the KeePassXC vault (`license-signing-private-key`) alongside a generated keypair backup; the vault itself is committed to the admin repo for backup/portability. A paper wallet is optional (revisit if the key is ever used to sign customer-facing licenses at scale).
+- [x] **Register for Stripe** — DONE (2026-08-13). Account live under `admin@farnalabs.com`, payouts to Starling. Secret keys stored in the vault; `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` env vars feed the fulfilment webhook.
+- [x] **Set up Stripe billing** — DONE (2026-08-13). Product `modulo-enterprise`, price `enterprise-annual-ga` ($8k/yr), coupon `first-year-50` (50% off first year), payment link `https://buy.stripe.com/fZu3cvdcJcgP4pHfM69EI03`. Backend auto-fulfils purchases (webhook → license key → customer email).
 - [ ] **Write `SECURITY.md`** — contact email, PGP key fingerprint, disclosure timeline. Required for any serious project. Goes in the repo root.
 
 ---

@@ -1,11 +1,11 @@
-"""Admin license endpoint — view and update the deployment license key."""
+"""Admin license endpoint — view, update, and issue the deployment license key."""
 
 from __future__ import annotations
 
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -20,6 +20,8 @@ from modulo.core.license import (
     parse_and_verify,
     store_license,
 )
+from modulo.core.license_signing import ENTERPRISE_FEATURES, LicenseSigningError, generate_enterprise_license
+from modulo.core.stripe_fulfilment import email_enterprise_license
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
@@ -47,6 +49,22 @@ class LicenseUploadResponse(BaseModel):
     features: list[str]
     expires_at: str | None = None
     org_id: str | None = None
+
+
+class LicenseIssueRequest(BaseModel):
+    org_name: str = Field(min_length=1, max_length=200)
+    term_months: int = Field(default=12, ge=1, le=120)
+    features: list[str] | None = None
+    email: str | None = None
+
+
+class LicenseIssueResponse(BaseModel):
+    license_key: str
+    expires_at: str
+    org_name: str
+    tier: str
+    features: list[str]
+    org_id: str
 
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
@@ -192,4 +210,61 @@ async def upload_license(
         features=data.features,
         expires_at=data.expires_at or None,
         org_id=data.org_id or None,
+    )
+
+
+@router.post("/issue", response_model=LicenseIssueResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.license.issue_license")
+async def issue_license(
+    req: LicenseIssueRequest,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+    _: TenantPrincipal = require_permission("org.license.manage"),
+) -> LicenseIssueResponse:
+    """Manually issue (sign) an enterprise license key for a customer.
+
+    Uses the same signing service as the Stripe purchase fulfilment webhook.
+    When ``email`` is provided, the license key is also emailed to the customer
+    via a background task so this request stays fast.
+    """
+    try:
+        license_key = generate_enterprise_license(
+            req.org_name,
+            term_months=req.term_months,
+            features=req.features if req.features is not None else ENTERPRISE_FEATURES,
+            private_key_hex=settings.modulo_license_private_key or None,
+        )
+    except (LicenseSigningError, ValueError) as exc:
+        logger.exception("license.issue_generation_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+
+    validation = parse_and_verify(license_key)
+    if not validation.valid or validation.license_data is None:
+        logger.error("license.issue_verification_failed error=%s", validation.error)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Generated license key failed signature verification.",
+        ) from None
+
+    data = validation.license_data
+
+    if req.email:
+        background_tasks.add_task(
+            email_enterprise_license,
+            settings,
+            req.email,
+            license_key,
+            data.expires_at,
+        )
+
+    return LicenseIssueResponse(
+        license_key=license_key,
+        expires_at=data.expires_at,
+        org_name=req.org_name,
+        tier=data.tier,
+        features=data.features,
+        org_id=data.org_id,
     )

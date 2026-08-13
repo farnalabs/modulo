@@ -110,6 +110,9 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/runs/{run_id}/nodes/{node_id}/recover"): "inline admin/operator check in handler",
     # Webhooks: HMAC/shared-secret is the authorization (exempt channel).
     ("POST", "/api/v1/triggers/{trigger_id}/webhook"): "HMAC/shared-secret channel",
+    # Stripe: Stripe-Signature (HMAC-SHA256 of the raw body with the webhook
+    # secret) is the authorization (exempt channel, mirrors the trigger webhook).
+    ("POST", "/api/v1/webhooks/stripe"): "Stripe-Signature HMAC channel",
     (
         "POST",
         "/api/v1/triggers/{trigger_id}/webhook/replay/{event_id}",
