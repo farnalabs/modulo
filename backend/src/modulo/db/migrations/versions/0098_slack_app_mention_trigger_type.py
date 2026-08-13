@@ -4,6 +4,11 @@ Revision ID: 0098_slack_app_mention_trigger_type
 Revises: 0097_ongoing_trigger_enabled_by_default
 Create Date: 2026-08-13
 
+Migration tree: ``0093_run_number_sequence`` -> ``0094_ongoing_trigger_type``
+-> ``0095_ongoing_trigger_flag`` -> ``0096_hitl_claims_overdue_notified``
+-> ``0097_ongoing_trigger_enabled_by_default`` -> ``0098_slack_app_mention_trigger_type``
+(sole head).
+
 The ``slack_app_mention`` trigger fires a pipeline when a bot is @-mentioned in
 Slack. It receives Slack Events API ``app_mention`` payloads over the route
 ``POST /api/v1/triggers/{trigger_id}/slack``, verifies the Slack signing
