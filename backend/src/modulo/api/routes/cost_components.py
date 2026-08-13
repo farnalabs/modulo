@@ -50,8 +50,6 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/costs/components", tags=["admin", "costs"])
 
-_RATE_COLUMN_CAP = Decimal("999999999999.999999")
-
 RESERVED_NAMES = frozenset({"reported", "rate", "cost_estimate_usd", "model_cost_usd"})
 RESERVED_REPORT_KEYS = frozenset({"reported", "rate", "cost_estimate_usd"})
 
@@ -189,10 +187,9 @@ def _validate_rate_usd_bound(rate_usd: Decimal | None) -> None:
     if rate_usd is None:
         return
     try:
-        knob = Decimal(str(get_settings().max_rate_usd))
+        cap = get_settings().effective_max_rate_usd
     except Exception:
         raise ValueError("rate knob unavailable: cannot validate rate_usd") from None
-    cap = min(knob, _RATE_COLUMN_CAP)
     if rate_usd > cap:
         raise ValueError(f"rate_usd exceeds max {cap}")
 
