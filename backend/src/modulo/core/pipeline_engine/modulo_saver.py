@@ -145,8 +145,10 @@ _MIGRATION_SQL: list[str] = [
     # Indexes for org-scoped queries
     "CREATE INDEX IF NOT EXISTS ix_checkpoints_org_thread ON checkpoints (organisation_id, thread_id, checkpoint_ns);",
     "CREATE INDEX IF NOT EXISTS ix_checkpoint_blobs_org ON checkpoint_blobs (organisation_id, thread_id);",
-    "CREATE INDEX IF NOT EXISTS ix_checkpoint_writes_org"
-    " ON checkpoint_writes (organisation_id, thread_id, checkpoint_id);",
+    (
+        "CREATE INDEX IF NOT EXISTS ix_checkpoint_writes_org"
+        " ON checkpoint_writes (organisation_id, thread_id, checkpoint_id);"
+    ),
     # created_at for the nightly checkpoint retention job (idempotent — safe to
     # re-run because setup() executes every migration on each startup).
     "ALTER TABLE checkpoints ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();",
