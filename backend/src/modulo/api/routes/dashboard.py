@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.jwt import TenantPrincipal
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.core.analytics import compute_delta
 from modulo.core.remy.config_service import RemyConfigService
 from modulo.db.models.daily_run_count import OrgDailyRunCount
@@ -42,16 +43,6 @@ from modulo.settings import get_settings
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
-
-
-def _safe_int(value: object, default: int = 0) -> int:
-    """Convert *value* to int, returning *default* for None, NaN, or conversion error."""
-    if not isinstance(value, (int, float, str, bytes, bytearray, Decimal)):
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:

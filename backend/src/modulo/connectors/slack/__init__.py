@@ -2,13 +2,13 @@
 
 import asyncio
 import json
-import math
 import random
 from typing import Any, cast
 
 import httpx
 
 from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -60,25 +60,6 @@ def _check_slack_ok(body: Any, context: str) -> None:
         raise SlackAPIError(f"Slack API returned non-JSON-object response in {context}: {type(body).__name__}")
     if not body.get("ok"):
         raise SlackAPIError(f"Slack API error in {context}: {body.get('error', 'unknown')}")
-
-
-def _safe_int(value: object, default: int = 1) -> int:
-    """Coerce *value* to int, returning *default* for None, non-finite, or unparseable values.
-
-    Guards against non-finite floats (``inf``/``nan``) which otherwise raise
-    ``OverflowError``/``ValueError`` on ``int()`` — Python's json parser
-    produces ``inf`` for overflowing literals such as ``1e999``, so a corrupt
-    or hostile Slack ``paging`` payload must not be able to crash
-    ``message_search`` pagination.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        return default
-    if isinstance(value, float) and not math.isfinite(value):
-        return default
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
 
 
 class SlackConnector(ConnectorBase):
