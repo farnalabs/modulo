@@ -111,8 +111,9 @@ class TestHitlReviewRateLimit:
         app = _make_app(registry=mock_registry)
 
         with TestClient(app) as client:
-            client.post(endpoint)
+            resp = client.post(endpoint)
 
+        assert resp.status_code == status.HTTP_200_OK
         mock_registry.check.assert_awaited_once()
         key = mock_registry.check.await_args[0][0]
         assert "/api/v1/runs" in key
@@ -125,8 +126,9 @@ class TestHitlReviewRateLimit:
         app = _make_app(registry=mock_registry)
 
         with TestClient(app) as client:
-            client.post(endpoint)
+            resp = client.post(endpoint)
 
+        assert resp.status_code == status.HTTP_200_OK
         mock_registry.check.assert_awaited_once()
         max_requests = mock_registry.check.await_args.kwargs["max_requests"]
         assert max_requests == 20
