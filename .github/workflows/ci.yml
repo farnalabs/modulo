@@ -474,6 +474,7 @@ jobs:
     permissions:
       pull-requests: read
     steps:
+      - uses: actions/checkout@v4
       - name: Skip PR Reviewer when head already reviewed or only merged since last review
         id: review-check
         if: success()
@@ -483,6 +484,10 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # The job must checkout the repo first so the dedup script exists
+          # on the runner - a missing script would otherwise be swallowed by
+          # the fail-open fallback and the dedup would silently no-op.
+          test -f .github/scripts/pr-review-dedup.py || { echo "::error::pr-review-dedup.py not found - dedup disabled"; exit 1; }
           # Fetch the PR's reviews and commits JSON, then run the versioned
           # dedup decision script (.github/scripts/pr-review-dedup.py).
           # The script handles multi-line bodies and pipe chars correctly
