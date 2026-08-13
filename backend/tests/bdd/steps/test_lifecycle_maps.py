@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/lifecycle_maps/crud.feature")
 with contextlib.suppress(FileNotFoundError, OSError):
@@ -217,6 +219,30 @@ def save_version_of_lifecycle_map(count: int, ctx: dict[str, Any], request: Any,
         )
     _store_response(request, ctx, resp)
     ctx["lifecycle_map"] = updated
+
+
+@when("I save a version of the lifecycle map with a circular transition")
+def save_version_with_circular_transition(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """POST /versions with a cyclic transition — the route maps the
+    ``LifecycleMapContentError`` raised by the content validator to a 422."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    stages = [
+        {"id": "stage-0", "name": "Stage 0", "type": "modulo"},
+        {"id": "stage-1", "name": "Stage 1", "type": "manual"},
+    ]
+    edges = [
+        {"id": "edge-0", "source": "stage-0", "target": "stage-1"},
+        {"id": "edge-1", "source": "stage-1", "target": "stage-0"},
+    ]
+    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+        mock_save.side_effect = LifecycleMapContentError(
+            "lifecycle-map content: stage transitions form a cycle: stage-0 -> stage-1 -> stage-0"
+        )
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{current.id}/versions",
+            json={"stages": stages, "edges": edges, "notes": ""},
+        )
+    _store_response(request, ctx, resp)
 
 
 @when("I get the lifecycle map versions")

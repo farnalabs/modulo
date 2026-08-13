@@ -123,6 +123,50 @@ def _normalise_edge(raw: Any, index: int) -> dict[str, Any]:
     return edge
 
 
+def _find_transition_cycle(edges: list[dict[str, Any]]) -> list[str] | None:
+    """Return a stage-id cycle path in *edges*, or ``None`` when acyclic.
+
+    The lifecycle map is a DAG (PRD §8.31.4), so a transition cycle is an
+    invalid graph structure. Uses depth-first search with three-state colouring
+    to detect back edges; the returned path starts at the cycle entry node and
+    closes with the repeated node (e.g. ``["s1", "s2", "s1"]``). A self-loop
+    (``source == target``) is reported as a two-element path ``[n, n]``.
+    """
+    adjacency: dict[str, list[str]] = {}
+    for edge in edges:
+        adjacency.setdefault(edge["source"], []).append(edge["target"])
+        adjacency.setdefault(edge["target"], [])
+
+    unvisited, in_progress, done = 0, 1, 2
+    colour: dict[str, int] = {}
+    path: list[str] = []
+
+    def _visit(node: str) -> list[str] | None:
+        colour[node] = in_progress
+        path.append(node)
+        for next_stage in adjacency.get(node, ()):
+            if colour.get(next_stage, unvisited) == in_progress:
+                try:
+                    start = path.index(next_stage)
+                except ValueError:
+                    start = 0
+                return [*path[start:], next_stage]
+            if colour.get(next_stage, unvisited) == unvisited:
+                cycle = _visit(next_stage)
+                if cycle is not None:
+                    return cycle
+        path.pop()
+        colour[node] = done
+        return None
+
+    for stage_id in adjacency:
+        if colour.get(stage_id, unvisited) == unvisited:
+            cycle = _visit(stage_id)
+            if cycle is not None:
+                return cycle
+    return None
+
+
 def normalize_content(content: dict[str, Any] | None) -> dict[str, Any]:
     """Validate and canonicalise a lifecycle-map ``content_json`` payload.
 
@@ -157,6 +201,11 @@ def normalize_content(content: dict[str, Any] | None) -> dict[str, Any]:
             raise LifecycleMapContentError("content_json.edges/transitions must be an array")
         result["edges"] = [_normalise_edge(e, i) for i, e in enumerate(edges_raw)]
         result.pop("transitions", None)
+        cycle = _find_transition_cycle(result["edges"])
+        if cycle is not None:
+            raise LifecycleMapContentError(
+                "lifecycle-map content: stage transitions form a cycle: " + " -> ".join(cycle)
+            )
 
     if "notes" in content:
         notes = content["notes"]

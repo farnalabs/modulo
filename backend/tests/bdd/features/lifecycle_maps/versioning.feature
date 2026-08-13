@@ -43,3 +43,8 @@ Feature: Lifecycle Map Versioning
     When I get the lifecycle map versions
     Then the response status is 200
     And the version list contains exactly 1 version at version 2
+
+  Scenario: Circular stage transitions are rejected as invalid content
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map with a circular transition
+    Then the response status is 422
