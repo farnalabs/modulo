@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
@@ -103,6 +103,10 @@ function mountView() {
 beforeEach(() => {
   vi.clearAllMocks()
   mockResponses['/api/v1/runs'] = listWith([])
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('RunsListView', () => {
@@ -371,6 +375,42 @@ describe('RunsListView', () => {
     const errorEl = wrapper.find('[data-testid="runs-list-cancel-error-run1"]')
     expect(errorEl.exists()).toBe(true)
     expect(errorEl.text()).toContain('run_already_terminal')
+    wrapper.unmount()
+  })
+
+  it('reloads runs with the search term after typing (debounced), resetting to page 1', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const searchInput = wrapper.find('[data-testid="filter-bar-search"]')
+    expect(searchInput.exists()).toBe(true)
+
+    vi.useFakeTimers()
+    await searchInput.setValue('foo')
+    await nextTick()
+
+    // Debounce window has not elapsed yet — no request carrying the search term.
+    expect(api.GET).not.toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ search: 'foo' }) },
+    }))
+
+    vi.advanceTimersByTime(300)
+    vi.useRealTimers()
+    await flushPromises()
+    await nextTick()
+
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/runs', expect.objectContaining({
+      params: { query: expect.objectContaining({ search: 'foo' }) },
+    }))
+    wrapper.unmount()
+  })
+
+  it('does not render a Reset button (filters clear by emptying the search box)', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).not.toContain('Reset')
     wrapper.unmount()
   })
 })

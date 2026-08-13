@@ -29,11 +29,7 @@
       :filter-values="{ status: filterStatus, trigger_type: filterTriggerType }"
       @update:search="filterSearch = $event"
       @update:filter="handleFilterUpdate"
-    >
-      <template #after>
-        <button class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent" @click="resetFilters">{{ $t('common.reset') }}</button>
-      </template>
-    </FilterBar>
+    ></FilterBar>
 
     <LoadingSpinner v-if="loading" />
 
@@ -256,6 +252,10 @@ onUnmounted(() => {
     clearInterval(elapsedTimer)
     elapsedTimer = null
   }
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = null
+  }
 })
 
 function aggregateCostValue(run: RunListItem): number | null {
@@ -293,20 +293,20 @@ watch([filterStatus, filterTriggerType, filterSearch], ([status, triggerType, se
   localStorage.setItem(`${FILTER_STORAGE_KEY}.search`, search)
 })
 
+const SEARCH_DEBOUNCE_MS = 300
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(filterSearch, () => {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    page.value = 1
+    loadRuns()
+  }, SEARCH_DEBOUNCE_MS)
+})
+
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'status') filterStatus.value = value
   else if (key === 'trigger_type') filterTriggerType.value = value
-  page.value = 1
-  loadRuns()
-}
-
-function resetFilters() {
-  filterStatus.value = ''
-  filterTriggerType.value = ''
-  filterSearch.value = ''
-  localStorage.removeItem(`${FILTER_STORAGE_KEY}.status`)
-  localStorage.removeItem(`${FILTER_STORAGE_KEY}.trigger_type`)
-  localStorage.removeItem(`${FILTER_STORAGE_KEY}.search`)
   page.value = 1
   loadRuns()
 }
