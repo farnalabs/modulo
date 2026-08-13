@@ -919,6 +919,66 @@ class TestListTriggerEventsTeamScope(_AuthContext):
         assert result["error"] == "team_boundary_violation"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_soft_deleted_trigger_blocked_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
+        """A soft-deleted/unresolvable trigger fails closed for a team-scoped key.
+
+        The ownership lookup filters ``Trigger.deleted_at.is_(None)``, so a
+        soft-deleted cross-team trigger resolves to None and is treated as out
+        of the key's team boundary instead of falling through to an unfiltered
+        event listing.
+        """
+        _ctx_team_id.set(_TEAM_A)
+        trigger_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute.return_value = _make_execute_result(None)
+        with patch("modulo.api.mcp_server._session") as mock_session:
+            mock_session.return_value = _make_session_context(session)
+            result = await list_trigger_events(trigger_id=str(trigger_id))
+
+        assert result["error"] == "team_boundary_violation"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_trigger_id_query_carries_team_clause(self, mock_validate_auth: AsyncMock) -> None:
+        """The deleted-trigger query must carry the team clause for a team-scoped key."""
+        from sqlalchemy.dialects import postgresql
+
+        _ctx_team_id.set(_TEAM_A)
+        trigger_id = uuid.uuid4()
+        trigger = MagicMock()
+        trigger.pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        total_result = MagicMock()
+        total_result.scalar_one_or_none.return_value = 0
+        rows_result = MagicMock()
+        rows_result.scalars.return_value.all.return_value = []
+        captured: list = []
+
+        async def fake_execute(stmt: Any, *a: Any, **k: Any) -> Any:
+            captured.append(stmt)
+            s = str(stmt).lower()
+            if "count(" in s:
+                return total_result
+            if "from triggers" in s and "trigger_events" not in s:
+                return _make_execute_result(trigger)
+            return rows_result
+
+        session.execute = fake_execute
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_A)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_trigger_events(trigger_id=str(trigger_id))
+
+        assert result["total"] == 0
+        sqls = [str(s.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})) for s in captured]
+        # The ownership lookup must exclude soft-deleted triggers.
+        assert any("triggers.deleted_at IS NULL" in s for s in sqls)
+        # The event query must carry the team clause even when filtered by trigger_id.
+        assert any(f"pipelines.owner_team_id = '{_TEAM_A}'" in s for s in sqls)
+        assert any("pipelines.owner_team_id IS NULL" in s for s in sqls)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_team_filter_applied_in_sql_when_no_filter(self, mock_validate_auth: AsyncMock) -> None:
         from sqlalchemy.dialects import postgresql
 

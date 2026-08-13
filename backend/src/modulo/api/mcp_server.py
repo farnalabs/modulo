@@ -2435,10 +2435,22 @@ async def list_trigger_events(
                 if key_team_id is not None:
                     # A team-scoped key must not read events for another
                     # team's trigger even when no pipeline filter is given.
-                    trigger = (await s.execute(select(Trigger).where(Trigger.id == tid))).scalar_one_or_none()
-                    if trigger is not None and _team_scoped_key_mismatch(
-                        await _pipeline_owner_team_id(s, trigger.pipeline_id)
-                    ):
+                    # Fail closed: a soft-deleted or otherwise-unresolvable
+                    # trigger is treated as out of the key's team boundary too
+                    # (matching ``list_triggers``, which filters
+                    # ``Trigger.deleted_at.is_(None)``), so a deleted cross-team
+                    # trigger cannot fall through to an unfiltered listing.
+                    trigger = (
+                        await s.execute(
+                            select(Trigger).where(
+                                Trigger.id == tid,
+                                Trigger.deleted_at.is_(None),
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if trigger is None:
+                        return _team_scope_error("trigger", str(tid))
+                    if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
                         return _team_scope_error("pipeline", str(trigger.pipeline_id))
 
             if pipeline_id is not None:
