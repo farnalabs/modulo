@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -43,16 +44,6 @@ class SlackAuthError(SlackAPIError):
 
 class SlackNetworkError(SlackError):
     """Raised on transport-level failures (timeout, connection, unexpected HTTP status)."""
-
-
-def _parse_retry_after(response: httpx.Response) -> float | None:
-    value = response.headers.get("Retry-After")
-    if value:
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            pass
-    return None
 
 
 def _compute_retry_delay(attempt: int, response: httpx.Response | None = None) -> float:

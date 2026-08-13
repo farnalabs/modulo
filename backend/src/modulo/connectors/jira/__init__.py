@@ -4,11 +4,16 @@ import asyncio
 import base64
 import json
 import random
-import time
 from typing import Any
 
 import httpx
 
+from modulo.connectors._retry_headers import (
+    extract_rate_limit_metadata,
+    format_rate_limit_detail,
+    parse_rate_limit_reset,
+    parse_retry_after,
+)
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -30,6 +35,9 @@ _RATE_LIMIT_HEADERS = (
     "X-RateLimit-Reset",
 )
 
+# Preferred header (epoch seconds) for the quota-reset retry delay.
+_RATE_LIMIT_RESET_HEADERS = ("X-RateLimit-Reset",)
+
 
 def _safe_int(value: object, default: int = 0) -> int:
     """Coerce *value* to int, returning *default* for None or unparseable values."""
@@ -41,17 +49,6 @@ def _safe_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _parse_retry_after(response: httpx.Response) -> float | None:
-    """Parse Retry-After header from API response."""
-    value = response.headers.get("Retry-After")
-    if value:
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            pass
-    return None
-
-
 def _compute_delay(attempt: int, response: httpx.Response | None = None) -> float:
     """Compute retry delay with exponential backoff, jitter, and optional Retry-After."""
     if response:
@@ -60,41 +57,6 @@ def _compute_delay(attempt: int, response: httpx.Response | None = None) -> floa
             return float(min(retry_after, _MAX_DELAY))
     jitter = random.uniform(0, 1)  # noqa: S311 — non-cryptographic jitter for retry delays
     return float(min(_BASE_DELAY * (2**attempt) + jitter, _MAX_DELAY))
-
-
-def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
-    """Parse Jira Cloud's ``X-RateLimit-Reset`` header (epoch seconds) into a retry delay.
-
-    When a 429 response includes ``X-RateLimit-Reset`` (the epoch second the
-    current quota window resets), the client can wait until the window resets
-    instead of guessing with blind backoff.
-    """
-    value = response.headers.get("X-RateLimit-Reset")
-    if not value:
-        return None
-    try:
-        reset_epoch = float(value)
-    except (ValueError, TypeError):
-        return None
-    delay = reset_epoch - time.time()
-    return delay if delay > 0 else None
-
-
-def _rate_limit_detail(response: httpx.Response) -> str:
-    """Summarise Jira Cloud ``X-RateLimit-*`` quota headers for error strings."""
-    parts = [f"{header}={value}" for header in _RATE_LIMIT_HEADERS if (value := response.headers.get(header))]
-    return "; ".join(parts)
-
-
-def _rate_limit_metadata(response: httpx.Response) -> dict[str, Any]:
-    """Extract Jira Cloud ``X-RateLimit-*`` headers into a metadata dict.
-
-    Jira Cloud reports quota state via ``X-RateLimit-Limit`` /
-    ``X-RateLimit-Remaining`` / ``X-RateLimit-Reset``. Only headers present on
-    the response are included, so an empty dict simply means no rate-limit
-    reporting (e.g. a proxy that strips them).
-    """
-    return {name: response.headers.get(name) for name in _RATE_LIMIT_HEADERS if name in response.headers}
 
 
 def _jitter(delay: float, *, tight: bool = False) -> float:
@@ -108,6 +70,26 @@ def _jitter(delay: float, *, tight: bool = False) -> float:
     if tight:
         return random.uniform(delay * 0.9, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
     return random.uniform(0, delay)  # noqa: S311 — non-cryptographic jitter for retry delays
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Parse Retry-After header from Jira API response."""
+    return parse_retry_after(response)
+
+
+def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
+    """Parse Jira Cloud's ``X-RateLimit-Reset`` header (epoch seconds) into a retry delay."""
+    return parse_rate_limit_reset(response, _RATE_LIMIT_RESET_HEADERS)
+
+
+def _rate_limit_detail(response: httpx.Response) -> str:
+    """Summarise Jira Cloud ``X-RateLimit-*`` quota headers for error strings."""
+    return format_rate_limit_detail(response, _RATE_LIMIT_HEADERS)
+
+
+def _rate_limit_metadata(response: httpx.Response) -> dict[str, str | None]:
+    """Extract Jira Cloud ``X-RateLimit-*`` headers into a metadata dict."""
+    return extract_rate_limit_metadata(response, _RATE_LIMIT_HEADERS)
 
 
 class JiraConnector(ConnectorBase):

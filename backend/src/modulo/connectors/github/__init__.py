@@ -11,6 +11,12 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._retry_headers import (
+    extract_rate_limit_metadata,
+    format_rate_limit_detail,
+    parse_rate_limit_reset,
+    parse_retry_after,
+)
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -70,6 +76,9 @@ _RATE_LIMIT_HEADERS = (
     "X-RateLimit-Used",
     "X-RateLimit-Resource",
 )
+
+# Preferred header (epoch seconds) for the quota-reset retry delay.
+_RATE_LIMIT_RESET_HEADERS = ("X-RateLimit-Reset",)
 
 
 class GitHubError(ValueError):
@@ -164,47 +173,22 @@ def _error_for_status(status_code: int, detail: str) -> GitHubError:
 
 def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from GitHub API response."""
-    value = response.headers.get("Retry-After")
-    if value:
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            pass
-    return None
+    return parse_retry_after(response)
 
 
 def _parse_rate_limit_reset(response: httpx.Response) -> float | None:
-    """Parse GitHub's rate-limit reset header (epoch seconds) into a retry delay.
-
-    GitHub reports quota state via ``X-RateLimit-Reset`` (epoch seconds) on
-    every response. When a 429 includes it, the client can wait until the quota
-    window resets instead of guessing with backoff.
-    """
-    value = response.headers.get("X-RateLimit-Reset")
-    if not value:
-        return None
-    try:
-        reset_epoch = float(value)
-    except (ValueError, TypeError):
-        return None
-    delay = reset_epoch - time.time()
-    return delay if delay > 0 else None
+    """Parse GitHub's rate-limit reset header (epoch seconds) into a retry delay."""
+    return parse_rate_limit_reset(response, _RATE_LIMIT_RESET_HEADERS)
 
 
 def _rate_limit_detail(response: httpx.Response) -> str:
     """Summarise GitHub rate-limit quota headers for error/health detail strings."""
-    parts = [f"{header}={value}" for header in _RATE_LIMIT_HEADERS if (value := response.headers.get(header))]
-    return "; ".join(parts)
+    return format_rate_limit_detail(response, _RATE_LIMIT_HEADERS)
 
 
-def _rate_limit_metadata(response: httpx.Response) -> dict[str, Any]:
-    """Extract GitHub ``X-RateLimit-*`` headers into a metadata dict.
-
-    GitHub reports quota state via ``X-RateLimit-Limit`` / ``X-RateLimit-Reset``
-    etc. on every API response. Only headers present on the response are
-    included, so an empty dict simply means no rate-limit reporting.
-    """
-    return {name: response.headers.get(name) for name in _RATE_LIMIT_HEADERS if name in response.headers}
+def _rate_limit_metadata(response: httpx.Response) -> dict[str, str | None]:
+    """Extract GitHub ``X-RateLimit-*`` headers into a metadata dict."""
+    return extract_rate_limit_metadata(response, _RATE_LIMIT_HEADERS)
 
 
 def _parse_link_header(response: httpx.Response) -> dict[str, str]:
