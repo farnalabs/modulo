@@ -114,7 +114,8 @@ class TestDispatch:
         registry = _registry(allowed=True)
         app = _make_app(registry=registry)
         with TestClient(app) as client:
-            client.post("/api/v1/runs")
+            resp = client.post("/api/v1/runs")
+        assert resp.status_code == 200
         args, kwargs = registry.check.await_args
         assert args[0] == "ip:testclient:/api/v1/runs"
         assert kwargs["max_requests"] == 60

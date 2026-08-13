@@ -22,6 +22,7 @@ from modulo.cli.migrate_org import (
     _remap_fk,
     _serialise,
     _serialise_row,
+    _validate_bundle,
     _verify_hash,
     _write_bundle,
     main,
@@ -208,6 +209,82 @@ class TestRemapFk:
 # ── Bundle loading / writing ─────────────────────────────────────────────────
 
 
+class TestValidateBundle:
+    VALID: ClassVar[dict[str, Any]] = {
+        "__meta__": {"version": 1, "hash": "abc"},
+        "organisation": {"id": "o1"},
+        "users": [{"id": "u1", "email": "a@b.com"}],
+        "teams": [{"id": "t1", "name": "Platform"}],
+    }
+
+    def test_valid_bundle_has_no_errors(self) -> None:
+        assert _validate_bundle(dict(self.VALID)) == []
+
+    def test_empty_bundle_has_no_errors(self) -> None:
+        # A bundle that only carries meta + organisation (no entity tables yet)
+        # is structurally fine — empty tables are valid.
+        assert _validate_bundle({"__meta__": {"version": 1}, "organisation": {"id": "o1"}}) == []
+
+    def test_non_object_root_reports_error(self) -> None:
+        errors = _validate_bundle([1, 2, 3])
+        assert len(errors) == 1
+        assert "must be a JSON object" in errors[0]
+        assert "list" in errors[0]
+
+    def test_missing_meta_reports_error(self) -> None:
+        errors = _validate_bundle({"organisation": {"id": "o1"}})
+        assert any("__meta__" in e for e in errors)
+
+    def test_missing_organisation_reports_error(self) -> None:
+        errors = _validate_bundle({"__meta__": {"version": 1}})
+        assert any("organisation" in e for e in errors)
+
+    def test_table_not_a_list_reports_error(self) -> None:
+        errors = _validate_bundle({"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": {"u1": {}}})
+        assert len(errors) == 1
+        assert "'users' must be a JSON array" in errors[0]
+
+    def test_row_not_a_dict_reports_error(self) -> None:
+        errors = _validate_bundle(
+            {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": "u1"}, "not-a-row"]}
+        )
+        assert any("'users' row 1" in e and "must be a JSON object" in e for e in errors)
+
+    def test_non_string_row_id_reports_error(self) -> None:
+        errors = _validate_bundle(
+            {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": 123, "email": "a@b.com"}]}
+        )
+        assert any("'id' must be a string" in e for e in errors)
+
+    def test_null_row_id_is_accepted(self) -> None:
+        # A row without a persistent id is re-created fresh on import; export
+        # never emits one, but null is a legitimate structural shape.
+        assert (
+            _validate_bundle(
+                {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": None, "email": "a@b.com"}]}
+            )
+            == []
+        )
+
+    def test_multiple_problems_accumulate(self) -> None:
+        errors = _validate_bundle(
+            {
+                "teams": "not-a-list",
+                "users": [{"id": "u1"}, {"id": 7}],
+            }
+        )
+        assert len(errors) >= 3
+        assert any("__meta__" in e for e in errors)
+        assert any("organisation" in e for e in errors)
+        assert any("'teams' must be a JSON array" in e for e in errors)
+        assert any("'users' row 1 'id' must be a string" in e for e in errors)
+
+    def test_unknown_top_level_keys_are_ignored(self) -> None:
+        bundle = dict(self.VALID)
+        bundle["not_an_entity"] = "ignored"
+        assert _validate_bundle(bundle) == []
+
+
 class TestLoadBundle:
     def test_loads_valid_bundle(self, tmp_path: Path) -> None:
         bundle: dict[str, Any] = {"__meta__": {"version": 1}, "organisation": {"id": "o1"}}
@@ -234,6 +311,52 @@ class TestLoadBundle:
         with pytest.raises(SystemExit) as exc:
             _load_bundle(path)
         assert "hash verification failed" in str(exc.value).lower()
+
+    def test_non_object_root_exits(self, tmp_path: Path) -> None:
+        # A JSON array root used to crash with an AttributeError inside
+        # _verify_hash; it must now exit with a structural error instead.
+        path = tmp_path / "array.json"
+        path.write_text(json.dumps([{"id": "o1"}]))
+        with pytest.raises(SystemExit) as exc:
+            _load_bundle(path)
+        assert "invalid bundle structure" in str(exc.value)
+        assert "must be a JSON object" in str(exc.value)
+
+    def test_corrupt_table_structure_exits(self, tmp_path: Path) -> None:
+        # Structurally corrupt but hash-consistent bundles are rejected before
+        # any import work — validation runs ahead of hash verification.
+        bundle: dict[str, Any] = {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": {"u1": {}}}
+        bundle["__meta__"]["hash"] = _compute_hash(bundle)
+        path = tmp_path / "corrupt.json"
+        path.write_text(json.dumps(bundle))
+        with pytest.raises(SystemExit) as exc:
+            _load_bundle(path)
+        assert "invalid bundle structure" in str(exc.value)
+        assert "'users' must be a JSON array" in str(exc.value)
+
+    def test_corrupt_row_id_exits(self, tmp_path: Path) -> None:
+        bundle: dict[str, Any] = {
+            "__meta__": {"version": 1},
+            "organisation": {"id": "o1"},
+            "users": [{"id": 123, "email": "a@b.com"}],
+        }
+        bundle["__meta__"]["hash"] = _compute_hash(bundle)
+        path = tmp_path / "bad_id.json"
+        path.write_text(json.dumps(bundle))
+        with pytest.raises(SystemExit) as exc:
+            _load_bundle(path)
+        assert "invalid bundle structure" in str(exc.value)
+        assert "'id' must be a string" in str(exc.value)
+
+    def test_structural_error_precedes_hash_mismatch(self, tmp_path: Path) -> None:
+        # A file that is both structurally invalid AND hash-mismatched reports
+        # the structural problem first — a clearer diagnosis for corrupt input.
+        path = tmp_path / "both_bad.json"
+        path.write_text(json.dumps({"__meta__": {"hash": "wrong"}, "users": "not-a-list"}))
+        with pytest.raises(SystemExit) as exc:
+            _load_bundle(path)
+        assert "invalid bundle structure" in str(exc.value)
+        assert "hash verification failed" not in str(exc.value)
 
 
 class TestWriteBundle:
@@ -358,6 +481,11 @@ class TestImport:
         self._make_bundle_file(dict(self.HASHED_BUNDLE), input_path)
         main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
         mock_do_import.assert_called_once()
+        called_bundle, called_org, called_strategy = mock_do_import.call_args.args
+        assert called_bundle["organisation"]["id"] == "o1"
+        assert called_bundle["__meta__"]["version"] == 1
+        assert called_org == uuid.UUID("00000000-0000-0000-0000-000000000001")
+        assert called_strategy == "skip"
 
     def test_import_file_not_found(self) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -378,6 +506,10 @@ class TestImport:
         self._make_bundle_file(dict(self.HASHED_BUNDLE), input_path)
         main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
         mock_do_import.assert_called_once()
+        called_bundle, called_org, called_strategy = mock_do_import.call_args.args
+        assert called_bundle["organisation"]["id"] == "o1"
+        assert called_org == uuid.UUID("00000000-0000-0000-0000-000000000001")
+        assert called_strategy == "skip"
 
 
 # ── DB-layer helpers used by the export/import flow ─────────────────────────
