@@ -17,6 +17,7 @@ const i18n = createI18n({
           view_details: 'View Details',
           auto_update: 'Auto update',
           copy_to_adapt: 'Copy to Adapt',
+          copy_to_adapt_creating: 'Copying...',
         },
       },
     },
@@ -123,5 +124,14 @@ describe('LibraryPrimitiveCard', () => {
   it('does not render the copy-to-adapt button for non-lifecycle-map primitives', () => {
     const wrapper = mountCard()
     expect(wrapper.find('[data-testid="library-create-lifecycle-map"]').exists()).toBe(false)
+  })
+
+  it('disables and shows a loading label on the copy-to-adapt button while adapting', () => {
+    const prim = { id: 'prim-1', source: 'modulo', primitive_type: 'lifecycle_map', name: 'SDLC Map', description: null, tags: [], forked_from: null, auto_update: false }
+    const wrapper = mountCard({ prim, adapting: { 'prim-1': true } })
+    const button = wrapper.find('[data-testid="library-create-lifecycle-map"]')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.attributes('aria-busy')).toBe('true')
+    expect(wrapper.text()).toContain('Copying...')
   })
 })

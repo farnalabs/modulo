@@ -77,11 +77,17 @@
       </button>
       <button
         v-else-if="prim.primitive_type === 'lifecycle_map'"
-        class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60"
+        class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60 disabled:opacity-50 disabled:cursor-not-allowed"
+        :disabled="adapting[prim.id]"
+        :aria-busy="adapting[prim.id]"
         @click="$emit('create-lifecycle-map', prim)"
         data-testid="library-create-lifecycle-map"
       >
-        {{ $t('views.LibraryView.copy_to_adapt') }}
+        {{
+          adapting[prim.id]
+            ? $t('views.LibraryView.copy_to_adapt_creating')
+            : $t('views.LibraryView.copy_to_adapt')
+        }}
       </button>
       <button
         class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
@@ -113,10 +119,12 @@ withDefaults(defineProps<{
   showTags?: boolean
   showAutoUpdate?: boolean
   toggleLoading?: Record<string, boolean>
+  adapting?: Record<string, boolean>
 }>(), {
   showTags: true,
   showAutoUpdate: false,
   toggleLoading: () => ({}),
+  adapting: () => ({}),
 })
 
 defineEmits<{

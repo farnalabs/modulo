@@ -109,7 +109,12 @@
 
       <div v-if="loading" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
 
-      <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
+      <div
+        v-else-if="error"
+        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        role="alert"
+        data-testid="library-error"
+      >
         {{ error }}
       </div>
 
@@ -130,6 +135,7 @@
           badge="modulo"
           show-auto-update
           :toggle-loading="toggleLoading"
+          :adapting="adapting"
           @create-pipeline="createPipeline"
           @create-lifecycle-map="createLifecycleMap"
           @view-details="viewPrimitive"
@@ -148,6 +154,7 @@
             :prim="prim"
             badge="preview"
             :show-tags="false"
+            :adapting="adapting"
             @create-pipeline="createPipeline"
             @create-lifecycle-map="createLifecycleMap"
             @view-details="viewPrimitive"
@@ -162,6 +169,7 @@
           :key="prim.id"
           :prim="prim"
           badge="community"
+          :adapting="adapting"
           @create-pipeline="createPipeline"
           @create-lifecycle-map="createLifecycleMap"
           @view-details="viewPrimitive"

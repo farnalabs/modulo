@@ -502,10 +502,10 @@ async def import_lifecycle_map_endpoint(
                 envelope=req.model_dump(),
             )
             await session.refresh(lifecycle_map)
-    except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.import_lifecycle_map_endpoint")
         raise HTTPException(

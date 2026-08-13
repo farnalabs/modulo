@@ -26,6 +26,10 @@ Feature: Lifecycle Map as Library Primitive
     When I import a lifecycle map with invalid content
     Then the response status is 422
 
+  Scenario: Importing a lifecycle map whose pipeline is already claimed returns 409
+    When I import a lifecycle map that conflicts with an existing map's pipeline
+    Then the response status is 409
+
   Scenario: Copy-to-adapt a lifecycle map primitive creates a new map
     Given a lifecycle map primitive exists
     When I create a lifecycle map from the primitive
@@ -36,6 +40,11 @@ Feature: Lifecycle Map as Library Primitive
     Given a non-lifecycle-map primitive exists
     When I create a lifecycle map from the primitive
     Then the response status is 422
+
+  Scenario: Copy-to-adapt a primitive whose pipeline is already claimed returns 409
+    Given a lifecycle map primitive exists
+    When I create a lifecycle map from a primitive that conflicts with an existing map's pipeline
+    Then the response status is 409
 
   Scenario: Copy-to-adapt a missing primitive returns 404
     When I create a lifecycle map from missing primitive

@@ -660,14 +660,18 @@ def suggest_import_name(
     """
     if proposed_name not in existing_names:
         return proposed_name
-    # Reserve room for " <suffix>" and up to a 4-digit dedupe counter.
+    # Reserve room for " <suffix>" and the dedupe counter so every numbered
+    # candidate stays within max_length. With max_length=255 and
+    # suffix="(imported)" that is 4 counter digits, so the loop stops at 9999 —
+    # allowing idx=10000 (5 digits) would overflow the name column.
     reserved = len(suffix) + 2 + 4
     base = proposed_name[: max_length - reserved]
     candidate = f"{base} {suffix}"
     if candidate not in existing_names:
         return candidate
+    max_idx = 10 ** (reserved - len(suffix) - 2) - 1
     idx = 2
-    while f"{base} {suffix} {idx}" in existing_names and idx < 10000:
+    while f"{base} {suffix} {idx}" in existing_names and idx < max_idx:
         idx += 1
     return f"{base} {suffix} {idx}"
 

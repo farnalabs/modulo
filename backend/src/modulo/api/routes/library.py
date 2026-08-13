@@ -1385,10 +1385,10 @@ async def create_lifecycle_map_from_primitive_endpoint(
                 primitive=primitive,
             )
             await session.refresh(lifecycle_map)
-    except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except IntegrityError:
         _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
         raise HTTPException(

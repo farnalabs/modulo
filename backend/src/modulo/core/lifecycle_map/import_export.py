@@ -12,7 +12,6 @@ validation, so an imported map is validated exactly like an editor save.
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from typing import Any
 
@@ -21,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.lifecycle_map.service import create_lifecycle_map
 from modulo.core.lifecycle_map.validation import normalize_content
-from modulo.core.workflow_import_export import suggest_import_name
+from modulo.core.workflow_import_export import _sanitize_slug, suggest_import_name
 from modulo.db.crud.library_primitive import create_library_primitive
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.lifecycle_map import LifecycleMap
@@ -65,8 +64,9 @@ def build_export_envelope(lifecycle_map: LifecycleMap) -> dict[str, Any]:
 
 def _slugify(name: str) -> str:
     """Produce a URL-safe slug from a lifecycle map name."""
-    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
-    return slug or "lifecycle-map"
+    if not name:
+        return "lifecycle-map"
+    return _sanitize_slug(name)
 
 
 async def import_lifecycle_map_envelope(

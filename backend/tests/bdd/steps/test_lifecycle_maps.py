@@ -180,11 +180,49 @@ def post_create_lifecycle_map_from_primitive(ctx: dict[str, Any], request: Any, 
     ctx["created_map"] = _make_lifecycle_map(name=prim.name)
 
 
+@when("I create a lifecycle map from a primitive that conflicts with an existing map's pipeline")
+def post_create_lifecycle_map_from_conflicting_primitive(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    prim = ctx.get("primitive") or MagicMock(id=uuid.uuid4(), primitive_type="lifecycle_map", name="SDLC Workflow")
+    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+
+    async def _fake_materialize(session, *, org_id, account_id, primitive, owner_team_id=None, visibility="org"):
+        raise LifecycleMapPipelineConflictError("pipeline(s) already a stage of another active lifecycle map")
+
+    with (
+        patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
+        patch("modulo.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
+    ):
+        resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
+    _store_response(request, ctx, resp)
+
+
 @when("I create a lifecycle map from missing primitive")
 def post_create_lifecycle_map_from_missing_primitive(request: Any, client: Any) -> None:
     missing_id = uuid.uuid4()
     with patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=None)):
         resp = client.post(f"/api/v1/libraries/{missing_id}/create-lifecycle-map")
+    _store_response(request, ctx={}, resp=resp)
+
+
+@when("I import a lifecycle map that conflicts with an existing map's pipeline")
+def post_import_lifecycle_map_conflict(request: Any, client: Any) -> None:
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": "Conflicting",
+        "content_json": {
+            "stages": [{"id": "s1", "name": "Inbox", "type": "modulo", "pipeline_id": str(uuid.uuid4())}],
+            "edges": [],
+        },
+    }
+    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+
+    conflict_error = LifecycleMapPipelineConflictError("pipeline(s) already a stage of another active lifecycle map")
+    with patch(
+        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        new=AsyncMock(side_effect=conflict_error),
+    ):
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
     _store_response(request, ctx={}, resp=resp)
 
 

@@ -39,6 +39,7 @@ export default {
       "create_pipeline": "Create Pipeline",
       "create_lifecycle_map": "Create Lifecycle Map",
       "copy_to_adapt": "Copy to Adapt",
+      "copy_to_adapt_creating": "Copying...",
       "view_details": "View Details",
       "previous_page": "Previous",
       "next_page": "Next",
