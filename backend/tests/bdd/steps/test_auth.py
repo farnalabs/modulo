@@ -558,12 +558,8 @@ def step_rls_enforced(request: Any, expected: str) -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        coro = set_rls_org(session, ORG_ID)
-        loop.run_until_complete(coro)
-        msg = "Expected RuntimeError when calling set_rls_org outside a transaction, but no error was raised"
-        raise AssertionError(msg)
-    except RuntimeError:
-        pass  # Expected — RLS requires an active transaction.
+        with pytest.raises(RuntimeError, match="requires an active transaction"):
+            loop.run_until_complete(set_rls_org(session, ORG_ID))
     finally:
         loop.close()
 
