@@ -12,12 +12,16 @@ regression that silently weakens the suite:
 - deprecated ``datetime.utcnow()`` / ``datetime.utcfromtimestamp()``
 - ``== True`` / ``== False`` equality on booleans (type confusion + E712)
 - stray ``print()`` calls polluting CI output
+- ``==`` against a float literal that is not exactly representable in binary
+  (``0.1``, ``0.04``, ``0.95``, ...) — precision-fragile equality that
+  ``pytest.approx`` is designed to replace
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
 """
 
 import ast
+from fractions import Fraction
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent.parent
@@ -213,4 +217,46 @@ def test_no_stray_print_in_test_code():
     assert not violations, (
         f"Found {len(violations)} stray print() call(s) in test code.\n"
         "Remove debug prints or route diagnostics through logging.\n" + "\n".join(violations)
+    )
+
+
+def test_no_precision_fragile_float_equality():
+    """``x == 0.1`` style assertions are precision-fragile: most decimal
+    fractions have no exact binary representation, so the value under test
+    can differ from the literal in the last ulp (e.g. ``0.04 == 0.04`` is not
+    guaranteed once the left side is the result of arithmetic or a DB round
+    trip). Prefer ``pytest.approx(literal)`` which compares within tolerance.
+
+    The lens only flags literals that are *not* exactly representable as a
+    binary float (``0.5``, ``0.25``, ``150.0`` are safe; ``0.1``, ``0.04``,
+    ``0.95`` are not), so it targets genuinely fragile comparisons without
+    forcing ``approx`` on trivial cases.
+    """
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            for left, op, right in zip([node.left, *node.comparators[:-1]], node.ops, node.comparators, strict=True):
+                if not isinstance(op, ast.Eq):
+                    continue
+                for side in (left, right):
+                    if not isinstance(side, ast.Constant) or not isinstance(side.value, float):
+                        continue
+                    other = right if side is left else left
+                    if isinstance(other, ast.Constant) and isinstance(other.value, float):
+                        continue
+                    if Fraction(side.value) == Fraction(str(side.value)):
+                        continue
+                    violations.append(
+                        f"  {path.relative_to(TESTS)}:{node.lineno}  compares "
+                        f"value == {side.value!r} (no exact binary representation)"
+                    )
+    assert not violations, (
+        f"Found {len(violations)} precision-fragile float comparison(s).\n"
+        "Use pytest.approx(<literal>) instead of == against a non-representable float literal.\n"
+        + "\n".join(violations)
     )

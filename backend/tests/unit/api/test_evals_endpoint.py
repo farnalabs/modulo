@@ -169,7 +169,7 @@ class TestCreateEvalDefinition:
         assert data["name"] == "Test Eval"
         assert data["eval_type"] == "regex"
         assert data["failure_behaviour"] == "block"
-        assert data["pass_threshold"] == 0.8
+        assert data["pass_threshold"] == pytest.approx(0.8)
         assert data["suite_id"] == "suite-1"
 
     def test_create_omit_optionals(self, admin_client: TestClient) -> None:
@@ -396,7 +396,7 @@ class TestUpdateEvalDefinition:
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "Updated Eval"
-        assert data["pass_threshold"] == 0.9
+        assert data["pass_threshold"] == pytest.approx(0.9)
         assert data["suite_id"] == "suite-2"
 
     def test_update_not_found(self, admin_client: TestClient) -> None:

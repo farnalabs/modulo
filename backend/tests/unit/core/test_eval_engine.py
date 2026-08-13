@@ -221,7 +221,7 @@ class TestCustomFunctionEval:
         eval_def = _make_eval_def("custom_function", {"function": "my_fn", "functions": {"my_fn": my_fn}})
         result = engine.evaluate({"text": "hello"}, eval_def)
         assert result.passed is True
-        assert result.score == 0.85
+        assert result.score == pytest.approx(0.85)
 
     def test_function_not_found(self) -> None:
         engine = EvalEngine()
@@ -269,7 +269,7 @@ class TestCustomFunctionEval:
             {"function": "cfg", "functions": {"cfg": cfg_fn}, "function_config": {"threshold": 0.9}},
         )
         result = engine.evaluate({"text": "hello"}, eval_def)
-        assert result.score == 0.9
+        assert result.score == pytest.approx(0.9)
 
 
 # =============================================================================
@@ -287,7 +287,7 @@ class TestLLMJudgeEval:
             llm_judge_callable=_make_llm_callable({"passed": True, "score": 0.9, "detail": "good"}),
         )
         assert result.passed is True
-        assert result.score == 0.9
+        assert result.score == pytest.approx(0.9)
 
     def test_score_below_pass_threshold_sets_passed_false(self) -> None:
         engine = EvalEngine()
@@ -298,7 +298,7 @@ class TestLLMJudgeEval:
             llm_judge_callable=_make_llm_callable({"passed": False, "score": 0.4, "detail": "poor"}),
         )
         assert result.passed is False
-        assert result.score == 0.4
+        assert result.score == pytest.approx(0.4)
 
     def test_no_callable_returns_failed(self) -> None:
         engine = EvalEngine()
@@ -568,8 +568,8 @@ class TestEvalSuiteBlockedError:
     def test_constructor_sets_fields(self) -> None:
         err = EvalSuiteBlockedError("suite-1", 0.3, 0.8)
         assert err.suite_id == "suite-1"
-        assert err.score == 0.3
-        assert err.threshold == 0.8
+        assert err.score == pytest.approx(0.3)
+        assert err.threshold == pytest.approx(0.8)
         assert "0.30" in str(err)
         assert "0.80" in str(err)
         assert "suite-1" in str(err)
@@ -585,7 +585,7 @@ class TestEvalSuiteBlockedError:
 
     def test_constructor_high_threshold(self) -> None:
         err = EvalSuiteBlockedError("suite-1", 0.99, 1.0)
-        assert err.score == 0.99
+        assert err.score == pytest.approx(0.99)
         assert err.threshold == 1.0
 
 
@@ -694,7 +694,7 @@ class TestNormalContent:
         result = engine.evaluate({"output": content}, eval_def, llm_judge_callable=_make_capturing_callable(captured))
 
         assert result.passed is True
-        assert result.score == 0.95
+        assert result.score == pytest.approx(0.95)
         safe_output, _ = captured[0]
         assert content in safe_output["output"]
 

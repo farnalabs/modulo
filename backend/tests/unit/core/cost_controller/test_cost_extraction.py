@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from modulo.core.cost_controller.breakdown.constants import MAX_REPORTABLE_BAND_USD, MAX_REPORTABLE_USD_MIN
 from modulo.core.pipeline_engine.node_runner import _build_model_cost_fields, _extract_reported_cost
 
@@ -61,7 +63,7 @@ def test_just_below_band_ceiling_ok() -> None:
     result = _extract_reported_cost({"model_cost_usd": 49.99})
     assert result is not None
     _raw, clamped, was_clamped, out_of_band = result
-    assert clamped == 49.99
+    assert clamped == pytest.approx(49.99)
     assert was_clamped is False
     assert out_of_band is False
 
@@ -80,8 +82,8 @@ def test_normal_report() -> None:
     result = _extract_reported_cost({"model_cost_usd": 0.04})
     assert result is not None
     raw, clamped, was_clamped, out_of_band = result
-    assert raw == 0.04
-    assert clamped == 0.04
+    assert raw == pytest.approx(0.04)
+    assert clamped == pytest.approx(0.04)
     assert was_clamped is False
     assert out_of_band is False
 
@@ -113,7 +115,7 @@ def test_display_clamp_bounds_raw() -> None:
     # A 1e300 raw value: the display field is clamped, the raw rides for audit.
     fields = _build_model_cost_fields({"model_cost_raw_usd": 1e300, "model_cost_usd": 1e300})
     assert fields["model_cost_display_usd"] <= 1e6
-    assert fields["model_cost_raw_usd"] == 1e300
+    assert fields["model_cost_raw_usd"] == pytest.approx(1e300)
 
 
 def test_extraction_is_order_independent() -> None:

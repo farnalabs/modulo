@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from modulo.api.mcp_server import list_runs
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -104,10 +106,10 @@ class TestListRunsCost(_AuthContext):
         assert result["total"] == 1
         assert "error" not in result
         item = result["items"][0]
-        assert item["total_cost_usd"] == 1.23
+        assert item["total_cost_usd"] == pytest.approx(1.23)
         assert item["child_runs_cost_usd"] == 0.5
         assert item["child_runs_count"] == 2
-        assert item["aggregate_cost_usd"] == 1.73
+        assert item["aggregate_cost_usd"] == pytest.approx(1.73)
         assert isinstance(item["total_cost_usd"], float)
         assert isinstance(item["child_runs_cost_usd"], float)
         assert isinstance(item["aggregate_cost_usd"], float)
