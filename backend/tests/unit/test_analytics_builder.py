@@ -180,6 +180,27 @@ class TestFAR102Filters:
         assert "pipeline_id" not in str(stmt.compile(dialect=postgresql.dialect()))
         assert "pipeline_ids" not in params
 
+    def test_team_id_filter_joins_pipeline_for_null_facts(self) -> None:
+        team = uuid.UUID("55555555-5555-4555-8555-555555555555")
+        stmt, params = build_facts_query(_query(team_id=team))
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        assert "pipelines" in sql, "a team filter must join pipelines to fall back for NULL-stamped facts"
+        assert "COALESCE" in sql.upper(), "the effective owner must coalesce the fact team with the pipeline owner"
+        assert str(team) not in sql, "team id must be bound, never interpolated"
+        assert params["team_id"] == team
+
+        concurrency_stmt, concurrency_params = build_concurrency_query(_query(team_id=team))
+        concurrency_sql = str(concurrency_stmt.compile(dialect=postgresql.dialect()))
+        assert "pipelines" in concurrency_sql
+        assert "COALESCE" in concurrency_sql.upper()
+        assert concurrency_params["team_id"] == team
+
+    def test_team_id_filter_absent_for_org_wide_query(self) -> None:
+        stmt, params = build_facts_query(_query())
+        assert "COALESCE" not in str(stmt.compile(dialect=postgresql.dialect())).upper()
+        assert "team_id" not in params
+
     def test_error_code_filter_is_bound(self) -> None:
         stmt, params = build_facts_query(_query(error_code="executor_stalled"))
         sql = str(stmt.compile(dialect=postgresql.dialect()))

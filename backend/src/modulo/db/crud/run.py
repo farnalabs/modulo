@@ -356,6 +356,16 @@ async def create_run(
     )
     canonical_refs = _canonicalise_ref_entries(work_item_refs)
 
+    # Team-boundary stamping: a run inherits its owner team from the pipeline
+    # it belongs to when no explicit team is passed. ``Run.owner_team_id`` is
+    # the source of truth for the MCP team-boundary guards and the analytics
+    # facts (``RunDailyFact.team_id``); without this stamp, every guard reads a
+    # NULL owner and silently treats cross-team runs as org-level.
+    if owner_team_id is None:
+        owner_team_id = (
+            await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
+        ).scalar_one_or_none()
+
     run = Run(
         id=run_id,
         organisation_id=org_id,

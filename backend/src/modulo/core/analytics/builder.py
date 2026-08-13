@@ -31,6 +31,7 @@ from typing import Any
 
 import sqlalchemy as sa
 
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
 
 __all__ = [
@@ -236,12 +237,17 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
     if query.team_id is not None:
         # A team-scoped caller sees its own team's facts plus org-level facts
-        # (no owner team) — the same boundary the MCP guard applies.
+        # (no owner team) — the same boundary the MCP guard applies. The fact's
+        # stamped team is the source of truth; facts predating the create-time
+        # run stamp (NULL) fall back to the pipeline's owner so a NULL stamp
+        # can never widen the boundary.
         params["team_id"] = query.team_id
+        stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(
             sa.or_(
-                RunDailyFact.team_id.is_(None),
-                RunDailyFact.team_id == sa.bindparam("team_id", type_=sa.Uuid),
+                effective_team.is_(None),
+                effective_team == sa.bindparam("team_id", type_=sa.Uuid),
             )
         )
     if query.error_code is not None:
@@ -309,12 +315,17 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
     if query.team_id is not None:
         # A team-scoped caller sees its own team's facts plus org-level facts
-        # (no owner team) — the same boundary the MCP guard applies.
+        # (no owner team) — the same boundary the MCP guard applies. The fact's
+        # stamped team is the source of truth; facts predating the create-time
+        # run stamp (NULL) fall back to the pipeline's owner so a NULL stamp
+        # can never widen the boundary.
         params["team_id"] = query.team_id
+        stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
+        effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
         stmt = stmt.where(
             sa.or_(
-                RunDailyFact.team_id.is_(None),
-                RunDailyFact.team_id == sa.bindparam("team_id", type_=sa.Uuid),
+                effective_team.is_(None),
+                effective_team == sa.bindparam("team_id", type_=sa.Uuid),
             )
         )
     if query.error_code is not None:

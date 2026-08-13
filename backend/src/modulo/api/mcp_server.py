@@ -118,7 +118,7 @@ from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
-from modulo.db.models.run import TERMINAL_STATUSES
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import get_settings
@@ -336,6 +336,20 @@ async def _pipeline_owner_team_id(session: AsyncSession, pipeline_id: uuid.UUID)
     return (
         await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
     ).scalar_one_or_none()
+
+
+async def _run_owner_team_id(session: AsyncSession, run: Run) -> uuid.UUID | None:
+    """Resolve the effective owning team of a run (None for org-level runs).
+
+    ``Run.owner_team_id`` is the source of truth (snapshot at creation, see
+    ``create_run``), but pre-existing runs predate the stamp and carry NULL.
+    Falling back to the pipeline's current ``owner_team_id`` keeps the
+    boundary enforced for those rows too — a NULL run owner must never mean
+    "visible to every team-scoped key".
+    """
+    if run.owner_team_id is not None:
+        return run.owner_team_id
+    return await _pipeline_owner_team_id(session, run.pipeline_id)
 
 
 # PRD §7.18: MCP trigger_pipeline is limited to 60 calls/min per client. All
@@ -1763,11 +1777,13 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
-        if run is None:
-            return {"error": "run_not_found", "run_id": run_id}
-        # The run carries its own owner_team_id (snapshot at creation) — that
-        # is the source of truth, not the pipeline's current team assignment.
-        if _team_scoped_key_mismatch(run.owner_team_id):
+            if run is None:
+                return {"error": "run_not_found", "run_id": run_id}
+            # The run carries its own owner_team_id (snapshot at creation) — that
+            # is the source of truth, not the pipeline's current team assignment.
+            # Legacy runs with a NULL stamp fall back to the pipeline owner.
+            run_owner_team_id = await _run_owner_team_id(s, run)
+        if _team_scoped_key_mismatch(run_owner_team_id):
             return _team_scope_error("run", run_id)
         result: dict[str, Any] = {
             "run_id": str(run.id),
@@ -1859,9 +1875,10 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
-        if run is None:
-            return {"error": "run_not_found", "run_id": run_id}
-        if _team_scoped_key_mismatch(run.owner_team_id):
+            if run is None:
+                return {"error": "run_not_found", "run_id": run_id}
+            run_owner_team_id = await _run_owner_team_id(s, run)
+        if _team_scoped_key_mismatch(run_owner_team_id):
             return _team_scope_error("run", run_id)
         outputs = run.outputs_json or {}
         telemetry = run.node_telemetry_json
@@ -1918,7 +1935,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            if _team_scoped_key_mismatch(run.owner_team_id):
+            if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
                 return _team_scope_error("run", run_id)
             evals = await db_get_run_evals(s, rid)
 
@@ -2018,7 +2035,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            if _team_scoped_key_mismatch(run.owner_team_id):
+            if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
                 return _team_scope_error("run", run_id)
             if run.status in TERMINAL_STATUSES:
                 detail = f"Run is already in terminal status: {run.status}"
@@ -2054,7 +2071,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         check_tool_scope(_ctx_role_val(), "list_pending_hitl")
         from sqlalchemy import func, select
 
-        from modulo.db.models.run import Run
+        from modulo.db.models.pipeline import Pipeline
 
         terminal_statuses = TERMINAL_STATUSES
         org_id = _ctx_org_id_val()
@@ -2068,12 +2085,20 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
             if key_team_id is not None:
                 # A team-scoped key only sees pending gates for runs owned by its
                 # own team (or org-level runs with no owner team) — the same
-                # boundary the run tools enforce.
+                # boundary the run tools enforce. The run's owner is the source
+                # of truth; runs predating the create-time stamp (NULL) fall
+                # back to the pipeline's owner so a NULL stamp can never widen
+                # the boundary.
                 from sqlalchemy import or_
 
-                base_where.append(or_(Run.owner_team_id.is_(None), Run.owner_team_id == key_team_id))
+                effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+                base_where.append(or_(effective_owner.is_(None), effective_owner == key_team_id))
             total_result = await s.execute(
-                select(func.count()).select_from(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*base_where)
+                select(func.count())
+                .select_from(HitlClaim)
+                .join(Run, HitlClaim.run_id == Run.id)
+                .join(Pipeline, Run.pipeline_id == Pipeline.id)
+                .where(*base_where)
             )
             total = total_result.scalar_one()
 
@@ -2081,6 +2106,7 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
             result = await s.execute(
                 select(HitlClaim)
                 .join(Run, HitlClaim.run_id == Run.id)
+                .join(Pipeline, Run.pipeline_id == Pipeline.id)
                 .where(*base_where)
                 .offset(offset)
                 .limit(page_size)

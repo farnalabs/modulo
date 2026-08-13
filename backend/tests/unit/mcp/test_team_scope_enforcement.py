@@ -371,6 +371,52 @@ class TestRunToolsTeamScope(_AuthContext):
         assert result["error"] == "team_boundary_violation"
         mock_cancel.assert_not_awaited()
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_run_status_blocked_when_run_owner_unstamped_but_pipeline_other_team(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        # Pre-stamp production state: Run.owner_team_id is NULL (never written
+        # by any code path before the create_run inheritance fix). The guard
+        # must NOT treat a NULL stamp as org-level — it falls back to the
+        # pipeline's owner team and still blocks the cross-team read.
+        _ctx_team_id.set(_TEAM_A)
+        run_id = uuid.uuid4()
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server.get_run") as mock_get_run,
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)) as mock_owner,
+        ):
+            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=None)
+            mock_session.return_value = _make_session_context(session)
+            result = await get_run_status(run_id=str(run_id))
+
+        assert result["error"] == "team_boundary_violation"
+        mock_owner.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_get_run_status_allowed_when_run_owner_unstamped_and_pipeline_org_level(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        # An unstamped run whose pipeline is org-level (no owner team) stays
+        # accessible to a team-scoped key — matches the org-level semantics.
+        _ctx_team_id.set(_TEAM_A)
+        run_id = uuid.uuid4()
+        run = _make_run(pipeline_id=uuid.uuid4(), status="complete", owner_team_id=None)
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server.get_run") as mock_get_run,
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=None)) as mock_owner,
+        ):
+            mock_get_run.return_value = run
+            mock_session.return_value = _make_session_context(session)
+            result = await get_run_status(run_id=str(run_id), detail=False)
+
+        assert result["run_id"] == str(run.id)
+        assert result["status"] == "complete"
+        mock_owner.assert_awaited_once()
+
 
 class _OperatorAuthContext(_AuthContext):
     """Auth context with an operator-role key (mutating tools need operator)."""
