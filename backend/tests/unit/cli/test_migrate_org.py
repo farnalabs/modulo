@@ -358,6 +358,11 @@ class TestImport:
         self._make_bundle_file(dict(self.HASHED_BUNDLE), input_path)
         main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
         mock_do_import.assert_called_once()
+        called_bundle, called_org, called_strategy = mock_do_import.call_args.args
+        assert called_bundle["organisation"]["id"] == "o1"
+        assert called_bundle["__meta__"]["version"] == 1
+        assert called_org == uuid.UUID("00000000-0000-0000-0000-000000000001")
+        assert called_strategy == "skip"
 
     def test_import_file_not_found(self) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -378,6 +383,10 @@ class TestImport:
         self._make_bundle_file(dict(self.HASHED_BUNDLE), input_path)
         main(["import-org", "--org-id", "00000000-0000-0000-0000-000000000001", "--input", str(input_path)])
         mock_do_import.assert_called_once()
+        called_bundle, called_org, called_strategy = mock_do_import.call_args.args
+        assert called_bundle["organisation"]["id"] == "o1"
+        assert called_org == uuid.UUID("00000000-0000-0000-0000-000000000001")
+        assert called_strategy == "skip"
 
 
 # ── DB-layer helpers used by the export/import flow ─────────────────────────
