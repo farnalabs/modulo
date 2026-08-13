@@ -7,7 +7,8 @@ No live Postgres here (integration territory) — instead:
   partial CHECK strings, and the downgrade restoring the pre-feature strings.
 * The ORM models' CHECK constraints are compared against the migration strings
   (drift guard): a CHECK edited on one side and not the other fails loudly.
-* ``0095_ongoing_trigger_flag`` is confirmed as the single head of the chain.
+* ``0096_hitl_claims_overdue_notified`` is confirmed as the single head of the
+  chain, sitting directly on top of ``0095_ongoing_trigger_flag``.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from alembic.script import ScriptDirectory
 
 _MIGRATION_0094 = "0094_ongoing_trigger_type"
 _MIGRATION_0095 = "0095_ongoing_trigger_flag"
+_MIGRATION_0096 = "0096_hitl_claims_overdue_notified"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -53,6 +55,11 @@ def migration_0094() -> ModuleType:
 @pytest.fixture(scope="module")
 def migration_0095() -> ModuleType:
     return _load_migration(_MIGRATION_0095)
+
+
+@pytest.fixture(scope="module")
+def migration_0096() -> ModuleType:
+    return _load_migration(_MIGRATION_0096)
 
 
 def _script() -> ScriptDirectory:
@@ -104,11 +111,14 @@ class TestMigration0095OngoingFlag:
         assert migration_0095.revision == "0095_ongoing_trigger_flag"
         assert migration_0095.down_revision == "0094_ongoing_trigger_type"
 
-    def test_single_head_chain(self, migration_0095: ModuleType) -> None:
+    def test_single_head_chain(self, migration_0096: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == ["0095_ongoing_trigger_flag"], f"expected a single head, got {heads}"
-        assert migration_0095.revision in heads
+        assert heads == ["0096_hitl_claims_overdue_notified"], f"expected a single head, got {heads}"
+        assert migration_0096.revision in heads
+
+    def test_0096_revises_0095(self, migration_0096: ModuleType) -> None:
+        assert migration_0096.down_revision == "0095_ongoing_trigger_flag"
 
     def test_flag_upserts_ongoing_trigger_inactive(self, migration_0095: ModuleType) -> None:
         assert "ongoing_trigger" in migration_0095._FLAGS
