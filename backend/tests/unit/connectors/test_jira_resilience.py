@@ -187,7 +187,7 @@ def test_parse_rate_limit_reset(monkeypatch):
     """X-RateLimit-Reset (epoch seconds) becomes a positive wait delay."""
     from modulo.connectors.jira import _parse_rate_limit_reset
 
-    monkeypatch.setattr("modulo.connectors.jira.time.time", lambda: 1_000_000)
+    monkeypatch.setattr("time.time", lambda: 1_000_000)
     resp = httpx.Response(429, headers={"X-RateLimit-Reset": "1000010"})
     delay = _parse_rate_limit_reset(resp)
     assert delay == pytest.approx(10.0)
@@ -197,7 +197,7 @@ def test_parse_rate_limit_reset_missing(monkeypatch):
     """No X-RateLimit-Reset header -> None (blind backoff fallback)."""
     from modulo.connectors.jira import _parse_rate_limit_reset
 
-    monkeypatch.setattr("modulo.connectors.jira.time.time", lambda: 1_000_000)
+    monkeypatch.setattr("time.time", lambda: 1_000_000)
     assert _parse_rate_limit_reset(httpx.Response(429)) is None
 
 
@@ -213,7 +213,7 @@ def test_parse_rate_limit_reset_in_the_past(monkeypatch):
     """A reset epoch already elapsed -> None (no point waiting)."""
     from modulo.connectors.jira import _parse_rate_limit_reset
 
-    monkeypatch.setattr("modulo.connectors.jira.time.time", lambda: 1_000_000)
+    monkeypatch.setattr("time.time", lambda: 1_000_000)
     resp = httpx.Response(429, headers={"X-RateLimit-Reset": "999999"})
     assert _parse_rate_limit_reset(resp) is None
 
@@ -249,7 +249,7 @@ def test_rate_limit_metadata_only_present_headers():
 
 def test_sleep_delay_uses_rate_limit_reset_on_429(connector, monkeypatch):
     """On 429 with X-RateLimit-Reset, sleep until the quota window resets."""
-    from modulo.connectors.jira import time
+    import time
 
     monkeypatch.setattr(time, "time", lambda: 1_000_000)
     resp = httpx.Response(429, headers={"X-RateLimit-Reset": "1000010"})
@@ -269,8 +269,7 @@ def test_sleep_delay_falls_back_to_backoff_on_429(connector):
 async def test_retry_429_then_success_with_reset_header(connector, monkeypatch):
     """A 429 carrying X-RateLimit-Reset retries using the quota wait, then succeeds."""
     import asyncio
-
-    from modulo.connectors.jira import time
+    import time
 
     monkeypatch.setattr(time, "time", lambda: 1_000_000)
     sleeps = []
