@@ -45,12 +45,20 @@ def validate_ongoing_config(
     * ``config_json.scan_interval_seconds`` must be >= 60 (the scheduler tick
       is 60s; a lower value would be ignored).
 
-    A non-ongoing ``trigger_type`` passes through with no checks.
+    Any failure — including a non-numeric ``daily_spend_limit`` or
+    ``scan_interval_seconds`` (which would otherwise leak a ``TypeError`` /
+    ``ValueError`` from the comparison / ``int()`` coercion as an HTTP 500) —
+    raises ``HTTPException(422)``. A non-ongoing ``trigger_type`` passes
+    through with no checks.
     """
     if trigger_type != "ongoing":
         return
 
-    if daily_spend_limit is None or daily_spend_limit <= 0:
+    try:
+        spend_limit_ok = daily_spend_limit is not None and daily_spend_limit > 0
+    except TypeError:
+        spend_limit_ok = False
+    if not spend_limit_ok:
         raise HTTPException(
             status_code=422,
             detail="ongoing triggers require daily_spend_limit (must be greater than 0)",
@@ -68,7 +76,13 @@ def validate_ongoing_config(
                 f"max_concurrent_runs ({pipeline_max_concurrent_runs})"
             ),
         )
-    scan_interval = int((config_json or {}).get("scan_interval_seconds") or 60)
+    try:
+        scan_interval = int((config_json or {}).get("scan_interval_seconds") or 60)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=422,
+            detail="ongoing trigger scan_interval_seconds must be an integer (number of seconds)",
+        ) from None
     if scan_interval < 60:
         raise HTTPException(
             status_code=422,
