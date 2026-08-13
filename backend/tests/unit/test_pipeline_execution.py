@@ -1320,13 +1320,15 @@ class TestSaqWorkerSettings:
         assert settings["timers"] == {"schedule": 5, "worker_info": 89, "sweep": 60, "abort": 1}
         # PR B-2: system crons wired (fire_due_triggers, reconcile, claim-expiry,
         # retention, webhook-dedup, stale recovery) + the cost probe (PR A2)
-        # + the hourly missed-fire alert cron (retro item 4).
+        # + the hourly missed-fire alert cron (retro item 4)
+        # + the hitl_overdue notification sweep.
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
             "fire_due_triggers",
             "dispatcher_reconcile",
             "claim_expiry",
+            "hitl_overdue",
             "retention_cleanup",
             "webhook_dedup_cleanup",
             "trigger_events_cleanup",
