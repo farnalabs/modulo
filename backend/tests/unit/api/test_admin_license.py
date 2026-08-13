@@ -361,3 +361,78 @@ class TestUploadLicense:
         resp = tenantless_admin_client.post(self.URL, json={"license_key": "dGVzdA==.dGVzdA=="})
         assert resp.status_code == 403
         assert resp.json()["detail"] == "Organisation membership required"
+
+
+class TestIssueLicense:
+    URL = "/api/v1/admin/license/issue"
+
+    @staticmethod
+    def _make_issue_settings() -> Settings:
+        return Settings(
+            database_url="postgresql+asyncpg://localhost/test",
+            secret_key=_VALID_32,
+            fernet_key=_VALID_32,
+            modulo_admin_password="testpass",
+            modulo_license_key="test-license-key",
+            modulo_license_private_key=_TEST_PRIV,
+            redis_url="",
+        )
+
+    @pytest.fixture
+    def issue_client(self) -> Generator[TestClient, None, None]:
+        app.dependency_overrides[get_settings] = self._make_issue_settings
+        app.dependency_overrides[get_db_session] = _make_mock_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="admin",
+            organisation_id=_TEST_ORG_ID,
+            account_id=_TEST_ACCOUNT_ID,
+            org_role="admin",
+        )
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        yield TestClient(app)
+        app.dependency_overrides.clear()
+
+    def test_issues_valid_license(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": "Acme"})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["org_name"] == "Acme"
+        assert data["tier"] == "team"
+        assert data["license_key"]
+        assert data["org_id"]
+        validation = parse_and_verify(data["license_key"])
+        assert validation.valid is True
+        assert validation.license_data is not None
+        assert validation.license_data.org_id == data["org_id"]
+
+    def test_issues_with_custom_features(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": "Acme", "features": ["sso"]})
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["features"] == ["sso"]
+
+    def test_issues_with_email_sends_background_email(self, issue_client: TestClient) -> None:
+        with patch("modulo.api.routes.admin_license.email_enterprise_license", new=AsyncMock()) as mock_email:
+            resp = issue_client.post(self.URL, json={"org_name": "Acme", "email": "bob@acme.com"})
+        assert resp.status_code == 201
+        mock_email.assert_awaited_once()
+        assert mock_email.await_args.args[1] == "bob@acme.com"
+
+    def test_requires_auth(self, unauth_client: TestClient) -> None:
+        resp = unauth_client.post(self.URL, json={"org_name": "Acme"})
+        assert resp.status_code in (401, 403)
+
+    def test_requires_admin(self, operator_client: TestClient) -> None:
+        resp = operator_client.post(self.URL, json={"org_name": "Acme"})
+        assert resp.status_code == 403
+
+    def test_empty_org_name_rejected(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": ""})
+        assert resp.status_code == 422
+
+    def test_invalid_term_months_rejected(self, issue_client: TestClient) -> None:
+        resp = issue_client.post(self.URL, json={"org_name": "Acme", "term_months": 0})
+        assert resp.status_code == 422
