@@ -127,6 +127,39 @@ def require_permission(permission: str) -> Any:
     return _tagged_dep(Depends(_check), permission=permission, permission_kind="tenant")
 
 
+def require_in_dev_operator(principal: TenantPrincipal, permission: str) -> None:
+    """Enforce the operator gate for an In-Dev reveal on a list endpoint.
+
+    Called by list handlers that accept ``?include_in_dev=true``; the override
+    must only be honoured for operator+ principals (ADR 010 disclosure control
+    — In-Dev items are deliberately hidden from the UI and all list endpoints).
+    The base ``connector.list`` / ``model_backend.list`` / ``library.search``
+    permissions remain viewer-level so ordinary listing is unchanged; only the
+    In-Dev reveal is gated (``*.list.in_dev`` resolves to ``operator``).
+
+    Fail-closed and NEVER lifted by the org authz kill switch (ADR 017 DECISION
+    3 scope pin): the In-Dev disclosure control is deliberately
+    ``kill_switch_eligible=False`` so an org that disables authz enforcement
+    still cannot expose pre-release items to viewers/runners.
+    """
+    required = resolve_required(permission)
+    try:
+        assert_org_role(principal.org_role, required, permission, kill_switch_eligible=False)
+    except PermissionDenied as exc:
+        logger.warning(
+            "permission.denied",
+            extra={
+                "permission": permission,
+                "required": required,
+                "actual": principal.org_role,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' requires '{required}' role",
+        ) from exc
+
+
 def require_permission_any_credential(permission: str) -> Any:
     """FastAPI dependency factory — require the org role for JWT OR API-key callers.
 

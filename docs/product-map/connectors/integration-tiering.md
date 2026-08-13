@@ -66,8 +66,12 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 
 ### Server-side enforcement
 
-- [x] `in_dev` items ARE filtered server-side: `list_connector_instances` and `list_model_backends` CRUD both default to `excluded_tiers=["in_dev"]` and exclude `in_dev` rows from total/item queries. The library `list_primitives` service applies the same exclusion to org, modulo, and community items. Every list endpoint silently filters `in_dev` via the CRUD/service layer — no caller override is exposed through the API.
-- [ ] No API query parameter exists for admins to bypass the `in_dev` exclusion — any operator who needs to see In-Dev items must query the DB directly.
+- [x] `in_dev` items ARE filtered server-side: `list_connector_instances` and `list_model_backends` CRUD both default to `excluded_tiers=["in_dev"]` and exclude `in_dev` rows from total/item queries. The library `list_primitives` service applies the same exclusion to org, modulo, and community items. Every list endpoint silently filters `in_dev` via the CRUD/service layer by default.
+- [x] `GET /api/v1/connectors?include_in_dev=true` bypasses the exclusion — the route passes `excluded_tiers=[]` (no tier filter) instead of the default `None` → `["in_dev"]` so operators can list In-Dev connectors for testing
+- [x] `GET /api/v1/model-backends?include_in_dev=true` bypasses the exclusion identically
+- [x] `GET /api/v1/libraries?include_in_dev=true` bypasses the exclusion — the route passes `excluded_tiers=[]` through `list_primitives`, keeping In-Dev org, modulo, and community items
+- [x] The In-Dev reveal is operator-gated (security review 2026-08-13): each endpoint keeps its base viewer-level list permission (`connector.list` / `model_backend.list` / `library.search`), but `include_in_dev=true` additionally requires the `*.list.in_dev` / `library.search.in_dev` permission which resolves to `operator` — a viewer/runner calling with `?include_in_dev=true` gets 403 (fail-closed, never lifted by the org authz kill switch, ADR 017 DECISION 3). Enforcement is via `require_in_dev_operator` in `api/dependencies.py`
+- [x] Omitting `include_in_dev` (or `?include_in_dev=false`) preserves the default `in_dev` exclusion — backwards compatible, no behaviour change for existing clients
 
 ### Error Handling
 
@@ -98,6 +102,26 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 
 ## QA History
 
+### 2026-08-13 — security review: `include_in_dev` reveal operator-gated (PR #1176)
+
+**Fixed (MAJOR):** the In-Dev reveal was previously available to ANY tenant member — each list endpoint relied on its base viewer-level permission (`connector.list`, `model_backend.list`, `library.search`), so `GET /api/v1/connectors?include_in_dev=true` let any viewer disclose pre-release In-Dev items that ADR 010 deliberately hides. The override is now gated behind the operator role:
+
+- New permission keys in `auth/permissions.py`: `connector.list.in_dev`, `model_backend.list.in_dev`, `library.search.in_dev` — all resolve to `operator` (import-time validated like every registry key).
+- New shared helper `require_in_dev_operator(principal, permission)` in `api/dependencies.py`: enforced when `include_in_dev=true`; raises 403 for viewers/runners. It passes `kill_switch_eligible=False` to `assert_org_role` so the org authz kill switch (ADR 017 DECISION 3) can never lift the In-Dev disclosure control — the base list permissions stay viewer-level, so ordinary listing is unchanged.
+- Each list handler now calls the gate before any DB work: `connectors.py`, `model_backends.py`, `library.py`.
+- **Tests:** 3 unit tests per endpoint (viewer → 403 asserting the permission key; operator/admin → 200 with the actual response JSON containing an `in_dev` item — replacing the previous mock-kwargs-only assertions; `include_in_dev=false` keeps the default exclusion) + 1 BDD scenario in `tiering.feature` (`viewers cannot reveal in_dev library primitives` → 403). 21 focused unit tests + 4/4 in_dev BDD scenarios pass.
+
+### 2026-08-13 — improve-architecture: `?include_in_dev=true` API override RESOLVED
+
+**RESOLVED the "No API override for In-Dev visibility" known gap.** All three list endpoints now accept an `include_in_dev` query param (boolean, default `false`) that bypasses the server-side `in_dev` tier exclusion so operators can reveal In-Dev connectors/backends/primitives for testing without querying the DB directly:
+
+- `GET /api/v1/connectors` → passes `excluded_tiers=[]` to `list_connector_instances` when `include_in_dev=true` (default `None` → CRUD's `["in_dev"]`)
+- `GET /api/v1/model-backends` → same wiring into `list_model_backends`
+- `GET /api/v1/libraries` → same wiring into the `list_primitives` service (covers org + modulo + community items)
+- `?include_in_dev=false` and omitting the param are identical — default exclusion preserved (backwards compatible)
+
+**Tests:** 9 new route unit tests (`test_connectors_endpoint.py`, `test_model_backends_endpoint.py`, `test_library_endpoint.py` — default `excluded_tiers=None`, `include_in_dev=true` → `[]`, `include_in_dev=false` → `None` on each endpoint) + 3 new BDD scenarios in `tiering.feature` (default listing excludes In-Dev, `include_in_dev=true` reveals it, `include_in_dev=false` keeps exclusion) with 4 new step definitions. **Fixed 2 pre-existing broken tiering.feature scenarios** (`Then the response status is 201` referenced the unset `request.node._resp` — the create step now records it). Regenerated `frontend/src/lib/api/schema.ts` (additive: `include_in_dev?: boolean` on all 3 list operations). 157 focused unit tests pass, 5/5 tiering BDD scenarios pass, ruff check + format clean, mypy --strict clean. Status: partial.
+
 ### 2026-08-06 — improve-architecture (product-map walk)
 
 **Fixed (MAJOR):** `copy_to_adapt` now propagates `tier`. Both the raw CRUD function (`db/crud/library_primitive.py`) and the service wrapper (`core/library_service.copy_to_adapt`) set `tier=source.tier` on the copied primitive, so a `preview` (or `in_dev`) primitive stays classified instead of silently downgrading to `native` via `server_default`. Added unit tests: service-level (`test_copy_to_adapt_propagates_tier`, `test_copy_to_adapt_native_tier_defaults`) and CRUD-level (`test_copy_to_adapt_propagates_tier`, `test_copy_to_adapt_native_tier_preserved`).
@@ -118,7 +142,7 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 
 ## Known Gaps
 
-- **No API override for In-Dev visibility.** Server-side filtering of `in_dev` items is hardcoded in the CRUD/service layer — there is no query parameter (`?include_in_dev=true`) that an admin could use to reveal In-Dev entries for testing. The frontend has no debug toggle either (ADR 010 open question).
+- ~~**No API override for In-Dev visibility.** Server-side filtering of `in_dev` items is hardcoded in the CRUD/service layer — there is no query parameter (`?include_in_dev=true`) that an admin could use to reveal In-Dev entries for testing. The frontend has no debug toggle either (ADR 010 open question).~~ **RESOLVED (2026-08-13)**: `?include_in_dev=true` now reveals In-Dev items on all three list endpoints (`GET /api/v1/connectors`, `GET /api/v1/model-backends`, `GET /api/v1/libraries`); the frontend debug toggle remains an open ADR 010 question.
 - **No tier promotion/demotion workflow.** Changing a connector/backend/primitive from `preview` to `native` (or vice versa) is a raw `PATCH` with no approval process, audit trail, or changelog entry — flagged as an open question in ADR 010.
 - **`copy_to_adapt` tier propagation** — ~~does not propagate tier~~ **RESOLVED (2026-08-06)**: both the raw CRUD `copy_to_adapt` and the service-level `library_service.copy_to_adapt` now carry `source.tier` onto the copied primitive; unit tests cover `preview` and `native` sources.
 - **Connector/ModelBackend tiering still lacks BDD coverage.** Only library primitives have BDD scenarios (`tiering.feature` — 2 scenarios covering create-with-tier and default-tier). Connector and ModelBackend tier creation/sorting lacks BDD coverage entirely.

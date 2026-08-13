@@ -277,6 +277,58 @@ class TestRequireTargetOrgRolePauseKillSwitch:
         assert outcome.account_id == _ACCOUNT
 
 
+class TestRequireInDevOperator:
+    """The In-Dev reveal gate: ``*.list.in_dev`` / ``library.search.in_dev`` @ operator.
+
+    Fail-closed and kill-switch-immune (``kill_switch_eligible=False``): a
+    viewer/runner must never reveal ADR 010-hidden In-Dev items, even in orgs
+    with authz enforcement disabled.
+    """
+
+    @pytest.mark.parametrize(
+        "permission",
+        ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
+    )
+    def test_operator_allowed(self, permission: str) -> None:
+        from modulo.api.dependencies import require_in_dev_operator
+
+        require_in_dev_operator(_tenant("operator"), permission)
+
+    @pytest.mark.parametrize(
+        "permission",
+        ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
+    )
+    def test_admin_allowed(self, permission: str) -> None:
+        from modulo.api.dependencies import require_in_dev_operator
+
+        require_in_dev_operator(_tenant("admin"), permission)
+
+    @pytest.mark.parametrize(
+        "permission",
+        ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
+    )
+    def test_viewer_denied(self, permission: str) -> None:
+        from modulo.api.dependencies import require_in_dev_operator
+
+        with pytest.raises(HTTPException) as excinfo:
+            require_in_dev_operator(_tenant("viewer"), permission)
+        assert excinfo.value.status_code == 403
+        assert permission in excinfo.value.detail
+        assert "operator" in excinfo.value.detail
+
+    @pytest.mark.parametrize(
+        "permission",
+        ["connector.list.in_dev", "model_backend.list.in_dev", "library.search.in_dev"],
+    )
+    def test_runner_denied(self, permission: str) -> None:
+        from modulo.api.dependencies import require_in_dev_operator
+
+        with pytest.raises(HTTPException) as excinfo:
+            require_in_dev_operator(_tenant("runner"), permission)
+        assert excinfo.value.status_code == 403
+        assert permission in excinfo.value.detail
+
+
 def _request(org_id: uuid.UUID) -> MagicMock:
     request = MagicMock()
     request.path_params = {"org_id": str(org_id)}
