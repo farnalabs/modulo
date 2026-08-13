@@ -14,7 +14,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any
 
-from sqlalchemy import Date, bindparam, case, cast, delete, func, or_, select, text
+from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -23,6 +23,7 @@ from modulo.core.exceptions import OrgDeletedError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     canonical_work_item_id,
@@ -452,8 +453,11 @@ async def list_runs(
     if team_id is not None:
         # A team-scoped caller sees runs for its own team's pipelines plus
         # org-level pipelines (no owner team) — the same boundary the MCP
-        # guard applies.
-        team_scope = or_(Pipeline.owner_team_id.is_(None), Pipeline.owner_team_id == team_id)
+        # guard applies. The run's stamped owner is the source of truth;
+        # runs predating the create-time stamp (NULL) fall back to the
+        # pipeline's owner so a NULL stamp can never widen the boundary.
+        effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+        team_scope = team_scope_clause(effective_owner, team_id)
         q = q.where(team_scope)
         count_q = count_q.where(team_scope)
     if pipeline_id is not None:

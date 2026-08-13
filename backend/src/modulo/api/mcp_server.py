@@ -327,15 +327,21 @@ def _team_scope_error(resource_kind: str, resource_id: str) -> dict[str, Any]:
     }
 
 
+def _team_scope_error_str(resource_kind: str, resource_id: str) -> str:
+    """String error (resource surface) for a team-boundary violation."""
+    err = _team_scope_error(resource_kind, resource_id)
+    return f"error: {err['error']} — {err['detail']}"
+
+
 async def _pipeline_owner_team_id(session: AsyncSession, pipeline_id: uuid.UUID) -> uuid.UUID | None:
-    """Resolve the owning team of a pipeline (None for org-level pipelines)."""
-    from sqlalchemy import select
+    """Resolve the owning team of a pipeline (None for org-level pipelines).
 
-    from modulo.db.models.pipeline import Pipeline
+    Thin wrapper over the shared ``team_scope`` resolver so MCP guards and the
+    DB list filters share one effective-owner source.
+    """
+    from modulo.db.crud.team_scope import pipeline_owner_team_id
 
-    return (
-        await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
-    ).scalar_one_or_none()
+    return await pipeline_owner_team_id(session, pipeline_id)
 
 
 async def _run_owner_team_id(session: AsyncSession, run: Run) -> uuid.UUID | None:
@@ -2089,10 +2095,10 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
                 # of truth; runs predating the create-time stamp (NULL) fall
                 # back to the pipeline's owner so a NULL stamp can never widen
                 # the boundary.
-                from sqlalchemy import or_
+                from modulo.db.crud.team_scope import team_scope_clause
 
                 effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
-                base_where.append(or_(effective_owner.is_(None), effective_owner == key_team_id))
+                base_where.append(team_scope_clause(effective_owner, key_team_id))
             total_result = await s.execute(
                 select(func.count())
                 .select_from(HitlClaim)
@@ -2189,6 +2195,16 @@ async def review_hitl(
 
     try:
         async with _session(org_id) as s:
+            # Team boundary: a team-scoped key must not act on a run owned by
+            # another team, even when the gate itself is org-level
+            # (required_team_id IS NULL). The run's effective owner is the
+            # source of truth with pipeline fallback for pre-stamp runs.
+            run = await get_run(s, rid)
+            if run is None:
+                return {"error": "gate_not_found", "run_id": run_id, "gate_id": gate_id}
+            if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
+                return _team_scope_error("run", run_id)
+
             # Check human_only for approve action
             if action == "approve":
                 gate_row = (
@@ -2402,7 +2418,9 @@ async def list_trigger_events(
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
+            key_team_id = _ctx_team_id_val()
             q = select(TriggerEvent).where(TriggerEvent.organisation_id == org_id)
+            joined = False
 
             if trigger_id is not None:
                 try:
@@ -2414,6 +2432,14 @@ async def list_trigger_events(
                         "detail": f"Invalid UUID format: {trigger_id}",
                     }
                 q = q.where(TriggerEvent.trigger_id == tid)
+                if key_team_id is not None:
+                    # A team-scoped key must not read events for another
+                    # team's trigger even when no pipeline filter is given.
+                    trigger = (await s.execute(select(Trigger).where(Trigger.id == tid))).scalar_one_or_none()
+                    if trigger is not None and _team_scoped_key_mismatch(
+                        await _pipeline_owner_team_id(s, trigger.pipeline_id)
+                    ):
+                        return _team_scope_error("pipeline", str(trigger.pipeline_id))
 
             if pipeline_id is not None:
                 try:
@@ -2424,12 +2450,30 @@ async def list_trigger_events(
                         "field": "pipeline_id",
                         "detail": f"Invalid UUID format: {pipeline_id}",
                     }
-                q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
-                q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+                if key_team_id is not None:
+                    owner_team_id = await _pipeline_owner_team_id(s, pid)
+                    if _team_scoped_key_mismatch(owner_team_id):
+                        return _team_scope_error("pipeline", str(pid))
+                if not joined:
+                    q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+                    q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+                    joined = True
                 q = q.where(
                     Trigger.pipeline_id == pid,
                     _Pipeline.deleted_at.is_(None),
                 )
+
+            if key_team_id is not None:
+                # A team-scoped key only sees events whose trigger's pipeline
+                # is org-level or owned by its own team — the same boundary
+                # ``list_triggers`` applies.
+                from modulo.db.crud.team_scope import team_scope_clause
+
+                if not joined:
+                    q = q.join(Trigger, TriggerEvent.trigger_id == Trigger.id)
+                    q = q.join(_Pipeline, Trigger.pipeline_id == _Pipeline.id)
+                    joined = True
+                q = q.where(team_scope_clause(_Pipeline.owner_team_id, key_team_id))
 
             total = (await s.execute(select(func.count()).select_from(q.subquery()))).scalar_one_or_none() or 0
 
@@ -4004,7 +4048,7 @@ async def resource_pipelines() -> str:
 
     org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
-        result = await list_pipelines(s, page=1, page_size=50)
+        result = await list_pipelines(s, page=1, page_size=50, team_id=_ctx_team_id_val())
     lines = [f"- {p.name} (id={p.id}, visibility={p.visibility})" for p in result.items]
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
 
@@ -4024,7 +4068,9 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
         pipeline = await get_pipeline(s, pid)
         if pipeline is None:
             return f"Pipeline {pipeline_id} not found."
-        result = await list_runs(s, pipeline_id=pid, page=1, page_size=50)
+        if _team_scoped_key_mismatch(pipeline.owner_team_id):
+            return _team_scope_error_str("pipeline", pipeline_id)
+        result = await list_runs(s, pipeline_id=pid, page=1, page_size=50, team_id=_ctx_team_id_val())
         # Child-run cost+count rollup: ONE GROUP BY query for the whole page,
         # joined in Python — never a per-row aggregate (avoids N+1).
         run_ids = [r.id for r in result.items]
@@ -4072,6 +4118,8 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
         pipeline = await get_pipeline(s, pid)
         if pipeline is None:
             return f"Pipeline {pipeline_id} not found."
+        if _team_scoped_key_mismatch(pipeline.owner_team_id):
+            return _team_scope_error_str("pipeline", pipeline_id)
 
         edge_result = await s.execute(
             select(func.count()).select_from(PipelineEdge).where(PipelineEdge.pipeline_id == pid)
@@ -4117,6 +4165,8 @@ async def resource_pipeline_snapshots(pipeline_id: str) -> str:
         return f"error: Invalid pipeline_id UUID: {pipeline_id}"
 
     async with _session(org_id) as s:
+        if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, pid)):
+            return _team_scope_error_str("pipeline", pipeline_id)
         snapshots, _ = await list_snapshots(s, pid, page=1, page_size=50)
 
     lines = [
@@ -4142,6 +4192,8 @@ async def resource_pipeline_snapshot_detail(pipeline_id: str, snapshot_id: str) 
         return "error: Invalid UUID format"
 
     async with _session(org_id) as s:
+        if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, uuid.UUID(pipeline_id))):
+            return _team_scope_error_str("pipeline", pipeline_id)
         snap = await get_snapshot_detail(s, sid, organisation_id=org_id, pipeline_id=uuid.UUID(pipeline_id))
 
     if snap is None:
@@ -4198,6 +4250,8 @@ async def resource_run(run_id: str) -> str:
         run = await get_run(s, rid)
         if run is None:
             return f"Run {run_id} not found."
+        if _team_scoped_key_mismatch(await _run_owner_team_id(s, run)):
+            return _team_scope_error_str("run", run_id)
         from modulo.db.crud.run import get_child_run_rollup
 
         child_rollups = await get_child_run_rollup(s, [rid])
@@ -4250,12 +4304,23 @@ async def resource_hitl_gate(run_id: str, gate_id: str) -> str:
         )
         gate = result.scalar_one_or_none()
         required_team_name = None
-        if gate is not None and gate.required_team_id is not None:
-            team_result = await s.execute(
-                select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None))
+        if gate is not None:
+            # A team-scoped key must not read another team's gate even when
+            # the gate itself is org-level (required_team_id IS NULL).
+            run = await get_run(s, rid)
+            owner_team_id = (
+                await _run_owner_team_id(s, run)
+                if run is not None
+                else await _pipeline_owner_team_id(s, gate.pipeline_id)
             )
-            team = team_result.scalar_one_or_none()
-            required_team_name = team.name if team else None
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error_str("run", run_id)
+            if gate.required_team_id is not None:
+                team_result = await s.execute(
+                    select(Team).where(Team.id == gate.required_team_id, Team.deleted_at.is_(None))
+                )
+                team = team_result.scalar_one_or_none()
+                required_team_name = team.name if team else None
     if gate is None:
         return f"HITL gate '{gate_id}' not found on run {run_id}."
     parts = [

@@ -541,6 +541,7 @@ class TestDeleteTrigger(_AuthContext):
         result = await delete_trigger(trigger_id=str(uuid.uuid4()))
 
         assert result == {"error": "not_found", "detail": "Trigger not found"}
+        mock_soft_delete.assert_not_awaited()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -556,8 +557,8 @@ class TestDeleteTrigger(_AuthContext):
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
-
-        result = await delete_trigger(trigger_id=str(trigger.id))
+        with patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=None)):
+            result = await delete_trigger(trigger_id=str(trigger.id))
 
         assert result == {"id": str(trigger.id), "deleted": True}
         mock_soft_delete.assert_awaited_once()

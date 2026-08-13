@@ -31,6 +31,7 @@ from typing import Any
 
 import sqlalchemy as sa
 
+from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run_daily_facts import RunDailyFact
 
@@ -245,12 +246,7 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
         params["team_id"] = query.team_id
         stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
-        stmt = stmt.where(
-            sa.or_(
-                effective_team.is_(None),
-                effective_team == sa.bindparam("team_id", type_=sa.Uuid),
-            )
-        )
+        stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
         params["error_code"] = query.error_code
         stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
@@ -323,12 +319,7 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
         params["team_id"] = query.team_id
         stmt = stmt.outerjoin(Pipeline, Pipeline.id == RunDailyFact.pipeline_id)
         effective_team = sa.func.coalesce(RunDailyFact.team_id, Pipeline.owner_team_id)
-        stmt = stmt.where(
-            sa.or_(
-                effective_team.is_(None),
-                effective_team == sa.bindparam("team_id", type_=sa.Uuid),
-            )
-        )
+        stmt = stmt.where(team_scope_clause(effective_team, sa.bindparam("team_id", type_=sa.Uuid)))
     if query.error_code is not None:
         params["error_code"] = query.error_code
         stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
