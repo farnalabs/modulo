@@ -1,10 +1,16 @@
 """Tests for email_service — SMTP email sending via stdlib smtplib."""
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modulo.core.email_service import EmailSendingError, send_email
+from modulo.core.email_service import (
+    EmailSendingError,
+    _effective_timeout,
+    _redact_credentials,
+    send_email,
+)
 
 
 class MockSettings:
@@ -395,3 +401,172 @@ class TestSendEmail:
             parts = [p.get_content_type() for p in msg.walk() if p.get_content_maintype() != "multipart"]
             assert "text/html" in parts
             assert "text/plain" in parts
+
+    def test_send_email_logs_disabled_no_smtp_host(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING, logger="modulo.core.email_service")
+
+        result = send_email(
+            MockSettingsNoSMTP(),
+            to=["admin@example.com"],
+            subject="Test",
+            body_html="<html><body><h1>Test</h1></body></html>",
+        )
+
+        assert result is False
+        assert any(r.getMessage() == "email.disabled_no_smtp_host" for r in caplog.records)
+
+    def test_send_email_logs_warning_when_no_recipients(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING, logger="modulo.core.email_service")
+
+        result = send_email(
+            MockSettings(),
+            to=[],
+            subject="Test",
+            body_html="<html><body><h1>Test</h1></body></html>",
+        )
+
+        assert result is False
+        assert any(r.getMessage() == "email.no_recipients" for r in caplog.records)
+
+    def test_send_email_logs_sent_with_recipients_and_subject(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger="modulo.core.email_service")
+
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_smtp.return_value.__enter__.return_value = MagicMock()
+
+            result = send_email(
+                MockSettings(),
+                to=["admin@example.com"],
+                subject="Test Subject",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+        assert result is True
+        sent = [r for r in caplog.records if r.getMessage() == "email.sent"]
+        assert len(sent) == 1
+        assert sent[0].to == ["admin@example.com"]
+        assert sent[0].subject == "Test Subject"
+
+    def test_send_email_logs_send_failed_with_redacted_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The final failure log must use the redacted error, never the raw
+        SMTP message that can echo configured credentials."""
+        caplog.set_level(logging.ERROR, logger="modulo.core.email_service")
+
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
+                "smtplib"
+            ).SMTPException("authentication failed for pass")
+
+            with pytest.raises(EmailSendingError):
+                send_email(
+                    MockSettings(),
+                    to=["admin@example.com"],
+                    subject="Test",
+                    body_html="<html><body><h1>Test</h1></body></html>",
+                )
+
+        failed = [r for r in caplog.records if r.getMessage() == "email.send_failed"]
+        assert len(failed) == 1
+        assert "pass" not in failed[0].error
+        assert "********" in failed[0].error
+
+    def test_send_email_logs_retry_warning_with_redacted_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Transient failures must log a retry warning carrying the redacted
+        error before the next attempt."""
+        caplog.set_level(logging.WARNING, logger="modulo.core.email_service")
+
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+            mock_server.send_message.side_effect = [
+                __import__("smtplib").SMTPException("connection failed for pass"),
+                None,
+            ]
+
+            result = send_email(
+                MockSettings(),
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+        assert result is True
+        retries = [r for r in caplog.records if r.getMessage() == "email.send_retry"]
+        assert len(retries) == 1
+        assert retries[0].attempt == 1
+        assert "pass" not in retries[0].error
+        assert "********" in retries[0].error
+
+    def test_send_email_html_fallback_creates_plain_text_body(self) -> None:
+        """Without body_text, the plain-text part must be the HTML with tags
+        stripped — not an empty body."""
+        with patch("modulo.core.email_service.smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value.__enter__.return_value = mock_server
+
+            result = send_email(
+                MockSettings(),
+                to=["admin@example.com"],
+                subject="Test",
+                body_html="<html><body><h1>Test</h1></body></html>",
+            )
+
+            assert result is True
+            msg = mock_server.send_message.call_args[0][0]
+            parts = [p for p in msg.walk() if p.get_content_maintype() != "multipart"]
+            plain = next(p for p in parts if p.get_content_type() == "text/plain")
+            html = next(p for p in parts if p.get_content_type() == "text/html")
+            assert plain.get_content() == "Test\n"
+            assert html.get_content() == "<html><body><h1>Test</h1></body></html>\n"
+
+
+class TestEffectiveTimeout:
+    def test_negative_timeout_clamps_to_default(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = -5
+        assert _effective_timeout(settings) == 30
+
+    def test_none_timeout_falls_back_to_default(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = None
+        assert _effective_timeout(settings) == 30
+
+    def test_float_timeout_is_truncated(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = 15.7
+        assert _effective_timeout(settings) == 15
+
+    def test_lower_bound_one_is_allowed(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = 1
+        assert _effective_timeout(settings) == 1
+
+    def test_max_timeout_cap_applied(self) -> None:
+        settings = MockSettings()
+        settings.smtp_timeout = 120
+        assert _effective_timeout(settings) == 120
+
+
+class TestRedactCredentials:
+    def test_redacts_username_and_password(self) -> None:
+        message = _redact_credentials("user logging in with pass", MockSettings())
+        assert message == "******** logging in with ********"
+
+    def test_redacts_username_only(self) -> None:
+        settings = MockSettings()
+        settings.smtp_password = ""
+        message = _redact_credentials("auth failed for user", settings)
+        assert message == "auth failed for ********"
+
+    def test_redacts_password_only(self) -> None:
+        settings = MockSettings()
+        settings.smtp_username = ""
+        message = _redact_credentials("SMTP AUTH failure: pass rejected", settings)
+        assert message == "SMTP AUTH failure: ******** rejected"
+
+    def test_empty_secrets_leave_message_unchanged(self) -> None:
+        settings = MockSettings()
+        settings.smtp_username = ""
+        settings.smtp_password = ""
+        message = _redact_credentials("no secrets in here", settings)
+        assert message == "no secrets in here"
