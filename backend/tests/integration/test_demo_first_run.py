@@ -327,6 +327,11 @@ async def test_seed_demo_data_no_org_no_crash(db_engine: AsyncEngine, db_url: st
     deps._engine = None
     deps._session_factory = None
 
+    # No org exists, so seeding must be a logged no-op — no demo account created.
+    async with db_engine.connect() as conn:
+        result = await conn.execute(text("SELECT COUNT(*) FROM accounts WHERE email = 'demo'"))
+        assert result.scalar_one() == 0, "No demo user should be created without an organisation"
+
 
 async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_url: str) -> None:
     """_seed_demo_data should be a no-op when MODULO_DEMO_MODE is False."""
