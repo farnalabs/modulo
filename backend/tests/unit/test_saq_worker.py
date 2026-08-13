@@ -81,6 +81,7 @@ class TestFunctionsWiring:
         assert "claim_expiry" in names
         assert "retention_cleanup" in names
         assert "webhook_dedup_cleanup" in names
+        assert "trigger_events_cleanup" in names
         assert "stale_run_recovery" in names
         assert "journey_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
@@ -93,6 +94,7 @@ class TestFunctionsWiring:
             "claim_expiry",
             "retention_cleanup",
             "webhook_dedup_cleanup",
+            "trigger_events_cleanup",
             "stale_run_recovery",
             "cost_probe",
             "analytics_facts_maintenance",

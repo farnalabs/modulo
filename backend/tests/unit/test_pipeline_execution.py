@@ -1329,6 +1329,7 @@ class TestSaqWorkerSettings:
             "claim_expiry",
             "retention_cleanup",
             "webhook_dedup_cleanup",
+            "trigger_events_cleanup",
             "stale_run_recovery",
             "cost_probe",
             "check_missed_fire_alerts_cron",
