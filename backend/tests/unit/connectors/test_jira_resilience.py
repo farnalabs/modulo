@@ -310,3 +310,60 @@ async def test_429_exhausted_includes_quota_detail(connector, monkeypatch):
     with pytest.raises(ValueError, match="HTTP 429") as exc:
         await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
     assert "quota: X-RateLimit-Limit=10000; X-RateLimit-Remaining=0" in str(exc.value)
+
+
+# --- _safe_int coercion edge cases ---
+
+
+def test_safe_int_non_finite_float_returns_default():
+    """inf/nan floats must not crash pagination (int(inf) raises OverflowError)."""
+    from modulo.connectors.jira import _safe_int
+
+    assert _safe_int(float("inf"), 7) == 7
+    assert _safe_int(float("-inf"), 7) == 7
+    assert _safe_int(float("nan"), 7) == 7
+
+
+def test_safe_int_rejects_bool_and_wrong_types():
+    """Booleans and non-numeric types fall back to default (True == 1 is a footgun)."""
+    from modulo.connectors.jira import _safe_int
+
+    assert _safe_int(True, 7) == 7
+    assert _safe_int(False, 7) == 7
+    assert _safe_int(None, 7) == 7
+    assert _safe_int([1], 7) == 7
+
+
+def test_safe_int_rejects_unparseable_strings():
+    """Garbage strings (incl. 'inf'/'nan') fall back to default."""
+    from modulo.connectors.jira import _safe_int
+
+    assert _safe_int("not-a-number", 7) == 7
+    assert _safe_int("inf", 7) == 7
+    assert _safe_int("nan", 7) == 7
+
+
+def test_safe_int_coerces_valid_values():
+    """Numeric strings, ints, and finite floats coerce to int."""
+    from modulo.connectors.jira import _safe_int
+
+    assert _safe_int("42", 7) == 42
+    assert _safe_int(42, 7) == 42
+    assert _safe_int(42.9, 7) == 42
+    assert _safe_int(-3, 7) == -3
+    assert _safe_int(0, 7) == 0
+
+
+@respx.mock
+async def test_search_with_corrupt_total_does_not_crash(connector):
+    """A corrupt 'total: 1e999' (json parses to inf) falls back to issue count."""
+    respx.post(f"{_BASE}/search").mock(
+        return_value=httpx.Response(
+            200,
+            text='{"issues": [{"key": "PROJ-1"}, {"key": "PROJ-2"}], "total": 1e999, "startAt": 0, "maxResults": 2}',
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"jql": "project = PROJ"}))
+    assert [r["key"] for r in result.records] == ["PROJ-1", "PROJ-2"]
+    assert result.total == 2
+    assert result.next_cursor is None
