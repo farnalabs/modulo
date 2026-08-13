@@ -33,3 +33,23 @@ Feature: Integration tier classification for library primitives
       """
     Then the response status is 201
     And the response has tier "native"
+
+  Scenario: in_dev library primitives are excluded from the default listing
+    Given an in_dev primitive exists in the built-in library
+    When the user lists library primitives without include_in_dev
+    Then the response contains no in_dev primitives
+
+  Scenario: include_in_dev reveals in_dev library primitives
+    Given an in_dev primitive exists in the built-in library
+    When the user lists library primitives with include_in_dev=true
+    Then the response contains the in_dev primitive
+
+  Scenario: viewers cannot reveal in_dev library primitives
+    Given an in_dev primitive exists in the built-in library
+    When the viewer lists library primitives with include_in_dev=true
+    Then the response status is 403
+
+  Scenario: include_in_dev=false keeps the default exclusion
+    Given an in_dev primitive exists in the built-in library
+    When the user lists library primitives with include_in_dev=false
+    Then the response contains no in_dev primitives

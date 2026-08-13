@@ -72,8 +72,8 @@ class NotificationEndpointResponse(BaseModel):
     team_id: str | None = None
 
 
-@handle_db_errors("notifications.list_endpoints")
 @router.get("", response_model=list[NotificationEndpointResponse])
+@handle_db_errors("notifications.list_endpoints")
 async def list_endpoints(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("notification.view"),
@@ -112,13 +112,13 @@ async def list_endpoints(
     return [_ep_to_response(ep) for ep in endpoints]
 
 
-@handle_db_errors("notifications.create_endpoint")
 @router.post(
     "",
     response_model=NotificationEndpointResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("notifications.create_endpoint")
 async def create_endpoint(
     req: NotificationEndpointCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -182,8 +182,8 @@ async def create_endpoint(
     return _ep_to_response(ep)
 
 
-@handle_db_errors("notifications.get_endpoint")
 @router.get("/{endpoint_id}", response_model=NotificationEndpointResponse)
+@handle_db_errors("notifications.get_endpoint")
 async def get_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -226,10 +226,10 @@ async def get_endpoint(
     return _ep_to_response(ep)
 
 
-@handle_db_errors("notifications.update_endpoint")
 @router.put(
     "/{endpoint_id}", response_model=NotificationEndpointResponse, dependencies=[Depends(deny_break_glass_mint)]
 )
+@handle_db_errors("notifications.update_endpoint")
 async def update_endpoint(
     endpoint_id: uuid.UUID,
     req: NotificationEndpointUpdate,
@@ -297,8 +297,8 @@ async def update_endpoint(
     return _ep_to_response(ep)
 
 
-@handle_db_errors("notifications.delete_endpoint")
 @router.delete("/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("notifications.delete_endpoint")
 async def delete_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -343,10 +343,10 @@ async def delete_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found")
 
 
-@handle_db_errors("notifications.restore_endpoint")
 @router.post(
     "/{endpoint_id}/restore", response_model=NotificationEndpointResponse, dependencies=[Depends(deny_break_glass_mint)]
 )
+@handle_db_errors("notifications.restore_endpoint")
 async def restore_endpoint(
     endpoint_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

@@ -48,6 +48,7 @@ from modulo.db.models.remy_session import ChatSession
 from modulo.db.models.remy_skill import RemySkill
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact, RunDailyFact
+from modulo.db.models.run_evidence import RunEvidence
 from modulo.db.models.scheduled_report import ScheduledReport
 from modulo.db.models.schema import Schema, SchemaFolder, SchemaVersion
 from modulo.db.models.secret import Secret
@@ -126,6 +127,7 @@ __all__ = [
     "RemySkill",
     "Run",
     "RunDailyFact",
+    "RunEvidence",
     "SavedView",
     "ScheduledReport",
     "Schema",

@@ -238,22 +238,6 @@ async def unarchive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> P
     return pipeline
 
 
-async def count_pipelines(
-    session: AsyncSession,
-    *,
-    org_id: uuid.UUID,
-    include_archived: bool = False,
-    include_deleted: bool = False,
-) -> int:
-    query = select(func.count()).select_from(Pipeline).where(Pipeline.organisation_id == org_id)
-    if not include_deleted:
-        query = query.where(Pipeline.deleted_at.is_(None))
-    if not include_archived:
-        query = query.where(Pipeline.archived_at.is_(None))
-    result = await session.execute(query)
-    return result.scalar_one() or 0
-
-
 async def get_pipeline_graph(
     session: AsyncSession,
     pipeline_id: uuid.UUID,

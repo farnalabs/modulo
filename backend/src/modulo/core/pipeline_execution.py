@@ -1287,6 +1287,7 @@ async def resume_run(
     resume_data: dict[str, Any] | None = None,
     job: Any = None,
     claim_cap: int | None = None,
+    claim_token: str | None = None,
 ) -> dict[str, Any]:
     """Resume an interrupted HITL run (SAQ ``resume_run`` job).
 
@@ -1302,6 +1303,12 @@ async def resume_run(
     ``claim_cap`` bounds the number of claims (claim_count) per run; when
     omitted it resolves from settings (``SAQ_RUN_CLAIM_CAP``, default 20) via
     :func:`_resolve_claim_cap`.
+
+    The ``claim_token`` kwarg is the stale token stamped into this job's kwargs
+    by a previous attempt (PR #1003). SAQ retries re-invoke this function with
+    ``**job.kwargs``, so the kwarg is accepted and intentionally IGNORED here —
+    it is NOT passed into :func:`claim_resume_run_async`, which generates its
+    own fresh token and re-stamps it via the job hash.
     """
     rid = uuid.UUID(run_id)
     oid = uuid.UUID(org_id)

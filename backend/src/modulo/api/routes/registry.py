@@ -115,8 +115,8 @@ class RegisterPublisherRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("registry.list_registry_primitives_endpoint")
 @router.get("/primitives", response_model=RegistryRankedListResponse)
+@handle_db_errors("registry.list_registry_primitives_endpoint")
 async def list_registry_primitives_endpoint(
     author: str | None = Query(None),
     primitive_type: str | None = Query(None),
@@ -162,8 +162,8 @@ async def list_registry_primitives_endpoint(
     return RegistryRankedListResponse(items=items, total=total)
 
 
-@handle_db_errors("registry.get_registry_primitive_endpoint")
 @router.get("/primitives/{slug:path}", response_model=PullResponse)
+@handle_db_errors("registry.get_registry_primitive_endpoint")
 async def get_registry_primitive_endpoint(
     slug: str,
     verify: bool = Query(True),
@@ -211,12 +211,12 @@ async def get_registry_primitive_endpoint(
     )
 
 
-@handle_db_errors("registry.publish_primitive_endpoint")
 @router.post(
     "/primitives",
     response_model=RegistryEntryResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@handle_db_errors("registry.publish_primitive_endpoint")
 async def publish_primitive_endpoint(
     req: PublishRequest,
     principal: TenantPrincipal = require_permission("registry.publish"),
@@ -248,11 +248,11 @@ async def publish_primitive_endpoint(
     return RegistryEntryResponse.model_validate(entry)
 
 
-@handle_db_errors("registry.download_registry_primitive_endpoint")
 @router.post(
     "/primitives/{slug:path}/download",
     response_model=PullResponse,
 )
+@handle_db_errors("registry.download_registry_primitive_endpoint")
 async def download_registry_primitive_endpoint(
     slug: str,
     session: AsyncSession = Depends(get_db_session),
@@ -392,8 +392,8 @@ class VerifyResponseV2(BaseModel):
     trust_anchor_verified: bool = False
 
 
-@handle_db_errors("registry.publish_primitive_v2")
 @router.post("/publish", response_model=PublishResponseV2, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("registry.publish_primitive_v2")
 async def publish_primitive_v2(
     req: PublishRequestV2,
     principal: TenantPrincipal = require_permission("registry.publish"),
@@ -481,8 +481,8 @@ async def publish_primitive_v2(
     )
 
 
-@handle_db_errors("registry.pull_registry_primitive_v2")
 @router.get("/pull/{slug:path}", response_model=PullResponseV2)
+@handle_db_errors("registry.pull_registry_primitive_v2")
 async def pull_registry_primitive_v2(
     slug: str,
 ) -> PullResponseV2:
@@ -518,8 +518,8 @@ async def pull_registry_primitive_v2(
     )
 
 
-@handle_db_errors("registry.verify_registry_primitive_v2")
 @router.get("/verify/{slug:path}", response_model=VerifyResponseV2)
+@handle_db_errors("registry.verify_registry_primitive_v2")
 async def verify_registry_primitive_v2(
     slug: str,
     public_key_hex: str | None = None,
@@ -636,8 +636,8 @@ async def verify_registry_primitive_v2(
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("registry.register_publisher_endpoint")
 @router.post("/publishers", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("registry.register_publisher_endpoint")
 async def register_publisher_endpoint(
     req: RegisterPublisherRequest,
     principal: TenantPrincipal = require_permission("registry.publisher.manage"),
@@ -652,8 +652,8 @@ async def register_publisher_endpoint(
     return {"status": "registered", "fingerprint": pub.fingerprint, "author": pub.author}
 
 
-@handle_db_errors("registry.revoke_publisher_endpoint")
 @router.post("/publishers/{fingerprint_hex}/revoke")
+@handle_db_errors("registry.revoke_publisher_endpoint")
 async def revoke_publisher_endpoint(
     fingerprint_hex: str,
     principal: TenantPrincipal = require_permission("registry.publisher.manage"),
@@ -665,8 +665,8 @@ async def revoke_publisher_endpoint(
     return {"status": "revoked", "fingerprint": fingerprint_hex}
 
 
-@handle_db_errors("registry.list_publishers_endpoint")
 @router.get("/publishers")
+@handle_db_errors("registry.list_publishers_endpoint")
 async def list_publishers_endpoint() -> list[dict[str, str]]:
     """List all verified publishers."""
     publishers = list_verified_publishers()

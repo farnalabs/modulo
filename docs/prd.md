@@ -4180,7 +4180,7 @@ A **journey** is a unit of work — a task, a ticket, a PR, a deploy — tracked
 
 ### 8.32 Analytics
 
-Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one row per terminal run, written on every finalize path and backfilled by a daily maintenance cron. Facts survive the 90-day run purge, so dimensioned run history outlives the `runs` rows it was derived from.
+Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one row per terminal run, written on every finalize path and backfilled by a daily maintenance cron. Facts are also written as a **compensating write** when the sweep/SAQ terminalizers mark runs failed outside the normal finalize path (`stale_run_recovery_sweep`, `dispatcher_reconcile`, `fail_run_terminal`), so terminal runs never miss a facts row. Facts survive the 90-day run purge, so dimensioned run history outlives the `runs` rows it was derived from.
 
 #### 8.32.1 Rolling-Window Semantics
 

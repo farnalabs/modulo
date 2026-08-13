@@ -214,8 +214,8 @@ def _build_action_list(
     return result
 
 
-@handle_db_errors("onboarding.get_onboarding_status")
 @router.get("/status", response_model=OnboardingStatusResponse)
+@handle_db_errors("onboarding.get_onboarding_status")
 async def get_onboarding_status(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -244,8 +244,8 @@ async def get_onboarding_status(
     )
 
 
-@handle_db_errors("onboarding.mark_action_completed")
 @router.post("/actions/{action_id}/complete", response_model=ActionCompletedResponse)
+@handle_db_errors("onboarding.mark_action_completed")
 async def mark_action_completed(
     action_id: str,
     session: AsyncSession = Depends(get_db_session),
@@ -277,8 +277,8 @@ async def mark_action_completed(
     )
 
 
-@handle_db_errors("onboarding.mark_action_skipped")
 @router.post("/actions/{action_id}/skip", response_model=ActionSkippedResponse)
+@handle_db_errors("onboarding.mark_action_skipped")
 async def mark_action_skipped(
     action_id: str,
     session: AsyncSession = Depends(get_db_session),
@@ -308,8 +308,8 @@ async def mark_action_skipped(
     )
 
 
-@handle_db_errors("onboarding.dismiss")
 @router.post("/dismiss", response_model=DismissResponse)
+@handle_db_errors("onboarding.dismiss")
 async def dismiss_onboarding(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -322,8 +322,8 @@ async def dismiss_onboarding(
     return DismissResponse(dismissed=True)
 
 
-@handle_db_errors("onboarding.seed_examples")
 @router.post("/seed-examples", response_model=SeedExamplesResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("onboarding.seed_examples")
 async def seed_examples(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -461,8 +461,8 @@ async def seed_examples(
     )
 
 
-@handle_db_errors("onboarding.create_starter_pipeline")
 @router.post("/starter-pipeline", response_model=StarterPipelineResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("onboarding.create_starter_pipeline")
 async def create_starter_pipeline(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),

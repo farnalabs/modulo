@@ -211,3 +211,29 @@ class TestSchemaGenerationService:
         service = SchemaGenerationService(backend, timeout=1.0)
         with pytest.raises(SchemaGenerationError, match="timed out"):
             await service.generate("A schema")
+
+    async def test_generate_uses_custom_system_prompt(self) -> None:
+        """A service-level custom system prompt must replace the default generation prompt."""
+
+        class _CapturingBackend:
+            def __init__(self):
+                self.messages = None
+
+            @property
+            def backend_id(self) -> str:
+                return "test/capture"
+
+            async def invoke(self, messages, **kwargs):
+                self.messages = messages
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content='{"type": "object", "properties": {}}')
+
+            def stream(self, messages, **kwargs):
+                raise NotImplementedError
+
+        backend = _CapturingBackend()
+        service = SchemaGenerationService(backend, system_prompt="Custom generation guidance")
+        result = await service.generate("A schema", examples=[{"a": 1}])
+        assert result == {"type": "object", "properties": {}}
+        assert backend.messages[0].content == "Custom generation guidance"

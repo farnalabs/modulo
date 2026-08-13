@@ -166,8 +166,8 @@ class SetSpendLimitRequest(BaseModel):
     daily_spend_limit: float | None = Field(None, ge=0)
 
 
-@handle_db_errors("costs.get_costs")
 @router.get("", response_model=CostReportResponse)
+@handle_db_errors("costs.get_costs")
 async def get_costs(
     group_by: str = Query("team", pattern=r"^(team|org)$"),
     period: str = Query("month", pattern=r"^(day|week|month|year)$"),
@@ -249,8 +249,8 @@ async def get_costs(
     )
 
 
-@handle_db_errors("costs.get_spend_limits")
 @router.get("/limits", response_model=SpendLimitResponse)
+@handle_db_errors("costs.get_spend_limits")
 async def get_spend_limits(
     _: object = require_feature("admin_spend_limits"),
     __: object = require_feature("admin_cost_controls"),
@@ -301,8 +301,8 @@ async def get_spend_limits(
     )
 
 
-@handle_db_errors("costs.set_org_spend_limit")
 @router.put("/limits/org", response_model=dict[str, Any])
+@handle_db_errors("costs.set_org_spend_limit")
 async def set_org_spend_limit(
     req: SetSpendLimitRequest,
     _: object = require_feature("admin_spend_limits"),
@@ -348,8 +348,8 @@ async def set_org_spend_limit(
     }
 
 
-@handle_db_errors("costs.set_team_spend_limit")
 @router.put("/limits/teams/{team_id}", response_model=dict[str, Any])
+@handle_db_errors("costs.set_team_spend_limit")
 async def set_team_spend_limit(
     team_id: uuid.UUID,
     req: SetSpendLimitRequest,
@@ -427,8 +427,8 @@ class UpdateCostControlsRequest(BaseModel):
         return value
 
 
-@handle_db_errors("costs.get_cost_controls")
 @router.get("/controls", response_model=CostControlsResponse)
+@handle_db_errors("costs.get_cost_controls")
 async def get_cost_controls(
     _: object = require_feature("admin_cost_controls"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
@@ -479,8 +479,8 @@ async def get_cost_controls(
     )
 
 
-@handle_db_errors("costs.update_cost_controls")
 @router.put("/controls", response_model=CostControlsResponse)
+@handle_db_errors("costs.update_cost_controls")
 async def update_cost_controls(
     req: UpdateCostControlsRequest,
     _: object = require_feature("admin_cost_controls"),
@@ -565,8 +565,8 @@ class CircuitBreakerResetResponse(BaseModel):
     triggers_reactivated: int
 
 
-@handle_db_errors("costs.reset_circuit_breaker")
 @router.post("/circuit-breaker/{pipeline_id}/reset", response_model=CircuitBreakerResetResponse)
+@handle_db_errors("costs.reset_circuit_breaker")
 async def reset_circuit_breaker(
     pipeline_id: uuid.UUID,
     _: object = require_feature("admin_cost_controls"),
@@ -622,8 +622,8 @@ async def reset_circuit_breaker(
 # ── Export ────────────────────────────────────────────────────────────────────
 
 
-@handle_db_errors("costs.export_costs")
 @router.get("/export")
+@handle_db_errors("costs.export_costs")
 async def export_costs(
     period: str = Query("this_month", pattern=r"^(this_month|last_month|7d|30d|90d)$"),
     group_by: str = Query("team", pattern=r"^(team|pipeline|model)$"),
@@ -726,8 +726,8 @@ def _report_response(report: ScheduledReport) -> ReportResponse:
     )
 
 
-@handle_db_errors("costs.create_report")
 @router.post("/reports", response_model=ReportResponse, status_code=201)
+@handle_db_errors("costs.create_report")
 async def create_report(
     req: CreateReportRequest,
     _: object = require_feature("admin_cost_controls"),
@@ -774,8 +774,8 @@ async def create_report(
     return _report_response(report)
 
 
-@handle_db_errors("costs.list_reports")
 @router.get("/reports", response_model=list[ReportResponse])
+@handle_db_errors("costs.list_reports")
 async def list_reports(
     _: object = require_feature("admin_cost_controls"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
@@ -815,8 +815,8 @@ async def list_reports(
     return [_report_response(report) for report in reports]
 
 
-@handle_db_errors("costs.delete_report")
 @router.delete("/reports/{report_id}", status_code=204)
+@handle_db_errors("costs.delete_report")
 async def delete_report(
     report_id: uuid.UUID,
     _: object = require_feature("admin_cost_controls"),
@@ -872,8 +872,8 @@ class AnomalyResponse(BaseModel):
     dismissed: bool
 
 
-@handle_db_errors("costs.get_anomalies")
 @router.get("/anomalies", response_model=list[AnomalyResponse])
+@handle_db_errors("costs.get_anomalies")
 async def get_anomalies(
     _: object = require_feature("admin_cost_breakdown"),
     current_user: TenantPrincipal = require_permission("cost.manage"),
@@ -983,8 +983,8 @@ async def get_anomalies(
         ) from None
 
 
-@handle_db_errors("costs.dismiss_anomaly_endpoint")
 @router.post("/anomalies/dismiss/{anomaly_id}", status_code=204)
+@handle_db_errors("costs.dismiss_anomaly_endpoint")
 async def dismiss_anomaly_endpoint(
     anomaly_id: uuid.UUID,
     _: object = require_feature("admin_cost_breakdown"),

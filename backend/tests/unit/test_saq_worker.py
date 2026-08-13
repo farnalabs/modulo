@@ -568,6 +568,80 @@ class TestExecuteResumeWrappers:
         core.assert_awaited_once()
         assert core.await_args.kwargs["resume_data"] == {"action": "approved"}
 
+    @pytest.mark.asyncio
+    async def test_execute_run_accepts_stale_claim_token_on_saq_retry(self) -> None:
+        """SAQ retries re-invoke the job function with **job.kwargs, which since
+        PR #1003 includes the stamped claim_token. The wrapper must ACCEPT the
+        stale kwarg (no TypeError) and still claim with a FRESH token, which is
+        what gets re-stamped into the job hash."""
+        job = MagicMock()
+        job.update = AsyncMock()
+        ctx: dict = {"job": job}
+
+        async def _pass_through(aeng: Any, **kwargs: Any) -> dict[str, str]:
+            await kwargs["execute_fn"]()
+            return {"status": "complete"}
+
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.pipeline_execution.claim_run_async", new_callable=AsyncMock, return_value="tok-fresh"
+            ) as claim,
+            patch("modulo.core.pipeline_execution.load_and_setup", new_callable=AsyncMock) as load,
+            patch("modulo.core.pipeline_execution.mark_complete", new_callable=AsyncMock) as complete,
+            patch(
+                "modulo.core.pipeline_execution.run_executor_with_watchdog",
+                side_effect=_pass_through,
+            ) as watchdog,
+        ):
+            run = MagicMock()
+            run.input_payload = {"a": 1}
+            executor = MagicMock()
+            executor.execute = AsyncMock()
+            load.return_value = (run, executor)
+            result = await sw.execute_run(
+                ctx,
+                run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+                claim_token="stale-token-from-previous-attempt",
+            )
+
+        assert result == {"status": "complete"}
+        claim.assert_awaited_once()
+        executor.execute.assert_awaited_once()
+        assert executor.execute.await_args.kwargs["claim_token"] == "tok-fresh"
+        complete.assert_awaited_once()
+        assert complete.await_args.kwargs["claim_token"] == "tok-fresh"
+        watchdog.assert_awaited_once()
+        assert watchdog.await_args.kwargs["claim_token"] == "tok-fresh"
+        # The FRESH token is stamped into the job hash, not the stale retry kwarg.
+        job.update.assert_awaited_once()
+        assert job.update.await_args.kwargs["kwargs"]["claim_token"] == "tok-fresh"
+
+    @pytest.mark.asyncio
+    async def test_resume_run_accepts_stale_claim_token_on_saq_retry(self) -> None:
+        """Analogous to the execute_run retry: the resume wrapper must accept the
+        stale claim_token kwarg SAQ passes back on a retry and forward to the
+        core without TypeError."""
+        with (
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch(
+                "modulo.core.pipeline_execution.resume_run", new_callable=AsyncMock, return_value={"status": "complete"}
+            ) as core,
+        ):
+            result = await sw.resume_run(
+                {},
+                run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+                resume_data={"action": "approved"},
+                claim_token="stale-token-from-previous-attempt",
+            )
+        assert result == {"status": "complete"}
+        core.assert_awaited_once()
+        assert core.await_args.kwargs["resume_data"] == {"action": "approved"}
+        # The stale kwarg is not forwarded to the core as a claim token.
+        assert "claim_token" not in core.await_args.kwargs
+
 
 class TestFireWrappersDispatchRuns:
     @pytest.mark.asyncio

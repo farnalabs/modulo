@@ -36,7 +36,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
-from sqlalchemy import select, text
+from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
@@ -64,8 +64,16 @@ from modulo.core.pipeline_engine.decorator import (
     set_connector_hub,
     set_model_backend_hub,
 )
-from modulo.core.pipeline_engine.error_codes import map_legacy_code
+from modulo.core.pipeline_engine.error_codes import map_legacy_code, sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from modulo.core.pipeline_engine.evidence import (
+    EvidenceProvider,
+    build_default_evidence_provider,
+    compute_work_intact,
+    evidence_enabled,
+    node_declared_success,
+    run_evidence_probe,
+)
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError
@@ -134,6 +142,16 @@ _RETRY_BACKOFF_CAP_SECONDS = 300.0
 # [0, fraction * delay] so the schedule keeps its exponential shape while
 # still decorrelating concurrent retries. Capped against ``_RETRY_BACKOFF_CAP_SECONDS``.
 _RETRY_BACKOFF_JITTER_FRACTION = 0.25
+
+
+def _sanitize_detail(detail: Any, limit: int = 5000) -> str:
+    """Sanitize an error detail at a write surface, THEN truncate (FAR-163).
+
+    Redaction runs before truncation so a secret straddling the cut point is
+    still removed. Never raises — :func:`sanitize_error_text` coerces any input
+    via ``str()`` and is a NO-OP for clean strings.
+    """
+    return sanitize_error_text(detail)[:limit]
 
 
 def _retry_backoff_seconds(
@@ -434,6 +452,39 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+async def _apply_work_intact(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    work_intact: bool,
+    *,
+    claim_token: str | None,
+) -> None:
+    """Fenced UPDATE of ``runs.work_intact`` — mirrors ``update_run_status``
+    fencing (F3a): a superseded executor's token no longer matches and the
+    write is a no-op, so it cannot stamp work_intact on a successor's run.
+    Runs INSIDE the caller's terminalization transaction (FAR-152 §15.3).
+
+    ``run_id`` is bound with the ``Uuid`` type so the raw SQL matches the
+    stored id on every backend (SQLite stores the 32-hex form, not the
+    dashed ``str(uuid)``)."""
+    if claim_token is None:
+        await session.execute(
+            text("UPDATE runs SET work_intact = :wi WHERE id = :rid").bindparams(
+                bindparam("rid", type_=Uuid()),
+                bindparam("wi", type_=Boolean()),
+            ),
+            {"wi": work_intact, "rid": run_id},
+        )
+        return
+    await session.execute(
+        text("UPDATE runs SET work_intact = :wi WHERE id = :rid AND claim_token = :tok").bindparams(
+            bindparam("rid", type_=Uuid()),
+            bindparam("wi", type_=Boolean()),
+        ),
+        {"wi": work_intact, "rid": run_id, "tok": claim_token},
+    )
+
+
 async def org_sandbox_capacity_free(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -485,11 +536,15 @@ class PipelineExecutor:
         db_engine: AsyncEngine,
         *,
         checkpointer_conn_string: str | None = None,
+        evidence_provider: EvidenceProvider | None = None,
     ) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._checkpointer_conn_string = checkpointer_conn_string
         self._otel_bridge = LangGraphOtelBridge()
+        # Evidence seam (FAR-152 §15.3): injected FakeEvidenceProvider in tests;
+        # None selects the production E2B+DB-backed provider per run.
+        self._evidence_provider = evidence_provider
         # Zombie-run protection hook (2026-08-05): wired by
         # ``pipeline_execution.run_executor_with_watchdog`` to an asyncio.Event.
         # Called when the FIRST node dispatches so the execute_run watchdog can
@@ -1040,6 +1095,74 @@ class PipelineExecutor:
                 sandbox_cost += Decimal(str(est))
         return sandbox_cost
 
+    def _get_evidence_provider(self, org_id: uuid.UUID) -> EvidenceProvider:
+        """The injected evidence provider (tests) or the production
+        E2B+DB-backed provider wired for this run's org."""
+        if self._evidence_provider is not None:
+            return self._evidence_provider
+        return build_default_evidence_provider(self._session_factory, org_id)
+
+    def _compute_run_work_intact(
+        self,
+        final_status: str,
+        error_code: str | None,
+        completed_node_outputs: dict[str, Any],
+        node_ids: set[str],
+    ) -> bool | None:
+        """FAR-152 §15.3 — work_intact computed at terminalization from
+        completed-node artifacts + the full DAG ran. NOT from the async
+        evidence probe (restores the false-failure banner for #1/#3).
+
+        Returns None for non-terminal statuses (nothing to write). An
+        A1-elevated run (``failed`` + ``agent.failed``) is NOT complete — its
+        honest work verdict is False (§15.4), so the zero-work elevation banner
+        is what renders.
+        """
+        if final_status not in _TERMINAL_STATUSES:
+            return None
+        if final_status == "failed" and error_code == "agent.failed":
+            return False
+        return compute_work_intact(completed_node_outputs, node_ids)
+
+    async def _run_post_terminal_evidence_probes(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        completed_node_outputs: dict[str, Any],
+    ) -> None:
+        """FAR-152 §15.3 — post-commit async evidence probe for no-op-eligible
+        nodes (declared ``outcome:success``) on a complete run. Runs off the
+        critical path (after terminalization commits), bounded ≤3s per probe,
+        gated by the EvidenceProvider seam. Fail-open — a probe failure never
+        affects the run."""
+        if final_status != "complete" or not evidence_enabled():
+            return
+        evidence_nodes = [node_id for node_id, out in completed_node_outputs.items() if node_declared_success(out)]
+        if not evidence_nodes:
+            return
+        provider = self._get_evidence_provider(org_id)
+        results = await asyncio.gather(
+            *[
+                run_evidence_probe(
+                    provider=provider,
+                    session_factory=self._session_factory,
+                    run_id=run_id,
+                    node_id=node_id,
+                )
+                for node_id in evidence_nodes
+            ],
+            return_exceptions=True,
+        )
+        for node_id, res in zip(evidence_nodes, results, strict=False):
+            if isinstance(res, Exception):
+                _log.warning(
+                    "heuristic.probe_task_failed",
+                    extra={"run_id": str(run_id), "node_id": node_id},
+                    exc_info=res,
+                )
+
     async def resume(
         self,
         *,
@@ -1152,7 +1275,7 @@ class PipelineExecutor:
                     config,
                     {"_hitl_decision": resume_data, "_claim_lease": self._claim_token},
                 )
-                final_status, error_code, _, node_token_usage = await self._stream_graph(
+                final_status, error_code, error_detail, node_token_usage = await self._stream_graph(
                     compiled,
                     None,
                     config,
@@ -1178,7 +1301,10 @@ class PipelineExecutor:
         except Exception as exc:
             import traceback
 
-            error_detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:2000]
+            error_detail = _sanitize_detail(
+                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                limit=2000,
+            )
             _log.exception("pipeline.resume_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
@@ -1202,7 +1328,7 @@ class PipelineExecutor:
                         event_type="eval.blocked",
                         resource_type="run",
                         resource_id=run_id,
-                        payload_json={"error_detail": error_code},
+                        payload_json={"error_detail": _sanitize_detail(error_detail, limit=5000)},
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1213,6 +1339,9 @@ class PipelineExecutor:
         # Resume recomputes from LIVE components over the cumulative merged set
         # (two-state rule, §4.4); finalize_cost reads the stored cumulative set,
         # merges the resumed segment (segment-wins), and recomputes.
+        # FAR-152 §15.3 — work_intact computed at terminalization (same rule as
+        # execute()).
+        work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await finalize_cost(
@@ -1229,6 +1358,13 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 claim_token=self._claim_token,
             )
+            if work_intact is not None:
+                try:
+                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
@@ -1239,6 +1375,15 @@ class PipelineExecutor:
 
         if final_run is None:
             raise RunNotFoundError(run_id)
+
+        # FAR-152 §15.3 — post-commit async evidence probe (same rule as
+        # execute()). Bounded ≤3s per node, gated by the EvidenceProvider seam.
+        await self._run_post_terminal_evidence_probes(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            completed_node_outputs=completed_node_outputs,
+        )
         return final_run
 
     async def execute(
@@ -1352,6 +1497,10 @@ class PipelineExecutor:
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         completed_node_outputs: dict[str, Any] = {}
+        # Initialised so the terminalization work_intact computation is safe even
+        # when the stream never started (compile/pre-stream failure) — a run with
+        # no executed nodes is never work-intact.
+        node_ids: set[str] = set()
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         set_audit_hook(self._dispatch_context_write_audit(org_id, run_id))
@@ -1530,14 +1679,21 @@ class PipelineExecutor:
             final_status = "failed"
             error_code = "node_cancelled"
             if isinstance(exc, NodeCancelledError):
-                error_detail = "Sandbox node cancelled (transient) after retries exhausted: " + str(exc)[:500]
+                error_detail = _sanitize_detail(
+                    "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=500
+                )
             else:
-                error_detail = "Sandbox node failed (transient) after retries exhausted: " + str(exc)[:500]
+                error_detail = _sanitize_detail(
+                    "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=500
+                )
             broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
         except Exception as exc:
             import traceback
 
-            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:2000]
+            _tb = _sanitize_detail(
+                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                limit=2000,
+            )
             _log.exception("pipeline.execution_error", extra={"run_id": str(run_id)})
             final_status = "failed"
             error_code = type(exc).__name__
@@ -1633,7 +1789,7 @@ class PipelineExecutor:
                             event_type="eval.blocked",
                             resource_type="run",
                             resource_id=run_id,
-                            payload_json={"error_detail": error_detail},
+                            payload_json={"error_detail": _sanitize_detail(error_detail, limit=5000)},
                         )
                     except asyncio.CancelledError:
                         raise
@@ -1649,8 +1805,8 @@ class PipelineExecutor:
                     except EvalSuiteBlockedError as exc:
                         final_status = "failed"
                         error_code = "eval_suite_blocked"
-                        error_detail = str(exc)
-                        broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": str(exc)})
+                        error_detail = _sanitize_detail(exc, limit=5000)
+                        broker.publish("run_failed", {"error": "eval_suite_blocked", "detail": error_detail})
                         _log.warning(
                             "eval.suite_blocked",
                             extra={
@@ -1667,7 +1823,7 @@ class PipelineExecutor:
                                 resource_type="run",
                                 resource_id=run_id,
                                 payload_json={
-                                    "error_detail": error_detail,
+                                    "error_detail": _sanitize_detail(error_detail, limit=5000),
                                     "suite_id": exc.suite_id,
                                     "score": exc.score,
                                 },
@@ -1730,6 +1886,11 @@ class PipelineExecutor:
         # segment sets into the stored cumulative sets (segment-wins), builds
         # the enriched union + breakdown (total == sum), and runs the
         # terminal-only ledger block.
+        # FAR-152 §15.3 — work_intact computed at terminalization from
+        # completed-node artifacts + the full DAG ran. NOT from the async
+        # evidence probe. Written atomically inside the same terminalization
+        # transaction (restores the false-failure banner for #1/#3).
+        work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await finalize_cost(
@@ -1746,6 +1907,15 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 claim_token=self._claim_token,
             )
+            if work_intact is not None:
+                # Atomic with terminalization: the same transaction, fenced so a
+                # superseded executor cannot stamp work_intact on a successor.
+                try:
+                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
@@ -1756,6 +1926,17 @@ class PipelineExecutor:
 
         if final_run is None:
             raise RunNotFoundError(run_id)
+
+        # FAR-152 §15.3 — post-commit async evidence probe for no-op-eligible
+        # nodes (declared outcome:success) on a complete run. Off the critical
+        # path (terminalization already committed), bounded ≤3s per probe,
+        # gated by the EvidenceProvider seam. Fail-open.
+        await self._run_post_terminal_evidence_probes(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            completed_node_outputs=completed_node_outputs,
+        )
         return final_run
 
     async def _check_eval_suites(
@@ -1989,7 +2170,10 @@ class PipelineExecutor:
                                     stalled_node_reason = stall_reason
                                     broker.publish(
                                         "run_stalled",
-                                        {"node_id": name, "stall_reason": stall_reason},
+                                        {
+                                            "node_id": name,
+                                            "stall_reason": _sanitize_detail(stall_reason, limit=5000),
+                                        },
                                     )
                                 agent_failure = _node_output_agent_failure(output)
                                 if agent_failure:
@@ -2079,11 +2263,12 @@ class PipelineExecutor:
                     from modulo.settings import get_settings
 
                     if get_settings().modulo_agent_failure_elevation_enabled:
+                        scrubbed = _sanitize_detail(agent_failure_reason, limit=5000)
                         broker.publish(
                             "run_failed",
-                            {"error": "agent.failed", "detail": agent_failure_reason},
+                            {"error": "agent.failed", "detail": scrubbed},
                         )
-                        return "failed", "agent.failed", agent_failure_reason, node_token_usage or None
+                        return "failed", "agent.failed", scrubbed, node_token_usage or None
                 except Exception:
                     _log.warning(
                         "agent_failure_elevation.failed_open",
@@ -2091,8 +2276,9 @@ class PipelineExecutor:
                         exc_info=True,
                     )
             if stalled_node_reason:
-                broker.publish("run_failed", {"error": "executor_stalled", "detail": stalled_node_reason})
-                return "stalled", "executor_stalled", stalled_node_reason, node_token_usage or None
+                scrubbed = _sanitize_detail(stalled_node_reason, limit=5000)
+                broker.publish("run_failed", {"error": "executor_stalled", "detail": scrubbed})
+                return "stalled", "executor_stalled", scrubbed, node_token_usage or None
             broker.publish("run_completed", {})
             return "complete", None, None, node_token_usage or None
         except GraphInterrupt as exc:
@@ -2107,19 +2293,21 @@ class PipelineExecutor:
                 org_id=org_id,
             )
         except EvalBlockedError as exc:
-            broker.publish("run_failed", {"error": "eval_blocked", "detail": str(exc)})
-            return "eval_failed", "eval_blocked", str(exc), node_token_usage or None
+            scrubbed = _sanitize_detail(exc, limit=5000)
+            broker.publish("run_failed", {"error": "eval_blocked", "detail": scrubbed})
+            return "eval_failed", "eval_blocked", scrubbed, node_token_usage or None
         except OutputRejectedError as exc:
             # C4: ``output_rejected`` violates the ``ck_runs_status`` CHECK
             # constraint as a STATUS — it is an error CODE on a ``failed`` run.
-            broker.publish("run_failed", {"error": "output_rejected", "detail": str(exc)})
-            return "failed", "output_rejected", str(exc), node_token_usage or None
+            scrubbed = _sanitize_detail(exc, limit=5000)
+            broker.publish("run_failed", {"error": "output_rejected", "detail": scrubbed})
+            return "failed", "output_rejected", scrubbed, node_token_usage or None
         except RunCancelledError:
             broker.publish("run_cancelled", {})
             self._log_accumulation_state(run_id, segments_completed, node_token_usage)
             return "cancelled", None, None, node_token_usage or None
         except RunawayRunError as exc:
-            error_detail = str(exc)
+            error_detail = _sanitize_detail(exc, limit=5000)
             broker.publish("run_failed", {"error": "runaway", "detail": error_detail})
             _log.warning(
                 "runaway.terminated",
@@ -2132,7 +2320,7 @@ class PipelineExecutor:
             )
             return "failed", "runaway", error_detail, node_token_usage or None
         except TimeoutError as exc:
-            error_detail = str(exc)
+            error_detail = _sanitize_detail(exc, limit=5000)
             broker.publish("run_failed", {"error": "node_timeout", "detail": error_detail})
             _log.warning(
                 "node.timeout",
@@ -2144,12 +2332,13 @@ class PipelineExecutor:
             # or a run no longer running. Terminal ``superseded`` failure; the
             # token-guarded finalize write is a no-op if a successor already
             # owns the run. NEVER a completed run with zero work.
-            broker.publish("run_failed", {"error": "executor_superseded", "detail": str(exc)})
+            scrubbed = _sanitize_detail(exc, limit=5000)
+            broker.publish("run_failed", {"error": "executor_superseded", "detail": scrubbed})
             _log.warning(
                 "pipeline.node_superseded",
-                extra={"run_id": str(run_id), "detail": str(exc)[:500]},
+                extra={"run_id": str(run_id), "detail": scrubbed[:500]},
             )
-            return "failed", "executor_superseded", str(exc), node_token_usage or None
+            return "failed", "executor_superseded", scrubbed, node_token_usage or None
         except asyncio.CancelledError:
             raise
         except (NodeCancelledError, SandboxNodeFailedError):
@@ -2163,6 +2352,9 @@ class PipelineExecutor:
         except Exception as exc:
             import traceback
 
-            _tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[:5000]
-            broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb[:5000]})
-            return "failed", type(exc).__name__, _tb[:5000], node_token_usage or None
+            _tb = _sanitize_detail(
+                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                limit=5000,
+            )
+            broker.publish("run_failed", {"error": type(exc).__name__, "detail": _tb})
+            return "failed", type(exc).__name__, _tb, node_token_usage or None

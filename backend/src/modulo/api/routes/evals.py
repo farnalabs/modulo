@@ -105,13 +105,13 @@ class EvalDefinitionListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("evals.create_eval_definition")
 @router.post(
     "/evals",
     response_model=dict[str, Any],
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("evals.create_eval_definition")
 async def create_eval_definition(
     req: CreateEvalRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -181,8 +181,8 @@ async def create_eval_definition(
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("evals.list_eval_definitions")
 @router.get("/evals", response_model=EvalDefinitionListResponse)
+@handle_db_errors("evals.list_eval_definitions")
 async def list_eval_definitions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -254,8 +254,8 @@ async def list_eval_definitions(
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("evals.eval_coverage")
 @router.get("/evals/coverage", status_code=status.HTTP_200_OK)
+@handle_db_errors("evals.eval_coverage")
 async def eval_coverage(
     pipeline_id: uuid.UUID = Query(..., description="Pipeline ID"),
     session: AsyncSession = Depends(get_db_session),
@@ -358,8 +358,8 @@ async def eval_coverage(
     }
 
 
-@handle_db_errors("evals.get_eval_definition")
 @router.get("/evals/{eval_id}", response_model=dict[str, Any])
+@handle_db_errors("evals.get_eval_definition")
 async def get_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -409,8 +409,8 @@ async def get_eval_definition(
     return _eval_def_to_dict(eval_def)
 
 
-@handle_db_errors("evals.update_eval_definition")
 @router.put("/evals/{eval_id}", response_model=dict[str, Any], dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("evals.update_eval_definition")
 async def update_eval_definition(
     eval_id: uuid.UUID,
     req: UpdateEvalRequest,
@@ -470,12 +470,12 @@ async def update_eval_definition(
     return _eval_def_to_dict(eval_def)
 
 
-@handle_db_errors("evals.delete_eval_definition")
 @router.delete(
     "/evals/{eval_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("evals.delete_eval_definition")
 async def delete_eval_definition(
     eval_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -528,8 +528,8 @@ async def delete_eval_definition(
         ) from None
 
 
-@handle_db_errors("evals.list_run_evals")
 @router.get("/runs/{run_id}/evals", response_model=dict[str, Any], status_code=status.HTTP_200_OK)
+@handle_db_errors("evals.list_run_evals")
 async def list_run_evals(
     run_id: uuid.UUID,
     page: int = Query(1, ge=1),
@@ -648,8 +648,8 @@ class CreateEvalFromRunRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("evals.compare_evals")
 @router.post("/evals/compare", status_code=status.HTTP_200_OK)
+@handle_db_errors("evals.compare_evals")
 async def compare_evals(
     req: CompareEvalsRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -820,12 +820,12 @@ async def compare_evals(
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("evals.create_eval_from_run")
 @router.post(
     "/evals/from-run",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("evals.create_eval_from_run")
 async def create_eval_from_run(
     req: CreateEvalFromRunRequest,
     session: AsyncSession = Depends(get_db_session),

@@ -21573,6 +21573,8 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                /** @description Include in_dev tier items (default excludes them) */
+                include_in_dev?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
@@ -22316,6 +22318,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 cursor?: string | null;
+                /** @description Include in_dev tier items (default excludes them) */
+                include_in_dev?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
@@ -24511,6 +24515,8 @@ export interface operations {
                 primitive_types?: string | null;
                 search?: string | null;
                 source?: string | null;
+                /** @description Include in_dev tier items (default excludes them) */
+                include_in_dev?: boolean;
                 _fresh?: boolean;
             };
             header?: never;

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -498,6 +499,105 @@ def test_update_trigger_returns_200(client: TestClient) -> None:
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
+def test_update_trigger_preserves_secret_when_masked_config_round_tripped(client: TestClient) -> None:
+    """A read-modify-write round trip through the masking API must NOT persist
+    the literal SENSITIVE_VALUE_MASK as the stored secret."""
+    trigger = _make_mock_trigger(trigger_type="webhook", config_json={"hmac_secret": "real-secret"})
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"config_json": {"hmac_secret": SENSITIVE_VALUE_MASK}},
+        )
+
+    assert resp.status_code == 200
+    assert trigger.config_json["hmac_secret"] == "real-secret"
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_trigger_updates_secret_with_new_value(client: TestClient) -> None:
+    """A genuinely new secret value must still be written through."""
+    trigger = _make_mock_trigger(trigger_type="webhook", config_json={"hmac_secret": "old-secret"})
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"config_json": {"hmac_secret": "new-secret"}},
+        )
+
+    assert resp.status_code == 200
+    assert trigger.config_json["hmac_secret"] == "new-secret"
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_trigger_null_secret_clears_key(client: TestClient) -> None:
+    """An explicit null for a sensitive key clears it from the stored config."""
+    trigger = _make_mock_trigger(trigger_type="webhook", config_json={"hmac_secret": "real-secret"})
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"config_json": {"hmac_secret": None}},
+        )
+
+    assert resp.status_code == 200
+    assert "hmac_secret" not in trigger.config_json
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_trigger_merges_masked_secret_but_updates_other_keys(client: TestClient) -> None:
+    """The exact production scenario: PUTting back a masked config with a
+    non-secret change must preserve the stored secret while applying the other
+    key's update."""
+    trigger = _make_mock_trigger(
+        trigger_type="webhook",
+        config_json={"hmac_secret": "real-secret", "work_item_ref_paths": [".agents"]},
+    )
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"config_json": {"hmac_secret": SENSITIVE_VALUE_MASK, "work_item_ref_paths": ["backend", "frontend"]}},
+        )
+
+    assert resp.status_code == 200
+    assert trigger.config_json["hmac_secret"] == "real-secret"
+    assert trigger.config_json["work_item_ref_paths"] == ["backend", "frontend"]
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
 def test_test_trigger_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="manual")
     with (
@@ -763,6 +863,72 @@ def test_update_polling_config_clears_daily_spend_limit_returns_200(client: Test
     body = resp.json()
     assert body["daily_spend_limit"] is None
     assert trigger.daily_spend_limit is None
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_polling_config_interval_below_60_returns_422(client: TestClient) -> None:
+    """FAR-169: poll_interval_seconds < 60 must be rejected (the scheduler ticks
+    every 60s, so sub-60 intervals are misleading — the effective cadence is
+    always >= 60s)."""
+    trigger = _make_mock_trigger(trigger_type="polling")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"poll_interval_seconds": 30},
+        )
+
+    assert resp.status_code == 422
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_polling_config_interval_59_returns_422(client: TestClient) -> None:
+    """FAR-169: the floor is exactly 60 — 59 is still rejected."""
+    trigger = _make_mock_trigger(trigger_type="polling")
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+    resp = client.patch(
+        f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+        json={"poll_interval_seconds": 59},
+    )
+
+    assert resp.status_code == 422
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_polling_config_interval_60_returns_200(client: TestClient) -> None:
+    """FAR-169: the 60s floor is the inclusive lower bound — 60 is accepted."""
+    trigger = _make_mock_trigger(trigger_type="polling")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"poll_interval_seconds": 60},
+        )
+
+    assert resp.status_code == 200
+    assert trigger.config_json["poll_interval_seconds"] == 60
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 

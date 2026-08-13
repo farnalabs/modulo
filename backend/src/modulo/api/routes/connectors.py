@@ -17,8 +17,8 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
-from modulo.api.middleware.sensitive_mask import mask_config_json
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
@@ -146,20 +146,29 @@ def _to_response(ci: Any) -> ConnectorResponse:
     )
 
 
-@handle_db_errors("connectors.list_connectors_endpoint")
 @router.get("", response_model=ConnectorListResponse, responses={401: {"description": "Unauthorized"}})
+@handle_db_errors("connectors.list_connectors_endpoint")
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(default=None),
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("connector.list"),
 ) -> ConnectorListResponse:
+    if include_in_dev:
+        require_in_dev_operator(principal, "connector.list.in_dev")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
+            result = await list_connector_instances(
+                session,
+                page=page,
+                page_size=page_size,
+                cursor=cursor,
+                excluded_tiers=[] if include_in_dev else None,
+            )
     except IntegrityError:
         logger.exception("connectors.list_connectors_endpoint")
         raise HTTPException(
@@ -196,13 +205,13 @@ async def list_connectors_endpoint(
     )
 
 
-@handle_db_errors("connectors.create_connector_endpoint")
 @router.post(
     "",
     response_model=ConnectorResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("connectors.create_connector_endpoint")
 async def create_connector_endpoint(
     req: ConnectorCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -274,8 +283,8 @@ async def create_connector_endpoint(
     return _to_response(ci)
 
 
-@handle_db_errors("connectors.get_connector_endpoint")
 @router.get("/{connector_id}", response_model=ConnectorResponse)
+@handle_db_errors("connectors.get_connector_endpoint")
 async def get_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -317,8 +326,8 @@ async def get_connector_endpoint(
     return _to_response(ci)
 
 
-@handle_db_errors("connectors.update_connector_endpoint")
 @router.patch("/{connector_id}", response_model=ConnectorResponse, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("connectors.update_connector_endpoint")
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
     req: ConnectorUpdate,
@@ -337,6 +346,19 @@ async def update_connector_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             existing = await get_connector_instance(session, connector_id)
+            if existing is not None and "config_json" in updates and updates["config_json"] is not None:
+                current_cfg = existing.config_json or {}
+                merged_cfg = dict(current_cfg)
+                for k, v in updates["config_json"].items():
+                    if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+                        # A masked placeholder must never clobber the stored secret
+                        # (read-modify-write round-trip guard). Keep the existing value.
+                        continue
+                    if v is None:
+                        merged_cfg.pop(k, None)
+                    else:
+                        merged_cfg[k] = v
+                updates["config_json"] = merged_cfg
             if existing is not None and existing.connector_type_id == "github" and credentials_updated:
                 temp = GitHubConnector(token=new_credentials)
                 try:
@@ -386,8 +408,8 @@ async def update_connector_endpoint(
     return _to_response(ci)
 
 
-@handle_db_errors("connectors.delete_connector_endpoint")
 @router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("connectors.delete_connector_endpoint")
 async def delete_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

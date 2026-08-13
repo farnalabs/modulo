@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.plugin_registry import get_plugin_registry
@@ -118,20 +118,27 @@ def _to_response(mb: Any) -> ModelBackendResponse:
     )
 
 
-@handle_db_errors("model_backends.list_model_backends_endpoint")
 @router.get("", response_model=ModelBackendListResponse, responses={401: {"description": "Unauthorized"}})
+@handle_db_errors("model_backends.list_model_backends_endpoint")
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("model_backend.list"),
 ) -> ModelBackendListResponse:
+    if include_in_dev:
+        require_in_dev_operator(principal, "model_backend.list.in_dev")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_model_backends(
-                session, org_id=principal.organisation_id, page=page, page_size=page_size
+                session,
+                org_id=principal.organisation_id,
+                page=page,
+                page_size=page_size,
+                excluded_tiers=[] if include_in_dev else None,
             )
     except IntegrityError:
         logger.exception("model_backends.list_model_backends_endpoint")
@@ -222,13 +229,13 @@ def _validate_provider(provider: str) -> None:
     )
 
 
-@handle_db_errors("model_backends.create_model_backend_endpoint")
 @router.post(
     "",
     response_model=ModelBackendResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("model_backends.create_model_backend_endpoint")
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -314,8 +321,8 @@ async def create_model_backend_endpoint(
     return response
 
 
-@handle_db_errors("model_backends.get_model_backend_endpoint")
 @router.get("/{backend_id}", response_model=ModelBackendResponse)
+@handle_db_errors("model_backends.get_model_backend_endpoint")
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -357,8 +364,8 @@ async def get_model_backend_endpoint(
     return _to_response(mb)
 
 
-@handle_db_errors("model_backends.update_model_backend_endpoint")
 @router.patch("/{backend_id}", response_model=ModelBackendResponse, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("model_backends.update_model_backend_endpoint")
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
@@ -418,8 +425,8 @@ async def update_model_backend_endpoint(
     return response
 
 
-@handle_db_errors("model_backends.delete_model_backend_endpoint")
 @router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("model_backends.delete_model_backend_endpoint")
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

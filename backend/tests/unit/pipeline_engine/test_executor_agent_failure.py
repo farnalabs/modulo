@@ -272,6 +272,51 @@ def test_retry_after_policy_legacy_behaviour_unchanged():
 
 
 # ---------------------------------------------------------------------------
+# work_intact interaction with A1 elevation (FAR-152 §15.4)
+# ---------------------------------------------------------------------------
+
+
+def _executor_instance() -> PipelineExecutor:
+    return PipelineExecutor(MagicMock())
+
+
+def test_work_intact_false_when_elevated_to_agent_failed():
+    """An A1-elevated run (failed + agent.failed) is NOT complete — the honest
+    work verdict is False, so the zero-work elevation banner renders (§15.4)."""
+    executor = _executor_instance()
+    work_intact = executor._compute_run_work_intact(
+        "failed",
+        "agent.failed",
+        {"node-a": {"output": {"status": "completed", "summary": "groomed 0/5"}}},
+        {"node-a"},
+    )
+    assert work_intact is False
+
+
+def test_work_intact_computed_for_harness_failure_with_full_dag():
+    """A harness crash after a completed node with the full DAG ran keeps
+    work_intact True — restores the false-failure banner for #1/#3."""
+    executor = _executor_instance()
+    work_intact = executor._compute_run_work_intact(
+        "failed",
+        "harness.db.connection_lost",
+        {"node-a": {"output": {"status": "completed", "summary": "all good"}}},
+        {"node-a"},
+    )
+    assert work_intact is True
+
+
+def test_work_intact_none_for_non_terminal():
+    executor = _executor_instance()
+    assert (
+        executor._compute_run_work_intact(
+            "awaiting_human", None, {"node-a": {"output": {"status": "completed"}}}, {"node-a"}
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry integration
 # ---------------------------------------------------------------------------
 
