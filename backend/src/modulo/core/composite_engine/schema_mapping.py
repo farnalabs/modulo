@@ -35,6 +35,7 @@ def apply_field_mapping(source: dict[str, Any], field_map: dict[str, Any] | None
     Passthrough mode:
         >>> apply_field_mapping({"a": 1, "b": 2}, None)
         {"a": 1, "b": 2}
+
     """
     if field_map is None:
         return dict(source)

@@ -43,6 +43,7 @@ def generate_keypair() -> tuple[str, str]:
 
     Returns:
         Tuple of (private_key_pem, public_key_pem).
+
     """
     private = Ed25519PrivateKey.generate()
     public = private.public_key()
@@ -87,6 +88,7 @@ def sign(private_key_pem: str, data: bytes) -> str:
         TypeError: If the key is not an Ed25519 private key.
         ValueError: If the PEM is malformed.
         UnsupportedAlgorithm: If the algorithm is not supported.
+
     """
     try:
         private_key = _load_private_key(private_key_pem)
@@ -111,6 +113,7 @@ def verify(public_key_pem: str, data: bytes, signature: str) -> bool:
 
     Returns:
         True if the signature is valid, False otherwise.
+
     """
     sig_bytes = _safe_base64_decode(signature)
     if sig_bytes is None:
@@ -159,6 +162,7 @@ def sign_with_trust_anchor(public_key_pem: str) -> str:
 
     Raises:
         UnsupportedAlgorithm: If the signing algorithm is not supported.
+
     """
     anchor = _get_trust_anchor()
     sig = anchor.sign(public_key_pem.encode())
@@ -180,6 +184,7 @@ def verify_trust_anchor(
 
     Returns:
         True if the signature is valid, False otherwise.
+
     """
     if trust_anchor_public_key_pem is None:
         anchor_pem = get_trust_anchor_public_key_pem()

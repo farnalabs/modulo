@@ -107,6 +107,7 @@ class ModuloSamlAuth:
 
         Returns:
             The IdP single sign-on URL with the SAMLRequest parameter.
+
         """
         auth = OneLogin_Saml2_Auth(
             self._get_request_data(),
@@ -134,6 +135,7 @@ class ModuloSamlAuth:
         Raises:
             SamlAuthError: If signature validation, conditions checks, or
                 any other SAML processing step fails.
+
         """
         auth = OneLogin_Saml2_Auth(
             self._get_request_data(post_data={"SAMLResponse": saml_response}),

@@ -466,7 +466,8 @@ async def _apply_work_intact(
 
     ``run_id`` is bound with the ``Uuid`` type so the raw SQL matches the
     stored id on every backend (SQLite stores the 32-hex form, not the
-    dashed ``str(uuid)``)."""
+    dashed ``str(uuid)``).
+    """
     if claim_token is None:
         await session.execute(
             text("UPDATE runs SET work_intact = :wi WHERE id = :rid").bindparams(
@@ -544,6 +545,7 @@ class PipelineExecutor:
         checkpointer_conn_string: psycopg-compatible connection string for
             LangGraph's AsyncPostgresSaver. If None, no checkpointer is used
             (runs will not persist checkpoints and HITL interrupts will not work).
+
     """
 
     def __init__(
@@ -1112,7 +1114,8 @@ class PipelineExecutor:
 
     def _get_evidence_provider(self, org_id: uuid.UUID) -> EvidenceProvider:
         """The injected evidence provider (tests) or the production
-        E2B+DB-backed provider wired for this run's org."""
+        E2B+DB-backed provider wired for this run's org.
+        """
         if self._evidence_provider is not None:
             return self._evidence_provider
         return build_default_evidence_provider(self._session_factory, org_id)
@@ -1151,7 +1154,8 @@ class PipelineExecutor:
         nodes (declared ``outcome:success``) on a complete run. Runs off the
         critical path (after terminalization commits), bounded ≤3s per probe,
         gated by the EvidenceProvider seam. Fail-open — a probe failure never
-        affects the run."""
+        affects the run.
+        """
         if final_status != "complete" or not evidence_enabled():
             return
         evidence_nodes = [node_id for node_id, out in completed_node_outputs.items() if node_declared_success(out)]

@@ -49,6 +49,7 @@ class DeprecationHeaderMiddleware(BaseHTTPMiddleware):
             path_prefix: URL path prefix (e.g. ``"/api/v1/old"``).
             sunset: ISO 8601 date string after which the endpoint will be removed.
             migration_url: Link to the migration guide.
+
         """
         cls._registry[path_prefix] = {
             "sunset": sunset,

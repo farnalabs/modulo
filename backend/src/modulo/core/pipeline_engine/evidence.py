@@ -229,7 +229,8 @@ def evidence_enabled() -> bool:
 
 def output_json_has_content(output_json: Any) -> bool:
     """True when output_json carries at least one non-metadata key with a
-    non-empty value. Empty dict/list/string/None values do NOT count (§7.2.2)."""
+    non-empty value. Empty dict/list/string/None values do NOT count (§7.2.2).
+    """
     if not isinstance(output_json, dict):
         return False
     for key, value in output_json.items():
@@ -245,7 +246,8 @@ def output_json_has_content(output_json: Any) -> bool:
 
 def extract_output_json(node_output: Any) -> dict[str, Any] | None:
     """The agent's output_json from a CAPTURED node output (the
-    ``{"artifacts": [...], "output": {...}}`` envelope). None when absent."""
+    ``{"artifacts": [...], "output": {...}}`` envelope). None when absent.
+    """
     if not isinstance(node_output, dict):
         return None
     artifacts = node_output.get("artifacts")
@@ -270,7 +272,8 @@ def extract_stored_output_json(
 ) -> dict[str, Any] | None:
     """The agent's output_json for a node from the STORED run columns
     (legacy-safe). P1 (split) rows carry the pure return — for sandbox_agent
-    that IS output_json; legacy rows bury it at ``artifacts[0].output.output_json``."""
+    that IS output_json; legacy rows bury it at ``artifacts[0].output.output_json``.
+    """
     from modulo.core.node_output_split import node_return
 
     value = node_return(outputs_json, telemetry_json, node_id)
@@ -295,7 +298,8 @@ def _inner_declared_success(inner: Any) -> bool:
     """§7.2.3 gate on the INNER output dict (the split telemetry / legacy
     inner output): the agent status is present AND completed, and the outcome
     is explicitly ``success``. Missing status (legacy/unknown) never qualifies
-    — where the flag can't fire anyway, saving cost (§13.3)."""
+    — where the flag can't fire anyway, saving cost (§13.3).
+    """
     if not isinstance(inner, dict):
         return False
     if inner.get("agent_status") != "completed":
@@ -305,7 +309,8 @@ def _inner_declared_success(inner: Any) -> bool:
 
 def node_declared_success(node_output: Any) -> bool:
     """The §7.2.3 no-op gate input for a CAPTURED node output (the
-    ``{"output": inner}`` envelope returned by node_runner)."""
+    ``{"output": inner}`` envelope returned by node_runner).
+    """
     if not isinstance(node_output, dict):
         return False
     return _inner_declared_success(node_output.get("output"))
@@ -313,7 +318,8 @@ def node_declared_success(node_output: Any) -> bool:
 
 def _declared_success_nodes(outputs_json: Any, telemetry_json: Any) -> list[str]:
     """Node ids whose STORED output declares success — the reconciliation
-    sweep's eligibility scan (legacy-safe via node_output_split.node_telemetry)."""
+    sweep's eligibility scan (legacy-safe via node_output_split.node_telemetry).
+    """
     from modulo.core.node_output_split import node_telemetry
 
     node_ids: set[str] = set()
@@ -330,7 +336,8 @@ def _declared_success_nodes(outputs_json: Any, telemetry_json: Any) -> list[str]
 def _node_output_has_valid_artifact(node_output: Any) -> bool:
     """A completed node's output carries a valid artifact: a dict envelope with
     an ``artifacts[0].output`` dict, an ``output`` dict, or a summary string.
-    None/strings/empty dicts are NOT valid artifacts."""
+    None/strings/empty dicts are NOT valid artifacts.
+    """
     if not isinstance(node_output, dict) or not node_output:
         return False
     artifacts = node_output.get("artifacts")
@@ -401,7 +408,8 @@ async def _e2b_run_command(sandbox_id: str, command: str) -> CommandResult:
     """Run a shell command in a live E2B sandbox. Single-shot SDK calls are
     individually bounded (repo rule: every E2B SDK call under asyncio.wait_for);
     connect/run are fresh coroutines safe to cancel. Raises on failure — the
-    caller maps any raised error to unverifiable."""
+    caller maps any raised error to unverifiable.
+    """
     from e2b import AsyncSandbox  # type: ignore[import-untyped]
 
     sandbox = await asyncio.wait_for(AsyncSandbox.connect(sandbox_id), timeout=_SANDBOX_IO_TIMEOUT_SECONDS)
@@ -418,7 +426,8 @@ async def _e2b_run_command(sandbox_id: str, command: str) -> CommandResult:
 
 async def _e2b_list_files(sandbox_id: str) -> list[FileInfo]:
     """List the live E2B sandbox's user home. Raises on failure — the caller
-    maps any raised error to unverifiable."""
+    maps any raised error to unverifiable.
+    """
     from e2b import AsyncSandbox
 
     sandbox = await asyncio.wait_for(AsyncSandbox.connect(sandbox_id), timeout=_SANDBOX_IO_TIMEOUT_SECONDS)
@@ -448,7 +457,8 @@ def build_default_evidence_provider(
     org_id: UUID,
 ) -> SandboxEvidenceProvider:
     """Wire the production provider: DB-backed sandbox resolution + stored
-    output_json loading, E2B-SDK command/files probing."""
+    output_json loading, E2B-SDK command/files probing.
+    """
 
     async def _resolve_sandbox_id(run_id: UUID, node_id: str) -> str | None:
         from modulo.db.crud.run import get_run
@@ -522,7 +532,8 @@ class SandboxEvidenceProvider:
     async def git_diff_empty(self, run_id: UUID, node_id: str) -> EvidenceResult:
         """§15.3 git probe: the run's git diff is empty (whitespace ignored)
         AND no non-metadata output_json key. Timeout/exception/no-repo →
-        unverifiable."""
+        unverifiable.
+        """
         return await asyncio.wait_for(
             self._git_diff_empty_unbounded(run_id, node_id),
             timeout=self._timeout_seconds,
@@ -551,7 +562,8 @@ class SandboxEvidenceProvider:
 
     async def sandbox_filesystem_probe(self, run_id: UUID, node_id: str) -> EvidenceResult:
         """§15.3 sandbox-filesystem probe: fs with content → has_work; fs
-        without content → verified_empty; no sandbox → unverifiable."""
+        without content → verified_empty; no sandbox → unverifiable.
+        """
         return await asyncio.wait_for(
             self._sandbox_filesystem_probe_unbounded(run_id, node_id),
             timeout=self._timeout_seconds,
@@ -572,7 +584,8 @@ class SandboxEvidenceProvider:
 def combine_probe_results(*results: EvidenceResult) -> tuple[EvidenceResult, str]:
     """§15.3 combination rule: any positive → has_work (never false-flag); any
     unverifiable → unverifiable (never flag); only when EVERY probe confirms
-    empty → verified_empty (the no-op flag's input)."""
+    empty → verified_empty (the no-op flag's input).
+    """
     if any(r == EvidenceResult.has_work for r in results):
         return EvidenceResult.has_work, "positive evidence (git diff / sandbox filesystem)"
     if any(r == EvidenceResult.unverifiable for r in results):
@@ -586,7 +599,8 @@ def _estimate_probe_cost_usd(seconds: float) -> float:
     """Estimated marginal sandbox cost of a probe: E2B hourly rate x probe
     wall-clock. There is no LLM/token cost — the probe executes shell commands
     and file listings only. Rate read from settings at runtime (mirrors
-    node_runner), defaulting to the constant."""
+    node_runner), defaulting to the constant.
+    """
     rate = _PROBE_SANDBOX_USD_PER_HOUR
     try:
         from modulo.settings import get_settings

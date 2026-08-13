@@ -304,7 +304,6 @@ async def retry_all_failed_deliveries(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Retry all failed and dead_lettered deliveries across all webhooks in the org."""
-
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)

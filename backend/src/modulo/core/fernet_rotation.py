@@ -263,6 +263,7 @@ async def rotate_all_encrypted_data(
 
     Returns:
         A ``RotationResult`` with per-table counts.
+
     """
     new_fernet = Fernet(new_key.encode())
     old_fernet = Fernet(old_key.encode()) if old_key else None
