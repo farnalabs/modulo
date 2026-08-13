@@ -7,8 +7,8 @@ implementable spec; §0–§14 are design history, and wherever an earlier secti
 conflicts with v6, v6 wins.
 **Owner:** Modulo product
 **Target PRD section:** run-status vocabulary + error-code vocabulary (see PRD §8
-run entity / state machine; the proposal's `superseded` and `stalled` statuses are
-not yet in the shipped status set)
+run entity / state machine; the proposal's `superseded` status is not yet in the
+shipped status set — `stalled` and `budget_exceeded` already are)
 **Related:** `docs/troubleshooting.md` (run-level `error_code` runbook), PRD §8
 run entity
 
@@ -17,11 +17,14 @@ run entity
   encouraged) is already adopted by dogfood drivers; `node_runner` reads
   `summary`/`changed_files`/`pr_url` from `output.json`.
 - The shipped run status set (PRD §8) is exactly `pending`, `running`,
-  `awaiting_human`, `claimed`, `complete`, `failed`, `cancelled`, `eval_failed`.
-  The proposal's `stalled` and `superseded` *statuses* are NOT shipped; today's
-  `executor_stalled` / `executor_superseded` are `error_code` values (runbook in
-  `docs/troubleshooting.md`), and the proposal maps them to `agent.stall` /
-  `superseded` respectively.
+  `awaiting_human`, `claimed`, `complete`, `failed`, `cancelled`, `eval_failed`,
+  `stalled`, `budget_exceeded` — the 10 values of the current `ck_runs_status`
+  CHECK constraint (`stalled` added by migration 0077, `budget_exceeded` by
+  0090/FAR-104; both are shipped terminal statuses). The proposal's `superseded`
+  *status* is the only one NOT shipped; today's `executor_superseded` is an
+  `error_code` value (runbook in `docs/troubleshooting.md`), and the proposal
+  maps it to `superseded`. `executor_stalled` is likewise a legacy `error_code`
+  that maps to the already-shipped `stalled` status via `agent.stall`.
 - This document is the implementable reference for the failure-surfacing
   design. Section numbering (§0–§15) is preserved verbatim from the source.
 
@@ -98,6 +101,7 @@ One axis. Each error code = registry entry `{code, class, display_name, retryabl
 | `complete` | Harness succeeded; work verdict success or unknown-positive. | — | healthy |
 | `failed` | Harness failed OR agent self-reported failure (A1 elevation). Union. | — | harness, sandbox, agent, node, contract, connector, capacity_timeout, eval, config |
 | `stalled` | Node went silent past idle watchdog. Terminal. | (exists) | agent.stall |
+| `budget_exceeded` | Token budget exhausted (FAR-104). Terminal. | (exists) | — |
 | `cancelled` | Human cancelled. Terminal. | — | operator |
 | `superseded` | **(NEW)** Newer run took over. Terminal, never alerts on its own. | `executor_superseded` → `superseded` | operator |
 | `eval_failed` | Work finished but eval blocked/failed. Terminal. | (exists) | eval |
@@ -114,6 +118,7 @@ One axis. Each error code = registry entry `{code, class, display_name, retryabl
 | Silent no-op / hallucinated | `complete` + `agent.no_op` warning (tri-state evidence) | `agent.no_op` |
 | Stall | `stalled` | `agent.stall` |
 | Resource exhaustion | `failed` | `node.timeout` / `node.runaway` |
+| Token budget exceeded (FAR-104) | `budget_exceeded` | `budget_exceeded` |
 | Contract violation | `failed` (schema fails run — §10) | `contract.schema` / `sandbox.no_output_json` |
 | Connector/provider | `failed` | `connector.*` |
 | Capacity (deferred) | `pending` + `capacity.*` marker (NOT failed — matches engine today) | `capacity.*` |
@@ -128,7 +133,7 @@ One axis. Each error code = registry entry `{code, class, display_name, retryabl
 2. **Harness failure with intact work (false-failure guard):** run about to terminalize `failed` for `harness.*`/`sandbox.*` + ≥1 node completed a valid artifact + full DAG ran → `failed` + `work_intact=true` + false-failure banner. `work_intact` is per-node aggregated: ALL completed nodes intact AND no unexecuted downstream nodes. A run truncated at node 3 of 5 is NOT work-intact.
 3. **`partial` deferred** (per v2 decision; no observed incident requires it).
 4. **Supersession:** real `superseded` status. The superseder is watched — if the superseding run terminalizes `failed`/`stalled`, that failure alerts normally. Superseder chain is bounded to the immediate successor; a chain that never terminalizes is time-boxed. A run superseded while `awaiting_human`: the open gate is auto-cancelled and the run lands `superseded`.
-5. **Retry = new attempt row (resolves the v2 contradiction).** A re-dispatch spawns a NEW run row (attempt_n+1) carrying `parent_attempt_id`; the terminal row is NEVER flipped back to `pending`. This replaces today's `UPDATE runs SET status='pending'` (executor.py:1396/1500) with insert-new-attempt semantics. Supersession guard: a pending retry is cancelled if a newer run claims the pipeline. `accepted_as_complete` lives on the terminal row it was granted for, and does not follow a re-run.
+5. **Retry = new attempt row (resolves the v2 contradiction).** A re-dispatch spawns a NEW run row (attempt_n+1) carrying `parent_attempt_id`; the terminal row is NEVER flipped back to `pending`. This replaces today's `UPDATE runs SET status='pending'` (executor.py:1639/1750) with insert-new-attempt semantics. Supersession guard: a pending retry is cancelled if a newer run claims the pipeline. `accepted_as_complete` lives on the terminal row it was granted for, and does not follow a re-run.
 6. **Fail-open terminalization:** all new elevation/verdict/heuristic computation wrapped so that on ANY exception the run still terminalizes via today's path + `harness.elevation_failed` warning flag. Scope: protects against computation errors. The DB-down-at-terminalization case is out of scope for the new machinery (it is today's H1 problem; the stale-run sweep remains the backstop). Terminalization is a single atomic transaction; no partial writes.
 
 ---
@@ -310,7 +315,7 @@ Every primary action logs a `recovery_action` event. Recovery NEVER mutates a te
 }
 ```
 
-**Wiring (v3 fix — no rename, verbatim propagation):** node_runner currently derives node status from exit_code and reads only summary/changed_files/pr_url from output.json (node_runner.py:1705-1713). v3 mandates: node_runner ALSO surfaces the agent's raw `status`/`outcome` from output.json VERBATIM as distinct node-output fields (`agent_status`, `agent_outcome`), without overwriting them from exit_code. The executor's A1 elevation reads `agent_status`/`agent_outcome`; the exit-code-derived node status remains harness truth for the node. Legacy drivers already write `status` (verified: `_common.exit_completed/exit_failed`, backlog-groomer, ticket-picker, ticket-to-pr-coder) — so the base contract is already adopted; no driver migration needed. A `status` field missing from output.json degrades to `unknown` (never a false `complete`).
+**Wiring (v3 fix — no rename, verbatim propagation):** node_runner currently derives node status from exit_code and reads only summary/changed_files/pr_url from output.json (node_runner.py:1706-1718). v3 mandates: node_runner ALSO surfaces the agent's raw `status`/`outcome` from output.json VERBATIM as distinct node-output fields (`agent_status`, `agent_outcome`), without overwriting them from exit_code. The executor's A1 elevation reads `agent_status`/`agent_outcome`; the exit-code-derived node status remains harness truth for the node. Legacy drivers already write `status` (verified: `_common.exit_completed/exit_failed`, backlog-groomer, ticket-picker, ticket-to-pr-coder) — so the base contract is already adopted; no driver migration needed. A `status` field missing from output.json degrades to `unknown` (never a false `complete`).
 
 - Base fields (`status`, `summary`) required, extracted before any custom schema.
 - `outcome` optional; absence → `unknown` — no heuristic flag, no alert (§7.2 gate).
@@ -367,7 +372,7 @@ Authority: **harness evidence** > **agent status** > **outcome** > **heuristic i
 2. **Legacy error codes:** old runs keep raw codes; new writes mapped; §3.2 shared alias module serves `_retry_after_policy`, alert matcher, event_mapper — each with regression tests.
 3. **Alert rules:** explicit user rules beat defaults; migration report lists behavior changes.
 4. **Custom schemas:** custom-schema fail-the-run for `output_json` only; base fields extracted independently.
-5. **New statuses (`superseded`, `claimed` listed, `waiting_for_lock`/`expired` purged):** **Single shared status-enum module** consumed by run.py, run_ws.py, mcp_server.py, cost probe, crud/run.py (incl. the hardcoded `completed_at` terminal tuples at :592/:635/:723 AND the analytics status-count tuples at :1140/:1200 — purging `expired` there), retention/purge, org deletion, saq_hooks `_mark_run_failed` guard (`NOT IN` set), notification log. Postgres CHECK constraint `ck_runs_status` needs drop/re-add for `superseded` (precedent 0077_add_stalled_status). Rollback rule: legacy readers treat unknown status as terminal. `executor_superseded`→`superseded` is PRESENTATION-LAYER — stored rows NOT mutated.
+5. **New statuses (`superseded`, `claimed` listed, `waiting_for_lock`/`expired` purged):** **Single shared status-enum module** consumed by run.py, run_ws.py, mcp_server.py, cost probe, crud/run.py (incl. the hardcoded `completed_at` terminal tuples at :592/:635/:723 AND the analytics status-count tuples at :1140/:1200 — purging `expired` there), retention/purge, org deletion, saq_hooks `_mark_run_failed` guard (`NOT IN` set), notification log. Postgres CHECK constraint `ck_runs_status` (currently the 10-value set — `pending`, `running`, `awaiting_human`, `claimed`, `complete`, `failed`, `cancelled`, `eval_failed`, `stalled` [0077], `budget_exceeded` [0090]) needs drop/re-add to ADD `superseded` (precedent 0077_add_stalled_status). Rollback rule: legacy readers treat unknown status as terminal. `executor_superseded`→`superseded` is PRESENTATION-LAYER — stored rows NOT mutated.
 6. **Retry policy:** default is explicit + code-filtered; explicit author policies win; save-time validation warning; SAQ budget composition documented; retry spawns NEW attempt rows (migration: add `parent_attempt_id` column; backfill existing retried runs' attempts as best-effort, default null).
 7. **Rollout ordering:** (a) shared status-enum module + registry + alias table, (b) `agent_status`/`agent_outcome` propagation in node_runner + A1 elevation (flag-gated, pre-flight), (c) verdict header + guidance + banners (frontend), (d) `superseded` status + CHECK migration + new-attempt-row retry, (e) schema fail-the-run (opt-in legacy, default new), (f) truthfulness heuristic (dry-run → opt-in → on), (g) accept-as-complete (human-only gate + verdict record).
 8. **API/MCP surface:** additive-only for one cycle; keep legacy status/error_code fields alongside new; publish status/code migration table; then remove legacy.
@@ -523,7 +528,7 @@ Add to §8 rollout as a prerequisite for A1 elevation + heuristic phases:
 
 ### 13.12 Schema diff completed (resolves L6-4)
 
-- `runs`: `accepted_at TIMESTAMP NULL`, `superseder_run_id UUID NULL` (FK, indexed), `run_group_id UUID NULL` (indexed, set = root id), `langgraph_thread_id` unique relaxed to composite `(run_group_id, thread_id)`; CHECK `ck_runs_status` widened with `superseded`.
+- `runs`: `accepted_at TIMESTAMP NULL`, `superseder_run_id UUID NULL` (FK, indexed), `run_group_id UUID NULL` (indexed, set = root id), `langgraph_thread_id` unique relaxed to composite `(run_group_id, thread_id)`; CHECK `ck_runs_status` (10 values incl. `stalled` [0077] and `budget_exceeded` [0090]) widened with `superseded`.
 - New table `run_evidence (run_id FK, node_id, evidence_state, evidence_detail, evidence_written_at)`.
 - New table `run_verdict (run_id FK, verdict_type, verdict_by, verdict_at, work_intact_snapshot, recovery_action)` — the hitl_manager-owned Accept-as-complete record (§4.4); `runs.accepted_as_complete`/`accepted_by` are denormalized from it.
 - `attempt_n` derived (ordinal within run_group_id), not stored; `parent_run_id` reused for chaining.
@@ -559,10 +564,10 @@ Where a line conflicts with any earlier section, the v5 amendment wins. This sec
 
 ### 14.1 Thread identity: ONLY Resume inherits the thread; retries get a fresh thread (resolves L2-C1/C2, L4-2)
 
-- **Root fact:** `langgraph_thread_id = f"{org_id}:{run_id}"` (crud/run.py:300) embeds the run id — two sibling attempts can never share a thread id, so the v4 "inherit thread for all attempts" was geometrically impossible.
+- **Root fact:** `langgraph_thread_id = f"{org_id}:{run_id}"` (crud/run.py:341) embeds the run id — two sibling attempts can never share a thread id, so the v4 "inherit thread for all attempts" was geometrically impossible.
 - **Correct model — two sub-paths:**
   - **Retry (policy-driven new attempt):** fresh thread id (`f"{org}:{child_run_id}"`). Runs the graph CLEAN. No checkpoint inheritance — a retry of `agent.failed` restarts, never resumes mid-graph. Unique stays `langgraph_thread_id` (already unique because it embeds the run id). NO composite-unique relaxation needed — v4's §13.1 relaxation is REVOKED.
-  - **Resume (stall recovery):** new run row, SAME `langgraph_thread_id` as the stalled parent (the resume sub-path is the ONLY inheritor). `langgraph_thread_id` unique is relaxed to `(run_group_kind='resume', thread_id)` via a partial unique index (Postgres `WHERE run_group_kind='resume'`), so a stalled row + its resume successor share the thread while every other run keeps a globally unique thread. `_resume_run` (executor.py:1029) continues from the checkpoint as today.
+  - **Resume (stall recovery):** new run row, SAME `langgraph_thread_id` as the stalled parent (the resume sub-path is the ONLY inheritor). `langgraph_thread_id` unique is relaxed to `(run_group_kind='resume', thread_id)` via a partial unique index (Postgres `WHERE run_group_kind='resume'`), so a stalled row + its resume successor share the thread while every other run keeps a globally unique thread. `PipelineExecutor.resume` (executor.py:1166) continues from the checkpoint as today.
 - **Doc fixes:** §2.3.5's "replaces today's UPDATE" and §13.1's "KEEP the fenced reset" are reconciled: the fenced same-row reset remains for SAQ short-transient retries; policy-driven retries insert child rows; Resume inserts a child row with inherited thread. The retry model is ONE place: §14.1.
 
 ### 14.2 `run_group_kind` discriminator (resolves L2-C3, L3-1)
@@ -706,7 +711,7 @@ This is the single implementable statement. All of §13/§14 remain as design hi
 - **Indexes (two partial unique indexes replace the global unique):**
   - `UNIQUE(parent_run_id) WHERE run_group_kind = 'resume'` — each parent admits at most ONE resume child (double-resume of the same stall → 409/DB reject); a resume child that stalls can itself be resumed (its parent is a different row) → chained resume works.
   - `UNIQUE(langgraph_thread_id) WHERE run_group_kind IS DISTINCT FROM 'resume'` — global thread uniqueness for roots/retries preserved.
-- `_resume_run` reference corrected: the real method is `PipelineExecutor.resume` (executor.py:950), which today re-claims the SAME row; the v6 child-row resume is a NEW path added alongside (SAQ `resume_run` → claim new child row → `resume` against inherited thread).
+- `_resume_run` reference corrected: the real method is `PipelineExecutor.resume` (executor.py:1166), which today re-claims the SAME row; the v6 child-row resume is a NEW path added alongside (SAQ `resume_run` → claim new child row → `resume` against inherited thread).
 - **Fenced same-row reset stays** for SAQ short-transient retries; policy-driven retries insert child rows; Resume inserts child rows. One retry model, one place.
 
 **Backfill (new, resolves the legacy hole):** walk `parent_run_id` for existing rows: `run_group_id` = true root (not self-root for children); `run_group_kind` = `'resume'` where a child shares its parent's `langgraph_thread_id` (evidence of a legacy resume), else NULL. A legacy stalled parent becomes resumable exactly once. Acceptance test: legacy parent resumed once succeeds, second resume rejected.
@@ -736,7 +741,7 @@ One expression, recomputed on demand (never stored; acceptance is post-terminali
 
 - Elevation: `agent_status == "failed" OR outcome == "failed"` on a captured node output → run NEVER lands `complete`. Fires regardless of exit code.
 - **Severity precedence (corrected):** if the node's harness-truth code is a retryable transient (`sandbox.*`, `harness.sdk_task_cancelled`, `harness.worker_failed`, transient `connector.*`) → crash class wins run `error_code` + severity (deferred to retry-exhaust); `agent.failed` preserved in `error_detail` AND surfaced as an explicit `elevation_signal` field on the run/alert/webhook so user `agent.failed` alert rules and the banner still fire. **Escalation rule:** if a RETRIED attempt again self-reports `agent_status=failed`/`outcome=failed`, promote to critical `agent.failed` (repeated coincidence is the signal, not the harness). Otherwise non-retryable-transient → `agent.failed` critical.
-- Resolution runs BEFORE `_retry_after_policy` (executor.py:1459) so retry and alert filters see the same code.
+- Resolution runs BEFORE `_retry_after_policy` (executor.py:1709) so retry and alert filters see the same code.
 
 ### 15.5 Retry-alert compensation (fire-once, resolvable)
 
@@ -754,7 +759,7 @@ One expression, recomputed on demand (never stored; acceptance is post-terminali
 ### 15.7 Superseded
 
 - New runs WRITE `superseded`; legacy rows keep `executor_superseded`/`failed` and render via the registry.
-- CHECK `ck_runs_status` widened (0077 precedent). Downgrade: does NOT convert rows; revert gate asserts zero `superseded` rows before re-narrowing; otherwise the CHECK stays widened.
+- CHECK `ck_runs_status` (10 values incl. `stalled` [0077] and `budget_exceeded` [0090]) widened with `superseded` (0077 precedent). Downgrade: does NOT convert rows; revert gate asserts zero `superseded` rows before re-narrowing; otherwise the CHECK stays widened.
 - Superseder chains: watch follows `superseder_run_id` to the LEAF; alert only on the leaf's terminal failure; chain time-box 24h (env-tunable); timeout → swept to `superseded` + note.
 - Mid-execution supersession: executor cancel path tears down the sandbox; node-cancel codes recorded as node detail; elevation suppressed; run lands `superseded`. Superseded retention 30 days then purge to audit record preserving `superseder_run_id`.
 
@@ -790,7 +795,7 @@ All 12 incidents (dual-fixture #2/#7; single-fixture machine-detected), exit_cod
 
 ### 15.12 Schema diff (final, authoritative)
 
-- `runs`: `run_group_id UUID NULL` (indexed), `run_group_kind VARCHAR NULL`, `superseder_run_id UUID NULL` (FK, indexed), `accepted_as_complete BOOL NULL`, `accepted_by VARCHAR NULL`, `accepted_at TIMESTAMP NULL`, `work_intact BOOL NULL`; DROP `UNIQUE(langgraph_thread_id)`; ADD partial `UNIQUE(parent_run_id) WHERE run_group_kind='resume'` + partial `UNIQUE(langgraph_thread_id) WHERE run_group_kind IS DISTINCT FROM 'resume'`; widen `ck_runs_status` with `superseded`.
+- `runs`: `run_group_id UUID NULL` (indexed), `run_group_kind VARCHAR NULL`, `superseder_run_id UUID NULL` (FK, indexed), `accepted_as_complete BOOL NULL`, `accepted_by VARCHAR NULL`, `accepted_at TIMESTAMP NULL`, `work_intact BOOL NULL`; DROP `UNIQUE(langgraph_thread_id)`; ADD partial `UNIQUE(parent_run_id) WHERE run_group_kind='resume'` + partial `UNIQUE(langgraph_thread_id) WHERE run_group_kind IS DISTINCT FROM 'resume'`; widen `ck_runs_status` (10 values incl. `stalled` [0077] and `budget_exceeded` [0090]) with `superseded`.
 - New: `run_evidence (run_id FK, node_id, evidence_state, evidence_detail, evidence_written_at, UNIQUE(run_id, node_id))`; `run_verdict (run_id FK, verdict_type, verdict_by, verdict_at, work_intact_snapshot, recovery_action)` — canonical; `runs.accepted_*` denormalized from it in one atomic transaction via hitl_manager; `deleted_defaults (org_id, signal)`.
 - `run_daily_facts`: add `run_group_id`.
 - `attempt_n` derived (root=1, retry/resume increment); `parent_run_id` reused for chaining.
