@@ -29,8 +29,8 @@ class CompleteSetupRequest(BaseModel):
     api_key: str = Field(..., min_length=1, description="The API key to configure")
 
 
-@handle_db_errors("mcp_setup.complete_model_backend_setup")
 @router.post("/model-backends/{backend_id}/complete-setup", dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("mcp_setup.complete_model_backend_setup")
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,
     payload: CompleteSetupRequest,

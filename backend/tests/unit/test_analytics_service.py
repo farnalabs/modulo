@@ -8,7 +8,7 @@ validation — the pure logic shared by the REST route and the MCP tool. No DB.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -97,7 +97,10 @@ class TestNormaliseBounds:
 
     def test_defaults_to_today_and_364_day_lookback(self) -> None:
         frm, to = _normalise_bounds(None, None)
-        assert to.date() == date.today()
+        # _normalise_bounds defaults to UTC today (datetime.now(UTC).date()) — the
+        # assertion must use UTC, not naive local date.today(), or it flakes across
+        # a local-midnight boundary (UTC+1).
+        assert to.date() == datetime.now(UTC).date()
         assert (to.date() - frm.date()).days == 364, "the default window is exactly 365 days inclusive"
 
     def test_inverted_range_rejected(self) -> None:

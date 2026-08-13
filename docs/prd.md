@@ -1247,7 +1247,7 @@ Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints ac
 When `retain_payload` is enabled on a run, the run's `input_payload` and `outputs_json` columns are retained past the run's lifecycle. The **payload retention job** (`cleanup_retained_payloads`) nulls these columns for runs older than the retention period (default: 30 days) in terminal states. Processes in batches of 500.
 
 ##### TriggerEvent Log Cleanup
-The `TriggerEvent` log accumulates records for every webhook trigger activation. The **trigger event cleanup job** (`cleanup_old_webhook_events`) deletes events older than the retention period (default: 30 days) in batches of 1000. Runs on a scheduled loop (`cleanup_scheduler_loop`, every 60 minutes) and as an SAQ system cron. Failure of the cleanup job does not block webhook processing — stale events cause no functional harm beyond table bloat.
+The `TriggerEvent` log accumulates records for every trigger activation (webhook, cron, polling, agent_signal, ongoing). Two cleanup jobs bound its growth. The **webhook-dedup cleanup job** (`cleanup_old_webhook_events`) deletes events older than 30 days in batches of 1000 (the webhook replay window). The **trigger-events retention job** (`cleanup_old_trigger_events`) is the canonical age-based retention: it deletes events whose `received_at` is older than the retention period (default: 90 days, aligned with the run-retention policy, and comfortably exceeding the replay window so replayable events are never purged) in batches of 500, indexed on `received_at`. Both run on a scheduled loop every 60 minutes and as SAQ system crons (`unique=True`, so overlapping ticks cannot interleave). Failure of either cleanup job does not block trigger processing — stale events cause no functional harm beyond table bloat.
 
 ### 8.9 Error Handling
 
@@ -4180,7 +4180,7 @@ A **journey** is a unit of work — a task, a ticket, a PR, a deploy — tracked
 
 ### 8.32 Analytics
 
-Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one row per terminal run, written on every finalize path and backfilled by a daily maintenance cron. Facts survive the 90-day run purge, so dimensioned run history outlives the `runs` rows it was derived from.
+Run analytics over a **retained facts table** (`run_daily_facts`, ADR 020): one row per terminal run, written on every finalize path and backfilled by a daily maintenance cron. Facts are also written as a **compensating write** when the sweep/SAQ terminalizers mark runs failed outside the normal finalize path (`stale_run_recovery_sweep`, `dispatcher_reconcile`, `fail_run_terminal`), so terminal runs never miss a facts row. Facts survive the 90-day run purge, so dimensioned run history outlives the `runs` rows it was derived from.
 
 #### 8.32.1 Rolling-Window Semantics
 

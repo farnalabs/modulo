@@ -44,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
+from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
@@ -394,7 +395,7 @@ async def _log_event(
         raw_payload_hash=payload_hash,
         validation_result=result,
         run_id=run_id,
-        error_detail=error_detail,
+        error_detail=None if error_detail is None else sanitize_error_text(error_detail),
     )
     session.add(event)
     await session.flush()
@@ -420,7 +421,7 @@ async def _log_poll_event(
         raw_payload_hash=payload_hash,
         validation_result=result,
         run_id=run_id,
-        error_detail=error_detail,
+        error_detail=None if error_detail is None else sanitize_error_text(error_detail),
     )
     session.add(event)
     await session.flush()
@@ -546,7 +547,11 @@ async def fire_cron_trigger(
         if not lock_result.scalar_one():
             return {"status": "skipped", "reason": "trigger_busy"}
         result = await session.execute(
-            select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
+            select(Trigger).where(
+                Trigger.id == trigger_id,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
         )
         trigger = result.scalar_one_or_none()
         if trigger is None or not trigger.active:
@@ -736,7 +741,11 @@ async def fire_polling_trigger(
         if not lock_result.scalar_one():
             return {"status": "skipped", "reason": "trigger_busy"}
         result = await session.execute(
-            select(Trigger).where(Trigger.id == trigger_id, Trigger.organisation_id == org_id)
+            select(Trigger).where(
+                Trigger.id == trigger_id,
+                Trigger.organisation_id == org_id,
+                Trigger.deleted_at.is_(None),
+            )
         )
         trigger = result.scalar_one_or_none()
         if trigger is None or not trigger.active:
@@ -1324,6 +1333,7 @@ async def _fire_missed_cron_epochs(
                 ).where(
                     Trigger.trigger_type == "cron",
                     Trigger.active.is_(True),
+                    Trigger.deleted_at.is_(None),
                     Trigger.next_fire_at.isnot(None),
                     Trigger.next_fire_at > now,
                     Trigger.last_fired_at.isnot(None),
@@ -1431,6 +1441,12 @@ async def fire_due_triggers() -> dict[str, Any]:
     Runs per-org (RLS-safe): the org context is set per transaction so the
     scheduler sees all orgs under FORCE RLS (integration) and behaves
     identically in production.
+
+    Soft-deleted triggers (``deleted_at`` set — ``soft_delete_trigger`` does NOT
+    flip ``active``) are excluded from every scan (cron, polling, missed-fire
+    catch-up) AND skipped by the per-item fire jobs (``fire_cron_trigger`` /
+    ``fire_polling_trigger`` treat them as ``trigger_inactive_or_missing``), so
+    a soft-deleted cron/polling trigger can never keep firing (FAR-166).
     """
     from modulo.db.models.organisation import Organisation
     from modulo.db.models.scheduled_report import ScheduledReport
@@ -1534,6 +1550,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                             ).where(
                                 Trigger.trigger_type == "cron",
                                 Trigger.active.is_(True),
+                                Trigger.deleted_at.is_(None),
                                 Trigger.next_fire_at.isnot(None),
                                 Trigger.next_fire_at <= now,
                                 Trigger.cron_expression.isnot(None),
@@ -1653,6 +1670,7 @@ async def fire_due_triggers() -> dict[str, Any]:
                             ).where(
                                 Trigger.trigger_type == "polling",
                                 Trigger.active.is_(True),
+                                Trigger.deleted_at.is_(None),
                                 Trigger.next_fire_at.isnot(None),
                                 Trigger.next_fire_at <= now,
                             )

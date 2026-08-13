@@ -21,6 +21,7 @@ Protocol:
 
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
@@ -31,7 +32,8 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import _get_engine
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.ws_token import WsTokenExpiredError, consume_ws_token
-from modulo.core.pipeline_engine.event_broker import get_registry
+from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+from modulo.core.pipeline_engine.event_broker import RunEvent, get_registry
 from modulo.db.crud.run import get_run
 from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.rls import set_rls_org
@@ -39,6 +41,26 @@ from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/runs", tags=["runs-ws"])
+
+
+def _sanitize_event(event: RunEvent) -> dict[str, Any]:
+    """Serialise a broker event for the browser with error fields scrubbed.
+
+    Defense-in-depth read-side guard: the executor sanitizes error detail at
+    the publish/write site (FAR-163), but this forwarder must never ship raw
+    tracebacks to the browser even if a future publisher skips that step.
+    Only the error-carrying payload keys are scrubbed — node output payloads
+    pass through untouched, and the original event is never mutated.
+    """
+    data = event.to_json()
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        scrubbed = dict(payload)
+        for key in ("detail", "error", "stall_reason"):
+            if isinstance(scrubbed.get(key), str):
+                scrubbed[key] = sanitize_error_text(scrubbed[key])
+        data["payload"] = scrubbed
+    return data
 
 
 @router.websocket("/{run_id}/ws")
@@ -137,7 +159,7 @@ async def run_websocket(
     try:
         # Replay buffered events the client missed
         for event in broker.replay_since(since_event_seq):
-            await ws.send_json(event.to_json())
+            await ws.send_json(_sanitize_event(event))
 
         # Forward live events until broker closes or client disconnects
         while True:
@@ -146,7 +168,7 @@ async def run_websocket(
                 await ws.send_json({"status": "terminal"})
                 break
             try:
-                await ws.send_json(item.to_json())
+                await ws.send_json(_sanitize_event(item))
             except WebSocketDisconnect:
                 break
     except WebSocketDisconnect:

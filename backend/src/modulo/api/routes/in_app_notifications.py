@@ -101,8 +101,8 @@ def _notification_to_response(n: Notification) -> NotificationResponse:
     )
 
 
-@handle_db_errors("in_app_notifications.get_dashboard")
 @router.get("/dashboard", response_model=DashboardNotificationResponse)
+@handle_db_errors("in_app_notifications.get_dashboard")
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("notification.self"),
@@ -146,8 +146,8 @@ async def get_dashboard(
     )
 
 
-@handle_db_errors("in_app_notifications.get_unread")
 @router.get("/unread-count", response_model=dict)
+@handle_db_errors("in_app_notifications.get_unread")
 async def get_unread(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("notification.self"),
@@ -182,8 +182,8 @@ async def get_unread(
     return {"count": count}
 
 
-@handle_db_errors("in_app_notifications.list_notifications")
 @router.get("", response_model=PaginatedNotificationsResponse)
+@handle_db_errors("in_app_notifications.list_notifications")
 async def list_notifications(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("notification.self"),
@@ -245,8 +245,8 @@ async def list_notifications(
     )
 
 
-@handle_db_errors("in_app_notifications.get_notification_detail")
 @router.get("/{notification_id}", response_model=NotificationResponse)
+@handle_db_errors("in_app_notifications.get_notification_detail")
 async def get_notification_detail(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -284,8 +284,8 @@ async def get_notification_detail(
     return _notification_to_response(n)
 
 
-@handle_db_errors("in_app_notifications.review_later_endpoint")
 @router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
+@handle_db_errors("in_app_notifications.review_later_endpoint")
 async def review_later_endpoint(
     notification_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -338,8 +338,8 @@ async def review_later_endpoint(
     return {"status": "review_later"}
 
 
-@handle_db_errors("in_app_notifications.dismiss_endpoint")
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
+@handle_db_errors("in_app_notifications.dismiss_endpoint")
 async def dismiss_endpoint(
     notification_id: uuid.UUID,
     req: DismissRequest,
@@ -396,8 +396,8 @@ async def dismiss_endpoint(
     return {"status": f"dismissed_{scope_label}"}
 
 
-@handle_db_errors("in_app_notifications.get_preferences")
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.get_preferences")
 async def get_preferences(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("notification.self"),
@@ -408,8 +408,8 @@ async def get_preferences(
     )
 
 
-@handle_db_errors("in_app_notifications.update_preferences")
 @router.put("/preferences", response_model=NotificationPreferencesResponse)
+@handle_db_errors("in_app_notifications.update_preferences")
 async def update_preferences(
     req: NotificationPreferencesUpdate,
     session: AsyncSession = Depends(get_db_session),

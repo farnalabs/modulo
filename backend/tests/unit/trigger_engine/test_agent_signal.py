@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.exceptions import TriggersPausedError
-from modulo.core.trigger_engine.agent_signal import fire_agent_signal
+from modulo.core.trigger_engine.agent_signal import _log_signal_event, fire_agent_signal
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON
 
 
@@ -506,3 +506,40 @@ class TestFireAgentSignal:
         assert results[0]["status"] == "skipped"
         assert results[0]["reason"] == PAUSE_SKIP_REASON
         assert any(getattr(c[0][0], "validation_result", None) == "paused" for c in mock_session.add.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# _log_signal_event — trigger_event.error_detail sanitization (FAR-163)
+# ---------------------------------------------------------------------------
+
+
+async def test_log_signal_event_sanitizes_error_detail(mock_session: MagicMock) -> None:
+    """A create_run failure message embedding a DB URL must be redacted before
+    it lands in the TriggerEvent.error_detail column (user-visible)."""
+    trigger = _make_trigger()
+    event = await _log_signal_event(
+        mock_session,
+        trigger,
+        uuid.uuid4(),
+        result="validation_failed",
+        error_detail="create run failed postgresql://user:supersecret@db.example/modulo",
+    )
+
+    assert "supersecret" not in event.error_detail
+    assert "<redacted>" in event.error_detail
+
+
+async def test_log_signal_event_preserves_clean_detail_and_none(mock_session: MagicMock) -> None:
+    """Sanitization is a no-op for clean strings and must not turn None into ''."""
+    trigger = _make_trigger()
+    clean = await _log_signal_event(
+        mock_session,
+        trigger,
+        uuid.uuid4(),
+        result="signal_fired",
+        error_detail="all good",
+    )
+    assert clean.error_detail == "all good"
+
+    none_event = await _log_signal_event(mock_session, trigger, uuid.uuid4(), result="signal_fired")
+    assert none_event.error_detail is None

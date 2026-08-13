@@ -303,8 +303,8 @@ async def _compute_period_metrics(
     }
 
 
-@handle_db_errors("dashboard.dashboard_summary")
 @router.get("/summary")
+@handle_db_errors("dashboard.dashboard_summary")
 async def dashboard_summary(
     days: int | None = Query(None, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
@@ -693,8 +693,8 @@ async def dashboard_summary(
         ) from exc
 
 
-@handle_db_errors("dashboard.dashboard_trends")
 @router.get("/trends")
+@handle_db_errors("dashboard.dashboard_trends")
 async def dashboard_trends(
     days: int = Query(7, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
@@ -912,8 +912,8 @@ async def dashboard_trends(
         ) from exc
 
 
-@handle_db_errors("dashboard.daily_run_counts")
 @router.get("/daily-run-counts")
+@handle_db_errors("dashboard.daily_run_counts")
 async def daily_run_counts(
     days: int = Query(30, ge=1, le=365),
     session: AsyncSession = Depends(get_db_session),

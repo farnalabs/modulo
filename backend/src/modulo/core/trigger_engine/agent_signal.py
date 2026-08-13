@@ -22,6 +22,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import TriggersPausedError
+from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
@@ -312,7 +313,7 @@ async def _log_signal_event(
         raw_payload_hash=payload_hash,
         validation_result=result,
         run_id=run_id,
-        error_detail=error_detail,
+        error_detail=None if error_detail is None else sanitize_error_text(error_detail),
     )
     session.add(event)
     await session.flush()

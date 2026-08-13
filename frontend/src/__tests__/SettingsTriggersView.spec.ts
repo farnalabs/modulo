@@ -178,4 +178,64 @@ describe('SettingsTriggersView', () => {
     await nextTick()
     expect(wrapper.find('.animate-spin').exists()).toBe(true)
   })
+
+  it('FAR-169: rejects a polling interval below 60 client-side without calling the API', async () => {
+    const wrapper = mountView(fakeJwt('admin'), baseListData)
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'polling', poll_interval: 30 }
+    await vm.saveTrigger()
+    await flush()
+    expect(vm.formError).toContain('at least 60')
+    expect(api.POST).not.toHaveBeenCalled()
+  })
+
+  it('FAR-169: polling interval input enforces a 60s floor (min=60) with the cadence hint', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: baseListData, error: undefined })
+    ;(getAccessToken as any).mockReturnValue(fakeJwt('admin'))
+    const wrapper = mount(SettingsTriggersView, {
+      global: {
+        stubs: {
+          ...dialogStubs.reduce((a, k) => ({ ...a, [k]: true }), {}),
+          FeatureGate: featureGateStub,
+          FormDialog: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'polling' }
+    await nextTick()
+
+    const input = wrapper.find('[data-testid="settings-triggers-form-polling-interval"]')
+    expect(input.exists()).toBe(true)
+    expect(input.attributes('min')).toBe('60')
+    expect(wrapper.text()).toContain('Minimum 60 seconds')
+  })
+
+  it('renders webhook and cron JSON placeholders without i18n message-compile errors', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: baseListData, error: undefined })
+    ;(getAccessToken as any).mockReturnValue(fakeJwt('admin'))
+    const wrapper = mount(SettingsTriggersView, {
+      global: {
+        stubs: {
+          ...dialogStubs.reduce((a, k) => ({ ...a, [k]: true }), {}),
+          FeatureGate: featureGateStub,
+          FormDialog: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await flush()
+    const vm = wrapper.vm as any
+
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook' }
+    await nextTick()
+    const headers = wrapper.find('[data-testid="settings-triggers-form-webhook-headers"]')
+    expect(headers.attributes('placeholder')).toContain('X-Custom-Header')
+
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'cron' }
+    await nextTick()
+    const tpl = wrapper.find('[data-testid="settings-triggers-form-cron-input"]')
+    expect(tpl.attributes('placeholder')).toContain('"key"')
+  })
 })

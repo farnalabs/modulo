@@ -110,8 +110,8 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
     )
 
 
-@handle_db_errors("environment_profiles.list_profiles")
 @router.get("", response_model=ProfileListResponse)
+@handle_db_errors("environment_profiles.list_profiles")
 async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -151,8 +151,8 @@ async def list_profiles(
     )
 
 
-@handle_db_errors("environment_profiles.create_profile")
 @router.post("", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("environment_profiles.create_profile")
 async def create_profile(
     req: ProfileCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -208,8 +208,8 @@ async def create_profile(
     return _to_response(profile)
 
 
-@handle_db_errors("environment_profiles.get_profile")
 @router.get("/{profile_id}", response_model=ProfileResponse)
+@handle_db_errors("environment_profiles.get_profile")
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -243,8 +243,8 @@ async def get_profile(
     return _to_response(profile)
 
 
-@handle_db_errors("environment_profiles.update_profile")
 @router.put("/{profile_id}", response_model=ProfileResponse)
+@handle_db_errors("environment_profiles.update_profile")
 async def update_profile(
     profile_id: uuid.UUID,
     req: ProfileUpdate,
@@ -292,8 +292,8 @@ async def update_profile(
     return _to_response(profile)
 
 
-@handle_db_errors("environment_profiles.delete_profile")
 @router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("environment_profiles.delete_profile")
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -326,8 +326,8 @@ async def delete_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Environment profile not found")
 
 
-@handle_db_errors("environment_profiles.restore_profile")
 @router.post("/{profile_id}/restore", response_model=ProfileResponse)
+@handle_db_errors("environment_profiles.restore_profile")
 async def restore_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
