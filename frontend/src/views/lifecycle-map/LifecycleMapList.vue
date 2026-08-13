@@ -76,9 +76,21 @@
         >
           <div class="flex items-start justify-between gap-2 mb-2">
             <h3 class="text-base font-medium text-foreground truncate">{{ m.name }}</h3>
-            <span class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              v{{ m.current_version }}
-            </span>
+            <div class="flex shrink-0 items-center gap-1">
+              <span class="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                v{{ m.current_version }}
+              </span>
+              <button
+                class="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                :aria-label="$t('views.LifecycleMapList.edit')"
+                data-testid="lifecycle-map-list-edit"
+                @click.stop="editMap(m)"
+                @keydown.enter.stop
+                @keydown.space.prevent.stop
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+              </button>
+            </div>
           </div>
 
           <p v-if="m.description" class="text-sm text-muted-foreground mb-3 line-clamp-2">
@@ -256,6 +268,10 @@ function formatDate(dateStr: string): string {
 
 function openMap(m: LifecycleMapSummary): void {
   router.push(`/lifecycle-maps/${m.id}`)
+}
+
+function editMap(m: LifecycleMapSummary): void {
+  router.push({ name: 'lifecycle-map-editor', params: { id: m.id } })
 }
 
 const showCreateDialog = ref(false)
