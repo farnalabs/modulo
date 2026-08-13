@@ -1,7 +1,7 @@
 """Register the ongoing_trigger feature flag as inactive (default OFF)
 
-Revision ID: 0092_ongoing_trigger_flag
-Revises: 0091_ongoing_trigger_type
+Revision ID: 0093_ongoing_trigger_flag
+Revises: 0092_ongoing_trigger_type
 Create Date: 2026-08-12
 
 The ``ongoing`` trigger type (FAR-158) ships as a feature-flagged
@@ -27,8 +27,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0092_ongoing_trigger_flag"
-down_revision: str | None = "0091_ongoing_trigger_type"
+revision: str = "0093_ongoing_trigger_flag"
+down_revision: str | None = "0092_ongoing_trigger_type"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
