@@ -625,6 +625,19 @@ def _list_libraries_with_include_in_dev(client: Any, ctx: dict[str, Any], value:
     _list_libraries_with_primitives(client, ctx, {"include_in_dev": value})
 
 
+@when("the viewer lists library primitives with include_in_dev=true")
+def _viewer_lists_libraries_with_include_in_dev(viewer_client: Any, ctx: dict[str, Any], request) -> None:
+    """Viewer-role listing: the operator-gated In-Dev reveal must be denied (403)."""
+    tiered = ctx.get("tier_primitives")
+    assert tiered is not None, "No tiered primitives in context — use the Given step"
+    with (
+        patch("modulo.core.library_service._filter_modulo", return_value=tiered),
+        patch("modulo.core.library_service._filter_community", return_value=[]),
+    ):
+        ctx["response"] = viewer_client.get("/api/v1/libraries", params={"include_in_dev": "true"})
+    request.node._resp = ctx["response"]
+
+
 @then("the response contains no in_dev primitives")
 def _response_has_no_in_dev(ctx: dict[str, Any]) -> None:
     items = ctx["response"].json()["items"]

@@ -63,6 +63,29 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="vieweruser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="viewer",
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 def _make_primitive(
     *,
     pid: uuid.UUID | None = None,
@@ -135,6 +158,7 @@ def _make_listable_primitive(
     pid: uuid.UUID | None = None,
     primitive_type: str = "workflow",
     name: str = "PR Review Workflow",
+    tier: str = "native",
 ) -> MagicMock:
     p = _make_primitive(pid=pid, primitive_type=primitive_type, name=name)
     p.source_url = None
@@ -143,7 +167,7 @@ def _make_listable_primitive(
     p.ed25519_signature = None
     p.verified = None
     p.trust_tier = None
-    p.tier = "native"
+    p.tier = tier
     p.download_count = 0
     p.average_rating = None
     p.review_count = 0
@@ -265,8 +289,9 @@ def test_list_libraries_default_excludes_in_dev(client: TestClient) -> None:
 
 
 def test_list_libraries_include_in_dev_passes_empty_exclusions(client: TestClient) -> None:
-    """?include_in_dev=true bypasses the in_dev tier exclusion in the service."""
-    result = PageResult(items=[_make_listable_primitive()], total=1, page=1, page_size=20)
+    """?include_in_dev=true reveals In-Dev primitives in the actual response JSON."""
+    in_dev = _make_listable_primitive(tier="in_dev")
+    result = PageResult(items=[in_dev], total=1, page=1, page_size=20)
     with (
         patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result) as mock_list,
         patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
@@ -276,6 +301,29 @@ def test_list_libraries_include_in_dev_passes_empty_exclusions(client: TestClien
     assert resp.status_code == 200, resp.text
     assert mock_list.await_args is not None
     assert mock_list.await_args.kwargs["excluded_tiers"] == []
+    tiers = [item["tier"] for item in resp.json()["items"]]
+    assert "in_dev" in tiers, f"Expected an in_dev primitive in the response, got tiers: {tiers}"
+
+
+def test_list_libraries_include_in_dev_denied_for_viewer(viewer_client: TestClient) -> None:
+    """Viewers can search the library but must NOT be able to reveal In-Dev items."""
+    resp = viewer_client.get("/api/v1/libraries", params={"include_in_dev": "true"})
+    assert resp.status_code == 403
+    assert "library.search.in_dev" in resp.json()["detail"]
+
+
+def test_list_libraries_include_in_dev_operator_reveals_in_dev(client: TestClient) -> None:
+    """An operator+ principal (admin fixture) can list In-Dev library primitives."""
+    in_dev = _make_listable_primitive(tier="in_dev")
+    result = PageResult(items=[in_dev], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=result),
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get("/api/v1/libraries", params={"include_in_dev": "true"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["tier"] == "in_dev"
 
 
 def test_list_libraries_include_in_dev_false_keeps_exclusion(client: TestClient) -> None:

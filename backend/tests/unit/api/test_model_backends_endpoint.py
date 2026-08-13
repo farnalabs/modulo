@@ -36,7 +36,7 @@ def _make_settings() -> Settings:
     )
 
 
-def _make_backend(credentials_ciphertext: bytes = b"encrypted") -> MagicMock:
+def _make_backend(credentials_ciphertext: bytes = b"encrypted", tier: str = "native") -> MagicMock:
     mb = MagicMock()
     mb.id = _BACKEND_ID
     mb.organisation_id = _ORG_ID
@@ -48,7 +48,7 @@ def _make_backend(credentials_ciphertext: bytes = b"encrypted") -> MagicMock:
     mb.default_params = {}
     mb.visibility = "org"
     mb.owner_team_id = None
-    mb.tier = "native"
+    mb.tier = tier
     mb.fallback_backend_ids = None
     mb.account_id = uuid.uuid4()
     mb.created_at = _NOW
@@ -106,6 +106,26 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def viewer_client() -> Generator[TestClient, None, None]:
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 _CREATE_BODY = {
     "name": "Test Backend",
     "display_name": "GPT-4",
@@ -142,8 +162,9 @@ def test_list_model_backends_default_excludes_in_dev(client: TestClient) -> None
 
 
 def test_list_model_backends_include_in_dev_passes_empty_exclusions(client: TestClient) -> None:
-    """?include_in_dev=true bypasses the in_dev tier exclusion."""
-    page_result = MagicMock(items=[_make_backend()], total=1, page=1, page_size=20)
+    """?include_in_dev=true reveals In-Dev model backends in the actual response JSON."""
+    in_dev = _make_backend(tier="in_dev")
+    page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20)
     with (
         patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result) as mock_list,
         patch("modulo.api.routes.model_backends.set_rls_org"),
@@ -153,6 +174,29 @@ def test_list_model_backends_include_in_dev_passes_empty_exclusions(client: Test
     assert resp.status_code == 200
     assert mock_list.await_args is not None
     assert mock_list.await_args.kwargs["excluded_tiers"] == []
+    tiers = [item["tier"] for item in resp.json()["items"]]
+    assert "in_dev" in tiers, f"Expected an in_dev model backend in the response, got tiers: {tiers}"
+
+
+def test_list_model_backends_include_in_dev_denied_for_viewer(viewer_client: TestClient) -> None:
+    """Viewers can list model backends but must NOT be able to reveal In-Dev items."""
+    resp = viewer_client.get("/api/v1/model-backends", params={"include_in_dev": "true"})
+    assert resp.status_code == 403
+    assert "model_backend.list.in_dev" in resp.json()["detail"]
+
+
+def test_list_model_backends_include_in_dev_operator_reveals_in_dev(client: TestClient) -> None:
+    """An operator+ principal (admin fixture) can list In-Dev model backends."""
+    in_dev = _make_backend(tier="in_dev")
+    page_result = MagicMock(items=[in_dev], total=1, page=1, page_size=20)
+    with (
+        patch("modulo.api.routes.model_backends.list_model_backends", return_value=page_result),
+        patch("modulo.api.routes.model_backends.set_rls_org"),
+        patch("modulo.api.routes.model_backends.set_rls_user_context"),
+    ):
+        resp = client.get("/api/v1/model-backends", params={"include_in_dev": "true"})
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["tier"] == "in_dev"
 
 
 def test_list_model_backends_include_in_dev_false_keeps_exclusion(client: TestClient) -> None:

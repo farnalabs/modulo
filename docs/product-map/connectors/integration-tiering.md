@@ -70,6 +70,7 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 - [x] `GET /api/v1/connectors?include_in_dev=true` bypasses the exclusion — the route passes `excluded_tiers=[]` (no tier filter) instead of the default `None` → `["in_dev"]` so operators can list In-Dev connectors for testing
 - [x] `GET /api/v1/model-backends?include_in_dev=true` bypasses the exclusion identically
 - [x] `GET /api/v1/libraries?include_in_dev=true` bypasses the exclusion — the route passes `excluded_tiers=[]` through `list_primitives`, keeping In-Dev org, modulo, and community items
+- [x] The In-Dev reveal is operator-gated (security review 2026-08-13): each endpoint keeps its base viewer-level list permission (`connector.list` / `model_backend.list` / `library.search`), but `include_in_dev=true` additionally requires the `*.list.in_dev` / `library.search.in_dev` permission which resolves to `operator` — a viewer/runner calling with `?include_in_dev=true` gets 403 (fail-closed, never lifted by the org authz kill switch, ADR 017 DECISION 3). Enforcement is via `require_in_dev_operator` in `api/dependencies.py`
 - [x] Omitting `include_in_dev` (or `?include_in_dev=false`) preserves the default `in_dev` exclusion — backwards compatible, no behaviour change for existing clients
 
 ### Error Handling
@@ -100,6 +101,15 @@ disclosure; In-Dev items are hidden from the UI entirely. See ADR 010.
 **Status:** partial (5 known gaps unchanged — `copy_to_adapt` tier propagation resolved 2026-08-06).
 
 ## QA History
+
+### 2026-08-13 — security review: `include_in_dev` reveal operator-gated (PR #1176)
+
+**Fixed (MAJOR):** the In-Dev reveal was previously available to ANY tenant member — each list endpoint relied on its base viewer-level permission (`connector.list`, `model_backend.list`, `library.search`), so `GET /api/v1/connectors?include_in_dev=true` let any viewer disclose pre-release In-Dev items that ADR 010 deliberately hides. The override is now gated behind the operator role:
+
+- New permission keys in `auth/permissions.py`: `connector.list.in_dev`, `model_backend.list.in_dev`, `library.search.in_dev` — all resolve to `operator` (import-time validated like every registry key).
+- New shared helper `require_in_dev_operator(principal, permission)` in `api/dependencies.py`: enforced when `include_in_dev=true`; raises 403 for viewers/runners. It passes `kill_switch_eligible=False` to `assert_org_role` so the org authz kill switch (ADR 017 DECISION 3) can never lift the In-Dev disclosure control — the base list permissions stay viewer-level, so ordinary listing is unchanged.
+- Each list handler now calls the gate before any DB work: `connectors.py`, `model_backends.py`, `library.py`.
+- **Tests:** 3 unit tests per endpoint (viewer → 403 asserting the permission key; operator/admin → 200 with the actual response JSON containing an `in_dev` item — replacing the previous mock-kwargs-only assertions; `include_in_dev=false` keeps the default exclusion) + 1 BDD scenario in `tiering.feature` (`viewers cannot reveal in_dev library primitives` → 403). 21 focused unit tests + 4/4 in_dev BDD scenarios pass.
 
 ### 2026-08-13 — improve-architecture: `?include_in_dev=true` API override RESOLVED
 
