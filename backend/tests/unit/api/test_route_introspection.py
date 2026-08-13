@@ -86,8 +86,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/mcp/oauth/consent/approve"): "OAuth A1b consent (get_current_tenant_user)",
     # Model backend setup flow.
     ("POST", "/api/v1/model-backends/{backend_id}/complete-setup"): "setup flow",
-    # Determination: draft generation, any-authenticated, no system mutation.
-    ("POST", "/api/v1/determination/draft"): "draft generation (no system mutation)",
     # Pipeline from template: creation-only.
     ("POST", "/api/v1/pipelines/from-template/{template_id}"): "creation-only (ADR 3.4)",
     # auth: no principal yet at these endpoints.
