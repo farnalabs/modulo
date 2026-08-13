@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -41,6 +41,9 @@ class TriggerEvent(OrgScoped):
             _TRIGGER_EVENT_VALIDATION_SQL,
             name="ck_trigger_events_validation_result",
         ),
+        # Age-based retention (FAR-167) reads ``received_at`` in a bounded
+        # select-then-delete sweep (migration 0091).
+        Index("ix_trigger_events_received_at", "received_at"),
     )
 
     trigger_id: Mapped[uuid.UUID] = mapped_column(
