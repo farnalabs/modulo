@@ -7,6 +7,17 @@ from modulo.core.schema_registry.validation import (
 )
 
 
+def _deeply_nested_schema(depth: int) -> dict:
+    """Build a schema nested *depth* levels deep via ``properties`` chains."""
+    schema: dict = {"type": "object"}
+    node = schema
+    for _ in range(depth):
+        child: dict = {"type": "object"}
+        node["properties"] = {"next": child}
+        node = child
+    return schema
+
+
 class TestValidateUnionSchema:
     def test_valid_one_of(self) -> None:
         schema = {
@@ -94,6 +105,12 @@ class TestValidateUnionSchema:
         assert not result.valid
         errors = [e.path for e in result.errors]
         assert any("deep/oneOf/1/oneOf/0" in p for p in errors)
+
+    def test_union_recursion_depth_guard(self) -> None:
+        schema = _deeply_nested_schema(55)
+        result = validate_union_schema(schema)
+        assert not result.valid
+        assert any("Maximum recursion depth exceeded" in e.message for e in result.errors)
 
 
 class TestValidateArraySchema:
@@ -188,6 +205,34 @@ class TestValidateArraySchema:
         }
         result = validate_array_schema(schema)
         assert result.valid
+
+    def test_single_element_list_type_is_normalized(self) -> None:
+        schema = {"type": "array", "items": {"type": ["string"]}}
+        result = validate_array_schema(schema)
+        assert result.valid
+
+    def test_multi_type_list_items_are_flagged(self) -> None:
+        schema = {"type": "array", "items": {"type": ["string", "null"]}}
+        result = validate_array_schema(schema)
+        assert not result.valid
+        assert any("should specify 'type'" in e.message for e in result.errors)
+
+    def test_no_type_variant_not_a_dict(self) -> None:
+        schema = {"anyOf": ["string", {"type": "array", "items": {"type": "integer"}}]}
+        result = validate_array_schema(schema)
+        assert not result.valid
+        assert any("must be a JSON Schema object" in e.message for e in result.errors)
+
+    def test_no_type_properties_are_still_validated(self) -> None:
+        schema = {"properties": {"data": {"type": "array", "items": {"type": "integer"}}}}
+        result = validate_array_schema(schema)
+        assert result.valid
+
+    def test_array_recursion_depth_guard(self) -> None:
+        schema = _deeply_nested_schema(55)
+        result = validate_array_schema(schema)
+        assert not result.valid
+        assert any("Maximum recursion depth exceeded" in e.message for e in result.errors)
 
 
 class TestValidateUnionAndArray:
