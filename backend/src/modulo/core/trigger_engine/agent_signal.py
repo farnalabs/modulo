@@ -22,7 +22,6 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.exceptions import TriggersPausedError
-from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
@@ -305,6 +304,8 @@ async def _log_signal_event(
     error_detail: str | None = None,
 ) -> TriggerEvent:
     """Create a TriggerEvent row for an agent_signal fire attempt."""
+    from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+
     payload_hash = hashlib.sha256(f"agent_signal:{trigger.id}".encode()).hexdigest()
     event = TriggerEvent(
         organisation_id=org_id,
