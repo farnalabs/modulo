@@ -274,7 +274,8 @@ TIER_RANK: dict[str, int] = {"community": 0, "team": 1}
 
 class CommunityTier:
     """Default plan — community-tier features active without a license key.
-    Backward-compatible class satisfying the PlanContext protocol."""
+    Backward-compatible class satisfying the PlanContext protocol.
+    """
 
     def __init__(self) -> None:
         self._registry = FeatureFlagRegistry(current_tier="community", has_license_key=False)
@@ -297,7 +298,8 @@ class CommunityTier:
 
 class LicenseKeyTier:
     """Licensed plan — activates features based on license tier and explicit feature list.
-    Backward-compatible class satisfying the PlanContext protocol."""
+    Backward-compatible class satisfying the PlanContext protocol.
+    """
 
     def __init__(self, license_data: LicenseData) -> None:
         self._tier = license_data.tier

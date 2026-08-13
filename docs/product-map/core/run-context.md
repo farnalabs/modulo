@@ -182,7 +182,7 @@ status: partial
 - **No test for run_context size limits**: No validation rejects payload > 64KB or exceeding N keys.
 - ~~**No test for reserved key protection**: No test verifies that a context-setter writing to the `cancelled` reserved key is rejected or ignored.~~ RESOLVED: test_decorator_resilience.py covers reserved key stripping for all 4 reserved keys (cancelled, input, _pipeline_default_autonomy, _run_context_write_log) plus warning logging and non-setter violation interaction (2026-07-05).
 - **No test for write-log overflow or pruning**: No test verifies behaviour when the write-log exceeds a reasonable bound.
-- **No BDD test for concurrent context-setter writes (race condition)**: Only sequential "last-write-wins" is tested. No scenario covers async race between two context-setter nodes writing the same key simultaneously in parallel branches.
+- **No BDD test for concurrent context-setter writes (race condition)**: No BDD scenario covers the async race between two context-setter nodes writing the same key simultaneously in parallel branches. Unit coverage of the parallel merge semantics (per-key last-write-wins, `PARALLEL_RUN_CONTEXT_WRITE` validation warning) landed with FAR-171 (`test_parallel_branches.py`); a BDD scenario is still open.
 - **No test for run_context merge semantics across retry/resume boundary**: No test confirms whether retry merges new overrides into existing run_context or replaces it entirely.
 - **No test for null/empty values**: No test covers `{"branch": null}` — does a null value overwrite a previous value or get ignored?
 - **No test for deeply nested run_context structures**: No test verifies that deeply nested dicts (3+ levels) are stored and retrieved correctly.

@@ -180,7 +180,6 @@ async def saml_login(
     session: AsyncSession = Depends(get_db_session),
 ) -> Any:
     """Redirect the user to the SAML IdP for authentication."""
-
     public_url = settings.modulo_public_url.rstrip("/")
     acs_url = f"{public_url}/api/v1/auth/saml/acs"
 
@@ -225,7 +224,6 @@ async def saml_acs(
     On success, redirects the browser to the frontend callback URL with
     access and refresh tokens as query parameters.
     """
-
     form = await request.form()
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:
@@ -275,7 +273,6 @@ async def saml_metadata(
     settings: Settings = Depends(get_settings),
 ) -> str:
     """Return SP metadata XML for SAML IdP configuration."""
-
     if not settings.modulo_saml_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

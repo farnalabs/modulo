@@ -1,7 +1,7 @@
 """Add the ``slack_app_mention`` trigger type (FAR-57) — Slack @-mention triggers.
 
-Revision ID: 0096_slack_app_mention_trigger_type
-Revises: 0095_ongoing_trigger_flag
+Revision ID: 0098_slack_app_mention_trigger_type
+Revises: 0097_ongoing_trigger_enabled_by_default
 Create Date: 2026-08-13
 
 The ``slack_app_mention`` trigger fires a pipeline when a bot is @-mentioned in
@@ -33,8 +33,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0097_slack_app_mention_trigger_type"
-down_revision: str | None = "0096_hitl_claims_overdue_notified"
+revision: str = "0098_slack_app_mention_trigger_type"
+down_revision: str | None = "0097_ongoing_trigger_enabled_by_default"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

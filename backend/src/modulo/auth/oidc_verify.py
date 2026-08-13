@@ -185,6 +185,7 @@ async def verify_id_token(
 
     Raises:
         OidcVerifyError: If signature verification or claim validation fails.
+
     """
     header = _decode_jwt_header(id_token)
     kid = header.get("kid")

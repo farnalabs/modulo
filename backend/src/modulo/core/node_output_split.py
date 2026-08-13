@@ -254,7 +254,7 @@ def _split_sandbox_agent(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]
 
 
 def _split_agent(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-    """regular agent: return = the outer ``output`` key.
+    """Regular agent: return = the outer ``output`` key.
 
     A stub / agent-without-backend envelope has NO ``output`` key, so the
     return is ``None``. Telemetry = ``{status, summary?}`` from the envelope.
@@ -274,7 +274,7 @@ def _split_agent(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
 
 
 def _split_connector(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-    """connector completed: return = ``artifacts[0].output`` (the result).
+    """Connector completed: return = ``artifacts[0].output`` (the result).
 
     connector failure (``artifacts[0].status == "failed"``): return = ``None``,
     telemetry = ``{status: failed, error}``.
@@ -337,7 +337,7 @@ def _split_manual(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
 
 
 def _split_recovery(envelope: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-    """recovery marker: ``{input, output, recovered|skipped}``.
+    """Recovery marker: ``{input, output, recovered|skipped}``.
 
     ``recovered`` -> return = ``input_data``, telemetry =
     ``{recovered: true, recovery_input: input_data}``. ``skipped`` -> return

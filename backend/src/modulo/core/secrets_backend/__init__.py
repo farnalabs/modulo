@@ -130,6 +130,7 @@ def create_secrets_backend(
     Raises:
         ValueError: If *backend_name* is not one of ``"fernet"``, ``"vault"``,
             or ``"aws"``.
+
     """
     name = (backend_name or os.environ.get("MODULO_SECRETS_BACKEND") or "fernet").lower().strip()
 

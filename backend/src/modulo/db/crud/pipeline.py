@@ -272,7 +272,8 @@ async def get_pipeline_graph(
 class _CloneSourceSnapshot:
     """Plain-data snapshot of the source pipeline taken in the clone's short
     step-(a) transaction, so the slower clone work (step b) never depends on a
-    lock or on live reads of the source (hitl-gate-removal-guard-plan.md §3 item 3)."""
+    lock or on live reads of the source (hitl-gate-removal-guard-plan.md §3 item 3).
+    """
 
     name: str
     description: str | None

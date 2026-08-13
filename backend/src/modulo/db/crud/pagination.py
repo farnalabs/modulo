@@ -109,6 +109,7 @@ class CursorPaginator:
             The ORM model class (required to resolve column attributes).
         compute_total:
             If True, run an extra ``COUNT`` query to populate ``total``.
+
         """
         sf = sort_field or self.sort_field
         sd = sort_dir or self.sort_dir

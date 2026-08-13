@@ -83,6 +83,7 @@ def run_output_validation(
 
     Raises:
         ValueError: If an eval definition has an unknown type.
+
     """
     failures: list[str] = []
     for eval_def in output_validation.eval_definitions:
@@ -181,6 +182,7 @@ async def execute_composite_with_retry(
     Raises:
         CompositeValidationError: If validation fails and retry budget
             is exhausted, or if a blocking eval fails.
+
     """
     if parameter_values is None:
         parameter_values = {}
@@ -265,6 +267,7 @@ def expand_composite_node(
     Raises:
         ValueError: If the template has no nodes, or if required parameters
             are missing.
+
     """
     if parameter_values is None:
         parameter_values = {}
@@ -313,6 +316,7 @@ def _inject_parameters(prompt: str, parameter_values: dict[str, Any]) -> str:
     Returns:
         The prompt with all recognized placeholders replaced. Unrecognized
         placeholders are left as-is.
+
     """
 
     def _replacer(match: re.Match[str]) -> str:
@@ -665,6 +669,7 @@ async def expand_composites_in_graph(
         ``expanded_nodes`` contains only flat node types
         (agent/manual/connector/sandbox_agent), so the compiled runtime accepts
         the resulting snapshot graph unchanged.
+
     """
     expander = _CompositeExpander(session, org_id, depth_limit=depth_limit)
     return await expander.expand(nodes, edges)

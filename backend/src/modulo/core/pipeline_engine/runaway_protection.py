@@ -22,6 +22,7 @@ class RunawayRunError(RuntimeError):
             ``token_budget``).
         current: The current value at the time of the violation.
         limit: The configured limit that was exceeded.
+
     """
 
     def __init__(self, guard: str, current: float, limit: float) -> None:
