@@ -593,8 +593,8 @@ def _get_all_tool_definitions(include_ui_tools: bool = True) -> list[dict[str, A
 # ── Session endpoints ────────────────────────────────────────────────────
 
 
-@handle_db_errors("remy.list_sessions")
 @router.get("/sessions", status_code=status.HTTP_200_OK)
+@handle_db_errors("remy.list_sessions")
 async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -653,8 +653,8 @@ async def list_sessions(
         ) from None
 
 
-@handle_db_errors("remy.create_session")
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("remy.create_session")
 async def create_session(
     req: CreateSessionRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -731,8 +731,8 @@ async def create_session(
         ) from None
 
 
-@handle_db_errors("remy.get_session")
 @router.get("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@handle_db_errors("remy.get_session")
 async def get_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -770,8 +770,8 @@ async def get_session(
         ) from None
 
 
-@handle_db_errors("remy.rename_session")
 @router.patch("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@handle_db_errors("remy.rename_session")
 async def rename_session(
     session_id: uuid.UUID,
     req: RenameSessionRequest,
@@ -809,8 +809,8 @@ async def rename_session(
         ) from None
 
 
-@handle_db_errors("remy.delete_session")
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_200_OK)
+@handle_db_errors("remy.delete_session")
 async def delete_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -867,8 +867,8 @@ async def delete_session(
 # ── Message endpoints ────────────────────────────────────────────────────
 
 
-@handle_db_errors("remy.list_messages")
 @router.get("/sessions/{session_id}/messages", status_code=status.HTTP_200_OK)
+@handle_db_errors("remy.list_messages")
 async def list_messages(
     session_id: uuid.UUID,
     page: int = Query(1, ge=1),
@@ -923,8 +923,8 @@ async def list_messages(
         ) from None
 
 
-@handle_db_errors("remy.append_message")
 @router.post("/sessions/{session_id}/messages", status_code=status.HTTP_201_CREATED)
+@handle_db_errors("remy.append_message")
 async def append_message(
     session_id: uuid.UUID,
     req: AppendMessageRequest,
@@ -975,8 +975,8 @@ async def append_message(
 # ── Streaming endpoint ───────────────────────────────────────────────────
 
 
-@handle_db_errors("remy.stream_chat")
 @router.post("/sessions/{session_id}/stream")
+@handle_db_errors("remy.stream_chat")
 async def stream_chat(
     session_id: uuid.UUID,
     req: StreamRequest,
@@ -1569,8 +1569,8 @@ async def stream_chat(
 # ── UI Command endpoints ─────────────────────────────────────────────────
 
 
-@handle_db_errors("remy.submit_permission_response")
 @router.post("/sessions/{session_id}/permission-response")
+@handle_db_errors("remy.submit_permission_response")
 async def submit_permission_response(
     session_id: uuid.UUID,
     req: PermissionResponse,
@@ -1628,8 +1628,8 @@ async def submit_permission_response(
     return {"status": "ok"}
 
 
-@handle_db_errors("remy.submit_ui_command_results")
 @router.post("/sessions/{session_id}/ui-command-results")
+@handle_db_errors("remy.submit_ui_command_results")
 async def submit_ui_command_results(
     session_id: uuid.UUID,
     req: UiCommandResultsBatch,
@@ -1681,8 +1681,8 @@ async def submit_ui_command_results(
     return {"status": "ok"}
 
 
-@handle_db_errors("remy.reset_session_permissions")
 @router.post("/sessions/{session_id}/reset-permissions")
+@handle_db_errors("remy.reset_session_permissions")
 async def reset_session_permissions(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1719,8 +1719,8 @@ async def reset_session_permissions(
     return {"status": "ok"}
 
 
-@handle_db_errors("remy.resume_session")
 @router.post("/sessions/{session_id}/resume")
+@handle_db_errors("remy.resume_session")
 async def resume_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1760,8 +1760,8 @@ async def resume_session(
     return {"status": "ok"}
 
 
-@handle_db_errors("remy.stop_session")
 @router.post("/sessions/{session_id}/stop")
+@handle_db_errors("remy.stop_session")
 async def stop_session(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1811,8 +1811,8 @@ async def stop_session(
     return {"status": "stopped"}
 
 
-@handle_db_errors("remy.get_audit_trail")
 @router.get("/sessions/{session_id}/audit-trail", status_code=status.HTTP_200_OK)
+@handle_db_errors("remy.get_audit_trail")
 async def get_audit_trail(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1875,8 +1875,8 @@ async def get_audit_trail(
         ) from None
 
 
-@handle_db_errors("remy.undo_last_action")
 @router.post("/sessions/{session_id}/undo")
+@handle_db_errors("remy.undo_last_action")
 async def undo_last_action(
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

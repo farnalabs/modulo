@@ -6,8 +6,8 @@ from modulo.core.manifest import get_manifest
 router = APIRouter(prefix="/api/v1", tags=["manifest"])
 
 
-@handle_db_errors("manifest.manifest_endpoint")
 @router.get("/manifest")
+@handle_db_errors("manifest.manifest_endpoint")
 async def manifest_endpoint() -> dict[str, object]:
     try:
         return get_manifest()

@@ -118,8 +118,8 @@ def _to_response(mb: Any) -> ModelBackendResponse:
     )
 
 
-@handle_db_errors("model_backends.list_model_backends_endpoint")
 @router.get("", response_model=ModelBackendListResponse, responses={401: {"description": "Unauthorized"}})
+@handle_db_errors("model_backends.list_model_backends_endpoint")
 async def list_model_backends_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -222,13 +222,13 @@ def _validate_provider(provider: str) -> None:
     )
 
 
-@handle_db_errors("model_backends.create_model_backend_endpoint")
 @router.post(
     "",
     response_model=ModelBackendResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("model_backends.create_model_backend_endpoint")
 async def create_model_backend_endpoint(
     req: ModelBackendCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -314,8 +314,8 @@ async def create_model_backend_endpoint(
     return response
 
 
-@handle_db_errors("model_backends.get_model_backend_endpoint")
 @router.get("/{backend_id}", response_model=ModelBackendResponse)
+@handle_db_errors("model_backends.get_model_backend_endpoint")
 async def get_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -357,8 +357,8 @@ async def get_model_backend_endpoint(
     return _to_response(mb)
 
 
-@handle_db_errors("model_backends.update_model_backend_endpoint")
 @router.patch("/{backend_id}", response_model=ModelBackendResponse, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("model_backends.update_model_backend_endpoint")
 async def update_model_backend_endpoint(
     backend_id: uuid.UUID,
     req: ModelBackendUpdate,
@@ -418,8 +418,8 @@ async def update_model_backend_endpoint(
     return response
 
 
-@handle_db_errors("model_backends.delete_model_backend_endpoint")
 @router.delete("/{backend_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("model_backends.delete_model_backend_endpoint")
 async def delete_model_backend_endpoint(
     backend_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),

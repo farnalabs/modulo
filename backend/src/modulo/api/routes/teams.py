@@ -107,8 +107,8 @@ class MembershipListResponse(BaseModel):
     page_size: int
 
 
-@handle_db_errors("teams.list_teams_endpoint")
 @router.get("", response_model=TeamListResponse)
+@handle_db_errors("teams.list_teams_endpoint")
 async def list_teams_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -162,8 +162,8 @@ async def list_teams_endpoint(
     )
 
 
-@handle_db_errors("teams.create_team_endpoint")
 @router.post("", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("teams.create_team_endpoint")
 async def create_team_endpoint(
     req: CreateTeamRequest,
     current_user: TenantPrincipal = require_permission("team.create"),
@@ -255,8 +255,8 @@ async def create_team_endpoint(
     )
 
 
-@handle_db_errors("teams.get_team_endpoint")
 @router.get("/{team_id}", response_model=TeamResponse)
+@handle_db_errors("teams.get_team_endpoint")
 async def get_team_endpoint(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = require_permission("team.list"),
@@ -310,8 +310,8 @@ async def get_team_endpoint(
     )
 
 
-@handle_db_errors("teams.update_team_endpoint")
 @router.patch("/{team_id}", response_model=TeamResponse)
+@handle_db_errors("teams.update_team_endpoint")
 async def update_team_endpoint(
     team_id: uuid.UUID,
     req: UpdateTeamRequest,
@@ -410,8 +410,8 @@ async def update_team_endpoint(
     )
 
 
-@handle_db_errors("teams.delete_team_endpoint")
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("teams.delete_team_endpoint")
 async def delete_team_endpoint(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = require_permission("team.delete"),
@@ -521,8 +521,8 @@ async def delete_team_endpoint(
         )
 
 
-@handle_db_errors("teams.list_members_endpoint")
 @router.get("/{team_id}/members", response_model=MembershipListResponse)
+@handle_db_errors("teams.list_members_endpoint")
 async def list_members_endpoint(
     team_id: uuid.UUID,
     page: int = Query(1, ge=1),
@@ -587,12 +587,12 @@ async def list_members_endpoint(
     )
 
 
-@handle_db_errors("teams.add_member_endpoint")
 @router.post(
     "/{team_id}/members",
     response_model=MembershipResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@handle_db_errors("teams.add_member_endpoint")
 async def add_member_endpoint(
     team_id: uuid.UUID,
     req: AddMemberRequest,
@@ -686,11 +686,11 @@ async def add_member_endpoint(
     )
 
 
-@handle_db_errors("teams.remove_member_endpoint")
 @router.delete(
     "/{team_id}/members/{membership_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@handle_db_errors("teams.remove_member_endpoint")
 async def remove_member_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
@@ -757,11 +757,11 @@ async def remove_member_endpoint(
         ) from None
 
 
-@handle_db_errors("teams.change_member_role_endpoint")
 @router.patch(
     "/{team_id}/members/{membership_id}",
     response_model=MembershipResponse,
 )
+@handle_db_errors("teams.change_member_role_endpoint")
 async def change_member_role_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,

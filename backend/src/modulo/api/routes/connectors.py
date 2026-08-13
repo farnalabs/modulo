@@ -146,8 +146,8 @@ def _to_response(ci: Any) -> ConnectorResponse:
     )
 
 
-@handle_db_errors("connectors.list_connectors_endpoint")
 @router.get("", response_model=ConnectorListResponse, responses={401: {"description": "Unauthorized"}})
+@handle_db_errors("connectors.list_connectors_endpoint")
 async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -196,13 +196,13 @@ async def list_connectors_endpoint(
     )
 
 
-@handle_db_errors("connectors.create_connector_endpoint")
 @router.post(
     "",
     response_model=ConnectorResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(deny_break_glass_mint)],
 )
+@handle_db_errors("connectors.create_connector_endpoint")
 async def create_connector_endpoint(
     req: ConnectorCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -274,8 +274,8 @@ async def create_connector_endpoint(
     return _to_response(ci)
 
 
-@handle_db_errors("connectors.get_connector_endpoint")
 @router.get("/{connector_id}", response_model=ConnectorResponse)
+@handle_db_errors("connectors.get_connector_endpoint")
 async def get_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -317,8 +317,8 @@ async def get_connector_endpoint(
     return _to_response(ci)
 
 
-@handle_db_errors("connectors.update_connector_endpoint")
 @router.patch("/{connector_id}", response_model=ConnectorResponse, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("connectors.update_connector_endpoint")
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
     req: ConnectorUpdate,
@@ -386,8 +386,8 @@ async def update_connector_endpoint(
     return _to_response(ci)
 
 
-@handle_db_errors("connectors.delete_connector_endpoint")
 @router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@handle_db_errors("connectors.delete_connector_endpoint")
 async def delete_connector_endpoint(
     connector_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
