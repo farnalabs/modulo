@@ -1319,7 +1319,9 @@ async def _ongoing_topup(
             outcome.update({"status": "skipped", "reason": "pipeline_not_found"})
         return []
     # Effective target = min(trigger target, pipeline cap) — handles a pipeline
-    # cap lowered after create AND multiple ongoing triggers on one pipeline.
+    # cap lowered after create. Multiple ongoing triggers on one pipeline each
+    # top up to their own target, so combined in-flight may exceed the cap; that
+    # is bounded downstream by capacity/claim demotion, not by this min().
     effective_target = min(int(trigger.max_concurrent_runs), int(pipeline_max))
     if in_flight >= effective_target:
         # At/above target — genuine no-op. NO event, NO last_fired_at write.

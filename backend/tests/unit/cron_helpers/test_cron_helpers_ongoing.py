@@ -219,7 +219,7 @@ async def _run_topup(
 
 
 # ---------------------------------------------------------------------------
-# _count_ongoing_runs â€” status-only predicate
+# _count_ongoing_runs — status-only predicate
 # ---------------------------------------------------------------------------
 
 
@@ -241,14 +241,14 @@ class TestCountOngoingRuns:
 
         assert count == 2
         assert len(executed) == 1
-        # The IN-list is an expanding bind param â€” inline the values to inspect
+        # The IN-list is an expanding bind param — inline the values to inspect
         # the actual status vocabulary.
         sql = str(executed[0].compile(compile_kwargs={"literal_binds": True}))
         assert "runs.status IN" in sql
         assert "pending" in sql and "running" in sql and "claimed" in sql
         for excluded in ("awaiting_human", "stalled", "eval_failed", "cancelled"):
             assert excluded not in sql, f"{excluded} must not be counted"
-        assert "cancellation_requested" not in sql, "count is status-only â€” no cancellation filter"
+        assert "cancellation_requested" not in sql, "count is status-only — no cancellation filter"
 
     @pytest.mark.asyncio
     async def test_topup_creates_run_when_awaiting_human_run_parked(self) -> None:
@@ -267,7 +267,7 @@ class TestCountOngoingRuns:
 
 
 # ---------------------------------------------------------------------------
-# _ongoing_topup â€” creation / no-op matrix
+# _ongoing_topup — creation / no-op matrix
 # ---------------------------------------------------------------------------
 
 
@@ -373,7 +373,7 @@ class TestOngoingTopup:
 
     @pytest.mark.asyncio
     async def test_trigger_read_filters_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The trigger SELECT filters deleted_at IS NULL â€” a soft-deleted ongoing
+        """The trigger SELECT filters deleted_at IS NULL — a soft-deleted ongoing
         trigger can never top up."""
         _patch_env(monkeypatch)
         now = datetime.now(UTC)
@@ -459,7 +459,7 @@ class TestOngoingTopup:
 
 
 # ---------------------------------------------------------------------------
-# _ongoing_topup â€” snapshot resolution
+# _ongoing_topup — snapshot resolution
 # ---------------------------------------------------------------------------
 
 
@@ -609,7 +609,7 @@ class TestPersistentFailureDeactivation:
 
 
 # ---------------------------------------------------------------------------
-# _dispatch_ongoing_runs â€” post-commit queue phase
+# _dispatch_ongoing_runs — post-commit queue phase
 # ---------------------------------------------------------------------------
 
 
@@ -646,7 +646,7 @@ class TestDispatchOngoingRuns:
 
 
 # ---------------------------------------------------------------------------
-# fire_ongoing_trigger â€” transaction + dispatch wrapper
+# fire_ongoing_trigger — transaction + dispatch wrapper
 # ---------------------------------------------------------------------------
 
 
@@ -720,7 +720,7 @@ class TestFireOngoingTrigger:
 
 
 # ---------------------------------------------------------------------------
-# _advance_ongoing_next_fire â€” scan cadence advance
+# _advance_ongoing_next_fire — scan cadence advance
 # ---------------------------------------------------------------------------
 
 
