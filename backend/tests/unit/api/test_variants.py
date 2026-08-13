@@ -16,6 +16,7 @@ from modulo.api.routes.variants import (
     get_group,
     list_groups,
     prompt_diffs,
+    run_batch,
     run_variant,
     update_group,
 )
@@ -212,6 +213,144 @@ class TestRunVariant:
             with pytest.raises(HTTPException) as exc:
                 await run_variant(group_id, body, mock_session, principal)
             assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+class TestRunVariantBatch:
+    def _make_group(self) -> MagicMock:
+        mock_group = MagicMock()
+        mock_group.pipeline_id = uuid.uuid4()
+        mock_group.variants = [
+            {"name": "control", "snapshot_id": str(uuid.uuid4()), "weight": 1.0},
+            {"name": "experiment", "snapshot_id": str(uuid.uuid4()), "weight": 1.0},
+        ]
+        return mock_group
+
+    async def test_creates_one_run_per_variant_and_returns_response(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {"key": "value"}
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.run_variant_batch",
+                new_callable=AsyncMock,
+            ) as mock_run,
+        ):
+            mock_get.return_value = self._make_group()
+            mock_run.return_value = [
+                {
+                    "run_id": uuid.uuid4(),
+                    "variant": {"name": "control"},
+                    "merged_payload": {"key": "value"},
+                },
+                {
+                    "run_id": uuid.uuid4(),
+                    "variant": {"name": "experiment"},
+                    "merged_payload": {"key": "value"},
+                },
+            ]
+
+            result = await run_batch(group_id, body, mock_session, principal)
+        assert result["count"] == 2
+        assert [r["variant_name"] for r in result["runs"]] == ["control", "experiment"]
+
+    async def test_raises_429_with_quota_code_when_batch_rejected(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with (
+            patch(
+                "modulo.api.routes.variants.get_variant_group",
+                new_callable=AsyncMock,
+            ) as mock_get,
+            patch(
+                "modulo.api.routes.variants.run_variant_batch",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            mock_get.return_value = self._make_group()
+
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(group_id, body, mock_session, principal)
+            assert exc.value.status_code == 429
+            assert "variant_group_quota_exceeded" in exc.value.detail
+
+    async def test_raises_404_when_group_not_found(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 404
+            assert "not found" in exc.value.detail.lower()
+
+    async def test_raises_429_when_variants_empty(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+        ) as mock_get:
+            mock_group = MagicMock()
+            mock_group.variants = []
+            mock_get.return_value = mock_group
+
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(group_id, body, mock_session, principal)
+            assert exc.value.status_code == 429
+            assert "no variants" in exc.value.detail.lower()
+
+    async def test_raises_503_on_sqlalchemy_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=SQLAlchemyError("mock", "mock", "mock"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 503
+
+    async def test_raises_500_on_unexpected_error(self) -> None:
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=ValueError("unexpected"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 500
 
 
 @pytest.mark.asyncio

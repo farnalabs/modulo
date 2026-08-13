@@ -78,14 +78,14 @@ def group_has_weighted_variants(v_a: str, w_a: int, v_b: str, w_b: int, ctx: dic
             "name": v_a,
             "weight": float(w_a),
             "snapshot_id": str(uuid.uuid4()),
-            "run_context_overrides": {},
+            "run_context_overrides": {"model_backend_id": f"backend-{v_a}"},
             "eval_definition_ids": [],
         },
         {
             "name": v_b,
             "weight": float(w_b),
             "snapshot_id": str(uuid.uuid4()),
-            "run_context_overrides": {},
+            "run_context_overrides": {"model_backend_id": f"backend-{v_b}"},
             "eval_definition_ids": [],
         },
     ]
@@ -187,31 +187,59 @@ def group_max_concurrent(limit: int, ctx: dict[str, Any]) -> None:
 # ===================================================================
 
 
-@when(parsers.parse("a batch of {count:d} runs is triggered on the variant group"))
-def batch_run_triggered(count: int, ctx: dict[str, Any]) -> None:
-    group = ctx["variant_group"]
-    variants = group.variants
-    if not variants:
-        ctx["run_results"] = []
-        return
+@when("a batch run is triggered on the variant group")
+def batch_run_triggered(ctx: dict[str, Any]) -> None:
+    import asyncio
 
-    total_weight = sum(v.get("weight", 1.0) for v in variants)
-    results = []
-    for i in range(count):
-        cumulative = 0.0
-        r = (i + 0.5) / count * total_weight
-        for v in variants:
-            cumulative += v.get("weight", 1.0)
-            if r <= cumulative:
-                results.append(
-                    {
-                        "run_id": uuid.uuid4(),
-                        "variant_name": v["name"],
-                        "variant": v,
-                    }
-                )
-                break
-    ctx["run_results"] = results
+    from modulo.db.crud.variant_group import run_variant_batch
+
+    async def _run():
+        session = AsyncMock()
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+
+        scalar_result = MagicMock()
+        scalar_result.scalar_one.return_value = 0
+        scalar_result.scalar_one_or_none.return_value = ctx["variant_group"]
+        session.execute = AsyncMock(return_value=scalar_result)
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.create_run",
+                new_callable=AsyncMock,
+                return_value=mock_run,
+            ),
+            patch(
+                "modulo.db.crud.variant_group.increment_run_count",
+                new_callable=AsyncMock,
+            ),
+        ):
+            return await run_variant_batch(
+                session,
+                org_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                group=ctx["variant_group"],
+                input_payload={},
+                account_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            )
+
+    result = asyncio.run(_run())
+    if result is None:
+        ctx["run_results"] = None
+        return
+    ctx["run_results"] = [
+        {
+            "run_id": r["run_id"],
+            "variant_name": r["variant"]["name"],
+            "variant": r["variant"],
+            "merged_payload": r["merged_payload"],
+        }
+        for r in result
+    ]
 
 
 @when("a sequential run is triggered on the variant group")
@@ -309,6 +337,20 @@ def check_variant_distribution(variant: str, expected: int, ctx: dict[str, Any])
     assert abs(actual - expected) <= tolerance, (
         f"Expected ~{expected} runs for {variant!r}, got {actual} (tolerance {tolerance})"
     )
+
+
+@then("each batch run merges its variant's run_context_overrides into the input payload")
+def check_batch_run_overrides_merged(ctx: dict[str, Any]) -> None:
+    results = ctx.get("run_results")
+    assert results is not None and len(results) >= 1, "Expected batch run results"
+    for entry in results:
+        variant = entry["variant"]
+        overrides = variant.get("run_context_overrides", {})
+        if isinstance(overrides, dict):
+            for key, value in overrides.items():
+                assert entry["merged_payload"].get(key) == value, (
+                    f"Run for variant {variant['name']!r} missing override {key!r}={value!r}"
+                )
 
 
 @then("runs are created in variant insertion order")
