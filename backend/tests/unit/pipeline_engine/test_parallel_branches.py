@@ -223,6 +223,17 @@ class TestParallelContextSetterValidatorWarning:
         GraphValidator._check_parallel_run_context_writes(graph, result)
         assert not result.issues
 
+    def test_loop_source_no_warning(self) -> None:
+        """A source with a LOOP edge routes ALL edges through the loop counter
+        (single target) — the normal edges are NOT a parallel fan-out, so a
+        loop + 2 normal edges to context-setters must not warn (the compiler
+        never runs those branches concurrently)."""
+        graph = self._graph({"branch-a": "context_setter", "branch-b": "context_setter"})
+        graph["edges"].append({"source": "fanout", "target": "fanout", "type": "loop", "max_iterations": 3})
+        result = ValidationResult()
+        GraphValidator._check_parallel_run_context_writes(graph, result)
+        assert not result.issues
+
     def test_warning_is_advisory_and_does_not_block(self) -> None:
         """PARALLEL_RUN_CONTEXT_WRITE is a warning — it never blocks a save."""
         result = ValidationResult()

@@ -265,6 +265,9 @@ def _make_loop_counter_router(
 # write to the same channel in the same superstep (e.g. parallel branches).
 # Ordering: LangGraph applies a reducer once per task completion in the
 # superstep's completion order, so the concatenation order == completion order.
+# NOTE: only LIST-valued keys actually concatenate — dict-valued keys here
+# (none today; `_iteration_counts` is dict-valued but written by loop counters)
+# fall through to whole-key replacement. See `_pipeline_state_reducer`.
 _CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log", "_iteration_counts"})
 
 
@@ -275,8 +278,8 @@ def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> 
 
     - ``_CONCAT_KEYS`` (lists): every writer's list is appended, in superstep
       completion order. Each parallel branch contributes its own entries, so
-      ``artifacts`` / ``_run_context_write_log`` / ``_iteration_counts`` /
-      ``_hitl_gates`` never clobber each other.
+      ``artifacts`` / ``_run_context_write_log`` / ``_hitl_gates`` never
+      clobber each other.
     - ``run_context`` (dict): merged per-key with LAST-WRITE-WINS — each write
       applies only the keys it carries onto the current ``run_context``; when
       two parallel context-setters write the SAME key, the write whose reducer
@@ -286,6 +289,16 @@ def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> 
       deterministic for a given run but order-dependent, which is why
       same-key parallel writes are flagged as a pipeline validation warning at
       save time (see ``GraphValidator._check_parallel_run_context_writes``).
+
+    Known limitation — ``_iteration_counts`` is NOT list-valued: the loop-edge
+    counter node returns a DICT (``make_loop_counter_fn``), so it never matches
+    the ``_CONCAT_KEYS`` concat branch and falls through to whole-key
+    replacement. This is correct for a single loop, but two loops running in
+    the same superstep (a fan-out whose branches each carry a loop edge) would
+    last-write-wins clobber each other's counters. Mitigation: the compile path
+    routes ALL outgoing edges of a loop source through the counter (single
+    target), so parallel loops require a deliberate multi-loop fan-out — an
+    uncommon shape that should be revisited with a per-key merge if needed.
 
     A non-dict ``run_context`` update falls back to whole-key replacement
     (legacy behaviour).

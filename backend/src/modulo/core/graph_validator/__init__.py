@@ -1791,10 +1791,20 @@ class GraphValidator:
             if nid is not None:
                 nodes_by_id[str(nid)] = n
 
+        def _edge_type(edge: dict[str, Any]) -> str:
+            raw = edge.get("type") if edge.get("type") is not None else edge.get("edge_type")
+            return str(raw or "")
+
+        loop_sources: set[str] = set()
         by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for e in edges:
-            etype = str(e.get("type", e.get("edge_type", "")))
-            if etype in ("reject", "kickback", "loop"):
+            etype = _edge_type(e)
+            if etype == "loop":
+                src = e.get("source", e.get("source_node_id"))
+                if src is not None:
+                    loop_sources.add(str(src))
+                continue
+            if etype in ("reject", "kickback"):
                 continue
             src = e.get("source", e.get("source_node_id"))
             if src is None:
@@ -1805,11 +1815,16 @@ class GraphValidator:
             src_node = nodes_by_id.get(source, {})
             if src_node.get("routing_mode") == "llm":
                 continue
+            # A source with ANY loop edge routes ALL its outgoing edges through
+            # the loop counter (single target, graph_cache.build_graph_from_json),
+            # so it is never a parallel fan-out.
+            if source in loop_sources:
+                continue
             # Any conditional edge => ALL outgoing edges go through the router
             # (single target chosen), so this source is NOT a parallel fan-out.
-            if any(str(e.get("type", e.get("edge_type", ""))) == "conditional" for e in src_edges):
+            if any(_edge_type(e) == "conditional" for e in src_edges):
                 continue
-            normal = [e for e in src_edges if str(e.get("type", e.get("edge_type", ""))) != "conditional"]
+            normal = [e for e in src_edges if _edge_type(e) != "conditional"]
             if len(normal) <= 1:
                 continue
 
@@ -1832,13 +1847,13 @@ class GraphValidator:
                 return None
 
             key_sets = [_written_keys(n) for n in setters]
-            if all(ks is not None for ks in key_sets):
-                common = set.intersection(*(ks or set() for ks in key_sets)) if key_sets else set()
+            if any(ks is None for ks in key_sets):
+                detail = "parallel branches are both context-setters (written keys unknown)"
+            else:
+                common = set.intersection(*(ks or set() for ks in key_sets))
                 if not common:
                     continue
                 detail = f"parallel branches write the same run_context keys: {sorted(common)}"
-            else:
-                detail = "parallel branches are both context-setters (written keys unknown)"
 
             result.warning(
                 "PARALLEL_RUN_CONTEXT_WRITE",
