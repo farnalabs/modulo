@@ -248,6 +248,95 @@ def test_normalize_content_drops_transitions_when_edges_absent() -> None:
     assert result["notes"] == "plan"
 
 
+def test_normalize_content_accepts_acyclic_transition_chain() -> None:
+    result = normalize_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+                {"id": "s3", "name": "Deploy", "type": "external"},
+            ],
+            "edges": [
+                {"id": "e1", "source": "s1", "target": "s2"},
+                {"id": "e2", "source": "s2", "target": "s3"},
+            ],
+        }
+    )
+    assert [e["target"] for e in result["edges"]] == ["s2", "s3"]
+
+
+def test_normalize_content_rejects_circular_transitions() -> None:
+    with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
+        normalize_content(
+            {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s2", "name": "Approve", "type": "manual"},
+                ],
+                "edges": [
+                    {"id": "e1", "source": "s1", "target": "s2"},
+                    {"id": "e2", "source": "s2", "target": "s1"},
+                ],
+            }
+        )
+
+
+def test_normalize_content_rejects_self_loop_transition() -> None:
+    with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
+        normalize_content({"edges": [{"id": "e1", "source": "s1", "target": "s1"}]})
+
+
+def test_normalize_content_rejects_cycle_in_transitions_alias() -> None:
+    with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
+        normalize_content(
+            {
+                "transitions": [
+                    {"id": "e1", "source": "a", "target": "b"},
+                    {"id": "e2", "source": "b", "target": "a"},
+                ]
+            }
+        )
+
+
+def test_normalize_content_rejects_three_node_cycle() -> None:
+    with pytest.raises(LifecycleMapContentError, match=r"cycle: s1 -> s2 -> s3 -> s1"):
+        normalize_content(
+            {
+                "edges": [
+                    {"id": "e1", "source": "s1", "target": "s2"},
+                    {"id": "e2", "source": "s2", "target": "s3"},
+                    {"id": "e3", "source": "s3", "target": "s1"},
+                ]
+            }
+        )
+
+
+def test_normalize_content_cycle_error_names_the_path() -> None:
+    with pytest.raises(LifecycleMapContentError, match=r"cycle: s2 -> s3 -> s2"):
+        normalize_content(
+            {
+                "edges": [
+                    {"id": "e1", "source": "s1", "target": "s2"},
+                    {"id": "e2", "source": "s2", "target": "s3"},
+                    {"id": "e3", "source": "s3", "target": "s2"},
+                ]
+            }
+        )
+
+
+def test_normalize_content_accepts_unconnected_and_parallel_edges() -> None:
+    result = normalize_content(
+        {
+            "edges": [
+                {"id": "e1", "source": "s1", "target": "s2"},
+                {"id": "e2", "source": "s3", "target": "s4"},
+                {"id": "e3", "source": "s1", "target": "s2"},
+            ]
+        }
+    )
+    assert len(result["edges"]) == 3
+
+
 # ---------------------------------------------------------------------------
 # save_map_version
 # ---------------------------------------------------------------------------

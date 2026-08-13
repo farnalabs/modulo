@@ -19,6 +19,7 @@ code:
   - frontend/src/views/lifecycle-map/
 unit-tests:
   - backend/tests/unit/core/test_lifecycle_map.py
+  - backend/tests/unit/core/test_lifecycle_map_versions.py
 depends-on: [feat-core-pipeline-execution]
 status: partial
 ---
@@ -61,14 +62,14 @@ work without acting as a pipeline execution engine.
 - [x] Map CRUD routes catch `IntegrityError` → 409
 - [x] Map CRUD routes catch `Exception` → 500 with logging
 - [x] Missing map ID returns 404
-- [x] Invalid graph structure in map content is rejected with 422 on import (and editor save)
+- [x] Invalid graph structure in map content is rejected with 422 on import (and editor save) — circular stage transitions are rejected by cycle detection in `normalize_content` (raises `LifecycleMapContentError` naming the offending stage path)
 
 ## Edge Cases
 
 - [x] Empty map content (no stages or transitions) — stored and returned
 - [x] Team visibility without owner_team_id — rejected on create
 - [x] Map with single stage — displayed correctly
-- [ ] Map with circular stage transitions — no cycle detection
+- [x] Map with circular stage transitions — rejected at save (cycle detection in `normalize_content` reports the offending stage path as a 422)
 - [x] Concurrent map content update while version history is being read — **decided (FAR-176): last-write-wins on the single active version; version-bumping write paths fetch the map row with `SELECT ... FOR UPDATE` so the counter is strictly increasing with no duplicates under concurrent saves; version-list reads always observe one consistent committed snapshot (never a half-written map).**
 
 ## Security
@@ -87,4 +88,5 @@ work without acting as a pipeline execution engine.
 ## QA History
 
 - 2026-08-13 — FAR-174: marked export/import + `lifecycle_map` library primitive behaviour as implemented (active-version envelope export, import with editor-save validation, copy-to-adapt via /libraries/{id}/create-lifecycle-map).
+- 2026-08-13 — improve-architecture: **RESOLVED** the "circular stage transitions" gap. `normalize_content` (`core/lifecycle_map/validation.py`) now runs DFS-based cycle detection over the normalised `edges` (back-edge detection with three-state colouring; self-loops reported as `[n, n]`); any cycle raises `LifecycleMapContentError` naming the offending stage path (`s1 -> s2 -> s1`), which the create/update/version-save routes map to 422. Added 7 unit tests (`test_normalize_content_*` in `test_lifecycle_map_versions.py`: acyclic chain accepted, 2-node cycle, self-loop, transitions-alias cycle, 3-node cycle path, cycle-path naming, unconnected/parallel edges) + 1 BDD scenario (`Circular stage transitions are rejected as invalid content` in `versioning.feature`) with a new step definition. 63/63 `test_lifecycle_map_versions.py` + 181 focused lifecycle-map unit/BDD tests pass, ruff clean, mypy --strict clean.
 - 2026-08-12 — Product-state sync: added Journeys section (FAR-141–145), marked version persistence + graduation implemented, updated code paths.
