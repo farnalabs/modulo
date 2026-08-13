@@ -1089,13 +1089,16 @@ async def test_decision_payload_size_limited():
 
 def test_decision_payload_none_is_accepted():
     """A None decision payload is allowed (legacy/payload-less decisions)."""
-    HITLManager._validate_decision_payload(None)
+    assert HITLManager._validate_decision_payload(None) is None
 
 
 def test_decision_payload_valid_dict_is_accepted():
     """A well-formed dict decision payload passes validation."""
-    HITLManager._validate_decision_payload(
-        {"action": "approved", "modified_output": {"blob": "ok"}, "nested": {"list": [1, 2, 3]}}
+    assert (
+        HITLManager._validate_decision_payload(
+            {"action": "approved", "modified_output": {"blob": "ok"}, "nested": {"list": [1, 2, 3]}}
+        )
+        is None
     )
 
 

@@ -545,10 +545,21 @@ class TestHeuristicMetrics:
 
     def test_metrics_noop_without_meter_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _stub_meter(monkeypatch, None)
+        for attr in (
+            "_heuristic_errors_total",
+            "_heuristic_unverifiable_total",
+            "_heuristic_probe_latency",
+            "_heuristic_probe_cost",
+        ):
+            setattr(evidence, attr, None)
         evidence.record_heuristic_error("x")
         evidence.record_heuristic_unverifiable("y")
         evidence.record_heuristic_probe_latency(0.5)
         evidence.record_heuristic_probe_cost(0.0001)
+        assert evidence._heuristic_errors_total is None
+        assert evidence._heuristic_unverifiable_total is None
+        assert evidence._heuristic_probe_latency is None
+        assert evidence._heuristic_probe_cost is None
 
 
 # ---------------------------------------------------------------------------
