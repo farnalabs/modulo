@@ -34,6 +34,7 @@ depends-on: [feat-observability-otel-config-ui, feat-core-notifications]
 unit-tests:
   - backend/tests/unit/error_tracking/test_error_models.py
   - backend/tests/unit/error_tracking/test_error_ingestion.py
+  - backend/tests/unit/error_tracking/test_breadcrumbs_persistence.py
   - backend/tests/unit/error_tracking/test_backend_hooks.py
   - backend/tests/unit/error_tracking/test_error_dashboard.py
   - backend/tests/unit/error_tracking/test_error_alerting.py
@@ -80,7 +81,9 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] `POST /api/v1/errors/ingest` accepts 1–20 events per request
 - [x] HMAC-signed body via `X-Modulo-Error-Token` header
 - [x] Validates level, source, message via Pydantic validators
-- [x] Strips breadcrumbs from events before persisting
+- [x] Breadcrumbs (capped at 50) are folded into `context_json["breadcrumbs"]`
+  before ingest (`_prepare_event_data`), persisted in the JSON column, and read
+  back out by the detail serializer — no longer stripped or lost
 - [x] Rate-limiting on ingest endpoint (10 req/min, enforced via RateLimitMiddleware)
 
 ### Frontend SDK (JavaScript/TypeScript)
@@ -93,7 +96,9 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] BreadcrumbCollector: click, API call (fetch monkey-patch), route change
   breadcrumbs (max 50, ring buffer)
 - [x] Context gatherer captures URL, viewport, userAgent, org plan info
-- [ ] Breadcrumbs are sent in HTTP request but stripped by backend — not persisted
+- [x] Breadcrumbs sent in HTTP request are persisted by the backend — folded into
+  `context_json["breadcrumbs"]` at ingest and surfaced in the event detail /
+  sample-event payloads
 
 ### Transport & Batching (Frontend)
 
@@ -188,8 +193,9 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 
 ### BDD Coverage
 
-- [x] `backend/tests/bdd/features/error_tracking/error_ingestion.feature` — 5 real
-  scenarios (backend error capture, API ingest, dedup, invalid input, batch)
+- [x] `backend/tests/bdd/features/error_tracking/error_ingestion.feature` — 6 real
+  scenarios (backend error capture, API ingest, dedup, invalid input, batch,
+  breadcrumb persistence)
 - [x] `backend/tests/bdd/features/error_tracking/error_dashboard.feature` — 5 real
   scenarios (list, filter, detail, resolve, 404)
 - [x] `backend/tests/bdd/features/error_tracking/error_notifications.feature` — 7 real
@@ -269,6 +275,15 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   event status/resolved_at propagation and terminal-event preservation).~~
 - **Breadcrumbs not persisted:** Frontend sends breadcrumbs (validated max 50) but
   backend strips them before DB insert
+  — ~~**RESOLVED 2026-08-13**: `_prepare_event_data()` in `api/routes/errors.py`
+  folds the top-level `breadcrumbs` field into `context_json["breadcrumbs"]`
+  (PRD §8.25 places breadcrumbs inside the event context) before `ingest_batch`
+  persists the event, so the breadcrumb trail reaches the DB JSON column; the
+  detail serializer reads `context_json["breadcrumbs"]` back out so the frontend
+  breadcrumb trail timeline works. 8 unit tests in `test_breadcrumbs_persistence.py`
+  (auth ingest fold + existing-context preserved, no-breadcrumbs untouched,
+  public ingest fold, serializer read-back + null-context, group-detail endpoint
+  round-trip) + 1 BDD scenario with 3 step definitions in `error_ingestion.feature`.~~
 - **No notification rules UI:** API exists but no frontend views for managing rules
 - **No forwarder configuration UI:** Only API CRUD — no frontend views
 - **In-memory cooldown state lost on restart:** Without Redis, alert cooldown is
@@ -280,6 +295,47 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - **Public ingest daily cap memory leak (fixed 2026-07-07):** `_public_daily_event_count` entries for stale IPs are now pruned by `_prune_stale_ip_counters()`. See QA History 2026-07-07.
 
 ## QA History
+
+### 2026-08-13 — improve-architecture (breadcrumb-persistence gap→resolved)
+
+- **Fixed feature gap:** breadcrumbs (validated to max 50 by `ErrorEventInput`)
+  were stripped at the ingest routes via `model_dump(exclude={"breadcrumbs"})`
+  and the detail serializer hardcoded `breadcrumbs: None` — the breadcrumb trail
+  collected by the frontend SDK never reached storage or the UI. Added
+  `_prepare_event_data()` in `api/routes/errors.py` which folds the top-level
+  `breadcrumbs` field into `context_json["breadcrumbs"]` (matching PRD §8.25,
+  which lists breadcrumbs as part of the event context payload) before the
+  service persists the event; `_serialize_error_event_detail()` now reads
+  `context_json["breadcrumbs"]` back out instead of returning `None`.
+- **Test coverage:** 8 unit tests in `test_breadcrumbs_persistence.py`
+  (authenticated ingest fold with existing context preserved, no-breadcrumbs
+  leaves context untouched, public ingest fold, serializer read-back with/
+  without breadcrumbs, null context, group-detail endpoint round-trip,
+  `_prepare_event_data` helper contract) + 1 BDD scenario in
+  `error_ingestion.feature` with 3 step definitions.
+- **Verification:** 485 error-tracking/error-model/db-error-handling unit +
+  BDD tests pass; ruff check + format clean; mypy --strict clean on the changed
+  source file. Updated product map behaviour checkboxes, Known Gaps, and
+  `unit-tests:` frontmatter.
+
+### 2026-08-12 — improve-tests: QA lens pass on alert_dispatcher (45% → 100% line + branch coverage)
+
+- **Coverage lifted to 100%** for `modulo.core.error_tracking.alert_dispatcher` via a
+  dedicated 22-test hermetic suite (`tests/unit/error_tracking/test_alert_dispatcher.py`),
+  replacing the thin partial coverage that previously lived inline in
+  `test_error_alerting.py` / `test_alert_delivery_failed_metric.py`.
+- **Dispatch routing matrix locked:** `in_app` (NotificationDeliveryLog entry with
+  `_build_summary` from the sample event), `email` (SMTP resolution from org
+  `settings_json` → global fallback → no-smtp disabled → no-admins → no-active-admins →
+  send success/false → `EmailSendingError` failure metric → unexpected-error swallow),
+  `webhook` (no-URL warning, Slack-emoji formatting, contract payload fields
+  `alert_id`/`elevation_signal`/`attempt_n`/`run_group_id`, HTTP-error + request-error
+  failure metrics), and unknown `action_type` warning.
+- **`dispatch_alert_resolved` fully covered:** in-app record, webhook payload post,
+  HTTP-error and request-error log paths — best-effort semantics verified (never raises).
+- **Helpers pinned:** `_escape_html` and `_format_slack_payload` get direct assertions.
+- **Verification:** 100% line + branch on `alert_dispatcher.py`; full
+  `tests/unit/error_tracking` package (355 tests) passes; ruff check + format clean.
 
 ### 2026-08-12 — improve-architecture (event-resolution cascade gap→resolved)
 

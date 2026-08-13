@@ -51,6 +51,7 @@
           :columns="[
             { key: 'pipeline_name', label: $t('views.RunsListView.pipeline'), sortable: true },
             { key: 'status', label: $t('views.RunsListView.status'), sortable: true },
+            { key: 'error', label: $t('views.RunsListView.error'), sortable: true },
             { key: 'trigger_type', label: $t('views.RunsListView.trigger'), sortable: true },
             { key: 'run_number', label: '#', numeric: true, sortable: true },
             { key: 'started_at', label: $t('views.RunsListView.start'), sortable: true },
@@ -75,6 +76,15 @@
             <span :class="runStatusBadgeClass(value as string)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
               {{ value }}
             </span>
+          </template>
+          <template #cell-error="{ row }">
+            <span
+              v-if="row.error_code"
+              :data-testid="`runs-list-error-${row.run_id}`"
+              class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize"
+              :title="(row.error_detail as string | null | undefined)?.slice(0, 200) || '—'"
+            >{{ row.error_code }}</span>
+            <span v-else>—</span>
           </template>
           <template #cell-trigger_type="{ value }">
             <span class="text-xs text-muted-foreground capitalize">{{ value || '—' }}</span>

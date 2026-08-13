@@ -1056,6 +1056,68 @@ def step_health_detail_contains(text, ctx):
     assert text in result.detail, f"Expected {text!r} in detail but got: {result.detail}"
 
 
+@given("a GitHub connector with a fine-grained token")
+def step_github_fine_grained_connector(ctx):
+    from modulo.connectors.github import GitHubConnector
+
+    ctx["connector"] = GitHubConnector(token="github_pat_11test")
+
+
+@when("the GitHub API returns the user probe without a permission header")
+def step_github_user_probe_no_permission_header(ctx):
+    import asyncio
+
+    import httpx
+    import respx
+
+    with respx.mock:
+        respx.get("https://api.github.com/user").mock(
+            return_value=httpx.Response(200, json={"login": "octocat"}),
+        )
+        ctx["verify_missing"] = asyncio.run(ctx["connector"].verify_scopes())
+        ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
+
+
+@when(parsers.parse('the GitHub API reports permission "{permission}" on the user probe'))
+def step_github_user_probe_permission(ctx, permission):
+    import asyncio
+
+    import httpx
+    import respx
+
+    with respx.mock:
+        respx.get("https://api.github.com/user").mock(
+            return_value=httpx.Response(
+                200,
+                json={"login": "octocat"},
+                headers={"X-Accepted-GitHub-Permissions": permission},
+            ),
+        )
+        ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
+
+
+@then("the GitHub scope verification passes")
+def step_github_verify_scopes_passes(ctx):
+    assert ctx.get("verify_missing") == set(), f"Expected no missing scopes, got {ctx.get('verify_missing')}"
+
+
+@then("the GitHub health check passes for the authenticated user")
+def step_github_health_check_passes(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is True, f"Expected healthy result, got {result}"
+    assert result.detail == "octocat"
+
+
+@then("the GitHub health check fails with missing fine-grained permissions")
+def step_github_health_check_fails_fine_grained(ctx):
+    result = ctx.get("health_result")
+    assert result is not None, "No health check result"
+    assert result.ok is False, f"Expected failed result, got {result}"
+    assert "missing_scope:contents:write" in result.detail, result.detail
+    assert "missing_scope:pull_requests:write" in result.detail, result.detail
+
+
 @when(parsers.parse('writing a file to GitHub returns HTTP {status_code:d} "{reason}"'))
 def step_github_write_returns_error(status_code, reason, ctx):
     connector = ctx["connector"]

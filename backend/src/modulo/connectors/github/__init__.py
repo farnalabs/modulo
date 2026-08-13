@@ -25,6 +25,25 @@ _API_VERSION = "2022-11-28"
 
 REQUIRED_SCOPES = frozenset({"repo", "read:org"})
 
+# PRD §7.11 minimum permissions for fine-grained PATs. Fine-grained PATs use a
+# different permission system from classic PAT scopes — GitHub prefixes them with
+# ``github_pat_`` and never returns the classic ``X-OAuth-Scopes`` header for them.
+REQUIRED_FINE_GRAINED_PERMISSIONS = frozenset({"contents:read", "contents:write", "pull_requests:write"})
+
+_FINE_GRAINED_PAT_PREFIX = "github_pat_"
+
+
+def is_fine_grained_pat(token: str) -> bool:
+    """True when *token* is a fine-grained personal access token.
+
+    GitHub prefixes fine-grained PATs with ``github_pat_`` (classic PATs use
+    ``ghp_``). Fine-grained PATs grant per-repository *permissions* instead of
+    classic OAuth *scopes*, so they must never be verified against the classic
+    ``X-OAuth-Scopes`` header — GitHub does not return it for them.
+    """
+    return token.startswith(_FINE_GRAINED_PAT_PREFIX)
+
+
 # Actions accepted by the batch commit resource (write("commit") / write("files"))
 _COMMIT_ACTIONS = frozenset({"create", "update", "delete", "move"})
 
@@ -665,14 +684,55 @@ class GitHubConnector(ConnectorBase):
             return {s.strip() for s in header_value.split(",")}
         return set()
 
-    async def verify_scopes(self) -> set[str]:
-        """Verify the token has required OAuth scopes via ``X-OAuth-Scopes`` header.
+    @staticmethod
+    def _parse_accepted_permissions(response: httpx.Response) -> set[str]:
+        """Parse GitHub's ``X-Accepted-GitHub-Permissions`` header.
 
-        Returns the set of missing scopes (empty if all present).
+        GitHub attaches this header to responses whose endpoint exercised a
+        permission, listing the fine-grained permissions (e.g. ``contents:read``,
+        ``pull_requests:write``) the token holds for the accessed resource. It is
+        the only permission signal GitHub exposes for fine-grained PATs.
+        """
+        header_value = response.headers.get("X-Accepted-GitHub-Permissions", "")
+        if header_value.strip():
+            return {s.strip() for s in header_value.split(",")}
+        return set()
+
+    def _fine_grained_missing_permissions(self, response: httpx.Response) -> set[str]:
+        """Return the missing PRD §7.11 fine-grained permissions for this token.
+
+        GitHub does not return ``X-OAuth-Scopes`` for fine-grained PATs and
+        exposes no endpoint that enumerates a token's permissions, so the only
+        signal is the ``X-Accepted-GitHub-Permissions`` header GitHub attaches to
+        responses whose endpoint required a permission. When the header is absent
+        (typical for the ``/user`` probe, which needs no repository permission)
+        the missing set is empty — the GitHub API remains the enforcement point
+        and a denied request already surfaces as a typed ``insufficient_scope``
+        error.
+        """
+        accepted = self._parse_accepted_permissions(response)
+        if not accepted:
+            return set()
+        return set(REQUIRED_FINE_GRAINED_PERMISSIONS - accepted)
+
+    async def verify_scopes(self) -> set[str]:
+        """Verify the token's scopes/permissions.
+
+        Returns the set of missing required scopes (empty if all present).
+
+        Classic PATs are verified against ``REQUIRED_SCOPES`` via GitHub's
+        ``X-OAuth-Scopes`` header. Fine-grained PATs (``github_pat_`` prefix)
+        never receive that header and are verified against the PRD §7.11
+        fine-grained permissions via ``X-Accepted-GitHub-Permissions`` when
+        GitHub reports them.
+
         Raises ``GitHubAuthError`` when the token itself is invalid/expired
         (401) or lacks the required permission (403).
         """
         r = await self._call_api("GET", "/user")
+
+        if is_fine_grained_pat(self._token):
+            return self._fine_grained_missing_permissions(r)
 
         token_scopes = self._parse_scopes_from_headers(r)
         # admin:org is a superset of read:org
@@ -681,11 +741,16 @@ class GitHubConnector(ConnectorBase):
         return set(REQUIRED_SCOPES - token_scopes)
 
     async def health_check(self) -> HealthResult:
-        """Check API access and verify required OAuth scopes via ``X-OAuth-Scopes`` header.
+        """Check API access and verify required scopes/permissions.
 
-        Required scopes: ``repo``, ``read:org``. Distinguishes expired/invalid
-        tokens (HTTP 401), missing scopes (HTTP 403), rate-limit exhaustion
-        (HTTP 429), and transport failures so the failure mode is actionable.
+        Classic PATs are verified against the required scopes (``repo``,
+        ``read:org``) via the ``X-OAuth-Scopes`` header; fine-grained PATs
+        (``github_pat_`` prefix) are verified against the PRD §7.11 permissions
+        (``contents:read``, ``contents:write``, ``pull_requests:write``) via
+        ``X-Accepted-GitHub-Permissions`` when GitHub reports them. Distinguishes
+        expired/invalid tokens (HTTP 401), missing scopes (HTTP 403),
+        rate-limit exhaustion (HTTP 429), and transport failures so the failure
+        mode is actionable.
 
         Health checks bypass the circuit breaker so the diagnostic path always
         probes the API — a healthy probe closes an open circuit, a failing
@@ -710,13 +775,26 @@ class GitHubConnector(ConnectorBase):
             return HealthResult(ok=False, detail=str(exc)[:200])
 
         token_scopes = self._parse_scopes_from_headers(r)
-        missing = REQUIRED_SCOPES - token_scopes
-        if missing:
-            missing_codes = ", ".join(f"missing_scope:{scope}" for scope in sorted(missing))
+        if is_fine_grained_pat(self._token):
+            missing = self._fine_grained_missing_permissions(r)
+            if missing:
+                missing_codes = ", ".join(f"missing_scope:{perm}" for perm in sorted(missing))
+                return HealthResult(
+                    ok=False,
+                    detail=(
+                        f"Missing scopes: {missing_codes} ({', '.join(sorted(missing))}). "
+                        f"Required: {', '.join(sorted(REQUIRED_FINE_GRAINED_PERMISSIONS))}"
+                    ),
+                )
+            return HealthResult(ok=True, detail=user_login)
+
+        missing_classic = REQUIRED_SCOPES - token_scopes
+        if missing_classic:
+            missing_codes = ", ".join(f"missing_scope:{scope}" for scope in sorted(missing_classic))
             return HealthResult(
                 ok=False,
                 detail=(
-                    f"Missing scopes: {missing_codes} ({', '.join(sorted(missing))}). "
+                    f"Missing scopes: {missing_codes} ({', '.join(sorted(missing_classic))}). "
                     f"Required: {', '.join(sorted(REQUIRED_SCOPES))}"
                 ),
             )

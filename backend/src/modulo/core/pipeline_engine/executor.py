@@ -508,10 +508,6 @@ class PipelineExecutor:
         self._stall_requested: asyncio.Event | None = None
         self._superseded: asyncio.Event | None = None
 
-    # Token pricing constants
-    _INPUT_TOKEN_RATE = Decimal("0.00001")
-    _OUTPUT_TOKEN_RATE = Decimal("0.00003")
-
     async def _check_capacity(
         self,
         *,
@@ -1174,6 +1170,7 @@ class PipelineExecutor:
                 _log.warning("pipeline.resume_no_checkpointer", extra={"run_id": str(run_id)})
                 final_status = "failed"
                 error_code = "configuration_error"
+                error_detail = "Pipeline configuration is invalid (checkpointer unavailable)."
             else:
                 raise
         except asyncio.CancelledError:

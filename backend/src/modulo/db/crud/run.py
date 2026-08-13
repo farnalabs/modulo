@@ -60,6 +60,7 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
         "cancelled",
         "eval_failed",
         "stalled",
+        "budget_exceeded",
     }
 )
 
@@ -589,7 +590,7 @@ async def update_run_status(
         run.started_at = datetime.now(UTC)
     if claimed_by is not None:
         run.claimed_by = claimed_by
-    if status in ("complete", "failed", "cancelled", "eval_failed", "stalled"):
+    if status in ("complete", "failed", "cancelled", "eval_failed", "stalled", "budget_exceeded"):
         run.completed_at = datetime.now(UTC)
     if clear_error_code:
         # Explicitly clear a prior capacity marker (the error_code=... writes
@@ -632,7 +633,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN now() ELSE started_at END, "
     "completed_at = CASE "
     "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
-    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') THEN now() "
+    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded') THEN now() "
     "  ELSE completed_at END, "
     "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
     "error_code = CASE WHEN :clear_error_code THEN NULL "
@@ -720,7 +721,8 @@ async def _update_run_status_fenced(
 
 _TRANSITION_SQL = text(
     "UPDATE runs SET status=CAST(:target AS text), "
-    "completed_at = CASE WHEN CAST(:target AS text) IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') "
+    "completed_at = CASE WHEN CAST(:target AS text) IN "
+    "('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded') "
     "THEN now() ELSE completed_at END, "
     "error_code = COALESCE(CAST(:error_code AS text), error_code), "
     "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "
@@ -744,7 +746,12 @@ async def transition_run(
     claim_token: str | None = None,
     allowed_from: frozenset[str] | None = None,
 ) -> bool:
-    """The single fenced run-transition authority (dist/runtime-core A1).
+    """The primary fenced run-transition authority (dist/runtime-core A1).
+
+    The single fenced run-transition authority for the REST/executor paths —
+    ``saq_hooks._mark_run_failed`` is a deliberate SECOND fenced authority for
+    the guarded SAQ task_failure path (PR #1003), so this is the primary, not
+    the only, fence.
 
     Performs ONE conditional ``UPDATE ... WHERE ... RETURNING id`` that is safe
     under concurrency:
@@ -844,7 +851,7 @@ async def _count_active_runs(
         .select_from(Run)
         .where(
             Run.status.in_(_active_run_statuses(include_pending)),
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     if pipeline_id is not None:
@@ -956,7 +963,7 @@ async def count_active_sandbox_runs_for_org(
         .where(
             Run.organisation_id == org_id,
             Run.status == "running",
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     if exclude_run_id is not None:

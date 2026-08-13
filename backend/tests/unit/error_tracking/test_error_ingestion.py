@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -174,6 +175,42 @@ class TestIngest:
                 {"level": "error", "message": "test", "source": "backend"},
             )
             assert result["is_new"] is False
+
+    async def test_ingest_sanitizes_secrets_before_fingerprint(self) -> None:
+        """P8: two events differing only by an embedded secret must hash to the
+        SAME fingerprint/group, and the stored message is redacted at the
+        ingest choke point."""
+        svc = ErrorIngestionService()
+        session = _make_session()
+        created: list[dict] = []
+
+        async def fake_create_event(session: Any, org_id: Any, **kwargs: Any) -> MagicMock:
+            created.append(kwargs)
+            return MagicMock(id=uuid.uuid4())
+
+        with (
+            patch("modulo.core.error_tracking.create_error_event", side_effect=fake_create_event),
+            patch(
+                "modulo.core.error_tracking.get_error_group_by_fingerprint",
+                AsyncMock(return_value=None),
+            ),
+            patch("modulo.core.error_tracking.upsert_error_group") as upsert_mock,
+        ):
+            upsert_mock.return_value = MagicMock(id=uuid.uuid4())
+            await svc.ingest(
+                session,
+                _ORG_ID,
+                {"level": "error", "message": "call failed with sk-abcdefghijkl1234", "source": "backend"},
+            )
+            await svc.ingest(
+                session,
+                _ORG_ID,
+                {"level": "error", "message": "call failed with sk-zzzzzzzzzzzzzzz9", "source": "backend"},
+            )
+
+        assert created[0]["fingerprint"] == created[1]["fingerprint"]
+        assert created[0]["message"] == "call failed with <redacted>"
+        assert created[1]["message"] == "call failed with <redacted>"
 
     @pytest.mark.parametrize(
         ("event_data", "missing"),

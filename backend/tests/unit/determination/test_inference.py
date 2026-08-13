@@ -278,6 +278,45 @@ def test_error_samples_do_not_crash_inference() -> None:
     assert categories == {"automation", "overview"}
 
 
+def test_issues_with_empty_records_are_tolerated() -> None:
+    """An issues sample that carries no records must not crash inference."""
+    samples = [
+        make_sample("issues", [], connector_type=ConnectorType.JIRA),
+        make_sample("issues", [{"summary": "T1"}], connector_type=ConnectorType.JIRA),
+    ]
+    findings = infer(samples)
+    assert not any(f.category == "stage" and "Planning" in f.finding for f in findings)
+    assert any(f.category == "overview" for f in findings)
+
+
+def test_issue_records_without_any_status_are_skipped() -> None:
+    """Issue records that expose neither a status nor a state must be ignored, not crash."""
+    samples = [
+        make_sample(
+            "issues",
+            [
+                {"summary": "T1"},
+                {"id": "T2"},
+            ],
+            connector_type=ConnectorType.JIRA,
+        )
+    ]
+    findings = infer(samples)
+    assert not any(f.category == "stage" and "Planning" in f.finding for f in findings)
+    assert not any(f.category == "transition" for f in findings)
+
+
+def test_unknown_resource_samples_are_ignored() -> None:
+    """Samples for resources outside the recognised set must be skipped without crashing."""
+    samples = [
+        make_sample("unknown_resource", [{"x": 1}]),
+        make_sample("repos", [{"name": "repo-a"}]),
+    ]
+    findings = infer(samples)
+    assert any(f.category == "stage" and "Development" in f.finding for f in findings)
+    assert "1 repository" in next(f for f in findings if f.category == "stage").evidence
+
+
 def test_finding_model() -> None:
     f = Finding(
         category="stage",

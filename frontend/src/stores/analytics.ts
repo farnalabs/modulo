@@ -97,6 +97,7 @@ export const RUN_STATUSES = [
   "cancelled",
   "eval_failed",
   "stalled",
+  "budget_exceeded",
 ] as const;
 
 export const TIMESPANS: AnalyticsTimespanOption[] = [

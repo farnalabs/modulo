@@ -158,6 +158,14 @@ ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES = 60
 
 _DISPATCH_FAILED_ERROR_CODE = "dispatch_failed"
 
+# Synthetic error_detail for the genuinely detail-less failure writers (P7'):
+# applied ONLY where detail is currently NULL — never overwrites real detail.
+# Derived from the ERROR_CODE_REGISTRY guidance in
+# ``modulo.core.pipeline_engine.error_codes``.
+_EXECUTOR_SUPERSEDED_ERROR_DETAIL = "Superseded by a newer run."
+_CLAIM_CAP_EXHAUSTED_ERROR_DETAIL = "Claim capacity exhausted."
+_DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure)."
+
 # ---------------------------------------------------------------------------
 # Age-bound mid-graph wedge terminalizer (B4). A run stuck mid-graph for longer
 # than the max plausible run duration is wedged (heartbeat may still be fresh —
@@ -207,16 +215,6 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["enqueue_failed_ttl_terminalized"] = stats.get("enqueue_failed_ttl_terminalized", 0)
     _dispatcher_reconcile_stats["enqueue_failed_redispatched"] = stats.get("enqueue_failed_redispatched", 0)
     _dispatcher_reconcile_stats["enqueue_failed_capped"] = stats.get("enqueue_failed_capped", 0)
-
-
-def get_dispatcher_reconcile_stats() -> dict[str, Any]:
-    """Read the last dispatcher_reconcile outcome (thread-safe).
-
-    In-process only: this returns the dict of THIS process. The system cron
-    writes it in the system-worker process; the web process /healthz/ready
-    reads the shared Redis key (see ``read_dispatcher_reconcile_stats``).
-    """
-    return dict(_dispatcher_reconcile_stats)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -839,9 +837,10 @@ async def fire_polling_trigger(
         if spend_limit is not None:
             from sqlalchemy import func
 
+            from modulo.core.cost_controller import created_at_day_start
             from modulo.db.models.run import Run
 
-            today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = created_at_day_start()
             cost_result = await session.execute(
                 select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
                     Run.trigger_id == trigger_id,
@@ -2665,15 +2664,6 @@ def _reconcile_job_type(status: str) -> str:
     return "resume_run" if status in ("awaiting_human", "claimed") else "execute_run"
 
 
-# HITL decisions whose faithful resume REQUIRES a payload beyond the action name.
-# ``approved``/``rejected``/``deliver_manual`` only need the action;
-# ``approved_with_modification`` and ``manual_output`` carry modification/output
-# data that must be persisted. These actions are carried by the persisted
-# ``decision_payload``'s ``action`` member — the ``hitl_claims.decision`` column
-# only ever holds ``approved``/``rejected``/``deliver_manual``.
-_PAYLOAD_REQUIRING_ACTIONS = frozenset({"approved_with_modification", "manual_output"})
-
-
 async def _awaiting_human_has_committed_decision(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -2807,12 +2797,18 @@ async def _terminalize_mid_graph_wedges(
     """
     result = await session.execute(
         text(
-            "UPDATE runs SET status='failed', error_code=:code, completed_at=now() "
+            "UPDATE runs SET status='failed', error_code=:code, "
+            "error_detail=:detail, completed_at=now() "
             "WHERE organisation_id=:oid AND status='running' AND dispatcher='saq' "
             "AND started_at < now() - (:max_age_minutes * interval '1 minute') "
             "RETURNING id"
         ),
-        {"oid": str(org_id), "code": _EXECUTOR_SUPERSEDED_ERROR_CODE, "max_age_minutes": max_age_minutes},
+        {
+            "oid": str(org_id),
+            "code": _EXECUTOR_SUPERSEDED_ERROR_CODE,
+            "detail": _EXECUTOR_SUPERSEDED_ERROR_DETAIL,
+            "max_age_minutes": max_age_minutes,
+        },
     )
     rows = result.all()
     for (run_id,) in rows:
@@ -2844,12 +2840,13 @@ async def _terminalize_claim_cap_exhausted(
     """
     result = await session.execute(
         text(
-            "UPDATE runs SET status='failed', error_code='claim_cap_exhausted', completed_at=now() "
+            "UPDATE runs SET status='failed', error_code='claim_cap_exhausted', "
+            "error_detail=:detail, completed_at=now() "
             "WHERE organisation_id=:oid AND status='running' AND claim_count >= :cap "
             "AND (heartbeat_at IS NULL OR heartbeat_at < now() - (:stale * interval '1 second')) "
             "RETURNING id"
         ),
-        {"oid": str(org_id), "cap": claim_cap, "stale": stale_seconds},
+        {"oid": str(org_id), "cap": claim_cap, "stale": stale_seconds, "detail": _CLAIM_CAP_EXHAUSTED_ERROR_DETAIL},
     )
     rows = result.all()
     for (run_id,) in rows:
@@ -2870,11 +2867,16 @@ async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, or
     """
     await session.execute(
         text(
-            "UPDATE runs SET status='failed', error_code=:code, completed_at=now() "
+            "UPDATE runs SET status='failed', error_code=:code, error_detail=:detail, completed_at=now() "
             "WHERE id=:rid AND organisation_id=:oid AND status='pending' AND dispatcher IS NULL "
             "AND enqueue_failed_at IS NOT NULL"
         ),
-        {"rid": str(run_id), "oid": str(org_id), "code": _DISPATCH_FAILED_ERROR_CODE},
+        {
+            "rid": str(run_id),
+            "oid": str(org_id),
+            "code": _DISPATCH_FAILED_ERROR_CODE,
+            "detail": _DISPATCH_FAILED_ERROR_DETAIL,
+        },
     )
 
 

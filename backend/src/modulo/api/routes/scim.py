@@ -58,7 +58,6 @@ _SCIM_USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
 _SCIM_GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
 _SCIM_LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 _SCIM_ERROR_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:Error"
-_SCIM_PATCH_OP_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────

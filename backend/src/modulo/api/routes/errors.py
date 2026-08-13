@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.models.error import (
+    ErrorEventInput,
     ErrorEventListResponse,
     ErrorGroupDetail,
     ErrorGroupResult,
@@ -55,6 +56,26 @@ _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: 
 
 # Orphan org ID for unauthenticated public ingest events
 ORPHAN_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+# Breadcrumbs are persisted inside ``context_json`` under this key (PRD §8.25
+# lists breadcrumbs as part of the event context payload).
+BREADCRUMBS_CONTEXT_KEY = "breadcrumbs"
+
+
+def _prepare_event_data(event: ErrorEventInput) -> dict[str, Any]:
+    """Dump an ingest event, folding breadcrumbs into ``context_json``.
+
+    The SDK sends breadcrumbs as a top-level field (capped at 50 by the
+    ``ErrorEventInput`` validator), but the storage contract places them inside
+    ``context_json`` (PRD §8.25). Without folding, ``model_dump`` would drop
+    them and the breadcrumb trail would never reach the detail view.
+    """
+    data = event.model_dump(exclude={"breadcrumbs"})
+    if event.breadcrumbs:
+        context = dict(data.get("context_json") or {})
+        context[BREADCRUMBS_CONTEXT_KEY] = event.breadcrumbs
+        data["context_json"] = context
+    return data
 
 
 def _prune_stale_ip_counters() -> None:
@@ -150,7 +171,7 @@ async def ingest_errors(
             detail=str(exc),
         ) from exc
 
-    events_data = [e.model_dump(exclude={"breadcrumbs"}) for e in ingest_request.events]
+    events_data = [_prepare_event_data(e) for e in ingest_request.events]
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -259,7 +280,7 @@ async def ingest_errors_public(
             detail="Daily cap exceeded. Max 100 events per IP per day.",
         )
 
-    events_data = [e.model_dump(exclude={"breadcrumbs"}) for e in valid_events]
+    events_data = [_prepare_event_data(e) for e in valid_events]
     try:
         async with session.begin():
             results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
@@ -311,6 +332,7 @@ def _serialize_error_group_summary(g: ErrorGroup, sample_event: ErrorEvent | Non
 
 
 def _serialize_error_event_detail(e: ErrorEvent) -> dict[str, Any]:
+    context = e.context_json or {}
     return {
         "id": str(e.id),
         "level": e.level,
@@ -320,7 +342,7 @@ def _serialize_error_event_detail(e: ErrorEvent) -> dict[str, Any]:
         "source": e.source,
         "environment": e.environment,
         "version": e.version,
-        "breadcrumbs": None,
+        "breadcrumbs": context.get(BREADCRUMBS_CONTEXT_KEY),
         "created_at": e.created_at.isoformat() if e.created_at else "",
     }
 

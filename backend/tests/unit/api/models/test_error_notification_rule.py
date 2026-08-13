@@ -108,9 +108,21 @@ class TestErrorNotificationRuleUpdate:
         with pytest.raises(ValidationError, match="condition_level must be one of"):
             ErrorNotificationRuleUpdate(condition_level="fatal")
 
+    @pytest.mark.parametrize("level", ["error", "warning", "critical"])
+    def test_valid_levels_accepted_on_update(self, level: str) -> None:
+        update = ErrorNotificationRuleUpdate(condition_level=level)
+        assert update.condition_level == level
+
     def test_invalid_action_rejected_on_update(self) -> None:
         with pytest.raises(ValidationError, match="action_type must be one of"):
             ErrorNotificationRuleUpdate(action_type="sms")
+
+    @pytest.mark.parametrize("action", ["in_app", "email", "webhook"])
+    def test_valid_actions_accepted_on_update(self, action: str) -> None:
+        kwargs: dict[str, str] = {"action_type": action}
+        if action == "webhook":
+            kwargs["webhook_url"] = "https://hooks.example.com"
+        assert ErrorNotificationRuleUpdate(**kwargs).action_type == action
 
     def test_webhook_url_validation_applies_on_update(self) -> None:
         with pytest.raises(ValidationError, match="webhook_url must start with"):

@@ -167,6 +167,17 @@ def _normalize_stacktrace(stacktrace: str) -> str:
     return "\n".join(_STACKTRACE_FILE_RE.sub("", line).strip() for line in lines)
 
 
+def _sanitize_context_json(value: Any, sanitize: Any) -> Any:
+    """Recursively sanitize every string leaf in a context_json payload."""
+    if isinstance(value, str):
+        return sanitize(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_context_json(v, sanitize) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_context_json(v, sanitize) for v in value]
+    return value
+
+
 class FingerprintError(Exception):
     pass
 
@@ -204,9 +215,21 @@ class ErrorIngestionService:
         if not message or not level or not source:
             raise ValueError("ingest requires 'message', 'level', and 'source' in event_data")
 
+        # Sanitize at the ingest choke point (P8) — BEFORE the fingerprint — so
+        # two events differing only by an embedded secret hash to the SAME
+        # group. Idempotent + a no-op for clean inputs, so existing fingerprint
+        # expectations are unchanged. Covers all 5 ingestion paths (logging
+        # handler, webhooks, cron_helpers, saq_hooks, public ingest).
+        from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+
+        message = sanitize_error_text(message)
+        raw_stacktrace = event_data.get("stacktrace")
+        stacktrace = None if raw_stacktrace is None else sanitize_error_text(raw_stacktrace)
+        context_json = _sanitize_context_json(event_data.get("context_json"), sanitize_error_text)
+
         fp = self.fingerprint(
             message=message,
-            stacktrace=event_data.get("stacktrace"),
+            stacktrace=stacktrace,
             source=source,
         )
         environment = event_data.get("environment")
@@ -218,8 +241,8 @@ class ErrorIngestionService:
             level=level,
             message=message,
             source=source,
-            stacktrace=event_data.get("stacktrace"),
-            context_json=event_data.get("context_json"),
+            stacktrace=stacktrace,
+            context_json=context_json,
             environment=environment,
             version=event_data.get("version"),
         )
