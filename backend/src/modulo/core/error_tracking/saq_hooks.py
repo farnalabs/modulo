@@ -106,6 +106,7 @@ def _classify(function: str, status: Any, error: str | None, kwargs: dict[str, A
             "action": "fail_run",
             "run_id": str(run_id),
             "org_id": str(org_id) if org_id else str(_SYSTEM_ORG_ID),
+            "error": error,
         }
 
     # fire_*/report/cron failure — log + ingest error event, no run state.
@@ -123,7 +124,12 @@ def _classify(function: str, status: Any, error: str | None, kwargs: dict[str, A
 # ---------------------------------------------------------------------------
 
 
-async def _mark_run_failed(run_id: str, org_id: str, claim_token: str | None = None) -> None:
+async def _mark_run_failed(
+    run_id: str,
+    org_id: str,
+    claim_token: str | None = None,
+    error_detail: str | None = None,
+) -> int:
     """Mark a run failed task_failure — guarded NOT IN terminal states (F3d).
 
     FENCED by *claim_token* (dist/runtime-core A1): when the failed job stamped
@@ -131,9 +137,20 @@ async def _mark_run_failed(run_id: str, org_id: str, claim_token: str | None = N
     the write also requires ``claim_token = :tok`` so a failed job cannot
     task_failure a run that a successor already re-claimed. CANCEL-WINS:
     ``cancellation_requested = false``.
+
+    *error_detail* is sanitized (secret-pattern redaction) and truncated to
+    5000 code points BEFORE the UPDATE — ``runs.error_detail`` is String(5000);
+    an untruncated detail raises DataError, which the generic except in
+    :func:`after_process` would swallow and the run would NEVER be marked
+    failed (the exact failure this fix exists to prevent). ``None`` is written
+    when the detail is falsy — never ``""`` (an empty-string detail flips the
+    daily-watcher detail_available flag; NULL does not).
+
+    Returns the number of rows updated — 0 means the guards rejected the write
+    (superseded / already terminal / cancellation requested).
     """
     clauses = [
-        "UPDATE runs SET status='failed', error_code='task_failure', completed_at=now() ",
+        "UPDATE runs SET status='failed', error_code='task_failure', error_detail=:detail, completed_at=now() ",
         "WHERE id=:rid AND organisation_id=:oid ",
         "AND status NOT IN ('complete', 'cancelled', 'failed') ",
         "AND cancellation_requested = false ",
@@ -143,14 +160,52 @@ async def _mark_run_failed(run_id: str, org_id: str, claim_token: str | None = N
         clauses.append("AND claim_token = CAST(:tok AS text)")
         params["tok"] = claim_token
 
+    from modulo.core.pipeline_engine.error_codes import sanitize_error_text
+
+    if error_detail:
+        params["detail"] = sanitize_error_text(error_detail)[:5000]
+    else:
+        params["detail"] = None
+
     async with _open_factory()() as session, session.begin():
         from modulo.db.rls import set_rls_org
 
         await set_rls_org(session, uuid.UUID(org_id))
-        await session.execute(
+        result = await session.execute(
             text("".join(clauses)),
             params,
         )
+        return int(result.rowcount)
+
+
+async def _record_task_failure_facts(run_id: str, org_id: str) -> None:
+    """Record the compensating analytics fact for a task_failure run (P6').
+
+    Runs in a SEPARATE session from the mark (which is already committed), so
+    a failure inside ``record_run_facts`` — including ``CancelledError`` — can
+    NEVER roll back the committed ``failed`` transition. Re-selects the Run
+    ORM entity AFTER the mark (a pre-update entity would record
+    ``status='running'`` with a NULL ``completed_at``). None-guarded and
+    fail-open: any failure logs and is swallowed.
+    """
+    try:
+        async with _open_factory()() as session, session.begin():
+            from modulo.db.rls import set_rls_org
+
+            await set_rls_org(session, uuid.UUID(org_id))
+
+            from modulo.core.analytics import record_run_facts
+            from modulo.db.crud.run import get_run
+
+            run = await get_run(session, uuid.UUID(run_id))
+            if run is None:
+                _log.warning("saq_hooks.task_failure_facts_run_missing run=%s", run_id)
+                return
+            await record_run_facts(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("saq_hooks.task_failure_facts_failed run=%s", run_id)
 
 
 async def _ingest_error_event(
@@ -212,7 +267,23 @@ async def after_process(ctx: dict[str, Any]) -> None:
                 function,
                 outcome["run_id"],
             )
-            await _mark_run_failed(outcome["run_id"], outcome["org_id"], claim_token=kwargs.get("claim_token"))
+            rowcount = await _mark_run_failed(
+                outcome["run_id"],
+                outcome["org_id"],
+                claim_token=kwargs.get("claim_token"),
+                error_detail=outcome.get("error"),
+            )
+            if rowcount == 0:
+                # Superseded / guard-rejected: the run was already terminal or
+                # re-claimed by a successor — nothing to compensate.
+                _log.warning(
+                    "saq_hooks.task_failure_superseded run=%s (rowcount 0)",
+                    outcome["run_id"],
+                )
+            else:
+                # rowcount == 1: the run is now failed — write the compensating
+                # analytics fact (separate session, fail-open).
+                await _record_task_failure_facts(outcome["run_id"], outcome["org_id"])
         elif action == "ingest_error":
             _log.error("SAQ job %s failed: %s", function, error)
             await _ingest_error_event(

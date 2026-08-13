@@ -1174,6 +1174,7 @@ class PipelineExecutor:
                 _log.warning("pipeline.resume_no_checkpointer", extra={"run_id": str(run_id)})
                 final_status = "failed"
                 error_code = "configuration_error"
+                error_detail = "Pipeline configuration is invalid (checkpointer unavailable)."
             else:
                 raise
         except asyncio.CancelledError:

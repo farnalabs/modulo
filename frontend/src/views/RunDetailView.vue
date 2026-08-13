@@ -160,7 +160,14 @@
 
       <!-- Failed Run Diagnostics -->
       <div v-if="run.status === 'failed' && run.error_detail" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-4">
-        <h3 class="text-sm font-semibold text-destructive mb-1">{{ $t('views.RunDetailView.run_error') }}</h3>
+        <div class="flex flex-wrap items-center gap-2 mb-1">
+          <h3 class="text-sm font-semibold text-destructive">{{ $t('views.RunDetailView.run_error') }}</h3>
+          <span
+            v-if="run.error_code"
+            class="badge badge-status-destructive"
+            :title="$t('views.RunDetailView.error_code_title')"
+          >{{ run.error_code }}</span>
+        </div>
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
       </div>
 
