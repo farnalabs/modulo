@@ -100,6 +100,7 @@ from modulo.api.routes.runs import router as runs_router
 from modulo.api.routes.schema_folders import router as schema_folders_router
 from modulo.api.routes.schemas import router as schemas_router
 from modulo.api.routes.scim import router as scim_router
+from modulo.api.routes.slack import router as slack_router
 from modulo.api.routes.sso import router as sso_router
 from modulo.api.routes.teams import router as teams_router
 from modulo.api.routes.templates import router as templates_router
@@ -1250,6 +1251,7 @@ app.include_router(run_ws_router)
 app.include_router(triggers_router)
 app.include_router(pipeline_triggers_router)
 app.include_router(webhooks_router)
+app.include_router(slack_router)
 app.include_router(views_router)
 app.include_router(viewmodel_router)
 app.include_router(api_keys_router)

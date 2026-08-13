@@ -956,11 +956,12 @@ class TriggerEngine:
         result: str,
         run_id: uuid.UUID | None = None,
         error_detail: str | None = None,
+        trigger_type: str | None = None,
     ) -> TriggerEvent:
         event = TriggerEvent(
             organisation_id=org_id,
             trigger_id=trigger.id,
-            trigger_type="webhook",
+            trigger_type=trigger_type or trigger.trigger_type,
             raw_payload_hash=payload_hash,
             validation_result=result,
             run_id=run_id,
