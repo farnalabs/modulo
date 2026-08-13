@@ -17,6 +17,7 @@ regression that silently weakens the suite:
 - ``asyncio.run()`` nested inside ``async def`` tests (conflicts with the loop)
 - ``assert`` in a ``try:`` body guarded by a swallowing ``except Exception:``
 - stray ``print()`` calls polluting CI output
+- fixtures that nothing requests (dead setup code that never runs)
 - ``==`` against a float literal that is not exactly representable in binary
   (``0.1``, ``0.04``, ``0.95``, ...) — precision-fragile equality that
   ``pytest.approx`` is designed to replace
@@ -26,6 +27,7 @@ of a bare "assert not violations", mirroring the sibling architecture tests.
 """
 
 import ast
+import re
 from fractions import Fraction
 from pathlib import Path
 
@@ -382,6 +384,71 @@ def test_no_stray_print_in_test_code():
     assert not violations, (
         f"Found {len(violations)} stray print() call(s) in test code.\n"
         "Remove debug prints or route diagnostics through logging.\n" + "\n".join(violations)
+    )
+
+
+def test_no_dead_fixtures():
+    """pytest only instantiates fixtures on demand, so a fixture that no test
+    (or other fixture) ever requests is unreachable setup code. It inflates
+    the suite, adds per-run collection overhead, and misleads readers into
+    believing a capability is covered — its body may already be broken without
+    anyone noticing. A fixture counts as used when its name appears as a test
+    parameter, an attribute, inside ``@pytest.mark.usefixtures(...)`` /
+    ``request.getfixturevalue(...)`` strings, or via the conformance-fixture
+    registry; ``autouse=True`` fixtures are legitimately unreferenced."""
+    used_names: dict[str, int] = {}
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                used_names[node.id] = used_names.get(node.id, 0) + 1
+            elif isinstance(node, ast.Attribute):
+                used_names[node.attr] = used_names.get(node.attr, 0) + 1
+            elif isinstance(node, ast.arg):
+                used_names[node.arg] = used_names.get(node.arg, 0) + 1
+        for token in re.findall(r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']', path.read_text(encoding="utf-8")):
+            used_names[token] = used_names.get(token, 0) + 1
+
+    def _decorator_name(dec: ast.AST) -> str | None:
+        if isinstance(dec, ast.Call):
+            dec = dec.func
+        if isinstance(dec, ast.Attribute):
+            return dec.attr
+        if isinstance(dec, ast.Name):
+            return dec.id
+        return None
+
+    def _decorator_autouse(dec: ast.AST) -> bool:
+        if not isinstance(dec, ast.Call):
+            return False
+        return any(
+            kw.arg == "autouse" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in dec.keywords
+        )
+
+    violations: list[str] = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(_decorator_name(d) == "fixture" for d in node.decorator_list):
+                continue
+            if any(_decorator_autouse(d) for d in node.decorator_list):
+                continue
+            if used_names.get(node.name, 0):
+                continue
+            violations.append(
+                f"  {path.relative_to(TESTS)}:{node.lineno}  @pytest.fixture {node.name}()"
+                " — never requested by any test"
+            )
+    assert not violations, (
+        f"Found {len(violations)} fixture(s) that no test requests.\n"
+        "pytest never instantiates an unrequested fixture, so its body is dead code.\n"
+        "Remove it, or wire it up (request it / autouse=True) so it does real work.\n" + "\n".join(violations)
     )
 
 
