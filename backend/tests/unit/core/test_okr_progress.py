@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 from tests.unit.api.mock_session import configure_mock_session
 
 from modulo.api.dependencies import _get_engine, get_db_session
@@ -193,6 +194,31 @@ class TestComputeTrendDirection:
         ]
         assert _compute_trend_direction(trend) == "declining"
 
+    def test_falls_back_to_overall_when_single_discrete_point(self) -> None:
+        # Only one non-empty discrete window: the fallback compares it against
+        # the ``overall`` window (which overlaps all windows).
+        trend = [
+            OkrTrendPoint(period="7d", pass_rate=0.5, total_evals=10, passed_evals=5),
+            OkrTrendPoint(period="overall", pass_rate=0.9, total_evals=20, passed_evals=18),
+        ]
+        assert _compute_trend_direction(trend) == "improving"
+
+    def test_fallback_with_overall_only_is_stable(self) -> None:
+        # Only the ``overall`` window carries data — the fallback also has a
+        # single usable point, so the direction is stable.
+        trend = [
+            OkrTrendPoint(period="7d", pass_rate=0.0, total_evals=0, passed_evals=0),
+            OkrTrendPoint(period="overall", pass_rate=0.9, total_evals=20, passed_evals=18),
+        ]
+        assert _compute_trend_direction(trend) == "stable"
+
+    def test_fallback_declining_against_overall(self) -> None:
+        trend = [
+            OkrTrendPoint(period="7d", pass_rate=0.9, total_evals=10, passed_evals=9),
+            OkrTrendPoint(period="overall", pass_rate=0.4, total_evals=40, passed_evals=16),
+        ]
+        assert _compute_trend_direction(trend) == "declining"
+
 
 # ── track_okr_progress tests ──────────────────────────────────────────────
 
@@ -225,6 +251,26 @@ class TestTrackOkrProgressDirect:
 
         with pytest.raises(ValueError, match="not found"):
             await track_okr_progress(session, _ORG_ID, "nonexistent-suite")
+
+    async def test_raises_value_error_for_empty_suite_id(self) -> None:
+        session = _make_mock_session()
+
+        with pytest.raises(ValueError, match="must not be empty"):
+            await track_okr_progress(session, _ORG_ID, "")
+
+    async def test_raises_timeout_error(self) -> None:
+        session = _make_mock_session()
+        session.execute.side_effect = TimeoutError("query timed out")
+
+        with pytest.raises(TimeoutError, match="query timed out"):
+            await track_okr_progress(session, _ORG_ID, _SUITE_ID)
+
+    async def test_raises_sqlalchemy_error(self) -> None:
+        session = _make_mock_session()
+        session.execute.side_effect = SQLAlchemyError("boom")
+
+        with pytest.raises(SQLAlchemyError, match="boom"):
+            await track_okr_progress(session, _ORG_ID, _SUITE_ID)
 
     async def test_returns_okr_progress_model(self) -> None:
         session = _make_mock_session()

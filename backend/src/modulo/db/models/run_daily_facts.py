@@ -2,6 +2,9 @@
 
 One row per terminal run, written by ``record_run_facts`` on every finalize
 path and backfilled/maintained by the ``analytics_facts_maintenance`` cron.
+The SAQ task_failure hook also writes a compensating fact row (in its own
+separate session) for runs it marks failed outside the finalize path, so a
+task_failure run is never invisible to analytics.
 The facts survive the 90-day run purge (``run_id`` is deliberately NOT a
 foreign key), so dimensioned run history outlives the ``runs`` rows it was
 derived from.

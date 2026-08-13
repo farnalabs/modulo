@@ -91,7 +91,6 @@ const searchItems = computed<SearchItem[]>(() => {
     { label: 'Dashboard', path: '/', icon: 'LayoutDashboard', section: 'BUILD' },
     { label: 'Pipelines', path: '/pipelines', icon: 'GitFork', section: 'BUILD' },
     { label: 'Library', path: '/library', icon: 'BookOpen', section: 'BUILD' },
-    { label: 'Stages Board', path: '/stages', icon: 'Columns', section: 'BUILD' },
     { label: 'Runs', path: '/runs', icon: 'CirclePlay', section: 'BUILD' },
     { label: 'Evals', path: '/evals', icon: 'CheckSquare', section: 'MONITOR' },
     { label: 'Schemas', path: '/schemas', icon: 'Database', section: 'CONFIGURE' },

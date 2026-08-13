@@ -553,6 +553,53 @@ jobs:
 
           echo "failed_gh_merge=$(echo "$FAILED" | xargs)" >> "$GITHUB_OUTPUT"
 
+      - name: Self-report merged PRs to Modulo (fail-open, best-effort)
+        if: success() && steps.merge.outputs.merged_count != '0'
+        env:
+          MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
+          MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
+        shell: bash
+        run: |
+          # FAR-145 follow-up (workflow self-report): the merge queue DISCOVERS the
+          # PRs it merges but never emitted work_item_refs, so the merge stage of a
+          # lifecycle-map journey (backend/src/modulo/core/lifecycle_map/) never
+          # advanced autonomously. This step emits a self-report payload matching
+          # the work-item-refs contract in self_report.py ({kind, ref, status?}
+          # entries — advisory operator claims that confirm/match existing journey
+          # rows only, never mint). The parser reads the payload's work_item_refs
+          # list directly (one of its recognised self-report keys).
+          #
+          # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a
+          # Modulo outage can NEVER fail the merge queue. The payload is always
+          # recorded in the log; the POST only fires when MODULO_SELF_REPORT_URL is
+          # configured. No such ingestion endpoint exists yet — see the follow-up
+          # ticket for the required API.
+          PR_NUMS=$(git log main..merge-queue --oneline 2>/dev/null | grep -oP 'PR #\K\d+' | tac || true)
+          [ -z "$PR_NUMS" ] && { echo "No PRs merged this cycle - nothing to self-report."; exit 0; }
+
+          REFS="[]"
+          for NUM in $PR_NUMS; do
+            REFS=$(echo "$REFS" | jq -c --arg ref "#${NUM}" '. + [{"kind": "github_pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
+          done
+          PAYLOAD=$(jq -n --argjson refs "$REFS" \
+            '{event: "workflow_self_report", source: "github_actions", workflow: "merge-queue", work_item_refs: $refs}' 2>/dev/null) \
+            || PAYLOAD='{"event":"workflow_self_report","source":"github_actions","workflow":"merge-queue","work_item_refs":[]}'
+
+          echo "=== Modulo self-report payload (merged PRs) ==="
+          echo "$PAYLOAD"
+
+          if [ -z "$MODULO_SELF_REPORT_URL" ]; then
+            echo "::notice::MODULO_SELF_REPORT_URL not configured - merged PRs recorded in log only, POST skipped (fail-open)."
+            exit 0
+          fi
+
+          curl -sS -f --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
+            -d "$PAYLOAD" 2>/dev/null \
+            && echo "Self-report delivered to Modulo." \
+            || echo "::warning::Modulo self-report POST failed - merged PRs recorded in log only (fail-open)."
+
       - name: Trigger main CI and deploy after merge
         if: success() && steps.merge.outputs.merged_count != '0'
         env:

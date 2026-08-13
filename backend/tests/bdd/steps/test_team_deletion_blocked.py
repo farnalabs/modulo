@@ -19,7 +19,6 @@ def ctx():
         "teams": {},
         "pipelines": {},
         "connectors": {},
-        "stages": {},
         "model_backends": {},
     }
 
@@ -39,12 +38,6 @@ def pipeline_owned_by_team(name: str, team_name: str, ctx) -> None:
 def connector_owned_by_team(name: str, team_name: str, ctx) -> None:
     team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
     ctx["connectors"][name] = {"id": str(uuid.uuid4()), "name": name, "owner_team_id": team_id}
-
-
-@given(parsers.parse('stage "{name}" is owned by team "{team_name}"'))
-def stage_owned_by_team(name: str, team_name: str, ctx) -> None:
-    team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
-    ctx["stages"][name] = {"id": str(uuid.uuid4()), "name": name, "owner_team_id": team_id}
 
 
 @given(parsers.parse('model backend "{name}" is owned by team "{team_name}"'))
@@ -78,7 +71,7 @@ def delete_team(team_name: str, request, ctx) -> None:
         return
 
     has_resources = False
-    for key in ("pipelines", "connectors", "stages", "model_backends"):
+    for key in ("pipelines", "connectors", "model_backends"):
         for data in ctx.get(key, {}).values():
             if str(data.get("owner_team_id")) == str(team.get("id")):
                 has_resources = True
@@ -90,7 +83,6 @@ def delete_team(team_name: str, request, ctx) -> None:
         resource_types = []
         resource_types.extend("pipeline" for _ in ctx.get("pipelines", {}))
         resource_types.extend("connector" for _ in ctx.get("connectors", {}))
-        resource_types.extend("stage" for _ in ctx.get("stages", {}))
         resource_types.extend("model backend" for _ in ctx.get("model_backends", {}))
 
         details = ", ".join(f"{rt}(s)" for rt in set(resource_types))

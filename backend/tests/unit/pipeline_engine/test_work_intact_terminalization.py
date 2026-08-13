@@ -172,7 +172,7 @@ class TestApplyWorkIntact:
 
 
 # ---------------------------------------------------------------------------
-# migration 0087 — run_evidence table + runs.work_intact
+# migration 0091 — run_evidence table + runs.work_intact
 # ---------------------------------------------------------------------------
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
@@ -187,16 +187,15 @@ def _load_migration(filename: str, module_name: str):
     return module
 
 
-class TestMigration0087:
+class TestMigration0091:
     def test_revision_chain(self) -> None:
-        migration = _load_migration("0087_run_evidence.py", "migration_0087_evidence")
-        assert migration.revision == "0087_run_evidence"
-        # Independent of the parallel worker's 0086 (seeded alert rules) — must
-        # apply standalone off the current head 0085.
-        assert migration.down_revision == "0086_seeded_alert_rules"
+        migration = _load_migration("0091_run_evidence.py", "migration_0091_evidence")
+        assert migration.revision == "0091_run_evidence"
+        # Chains off main's current head 0090 (add_budget_exceeded_status).
+        assert migration.down_revision == "0090_add_budget_exceeded_status"
 
     def test_upgrade_adds_work_intact_and_evidence_table(self) -> None:
-        migration = _load_migration("0087_run_evidence.py", "migration_0087_evidence_up")
+        migration = _load_migration("0091_run_evidence.py", "migration_0091_evidence_up")
         mock_op = MagicMock()
         with patch.object(migration, "op", mock_op):
             migration.upgrade()
@@ -221,7 +220,7 @@ class TestMigration0087:
         } <= column_names
 
     def test_downgrade_drops_table_and_column(self) -> None:
-        migration = _load_migration("0087_run_evidence.py", "migration_0087_evidence_down")
+        migration = _load_migration("0091_run_evidence.py", "migration_0091_evidence_down")
         mock_op = MagicMock()
         with patch.object(migration, "op", mock_op):
             migration.downgrade()

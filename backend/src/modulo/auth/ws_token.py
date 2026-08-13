@@ -13,8 +13,6 @@ _log = logging.getLogger(__name__)
 
 _KEY_PREFIX = "ws_token:"
 
-_WS_TOKEN_REDIS_TIMEOUT = 2.0
-
 
 class WsTokenConsumeError(Exception):
     """Raised when a Redis error prevents WS token consumption."""

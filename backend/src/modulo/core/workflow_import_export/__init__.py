@@ -846,8 +846,10 @@ async def materialize_import(
                 schema_version_map[export_schema_id] = existing_sv.version
                 continue
 
-        schema_created = False
-        for attempt_sc in range(_MAX_NAME_RETRIES):
+        # Every loop exit is either a break after a successful create or a raise,
+        # so the loop is guaranteed to leave `new_schema` bound.
+        attempt_sc = 0
+        while True:
             try:
                 async with session.begin_nested():
                     new_schema = await create_schema(
@@ -858,11 +860,11 @@ async def materialize_import(
                         description=sd.get("description"),
                         abstract_name=sd.get("abstract_name"),
                     )
-                schema_created = True
                 break
             except IntegrityError:
                 if attempt_sc == _MAX_NAME_RETRIES - 1:
                     raise
+                attempt_sc += 1
                 if existing_schema_names is None:
                     all_existing = (
                         (await session.execute(select(Schema).where(Schema.organisation_id == org_id))).scalars().all()
@@ -876,8 +878,6 @@ async def materialize_import(
             except Exception:
                 logger.exception("Failed to create schema '%s'", sname)
                 raise
-        if not schema_created:
-            raise RuntimeError(f"Failed to create schema '{sname}' after {_MAX_NAME_RETRIES} attempts")
 
         schema_id_map[export_schema_id] = str(new_schema.id)
 
@@ -956,16 +956,18 @@ async def materialize_import(
         if resolved_mb_id:
             agent_args["model_backend_id"] = _safe_uuid(resolved_mb_id, "agent.model_backend_id")
 
-        agent_created = False
-        for attempt_a in range(_MAX_NAME_RETRIES):
+        # Every loop exit is either a break after a successful create or a raise,
+        # so the loop is guaranteed to leave `agent` bound.
+        attempt_a = 0
+        while True:
             try:
                 async with session.begin_nested():
                     agent = await create_agent(**agent_args)
-                agent_created = True
                 break
             except IntegrityError:
                 if attempt_a == _MAX_NAME_RETRIES - 1:
                     raise
+                attempt_a += 1
                 existing_agent_names.add(aname)
                 aname = suggest_import_name(existing_agent_names, ad.get("name", "Imported Agent"))
                 existing_agent_names.add(aname)
@@ -974,8 +976,6 @@ async def materialize_import(
             except (ValueError, SQLAlchemyError):
                 logger.exception("Failed to create agent '%s'", aname)
                 raise
-        if not agent_created:
-            raise RuntimeError(f"Failed to create agent '{aname}' after {_MAX_NAME_RETRIES} attempts")
 
         agent_id_map[export_agent_id] = str(agent.id)
 
@@ -1002,8 +1002,10 @@ async def materialize_import(
             if existing_id and existing_id in conn_overrides:
                 connector_binding["instance_id"] = conn_overrides[existing_id]
 
-    pipeline_created = False
-    for attempt_p in range(_MAX_NAME_RETRIES):
+    # Every loop exit is either a break after a successful create or a raise,
+    # so the loop is guaranteed to leave `pipeline` bound.
+    attempt_p = 0
+    while True:
         try:
             async with session.begin_nested():
                 pipeline = await create_pipeline(
@@ -1017,19 +1019,17 @@ async def materialize_import(
                     node_timeout_seconds=pipeline_info.get("node_timeout_seconds") or DEFAULT_NODE_TIMEOUT,
                     run_context_defaults=pipeline_info.get("run_context_defaults"),
                 )
-            pipeline_created = True
             break
         except IntegrityError:
             if attempt_p == _MAX_NAME_RETRIES - 1:
                 raise
+            attempt_p += 1
             existing_pipeline_names.add(pname)
             pname = suggest_import_name(existing_pipeline_names, name)
             warnings.append(f"Pipeline name '{name}' conflicted; retrying as '{pname}'.")
         except Exception:
             logger.exception("Failed to create pipeline '%s'", pname)
             raise
-    if not pipeline_created:
-        raise RuntimeError(f"Failed to create pipeline '{pname}' after {_MAX_NAME_RETRIES} attempts")
 
     pipeline.graph_nodes_json = list(graph_nodes)
     imported_retry_policy = pipeline_info.get("retry_policy")

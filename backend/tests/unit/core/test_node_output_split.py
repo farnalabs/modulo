@@ -106,6 +106,36 @@ def test_split_sandbox_agent_no_artifacts_lossless() -> None:
     assert telemetry["summary"] == "Skipped: missing input fields"
 
 
+def test_split_sandbox_agent_non_dict_inner_output() -> None:
+    # ``artifacts[0].output`` not a dict: no return, only the surfaced fields.
+    envelope = {
+        "artifacts": [{"node_id": "sandbox-1", "status": "skipped", "output": "not-a-dict"}],
+        "output": {"status": "skipped"},
+    }
+    value, telemetry = split_node_output(envelope, "sandbox_agent", None)
+    assert value is None
+    assert telemetry == {"status": "skipped"}
+
+
+def test_split_sandbox_agent_non_dict_outer_output_lossless() -> None:
+    # A non-dict outer ``output`` is not consumed into telemetry; it is folded
+    # in losslessly while the artifact's ``output_json`` stays the return.
+    envelope = {
+        "artifacts": [
+            {
+                "node_id": "sandbox-1",
+                "status": "completed",
+                "output": {"output_json": {"ok": 1}, "status": "completed"},
+            }
+        ],
+        "output": "not-a-dict",
+    }
+    value, telemetry = split_node_output(envelope, "sandbox_agent", None)
+    assert value == {"ok": 1}
+    assert telemetry["status"] == "completed"
+    assert telemetry["output"] == "not-a-dict"
+
+
 # ---------------------------------------------------------------------------
 # split_node_output -- regular agent
 # ---------------------------------------------------------------------------
@@ -124,6 +154,26 @@ def test_split_agent_stub_without_output_returns_none() -> None:
     value, telemetry = split_node_output(envelope, "agent", None)
     assert value is None
     assert telemetry["status"] == "executed"
+
+
+def test_split_agent_envelope_level_status_without_artifacts() -> None:
+    # No artifact: status/summary come from the envelope top level.
+    result = {"answer": 42}
+    envelope = {"status": "completed", "summary": "no artifacts", "output": result}
+    value, telemetry = split_node_output(envelope, "agent", None)
+    assert value == result
+    assert telemetry["status"] == "completed"
+    assert telemetry["summary"] == "no artifacts"
+
+
+def test_split_agent_envelope_status_not_overwritten_by_artifact() -> None:
+    # The artifact status wins; the top-level key is already represented in
+    # telemetry and is NOT folded in again (lossless fold skips it).
+    result = {"answer": 42}
+    envelope = {"artifacts": [{"node_id": "a1", "status": "completed"}], "status": "pending", "output": result}
+    value, telemetry = split_node_output(envelope, "agent", None)
+    assert value == result
+    assert telemetry["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +197,24 @@ def test_split_connector_failure_returns_none() -> None:
     value, telemetry = split_node_output(envelope, "connector", None)
     assert value is None
     assert telemetry == {"status": "failed", "error": "boom"}
+
+
+def test_split_connector_failure_without_error() -> None:
+    envelope = {"artifacts": [{"node_id": "c1", "status": "failed"}]}
+    value, telemetry = split_node_output(envelope, "connector", None)
+    assert value is None
+    assert telemetry == {"status": "failed"}
+
+
+def test_split_connector_without_artifacts_uses_envelope_output() -> None:
+    result = {"rows": 3}
+    envelope = {"output": result, "status": "completed"}
+    value, telemetry = split_node_output(envelope, "connector", None)
+    assert value == result
+    assert telemetry["status"] == "completed"
+    # The outer ``output`` is folded into telemetry losslessly (no artifact to
+    # prove it was consumed as the return).
+    assert telemetry["output"] is result
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +280,25 @@ def test_split_gate_no_human_data_returns_none() -> None:
     assert telemetry["autonomy"] == "fully_autonomous"
 
 
+def test_split_gate_detected_by_interrupted_status_only() -> None:
+    # No human_data/autonomy/result on the artifact: the gate is still detected
+    # from the interrupted status alone.
+    envelope = {"artifacts": [{"node_id": "hitl_gate_a_b", "status": "interrupted"}]}
+    value, telemetry = split_node_output(envelope, None, None)
+    assert value is None
+    assert telemetry["status"] == "interrupted"
+
+
+def test_split_gate_without_artifacts() -> None:
+    # A gate envelope with no artifact list: return None, telemetry from the
+    # top-level keys (lossless).
+    envelope = {"status": "completed", "human_data": {"action": "approved"}}
+    value, telemetry = split_node_output(envelope, NODE_TYPE_GATE, None)
+    assert value is None
+    assert telemetry["status"] == "completed"
+    assert telemetry["human_data"] == {"action": "approved"}
+
+
 # ---------------------------------------------------------------------------
 # split_node_output -- manual node
 # ---------------------------------------------------------------------------
@@ -226,6 +313,48 @@ def test_split_manual_node_resume() -> None:
     value, telemetry = split_node_output(envelope, "manual", None)
     assert value == manual_output
     assert telemetry["status"] == "completed"
+
+
+def test_split_manual_node_falls_back_to_artifact_human_output() -> None:
+    # No top-level ``manual_output``: fall back to the artifact's human_output.
+    manual_output = {"review": "approved"}
+    envelope = {"artifacts": [{"node_id": "m1", "status": "completed", "human_output": manual_output}]}
+    value, telemetry = split_node_output(envelope, "manual", None)
+    assert value == manual_output
+    assert telemetry["status"] == "completed"
+    assert telemetry["human_output"] == manual_output
+
+
+def test_split_manual_node_partial_artifact_fields() -> None:
+    # The artifact only carries ``status`` (no human_output): return None and
+    # only the present keys surface into telemetry.
+    envelope = {"artifacts": [{"node_id": "m1", "status": "completed"}]}
+    value, telemetry = split_node_output(envelope, "manual", None)
+    assert value is None
+    assert telemetry == {"status": "completed"}
+
+
+def test_split_manual_node_with_recovered_flag() -> None:
+    # Artifacts present (so the recovery-marker branch does not intercept) and a
+    # top-level ``recovered`` flag: it is kept in telemetry.
+    envelope = {
+        "artifacts": [{"node_id": "m1", "status": "completed"}],
+        "manual_output": {"x": 1},
+        "recovered": True,
+    }
+    value, telemetry = split_node_output(envelope, "manual", None)
+    assert value == {"x": 1}
+    assert telemetry["status"] == "completed"
+    assert telemetry["recovered"] is True
+
+
+def test_split_manual_node_without_artifacts() -> None:
+    # No artifact list: return the top-level ``manual_output`` and no
+    # artifact-derived fields.
+    envelope = {"manual_output": {"x": 1}, "status": "completed"}
+    value, telemetry = split_node_output(envelope, "manual", None)
+    assert value == {"x": 1}
+    assert telemetry == {"status": "completed"}
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +460,15 @@ def test_node_return_pure_row_verbatim_not_resplit() -> None:
     assert node_return(outputs, telemetry, "n1") is pure_return
 
 
+def test_node_return_telemetry_presence_only() -> None:
+    # A telemetry entry for the node means the value is already pure -- returned
+    # verbatim regardless of its shape.
+    pure_return = {"artifacts": [{"x": 1}], "output": {"y": 2}}
+    outputs = {"n1": pure_return}
+    telemetry = {"n1": {"status": "completed"}}
+    assert node_return(outputs, telemetry, "n1") is pure_return
+
+
 def test_node_return_missing_node_returns_none() -> None:
     assert node_return({"n1": 1}, None, "nope") is None
     assert node_return(None, None, "n1") is None
@@ -410,3 +548,14 @@ def test_extend_type_map_safe_on_malformed_graph() -> None:
     assert extend_node_type_map_from_edges({"a": "agent"}, None) == {"a": "agent"}
     assert extend_node_type_map_from_edges({"a": "agent"}, {"edges": "nope"}) == {"a": "agent"}
     assert extend_node_type_map_from_edges(None, {"nodes": [], "edges": []}) == {}
+
+
+def test_extend_type_map_skips_edges_without_source_or_target() -> None:
+    graph = {
+        "edges": [
+            {"hitl_gate_config": {"gate_id": "g1"}, "source": "a"},
+            {"hitl_gate_config": {"gate_id": "g2"}, "target": "b"},
+            {"hitl_gate_config": {"gate_id": "g3"}},
+        ]
+    }
+    assert extend_node_type_map_from_edges(None, graph) == {}

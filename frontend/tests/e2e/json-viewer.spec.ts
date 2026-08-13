@@ -162,4 +162,111 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
     const clipboard = await page.evaluate(() => navigator.clipboard.readText())
     expect(clipboard).toContain('hello world')
   })
+
+  test('truncates long string values and expands to the full value', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+
+    const longText = 'The quick brown fox jumps over the lazy dog. '.repeat(60)
+    const expectedCount = longText.length.toLocaleString('en-US')
+
+    await page.route('**/api/v1/runs/run-json-viewer', (route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            run_id: 'run-json-viewer',
+            run_number: 42,
+            pipeline_id: 'p-1',
+            pipeline_name: 'JSON Viewer Test',
+            status: 'complete',
+            trace_id: 'trace-abc',
+            total_cost_usd: '0.000100',
+            node_token_usage: { format: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+          }),
+        })
+      }
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/io', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          outputs_json: {
+            format: {
+              output: { result: 'success', agent_stdout: longText },
+            },
+          },
+        }),
+      })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/workspace-lease', (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'completed' }) })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
+    })
+
+    await page.goto('/runs/run-json-viewer')
+    await expect(page.locator('.json-viewer').first()).toBeVisible()
+    await page.getByTestId('run-detail-toggle-io').click()
+
+    const truncated = page.getByTestId('json-viewer-string-truncated').first()
+    await expect(truncated).toBeVisible()
+    await expect(truncated).toContainText('Expand')
+    await expect(truncated).toContainText(`… ${expectedCount} chars`)
+    await expect(truncated).not.toContainText(longText.slice(500))
+
+    await page.getByTestId('json-viewer-string-expand').first().click()
+    await expect(page.getByTestId('json-viewer-string-expanded').first()).toContainText(longText)
+  })
+
+  test('copy still copies the FULL long string value when the tree truncates it', { tag: '@regression' }, async ({ page, env }) => {
+    await loginAsAdmin(page, env)
+
+    const longText = 'The quick brown fox jumps over the lazy dog. '.repeat(60)
+
+    await page.route('**/api/v1/runs/run-json-viewer', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          run_id: 'run-json-viewer',
+          run_number: 42,
+          pipeline_id: 'p-1',
+          pipeline_name: 'JSON Viewer Test',
+          status: 'failed',
+          trace_id: 'trace-abc',
+          total_cost_usd: '0.000100',
+          node_token_usage: { format: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } },
+        }),
+      })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/workspace-lease', (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'completed' }) })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/events*', (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: [] }) })
+    })
+    await page.route('**/api/v1/runs/run-json-viewer/io', (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          input_payload: { prompt: 'hello world', agent_stdout: longText },
+          outputs_json: { format: { output: { result: 'success' } } },
+        }),
+      })
+    })
+
+    await page.goto('/runs/run-json-viewer')
+    await expect(page.getByTestId('json-viewer-copy')).toBeVisible()
+    await expect(page.getByTestId('json-viewer-string-truncated').first()).toBeVisible()
+
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await page.getByTestId('json-viewer-copy').click()
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText())
+    expect(clipboard).toContain(longText)
+  })
 })

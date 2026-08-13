@@ -1,7 +1,7 @@
 """Add run_evidence table + runs.work_intact (FAR-152 evidence & no-op detection)
 
-Revision ID: 0087_run_evidence
-Revises: 0085_journey_facts
+Revision ID: 0091_run_evidence
+Revises: 0090_add_budget_exceeded_status
 Create Date: 2026-08-12
 
 Implements the §15.3/§15.12 schema for the tri-state evidence machinery:
@@ -16,8 +16,9 @@ Implements the §15.3/§15.12 schema for the tri-state evidence machinery:
   for incidents #1/#3). NULL = unknown/not-applicable, never retro-false.
 
 NOTE on migration-chain coordination: this migration chains after
-0086 (the seeded-alert-rules migration); 0086 itself chains from 0085,
-so the final head is 0087 and the chain is linear (0085 -> 0086 -> 0087).
+0090 (add_budget_exceeded_status, the current head on main); 0090 itself
+chains through 0089 -> 0088 -> 0087_circuit_breaker -> 0086 -> 0085,
+so the final head is 0091 and the chain is linear (0085 -> ... -> 0091).
 
 """
 
@@ -28,8 +29,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0087_run_evidence"
-down_revision: str | None = "0086_seeded_alert_rules"
+revision: str = "0091_run_evidence"
+down_revision: str | None = "0090_add_budget_exceeded_status"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

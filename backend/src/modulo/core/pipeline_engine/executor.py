@@ -25,6 +25,7 @@ import asyncio
 import logging
 import math
 import os
+import random
 import socket
 import uuid
 from collections import OrderedDict
@@ -124,9 +125,51 @@ _log = logging.getLogger(__name__)
 # api/routes/pipelines.py and the graph validator). A policy can retry on:
 #   - "stall":    run ended "stalled" / error_code "executor_stalled"
 #   - "timeout":  error_code "node_timeout" / "TimeoutError"
-#   - "failure":  any other "failed" terminal status
+#   - "failure":  any other "failed" terminal status (excluding sandbox-agent
+#                 hang deaths — error_code "node_cancelled" + "likely hung" in
+#                 error_detail — see ``_retry_after_policy``, FAR-136)
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
 _RETRY_POLICY_MAX_RETRIES = 5
+
+# Backoff schedule for a retry_policy re-dispatch (FAR-136). A policy-triggered
+# retry must NOT re-fire back-to-back — the run is re-dispatched only after a
+# jittered, capped exponential delay. ``base`` is the first-attempt wait; the
+# delay doubles per attempt and is capped at ``cap``. Jitter spreads re-dispatch
+# across the fleet (a herd of failing pipelines must not all re-fire together).
+_RETRY_BACKOFF_BASE_SECONDS = 45.0
+_RETRY_BACKOFF_CAP_SECONDS = 300.0
+# Jitter range as a fraction of the current schedule value; uniform in
+# [0, fraction * delay] so the schedule keeps its exponential shape while
+# still decorrelating concurrent retries. Capped against ``_RETRY_BACKOFF_CAP_SECONDS``.
+_RETRY_BACKOFF_JITTER_FRACTION = 0.25
+
+
+def _retry_backoff_seconds(
+    attempt_n: int,
+    *,
+    base: float = _RETRY_BACKOFF_BASE_SECONDS,
+    cap: float = _RETRY_BACKOFF_CAP_SECONDS,
+    jitter_fraction: float = _RETRY_BACKOFF_JITTER_FRACTION,
+) -> float:
+    """Jittered, capped exponential backoff delay for a retry_policy retry.
+
+    ``attempt_n`` is the 1-based node execution attempt count (attempt 1 = the
+    first real execution). The deterministic schedule is
+    ``min(base * 2 ** (attempt_n - 1), cap)`` and a uniform jitter term in
+    ``[0, jitter_fraction * delay]`` is added (clamped so the total never
+    exceeds ``cap``). A 0/negative ``attempt_n`` is clamped to 1.
+
+    The schedule is bounded by the retry budget at the decision site: the
+    executor only re-dispatches while ``node_attempt_count <= max_retries``,
+    so the last scheduled attempt (attempt == budget) cannot extend beyond the
+    policy's ``max_retries``. This is a pure function of the attempt number —
+    unit-testable without touching the async retry path.
+    """
+    n = max(int(attempt_n), 1)
+    exponential: float = min(float(base) * float(2 ** (n - 1)), cap)
+    # Jitter is NOT crypto — it only decorrelates concurrent retries (S311).
+    jitter = float(random.uniform(0.0, exponential * max(jitter_fraction, 0.0)))  # noqa: S311
+    return min(exponential + jitter, cap)
 
 
 class RunRetryPolicyError(NodeCancelledError):
@@ -144,7 +187,12 @@ class RunRetryPolicyError(NodeCancelledError):
         self.max_retries = max_retries
 
 
-def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) -> int | None:
+def _retry_after_policy(
+    policy: Any,
+    final_status: str,
+    error_code: str | None,
+    error_detail: str | None = None,
+) -> int | None:
     """Return the retry budget (``max_retries``) for a terminal outcome, or None.
 
     Matching rules:
@@ -158,6 +206,13 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
     through the shared ``map_legacy_code`` alias table, so dotted registry codes
     (e.g. an ``agent.failed`` A1 elevation) and legacy codes behave identically
     (§3.2: one alias table shared by retry/alert/notifier consumers).
+
+    ``error_detail`` (optional) refines the ``"failure"`` match: a sandbox-agent
+    HANG death terminalizes as ``error_code="node_cancelled"`` with
+    ``error_detail`` containing ``"likely hung"`` (node_runner). Re-dispatching
+    a hang would burn a full node timeout with zero recovery probability, so it
+    is excluded from ``"failure"`` retries — while TRANSIENT ``node_cancelled``
+    (no hang marker) stays retryable via the existing NodeCancelledError path.
 
     Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
     path only — a node returns a stalled output dict (``stall_reason``) in
@@ -199,6 +254,12 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
         and code not in ("node_timeout", "TimeoutError", "executor_stalled")
         and mapped not in ("node.timeout", "node.runaway", "agent.stall")
     ):
+        # FAR-136 Gap 2: exclude sandbox-agent hang deaths. A hang terminalizes
+        # as node_cancelled + "likely hung" in error_detail — retrying it only
+        # re-burns a full node timeout with zero recovery probability.
+        is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
+        if is_cancel and error_detail and "likely hung" in error_detail:
+            return None
         return max_retries
     return None
 
@@ -491,10 +552,6 @@ class PipelineExecutor:
         # from a genuine transient node cancellation and skip the pending-reset.
         self._stall_requested: asyncio.Event | None = None
         self._superseded: asyncio.Event | None = None
-
-    # Token pricing constants
-    _INPUT_TOKEN_RATE = Decimal("0.00001")
-    _OUTPUT_TOKEN_RATE = Decimal("0.00003")
 
     async def _check_capacity(
         self,
@@ -1226,6 +1283,7 @@ class PipelineExecutor:
                 _log.warning("pipeline.resume_no_checkpointer", extra={"run_id": str(run_id)})
                 final_status = "failed"
                 error_code = "configuration_error"
+                error_detail = "Pipeline configuration is invalid (checkpointer unavailable)."
             else:
                 raise
         except asyncio.CancelledError:
@@ -1628,7 +1686,7 @@ class PipelineExecutor:
         # NodeCancelledError path above. The E2B dispatch fence was retired in
         # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
         # fenced pending-reset below IS the fence release.
-        retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code)
+        retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code, error_detail)
         if retry_budget is not None:
             node_attempt_count = 0
             current_claim_token: str | None = None
@@ -1688,6 +1746,15 @@ class PipelineExecutor:
                 if connector_hub is not None:
                     await _teardown_hub(connector_hub)
                 get_registry().close(run_id)
+                # FAR-136 Gap 1: jittered, capped backoff before the re-dispatch.
+                # Without it a policy-triggered retry re-fires back-to-back,
+                # hammering the queue/gateway on a persistent failure. The delay
+                # grows with the attempt count and is bounded by the retry
+                # budget (the loop above only re-dispatches while
+                # node_attempt_count <= retry_budget), so the schedule can never
+                # extend beyond max_retries. `_retry_backoff_seconds` is a pure
+                # function of the attempt number — covered by unit tests.
+                await asyncio.sleep(_retry_backoff_seconds(node_attempt_count))
                 raise RunRetryPolicyError(final_status, retry_budget)
 
         try:

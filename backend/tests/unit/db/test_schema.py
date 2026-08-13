@@ -69,7 +69,6 @@ def test_initial_schema_contains_required_tables() -> None:
         "secrets",
         "spend_anomalies",
         "sso_providers",
-        "stages",
         "system_config",
         "team_memberships",
         "teams",
@@ -109,7 +108,6 @@ def test_initial_schema_includes_forward_compatible_fields() -> None:
         "library_primitives",
         "model_backends",
         "pipelines",
-        "stages",
     ):
         assert {"owner_team_id", "visibility"} <= set(tables[name].c.keys())
 
@@ -138,7 +136,6 @@ def test_reviewed_security_and_provenance_contracts() -> None:
 
     assert {"hashed_secret", "team_id"} <= set(tables["org_api_keys"].c.keys())
     assert "key_hash" not in tables["org_api_keys"].c
-    assert "stage_id" in tables["pipelines"].c
     assert "graph_nodes_json" in tables["pipelines"].c
     assert {
         "forked_from",
@@ -164,7 +161,6 @@ def test_visibility_and_trigger_outcome_constraints_are_complete() -> None:
         "library_primitives",
         "model_backends",
         "pipelines",
-        "stages",
     ):
         constraint_names = {constraint.name for constraint in tables[name].constraints}
         assert any(value is not None and value.endswith("_team_owner") for value in constraint_names)

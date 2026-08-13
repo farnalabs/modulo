@@ -76,6 +76,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.lifecycle_refs import canonical_work_item_id, validate_ref_entry
+from modulo.db.models.journey import Journey
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 
 _log = logging.getLogger(__name__)
@@ -83,9 +84,6 @@ _log = logging.getLogger(__name__)
 # Terminal statuses that ADVANCE a journey (evidence + run_count). Cancelled
 # and stalled are deliberately excluded — they mean "the work did not happen".
 _ADVANCING_TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "eval_failed"})
-
-# Statuses that NEVER advance a journey (mint-only).
-_NON_ADVANCING_STATUSES: frozenset[str] = frozenset({"cancelled", "stalled"})
 
 _AWAITING_HUMAN = "awaiting_human"
 
@@ -119,7 +117,7 @@ _ADVANCE_SQL = text(
     ":run_count_delta, CURRENT_TIMESTAMP, :evidence_ts"
     ") ON CONFLICT (organisation_id, kind, ref) DO UPDATE SET "
     "latest_terminal_run_id = CASE "
-    "  WHEN :evidence_ts > updated_at OR updated_at IS NULL THEN :run_id "
+    "  WHEN (:evidence_ts > updated_at OR updated_at IS NULL) AND :run_id IS NOT NULL THEN :run_id "
     "  ELSE latest_terminal_run_id END, "
     "latest_status = CASE "
     "  WHEN :evidence_ts > updated_at OR updated_at IS NULL THEN :status "
@@ -195,11 +193,50 @@ def _evidence_timestamp(completed_at: datetime | None, run_created_at: datetime)
     return anchor.isoformat(sep=" ")
 
 
+async def confirm_reported_refs(
+    session: AsyncSession,
+    organisation_id: uuid.UUID,
+    entries: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Confirm which reported entries match an existing journey row.
+
+    Self-report is ADVISORY (FAR-143 spec v6): a reported claim can only
+    CONFIRM / MATCH an existing journey keyed by the same canonical
+    ``(organisation_id, kind, ref)`` — it can NEVER mint one (minting is owned
+    by the create-time ``INSERT ... ON CONFLICT DO NOTHING`` path in
+    ``modulo.db.crud.run``). This is the self-report endpoint's counterpart to
+    the finalise path's ``_confirm_reported_refs``, kept here so both consumers
+    share one org-scoped EXISTS check.
+
+    ``entries`` must already be canonicalised by
+    :func:`validate_and_normalise_reported_refs` (kind/ref canonical,
+    ``source="reported"``). Returns ``(confirmed_entries, unmatched_count)``.
+    The caller owns the RLS org context and an active transaction.
+    """
+    confirmed: list[dict[str, Any]] = []
+    unmatched = 0
+    for entry in entries:
+        exists = (
+            await session.execute(
+                select(Journey.id).where(
+                    Journey.organisation_id == organisation_id,
+                    Journey.kind == entry["kind"],
+                    Journey.ref == entry["ref"],
+                )
+            )
+        ).scalar_one_or_none()
+        if exists is not None:
+            confirmed.append(entry)
+        else:
+            unmatched += 1
+    return confirmed, unmatched
+
+
 async def advance_journeys(
     session: AsyncSession,
     organisation_id: uuid.UUID,
-    run_id: uuid.UUID,
-    pipeline_id: uuid.UUID,
+    run_id: uuid.UUID | None,
+    pipeline_id: uuid.UUID | None,
     refs: list[dict[str, Any]],
     status: str,
     completed_at: datetime | None,
@@ -213,9 +250,13 @@ async def advance_journeys(
         session: Async session inside an active transaction, org context set.
         organisation_id: The org owning the journeys (and the refs).
         run_id: The finalising run (recorded as ``latest_terminal_run_id`` on a
-            winning advance).
+            winning advance). ``None`` for workflow self-report evidence that
+            has no backing run — the existing ``latest_terminal_run_id`` is
+            then preserved (never cleared).
         pipeline_id: The run's pipeline; used to resolve lifecycle-map stage
             identity (org-scoped). Non-map pipelines never move the stage.
+            ``None`` skips the stage lookup entirely (self-report callers that
+            cannot attribute a pipeline still update latest evidence).
         refs: Raw work-item ref entries ``{kind, ref, source?, status?}``.
         status: The run's status — terminal advancing (``complete`` /
             ``failed`` / ``eval_failed``) advances evidence + ``run_count``;
@@ -246,7 +287,7 @@ async def advance_journeys(
     evidence_ts = _evidence_timestamp(completed_at, run_created_at)
 
     stage: LifecycleMapStage | None = None
-    if advancing:
+    if advancing and pipeline_id is not None:
         stage = await _resolve_stage_identity(session, organisation_id, pipeline_id)
 
     advanced = 0
@@ -276,7 +317,7 @@ async def advance_journeys(
             _ADVANCE_SQL,
             {
                 **params,
-                "run_id": run_id.hex,
+                "run_id": run_id.hex if run_id is not None else None,
                 "status": status,
                 "provenance": canonical.get("source", "derived"),
                 "map_id": stage.map_id.hex if stage is not None else None,

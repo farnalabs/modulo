@@ -67,9 +67,6 @@ async def get_user_settings(
     return account.preferences
 
 
-SUPPORTED_LOCALES = {"en-US"}
-
-
 @router.put("/me/settings", response_model=SettingsResponse)
 @handle_db_errors("me.update_user_settings")
 async def update_user_settings(

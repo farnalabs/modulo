@@ -107,17 +107,6 @@ routes:
         <<: *community
         deprecated: false
 
-    /stages:
-        name: stages
-        breadcrumb: Stages Board
-        parent: /
-        product_map:
-        sidebar_group: core
-        sidebar_order: 7
-        type: page
-        <<: *community
-        deprecated: false
-
     /runs:
         name: runs-list
         breadcrumb: Runs

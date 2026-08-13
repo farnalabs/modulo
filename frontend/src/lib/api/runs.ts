@@ -12,6 +12,7 @@ export interface RunListItem extends Record<string, unknown> {
   started_at: string | null
   completed_at: string | null
   error_code: string | null
+  error_detail?: string | null
   total_cost_usd: number | null
   account_id: string | null
   child_runs_cost_usd?: string | null

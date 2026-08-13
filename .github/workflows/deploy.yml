@@ -256,6 +256,54 @@ jobs:
           }
           Write-Host "staging.modulo.run SHA match: $deployedSha"
 
+      - name: Self-report deployed PRs to Modulo (fail-open, best-effort)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
+          MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
+        run: |
+          # FAR-145 follow-up (workflow self-report): the Deploy Agent carries PRs
+          # to staging/prod but never emitted work_item_refs, so the deploy stage of
+          # a lifecycle-map journey never advanced autonomously. This step discovers
+          # the PRs this deploy carries from the squash-merge commit messages on
+          # main ("Title (#123)" / "Merge pull request #123") and emits a
+          # self-report payload matching the work-item-refs contract in self_report.py
+          # ({kind, ref, status?} — advisory operator claims, confirm/match only,
+          # never mint). The parser reads the payload's work_item_refs list directly.
+          #
+          # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a
+          # Modulo outage can NEVER fail the deploy. The payload is always recorded
+          # in the log; the POST only fires when MODULO_SELF_REPORT_URL is
+          # configured. No such ingestion endpoint exists yet — see the follow-up
+          # ticket for the required API.
+          COMMITS=$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=30" --jq '.[].commit.message' 2>/dev/null || echo "")
+          NUMS=$(echo "$COMMITS" | grep -oE 'Merge pull request #[0-9]+|\(#[0-9]+\)' | grep -oE '[0-9]+' | sort -un || true)
+          [ -z "$NUMS" ] && { echo "No PR numbers found in the deployed commit range - nothing to self-report."; exit 0; }
+
+          REFS="[]"
+          for NUM in $NUMS; do
+            REFS=$(echo "$REFS" | jq -c --arg ref "#${NUM}" '. + [{"kind": "github_pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
+          done
+          PAYLOAD=$(jq -n --argjson refs "$REFS" \
+            '{event: "workflow_self_report", source: "github_actions", workflow: "deploy", work_item_refs: $refs}' 2>/dev/null) \
+            || PAYLOAD='{"event":"workflow_self_report","source":"github_actions","workflow":"deploy","work_item_refs":[]}'
+
+          echo "=== Modulo self-report payload (deployed PRs) ==="
+          echo "$PAYLOAD"
+
+          if [ -z "$MODULO_SELF_REPORT_URL" ]; then
+            echo "::notice::MODULO_SELF_REPORT_URL not configured - deployed PRs recorded in log only, POST skipped (fail-open)."
+            exit 0
+          fi
+
+          curl -sS -f --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
+            -d "$PAYLOAD" 2>/dev/null \
+            && echo "Self-report delivered to Modulo." \
+            || echo "::warning::Modulo self-report POST failed - deployed PRs recorded in log only (fail-open)."
+
       - name: Ensure worker machine exists (staging)
         shell: bash
         env:

@@ -133,7 +133,6 @@ Two concrete implementations of every primitive type exist to validate the abstr
 - HITL review UI (full context, claim, approve/reject, claimed-by indicator, overdue badge)
 - Run list + detail (state badge, per-node status, error detail, recovery actions, TriggerEvent log)
 - Library browser (list, preview, copy-to-adapt)
-- Stage board (search, filter by status, `awaiting_human` quick filter)
 - Demo pipeline pre-loaded with guided first-run walkthrough
 - Real-time progress via WebSocket
 

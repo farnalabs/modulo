@@ -72,7 +72,6 @@ _DEMO_ACCOUNT_CHILD_SQL: tuple[str, ...] = (
     "DELETE FROM pipeline_folders WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
     "DELETE FROM saved_views WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
     "DELETE FROM model_backends WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
-    "DELETE FROM stages WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
     "DELETE FROM pipelines WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
     "DELETE FROM teams WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",
     "DELETE FROM schemas WHERE account_id IN (SELECT id FROM accounts WHERE email = 'demo')",

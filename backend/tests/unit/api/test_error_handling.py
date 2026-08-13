@@ -171,10 +171,6 @@ SESSION_CASES: list[tuple[str, str, str, type, int, dict | None, str | None]] = 
     ("runs_get_sqla", "GET", f"/api/v1/runs/{_RUN_ID}", SQLAlchemyError, 503, None, "database"),
     ("runs_cancel_prog", "POST", f"/api/v1/runs/{_RUN_ID}/cancel", ProgrammingError, 501, None, "database"),
     ("runs_io_prog", "GET", f"/api/v1/runs/{_RUN_ID}/io", ProgrammingError, 501, None, "database"),
-    # Stages
-    ("stages_list_prog", "GET", "/api/v1/stages", ProgrammingError, 501, None, "database"),
-    ("stages_list_sqla", "GET", "/api/v1/stages", SQLAlchemyError, 503, None, "database"),
-    ("stages_create_exc", "POST", "/api/v1/stages", ValueError, 500, {"name": "Test Stage"}, "unexpected error"),
     # Evals
     (
         "evals_create_prog",

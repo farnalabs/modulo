@@ -353,14 +353,25 @@ export default {
       "modulo": "Modulo"
     },
     "NotificationsPage": {
+      "title": "Notifications",
       "all_status": "All Status",
       "all_scopes": "All Scopes",
       "dismissed_self": "Dismissed (self)",
       "dismissed_scope": "Dismissed (scope)",
+      "level_error": "Error",
+      "level_warning": "Warning",
+      "level_info": "Info",
+      "level_debug": "Debug",
+      "scope_personal": "Personal",
+      "scope_admin": "Admin",
       "no_notifications": "No notifications",
+      "no_notifications_matching_filters": "No notifications matching your filters.",
+      "showing_x_of_y_notifications": "Showing {count} of {total} notifications",
       "view_and_manage_your_notifications": "View and manage your notifications",
       "clear_filters": "Clear filters",
-      "apply_filters": "Apply Filters"
+      "apply_filters": "Apply Filters",
+      "failed_to_dismiss_notification": "Failed to dismiss notification",
+      "request_timed_out": "Notifications request timed out after 30s"
     },
     "AdminEnvironmentProfilesView": {
       "no_response_body": "No response body",
@@ -826,6 +837,7 @@ export default {
       "search_by_pipeline_name": "Search by pipeline name...",
       "pipeline": "Pipeline",
       "status": "Status",
+      "error": "Error",
       "trigger": "Trigger",
       "start": "Start",
       "end": "End",
@@ -1058,6 +1070,7 @@ export default {
       "trace_id": "Trace ID",
       "run_detail": "Run Detail",
       "run_error": "Run Error",
+      "error_code_title": "Run error code",
       "run_input": "Run Input",
       "hide": "Hide",
       "show": "Show",
@@ -1241,32 +1254,6 @@ export default {
       "setting_up_ownership_and_options": "Setting up ownership and options",
       "pipeline_copied": "Pipeline Copied!",
       "copy_failed": "Copy Failed"
-    },
-    "StageBoardView": {
-      "t235959": "T23:59:59",
-      "failed_to_load_stage_board_data": "Failed to load stage board data",
-      "team": "Team",
-      "all_teams": "All Teams",
-      "status": "Status",
-      "all_statuses": "All Statuses",
-      "running": "Running",
-      "idle": "Idle",
-      "failed": "Failed",
-      "complete": "Complete",
-      "awaiting_human": "Awaiting Human",
-      "from": "From",
-      "stage_details": "Stage Details",
-      "name": "Name",
-      "description": "Description",
-      "position": "Position",
-      "visibility": "Visibility",
-      "connected_pipelines": "Connected Pipelines",
-      "created": "Created",
-      "no_pipelines_assigned": "No pipelines assigned",
-      "create_new_stage": "Create New Stage",
-      "org": "Org",
-      "pipeline_details": "Pipeline Details",
-      "stage": "Stage"
     },
     "AdminSpendLimitsView": {
       "configure_daily_spend_limits_at_the_org_and_team_level": "Configure daily spend limits at the org and team level",
@@ -2151,6 +2138,7 @@ export default {
           "complete": "Complete",
           "failed": "Failed",
           "stalled": "Stalled",
+          "budget_exceeded": "Budget exceeded",
           "running": "Running",
           "pending": "Pending",
           "awaiting_human": "Awaiting Human",
@@ -2499,7 +2487,6 @@ export default {
       "item_lifecycle_maps": "Lifecycle Maps",
       "item_templates": "Templates",
       "item_copy_pipeline": "Copy Pipeline",
-      "item_stages_board": "Stages Board",
       "item_runs_list": "Runs",
       "item_output_diff": "Output Diff",
       "item_evals": "Evals",
@@ -2617,7 +2604,10 @@ export default {
       "copy": "Copy",
       "copied": "Copied",
       "expand_all": "Expand all",
-      "collapse_all": "Collapse all"
+      "collapse_all": "Collapse all",
+      "expand_string": "Expand",
+      "collapse_string": "Collapse",
+      "truncated_count": "… {count} chars"
     }
   },
   "common": {

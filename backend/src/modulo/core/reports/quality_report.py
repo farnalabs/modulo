@@ -182,7 +182,7 @@ async def _query_eval_summary(
     end_dt = _date_to_dt(end) + timedelta(days=1)
     q = select(
         func.count().label("total_evals"),
-        func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed_evals"),  # noqa: E712
+        func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed_evals"),
     ).where(
         EvalResult.organisation_id == org_id,
         EvalResult.evaluated_at >= start_dt,
@@ -212,7 +212,7 @@ async def _query_daily_eval_rates(
         select(
             eval_date.label("eval_date"),
             func.count().label("total"),
-            func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+            func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
         )
         .where(
             EvalResult.organisation_id == org_id,

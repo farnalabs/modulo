@@ -9,11 +9,17 @@ hard rules).
 
 The module is intentionally dependency-free (no DB, no settings import) so unit
 tests are fast and the registry is importable from any consumer.
+
+It also owns the shared error-text sanitizer (:func:`sanitize_error_text`) and
+the read-surface presenter (:func:`present_error`) used by the API/MCP layers
+and the SAQ task_failure writer — one redaction primitive, no drift.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -331,3 +337,80 @@ def is_retryable(code: str | None) -> bool:
     if spec is None:
         return False
     return spec.retryable
+
+
+# ---------------------------------------------------------------------------
+# Shared error-text sanitizer + read-surface presenter (run-failure UX)
+# ---------------------------------------------------------------------------
+
+# Hard cap BEFORE any regex runs — bounds the ReDoS surface (an attacker who can
+# reach error_detail must not be able to feed an unbounded string into the
+# pattern engine). ``runs.error_detail`` is String(5000), so this also mirrors
+# the column bound.
+_ERROR_DETAIL_HARD_LIMIT = 5000
+
+# Redaction patterns — char-class-only, NO alternations with nested quantifiers
+# (the codebase's own (a|b)+ ReDoS lesson). Each pattern is a single anchored
+# literal prefix + a flat char class + a flat quantifier, so worst-case work is
+# linear in the (capped) input.
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"sk-[A-Za-z0-9]{8,}"),
+    re.compile(r"sk-ant-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"sk_live_[A-Za-z0-9]{8,}"),
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+    re.compile(r"gh[ousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"glpat-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"ASIA[0-9A-Z]{16}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+    re.compile(r"xox[bap]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"://[^:\s@]+:[^@\s@]+@"),
+    re.compile(r"secret_[A-Za-z0-9]{16,}"),
+    re.compile(r"npm_[A-Za-z0-9]{20,}"),
+)
+
+# Hard control characters (NUL, bell, vertical tab, form feed, C0 except
+# \n \t \r, DEL). Printable text, newlines, tabs and carriage returns pass
+# through untouched — the sanitizer is a NO-OP for clean strings.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def sanitize_error_text(text: Any) -> str:
+    """Control-char strip + secret-pattern redaction for error detail.
+
+    Idempotent and a NO-OP for clean strings (the redacted replacement never
+    matches a secret pattern). Input is capped at :data:`_ERROR_DETAIL_HARD_LIMIT`
+    code points BEFORE any regex runs (ReDoS defense). Non-str input is coerced
+    via ``str()`` — never raises.
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    capped = text[:_ERROR_DETAIL_HARD_LIMIT]
+    sanitized = _CONTROL_CHARS.sub("", capped)
+    for pattern in _SECRET_PATTERNS:
+        sanitized = pattern.sub("<redacted>", sanitized)
+    return sanitized
+
+
+def present_error(code: str | None, detail: Any, limit: int) -> tuple[str | None, str | None]:
+    """Present one run's error for a read surface (sanitize + truncate).
+
+    * ``code`` passes through RAW (no mapping — codes stay raw on the wire).
+    * ``detail``: ``None`` → ``None``; otherwise :func:`sanitize_error_text`
+      then a code-point-safe truncate to *limit* with a ``…`` suffix when cut.
+      Python ``str`` slicing never splits a multi-byte character.
+    * Never raises on a non-str detail (coerced via ``str()``).
+
+    Returns ``(code, detail)`` ready for the response dict.
+    """
+    if detail is None:
+        return code, None
+    cleaned = sanitize_error_text(detail)
+    if len(cleaned) > limit:
+        cleaned = cleaned[:limit] + "…"
+    return code, cleaned

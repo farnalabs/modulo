@@ -102,12 +102,6 @@ _generic_owners: dict[str, int] = {}
 _generic_dict_lock = asyncio.Lock()
 
 
-def _clear_generic_locks() -> None:
-    """Clear all GenericLock state — call in test setUp for isolation."""
-    _generic_locks.clear()
-    _generic_owners.clear()
-
-
 class GenericLock(BaseLockService):
     """In-memory lock for single-process backends (SQLite, MariaDB).
 
