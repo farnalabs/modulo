@@ -801,7 +801,6 @@ async def infer_schema_endpoint(
     The returned *definition_json* is a draft for the user to review and
     save via the standard POST /api/v1/schemas endpoint.
     """
-
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
@@ -1300,8 +1299,16 @@ async def migrate_data_endpoint(
 @handle_db_errors("schemas.migration_plan_endpoint")
 async def migration_plan_endpoint(
     req: SchemaMigrationPlanRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("schema.list"),
 ) -> dict[str, Any]:
-    """Preview a migration plan between two schemas without applying it."""
+    """Preview a migration plan between two schemas without applying it.
+
+    Computes a structural diff between two inline definitions. Requires an
+    authenticated principal (``schema.list``) and records a
+    ``schema_migration_planned`` audit event so plan previews are traceable;
+    audit failures are logged and never break the response.
+    """
     try:
         plan = create_migration(req.from_definition, req.to_definition)
     except HTTPException:
@@ -1314,12 +1321,42 @@ async def migration_plan_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to compute migration plan.",
         ) from None
-    return {
+
+    plan_dict: dict[str, Any] = {
         "field_additions": plan.field_additions,
         "field_removals": plan.field_removals,
         "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
         "renames": plan.renames,
     }
+
+    try:
+        try:
+            async with session.begin():
+                await append_audit_event(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="schema_migration_planned",
+                    actor_user_id=principal.account_id,
+                    resource_type="schema",
+                    payload_json={
+                        "field_additions": len(plan.field_additions),
+                        "field_removals": len(plan.field_removals),
+                        "type_changes": len(plan.type_changes),
+                        "renames": len(plan.renames),
+                    },
+                )
+        except ProgrammingError:
+            logger.exception("schemas.migrate_plan_audit")
+            logger.warning("Audit event not recorded — schema migration table missing")
+    except HTTPException as exc:
+        logger.debug("schemas.migrate_plan.audit_http_error", extra={"detail": exc.detail})
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("schemas.migrate_plan.audit_failed")
+
+    return plan_dict
 
 
 async def _get_latest_version(session: AsyncSession, schema_id: uuid.UUID) -> Any:

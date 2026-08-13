@@ -86,8 +86,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/mcp/oauth/consent/approve"): "OAuth A1b consent (get_current_tenant_user)",
     # Model backend setup flow.
     ("POST", "/api/v1/model-backends/{backend_id}/complete-setup"): "setup flow",
-    # Determination: draft generation, any-authenticated, no system mutation.
-    ("POST", "/api/v1/determination/draft"): "draft generation (no system mutation)",
     # Pipeline from template: creation-only.
     ("POST", "/api/v1/pipelines/from-template/{template_id}"): "creation-only (ADR 3.4)",
     # auth: no principal yet at these endpoints.
@@ -105,7 +103,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/composite-templates/detect-params"): "composite creation-only (ADR 3.6)",
     ("POST", "/api/v1/composite-templates/{template_id}/publish"): "composite creation-only (ADR 3.6)",
     # Schemas: stateless POSTs with no principal (validation/inference helpers).
-    ("POST", "/api/v1/schemas/migrate/plan"): "stateless schema helper",
     ("POST", "/api/v1/schemas/validate"): "stateless schema helper",
     ("POST", "/api/v1/schemas/import"): "stateless schema helper",
     # Runs: node observe/recover carry inline admin/operator checks in the handler.

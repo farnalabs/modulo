@@ -271,6 +271,7 @@ async def advance_journeys(
     Returns:
         The number of journeys advanced (evidence + possibly ``run_count``
         written). Mint-only non-advancing runs are not counted.
+
     """
     if not refs:
         return 0

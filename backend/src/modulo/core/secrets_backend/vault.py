@@ -44,6 +44,7 @@ class VaultSecretsBackend(SecretsBackend):
 
     Raises:
         RuntimeError: If *hvac* is not installed.
+
     """
 
     def __init__(self) -> None:

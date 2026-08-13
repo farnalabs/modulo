@@ -23,6 +23,7 @@ from modulo.core.exceptions import OrgDeletedError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     canonical_work_item_id,
@@ -220,9 +221,14 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
 
 _ATOMIC_RUN_NUMBER_SQL = text(
     "INSERT INTO run_number_counters (organisation_id, next_run_number) "
-    "VALUES (:org_id, 1) "
+    "VALUES (:org_id, (SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id)) "
     "ON CONFLICT (organisation_id) "
-    "DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1 "
+    "DO UPDATE SET next_run_number = CASE "
+    "WHEN run_number_counters.next_run_number + 1 > "
+    "(SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id) "
+    "THEN run_number_counters.next_run_number + 1 "
+    "ELSE (SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id) "
+    "END "
     "RETURNING next_run_number"
 )
 
@@ -240,6 +246,21 @@ async def _allocate_run_number(session: AsyncSession, org_id: uuid.UUID) -> int:
     missed a cycle and SAQ retried). Migration 0093 seeds the counter from the
     current ``MAX(run_number)`` per org so existing sequences continue without
     collision.
+
+    The counter is self-healing on BOTH paths:
+
+    * **No counter row yet** — the INSERT seed is
+      ``COALESCE(MAX(run_number), 0) + 1`` from the ``runs`` table rather than a
+      hardcoded ``1``, so orgs whose runs predate the counter (raw inserts that
+      bypass ``create_run``, or an org created before migration 0093 without a
+      seeded counter row) continue their existing sequence instead of colliding
+      on ``run_number = 1``.
+    * **Stale counter row** — a raw insert that bypasses the counter can leave
+      the existing row behind ``MAX(run_number)``. The ``DO UPDATE`` takes the
+      greater of ``counter + 1`` and ``MAX(run_number) + 1`` (via a portable
+      ``CASE`` — ``GREATEST`` is not available on SQLite) so a counter that
+      drifted below the actual max catches up instead of re-allocating an
+      already-used number.
 
     Generic backends (SQLite/MariaDB) fall back to ``MAX(run_number)+1`` — a
     documented divergence: they are single-writer in practice and do not share
@@ -356,6 +377,16 @@ async def create_run(
     )
     canonical_refs = _canonicalise_ref_entries(work_item_refs)
 
+    # Team-boundary stamping: a run inherits its owner team from the pipeline
+    # it belongs to when no explicit team is passed. ``Run.owner_team_id`` is
+    # the source of truth for the MCP team-boundary guards and the analytics
+    # facts (``RunDailyFact.team_id``); without this stamp, every guard reads a
+    # NULL owner and silently treats cross-team runs as org-level.
+    if owner_team_id is None:
+        owner_team_id = (
+            await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
+        ).scalar_one_or_none()
+
     run = Run(
         id=run_id,
         organisation_id=org_id,
@@ -425,6 +456,7 @@ async def list_runs(
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
+    team_id: uuid.UUID | None = None,
 ) -> PageResult[Run]:
     q = (
         select(Run)
@@ -438,6 +470,16 @@ async def list_runs(
         .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
         .where(Pipeline.deleted_at.is_(None))
     )
+    if team_id is not None:
+        # A team-scoped caller sees runs for its own team's pipelines plus
+        # org-level pipelines (no owner team) — the same boundary the MCP
+        # guard applies. The run's stamped owner is the source of truth;
+        # runs predating the create-time stamp (NULL) fall back to the
+        # pipeline's owner so a NULL stamp can never widen the boundary.
+        effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+        team_scope = team_scope_clause(effective_owner, team_id)
+        q = q.where(team_scope)
+        count_q = count_q.where(team_scope)
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
         count_q = count_q.where(Run.pipeline_id == pipeline_id)

@@ -1,5 +1,6 @@
 """First-run onboarding REST API — action-based recommended actions with DB persistence."""
 
+import logging
 import uuid
 from operator import itemgetter
 from typing import Any
@@ -24,7 +25,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
-_log = __import__("logging").getLogger(__name__)
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/onboarding", tags=["onboarding"])
 

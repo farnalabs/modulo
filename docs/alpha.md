@@ -194,7 +194,8 @@ Two concrete implementations of every primitive type exist to validate the abstr
 
 | Feature | Status | Target |
 |---|---|---|
-| Kick-back edges / parallel branches | Not in alpha (sequential only) | V1 Extended |
+| Kick-back edges | Not in alpha (sequential only) | V1 Extended |
+| Parallel branches (fan-out) | In alpha — a node with multiple normal outgoing edges runs all downstream branches concurrently | — |
 | Pipeline creation/editing via MCP | Not in alpha (browser-only) | V2 |
 | Schema union/collection types | Not in alpha | V1 Extended |
 | Migration functions between schema versions | Not in alpha | V1 Extended |

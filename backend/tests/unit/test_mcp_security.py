@@ -149,8 +149,10 @@ class TestHumanOnlyGateBypass:
             hitl_result.scalar_one_or_none.return_value = gate_row
             edge_result = MagicMock()
             edge_result.scalars.return_value.first.return_value = edge_row
+            run_result = MagicMock()
+            run_result.scalar_one_or_none.return_value = MagicMock()  # the run
 
-            mock_session.execute.side_effect = [hitl_result, edge_result]
+            mock_session.execute.side_effect = [run_result, hitl_result, edge_result]
 
             result = await _rh(
                 run_id=_FAKE_ID,
@@ -184,8 +186,10 @@ class TestHumanOnlyGateBypass:
             hitl_result.scalar_one_or_none.return_value = gate_row
             edge_result = MagicMock()
             edge_result.scalars.return_value.first.return_value = edge_row
+            run_result = MagicMock()
+            run_result.scalar_one_or_none.return_value = MagicMock()  # the run
 
-            mock_session.execute.side_effect = [hitl_result, edge_result]
+            mock_session.execute.side_effect = [run_result, hitl_result, edge_result]
 
             with patch("modulo.api.mcp_server.HITLManager") as mock_mgr:
                 mock_mgr_instance = AsyncMock()

@@ -37,6 +37,11 @@ vi.mock('@/composables/useUiCommandExecutor', () => ({
   isPaused: vi.fn(() => false),
 }))
 
+vi.mock('vue-echarts', () => ({
+  default: { name: 'VChart', props: ['option'], template: '<div class="vchart-stub" />' },
+}))
+vi.mock('echarts', () => ({ default: {} }))
+
 beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
@@ -117,5 +122,49 @@ describe('RemyChat remyOnly prop', () => {
     store.isExecutingUi = true
     const wrapper = mountChat(false)
     expect(wrapper.find('.remy-executing-indicator').exists()).toBe(true)
+  })
+})
+
+describe('RemyChat analytics chart card', () => {
+  it('renders a chart card + deep link for a successful query_analytics tool result', async () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({
+      tool_call_id: 'tc-1',
+      tool_name: 'query_analytics',
+      success: true,
+      result: {
+        group_by: 'day',
+        dimension: null,
+        date_from: '2026-07-30',
+        date_to: '2026-08-06',
+        deep_link: '/analytics?group_by=day&date_from=2026-07-30&date_to=2026-08-06',
+        buckets: [
+          { date: '2026-08-01', count: 3 },
+          { date: '2026-08-02', count: 5 },
+        ],
+      },
+    })
+    const wrapper = mountChat(false)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="remy-analytics-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analytics-chart"]').exists()).toBe(true)
+    const link = wrapper.find('.remy-analytics-link')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/analytics?group_by=day&date_from=2026-07-30&date_to=2026-08-06')
+  })
+
+  it('falls back to the generic tool card when the analytics result is not chartable', () => {
+    const store = useRemyStore()
+    store.activeSessionId = 'session-1'
+    store.appendToolCall({
+      tool_call_id: 'tc-2',
+      tool_name: 'query_analytics',
+      success: true,
+      result: { group_by: 'day', buckets: 'not-an-array' },
+    })
+    const wrapper = mountChat(false)
+    expect(wrapper.find('[data-testid="remy-analytics-card"]').exists()).toBe(false)
+    expect(wrapper.find('.remy-tool-card').exists()).toBe(true)
   })
 })

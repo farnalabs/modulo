@@ -11,6 +11,8 @@ import httpx
 import pytest
 
 from modulo.core.reports.scheduler import (
+    _REPORT_HTTP_TIMEOUT,
+    _coerce_timeout,
     _deliver_slack_webhook,
     _deliver_to_urls,
     _deliver_via_config,
@@ -398,6 +400,44 @@ class TestDeliverViaConfig:
         assert len(results) == 1
         assert results[0]["status"] == "delivered"
 
+    async def test_timeout_passes_through_recipient_config(self) -> None:
+        """The recipient config ``timeout`` must reach the underlying HTTP
+        client — and a boolean value must be rejected, not coerced to 1.0."""
+        url = "https://hooks.example.com/report"
+
+        with (
+            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+        ):
+            client = AsyncMock()
+            resp = MagicMock()
+            resp.is_success = True
+            resp.status_code = 200
+            client.post = AsyncMock(return_value=resp)
+            client_cls.return_value.__aenter__.return_value = client
+
+            await _deliver_via_config(
+                {"report": "data"},
+                {"urls": [url], "timeout": True},
+            )
+
+        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
+
+        client_cls.reset_mock()
+        with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
+            client = AsyncMock()
+            resp = MagicMock()
+            resp.is_success = True
+            resp.status_code = 200
+            client.post = AsyncMock(return_value=resp)
+            client_cls.return_value.__aenter__.return_value = client
+
+            await _deliver_via_config(
+                {"report": "data"},
+                {"urls": [url], "timeout": 4.25},
+            )
+
+        assert client_cls.call_args.kwargs["timeout"] == 4.25
+
 
 # ---------------------------------------------------------------------------
 # _get_engine tests
@@ -514,6 +554,85 @@ class TestParseRetryAfter:
 
     def test_defaults_on_non_numeric_header(self) -> None:
         assert _parse_retry_after(self._resp("soon")) == 5.0
+
+
+# ---------------------------------------------------------------------------
+# _coerce_timeout tests — caller-supplied timeout validation gate
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceTimeout:
+    def test_accepts_positive_int(self) -> None:
+        assert _coerce_timeout(10) == 10.0
+
+    def test_accepts_positive_float(self) -> None:
+        assert _coerce_timeout(2.5) == 2.5
+
+    def test_accepts_numeric_string(self) -> None:
+        assert _coerce_timeout("5.5") == 5.5
+        assert _coerce_timeout("7") == 7.0
+
+    def test_accepts_fractional_string_below_one(self) -> None:
+        assert _coerce_timeout("0.5") == 0.5
+
+    def test_rejects_bool_true(self) -> None:
+        """A boolean must never coerce to ``1.0`` — ``float(True)`` is 1.0, so
+        without the guard a ``{"timeout": true}`` config would silently become a
+        1-second request timeout."""
+        assert _coerce_timeout(True) is None
+
+    def test_rejects_bool_false(self) -> None:
+        assert _coerce_timeout(False) is None
+
+    def test_rejects_zero(self) -> None:
+        assert _coerce_timeout(0) is None
+        assert _coerce_timeout(0.0) is None
+        assert _coerce_timeout("0") is None
+
+    def test_rejects_negative(self) -> None:
+        assert _coerce_timeout(-1) is None
+        assert _coerce_timeout(-0.5) is None
+
+    def test_rejects_non_numeric(self) -> None:
+        assert _coerce_timeout("abc") is None
+        assert _coerce_timeout(None) is None
+        assert _coerce_timeout(object()) is None
+
+
+class TestDeliverToUrlsTimeout:
+    async def _client_timeout(self, request_timeout: object) -> float:
+        """Call ``_deliver_to_urls`` with *request_timeout* and return the
+        ``timeout`` the underlying ``httpx.AsyncClient`` was built with."""
+        url = "https://hooks.example.com/x"
+        client = _deliver_client([_ok_resp(200)])
+        with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
+            client_cls.return_value.__aenter__.return_value = client
+            await _deliver_to_urls([url], {"a": 1}, request_timeout=request_timeout)  # type: ignore[arg-type]
+        return client_cls.call_args.kwargs["timeout"]
+
+    async def test_valid_float_timeout_is_honored(self) -> None:
+        assert await self._client_timeout(2.5) == 2.5
+
+    async def test_valid_int_timeout_is_honored(self) -> None:
+        assert await self._client_timeout(15) == 15.0
+
+    async def test_none_timeout_uses_default(self) -> None:
+        assert await self._client_timeout(None) == _REPORT_HTTP_TIMEOUT
+
+    async def test_bool_timeout_falls_back_to_default(self) -> None:
+        """``{"timeout": true}`` in a recipient config must NOT become a 1s
+        timeout — the bool guard in ``_coerce_timeout`` must fall back to the
+        default 30s."""
+        assert await self._client_timeout(True) == _REPORT_HTTP_TIMEOUT
+
+    async def test_zero_timeout_falls_back_to_default(self) -> None:
+        assert await self._client_timeout(0) == _REPORT_HTTP_TIMEOUT
+
+    async def test_negative_timeout_falls_back_to_default(self) -> None:
+        assert await self._client_timeout(-5) == _REPORT_HTTP_TIMEOUT
+
+    async def test_non_numeric_timeout_falls_back_to_default(self) -> None:
+        assert await self._client_timeout("abc") == _REPORT_HTTP_TIMEOUT
 
 
 # ---------------------------------------------------------------------------

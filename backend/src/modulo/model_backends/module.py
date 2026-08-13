@@ -22,7 +22,8 @@ class ProviderUnavailableError(RuntimeError):
 
 class OpenAICompatibleBackend(ModelBackendBase):
     """Single backend for all OpenAI-compatible providers.
-    Parameterized by base_url, api_key, and provider name."""
+    Parameterized by base_url, api_key, and provider name.
+    """
 
     supports_tools: bool = True
 

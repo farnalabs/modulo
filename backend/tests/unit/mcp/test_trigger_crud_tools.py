@@ -535,11 +535,13 @@ class TestDeleteTrigger(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(None))
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await delete_trigger(trigger_id=str(uuid.uuid4()))
 
         assert result == {"error": "not_found", "detail": "Trigger not found"}
+        mock_soft_delete.assert_not_awaited()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -553,9 +555,10 @@ class TestDeleteTrigger(_AuthContext):
         trigger = _make_mock_trigger()
         mock_soft_delete.return_value = trigger
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
-
-        result = await delete_trigger(trigger_id=str(trigger.id))
+        with patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=None)):
+            result = await delete_trigger(trigger_id=str(trigger.id))
 
         assert result == {"id": str(trigger.id), "deleted": True}
         mock_soft_delete.assert_awaited_once()
@@ -745,9 +748,10 @@ class TestGetTriggerOngoing(_AuthContext):
         trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal("25.00"))
         mock_sesh = AsyncMock()
         trigger_result = _make_execute_result(trigger)
+        owner_team_result = _make_execute_result(None)
         count_result = MagicMock()
         count_result.scalar_one.return_value = 2
-        mock_sesh.execute = AsyncMock(side_effect=[trigger_result, count_result])
+        mock_sesh.execute = AsyncMock(side_effect=[trigger_result, owner_team_result, count_result])
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await get_trigger(trigger_id=str(trigger.id))

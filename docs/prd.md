@@ -133,7 +133,7 @@ The closest alternatives in each layer, and why Modulo makes a different bet:
 - No SSO — basic auth only (v1)
 - No run trace / observability UI — stdout OTel; UI in v1
 - No cron / polling triggers — manual and webhook only
-- No kick-back edges or parallel branches (v1)
+- No kick-back edges (v1) — parallel branches (fan-out) ARE supported in alpha: a node with multiple normal outgoing edges runs all downstream branches concurrently
 - No cost controls UI — v1
 - No audit log viewer — v1 (event recording is alpha; viewer is v1)
 - No community library registry — local library only; registry protocol in v2
@@ -153,7 +153,7 @@ The closest alternatives in each layer, and why Modulo makes a different bet:
 | **ConnectorType** | Abstract capability category (e.g. `git-host`, `issue-tracker`). Defines the operations interface. |
 | **ConnectorInstance** | A configured, authenticated binding of a ConnectorType to a specific system (e.g. "our GitHub"). Per-org. Fernet-encrypted credentials. |
 | **ConnectorBinding** | An explicit mapping on a pipeline node: `{type: "git-host", instance_id: "<uuid>"}`. Set at pipeline-save time. Resolved by ConnectorHub at run time. No auto-selection. |
-| **Pipeline** | An ordered graph of agents with explicit ConnectorBindings on each node. Sequential in alpha; parallel and cyclic in v1. Optionally owned by a Team; visibility is `org` or `team`. |
+| **Pipeline** | An ordered graph of agents with explicit ConnectorBindings on each node. Sequential in alpha; parallel fan-out supported (multiple normal outgoing edges run concurrently); cyclic in v1. Optionally owned by a Team; visibility is `org` or `team`. |
 | **PipelineSnapshot** | Immutable copy of a pipeline definition (including all ConnectorBindings and schema version pins) taken at run-start. Runs execute against their snapshot. |
 | **Stage** | A named SDLC grouping of pipelines (Product, Development, QA, Release). Top-level kanban columns. Carries `owner_team_id` (nullable) and `visibility` (`org`\|`team`). A team-visibility Stage may only contain pipelines owned by the same team. |
 | **Trigger** | A first-class object initiating a pipeline run. Belongs to exactly one pipeline. A pipeline may have multiple triggers. Types: manual, webhook (alpha); cron, polling, agent_signal (v1). |
@@ -1690,7 +1690,7 @@ LangGraph state = {
 - **Context-setter agents** (a new agent role, opt-in via `role: context_setter` in agent config) may write to `run_context`. Normal agents are read-only. Enforcement runs as a **pre-node guard** in the `@cancellable_node` decorator: after a non-context-setter node executes, any writes it made to the `run_context` slice of LangGraph state are silently discarded and an `audit_warning` event is emitted (`context_write_by_non_setter`, node_id, attempted keys). The run does not fail — the write is ignored. This makes the guard non-breaking while remaining auditable.
 
 > **Implementation note (2026-07):** The current code raises `ContextSetterViolationError` (a hard error) instead of silently discarding writes. The PRD's non-breaking silent-discard approach is deferred to v1. See `backend/src/modulo/core/pipeline_engine/decorator.py:129-142`.
-- Writes follow a **write-log with last-write-wins** resolution: every write to a `run_context` key is appended to an ordered log, and the resolved value is always the most recent write. The full write history is visible in run inspection. When two context-setters both write the same key in v1 parallel branches, the write that completes last wins; this is deterministic but order-dependent, so parallel context-setter writes to the same key are flagged as a pipeline validation warning
+- Writes follow a **write-log with last-write-wins** resolution: every write to a `run_context` key is appended to an ordered log, and the resolved value is always the most recent write. The full write history is visible in run inspection. When two context-setters both write the same key in parallel branches (fan-out, FAR-171), the write that completes last wins; this is deterministic but order-dependent, so parallel context-setter writes to the same key are flagged as a pipeline validation warning at save time (`PARALLEL_RUN_CONTEXT_WRITE`).
 
 #### Canonical use case: complexity-reviewer
 A `complexity-reviewer` is a `context_setter` agent placed early in a pipeline. It reads the incoming artifact and writes into `run_context`:
@@ -3538,7 +3538,7 @@ The minimum viable public release. Ships together.
 ### V1 Extended (Post-Launch, shipped incrementally)
 These are not required for the initial release but should follow shortly after.
 
-- Kick-back edges, conditional transitions, parallel branches
+- Kick-back edges, conditional transitions
 - MCP OAuth 2.0 server via `authlib` (PKCE mandatory; pipeline-scoped scopes)
 - AI-assisted schema generation ("describe output → suggested schema")
 - Schema union/collection types + migration functions
@@ -4249,7 +4249,7 @@ The facts table is enriched with stall-dimension and run-lifecycle columns so th
 - **Per-bucket metrics**: the query surface adds `failure_count`, `stall_count`, `avg_queue_wait_ms`, `avg_final_idle_ms`, and `avg_output_bytes` to every bucket. A **stall** is a run whose `status == "failed"` and `error_code` is in a fixed `STALL_ERROR_CODES` set (`executor_stalled`, `node_timeout`, `TimeoutError` — the no-progress error codes the executor actually emits).
 - **Comparison**: a repeated `pipeline_id` query param returns an "A vs B" series in a single request (the builder bounds it via an allowlisted, parameterised `IN` — never string interpolation).
 - **Export**: `GET /api/v1/analytics/export` returns raw fact rows (no bucketing, all fact columns) filtered by the same typed params, ordered by `run_date`/`created_at`, paginated (`offset`/`limit`, default 500, max 5000), org-scoped, rate-limited, permission + feature gated. `format=json` (default) or `format=csv` (Content-Disposition attachment).
-- **MCP**: the `query_analytics` MCP tool mirrors the REST surface (typed params incl. repeated `pipeline_id`, `error_code`, date range, limit), enforcing the `analytics.query` permission and the `analytics_page` feature gate. Both REST and MCP funnel through the same shared service, so org predicate, rate limit, statement timeout, bucketing, and error semantics stay identical.
+- **MCP**: the `query_analytics` MCP tool mirrors the REST surface (typed params incl. repeated `pipeline_id`, `error_code`, date range, limit), enforcing the `analytics.query` permission and the `analytics_page` feature gate. Both REST and MCP funnel through the same shared service, so org predicate, rate limit, statement timeout, bucketing, and error semantics stay identical. The MCP result also carries a **`deep_link`** — a relative `/analytics?...` URL pre-filtered with the same resolved params — so the Remy assistant can hand the user a clickable link to the pre-filtered analytics view instead of dumping the raw series. When Remy renders a successful `query_analytics` tool result it shows a **chart card** (reusing the analytics ECharts component with a measure toggle) plus the deep link; the `/analytics` page reads `group_by`/`date_from`/`date_to`/`dimension`/`trigger_type`/`status`/`pipeline_id`/`folder_id` query params on mount to restore the exact same view.
 
 #### 8.32.10 Concurrency / Slot Utilization (FAR-134)
 

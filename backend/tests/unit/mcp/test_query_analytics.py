@@ -178,7 +178,17 @@ class TestQueryAnalytics(_AuthContext):
                 error_code="executor_stalled",
                 group_by="day",
             )
-        assert result == canned
+        assert result["group_by"] == canned["group_by"]
+        assert result["dimension"] == canned["dimension"]
+        assert result["buckets"] == canned["buckets"]
+        assert "deep_link" in result
+        assert result["deep_link"].startswith("/analytics?")
+        assert "group_by=day" in result["deep_link"]
+        assert "dimension=error_code" in result["deep_link"]
+        assert str(pid_a) in result["deep_link"]
+        assert str(pid_b) in result["deep_link"]
+        assert "error_code=executor_stalled" in result["deep_link"]
+        assert "date_from=2026-08-01T00%3A00%3A00%2B00%3A00" in result["deep_link"]
         mock_run.assert_awaited_once()
         kwargs = mock_run.await_args.kwargs
         params = kwargs["params"]
@@ -251,7 +261,12 @@ class TestQueryAnalytics(_AuthContext):
             for p in patches:
                 stack.enter_context(p)
             result = await query_analytics(date_from="2026-08-01", date_to="2026-08-05T14:00:00Z")
-        assert result == canned
+        assert result["group_by"] == canned["group_by"]
+        assert result["dimension"] == canned["dimension"]
+        assert result["date_from"] == canned["date_from"]
+        assert result["date_to"] == canned["date_to"]
+        assert result["buckets"] == canned["buckets"]
+        assert result["deep_link"] == "/analytics?group_by=day"
         mock_run = patches[-1].new
         params = mock_run.await_args.kwargs["params"]
         assert params.date_from is not None
@@ -272,7 +287,9 @@ class TestQueryAnalytics(_AuthContext):
             for p in patches:
                 stack.enter_context(p)
             result = await query_analytics(limit=5000)
-        assert result == canned
+        assert result["group_by"] == "day"
+        assert result["buckets"] == []
+        assert result["deep_link"] == "/analytics?group_by=day"
         mock_run = patches[-1].new
         assert mock_run.await_args.kwargs["params"].limit == 1000, "limit must be clamped to the REST cap of 1000"
 

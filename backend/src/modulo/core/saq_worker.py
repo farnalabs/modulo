@@ -521,7 +521,8 @@ async def claim_expiry(ctx: dict[str, Any]) -> dict[str, Any]:
 
 async def hitl_overdue(ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — dispatch ``hitl_overdue`` notifications for HITL gates that
-    have been waiting past the overdue threshold (idempotent per claim)."""
+    have been waiting past the overdue threshold (idempotent per claim).
+    """
     from modulo.core.hitl_manager.overdue_warning import dispatch_overdue_notifications
     from modulo.core.notifier import Notifier
 
@@ -813,7 +814,8 @@ def _runs_functions() -> list[tuple[str, Any]]:
 
 def _system_functions() -> list[Any]:
     """Functions registered on the ``system`` worker (under their ``__qualname__``,
-    which is the name SAQ's cron scheduler uses when enqueueing)."""
+    which is the name SAQ's cron scheduler uses when enqueueing).
+    """
     return [
         fire_due_triggers,
         dispatcher_reconcile,
@@ -1036,7 +1038,8 @@ def run_system_web() -> None:
 
     async def _set_duplicate_terminal_cooldown() -> None:
         """Set the flood cooldown on worker start so the probe (same process)
-        does not auto-trigger a rollback on PR A's OWN rollout restart burst."""
+        does not auto-trigger a rollback on PR A's OWN rollout restart burst.
+        """
         from modulo.core.cost_controller.probe import set_duplicate_terminal_cooldown
 
         try:

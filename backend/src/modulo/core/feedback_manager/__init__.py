@@ -371,6 +371,7 @@ class FeedbackManager:
 
         Returns:
             The UUID of the newly created correction run.
+
         """
         record = await self.get_feedback_record(record_id)
         if record is None:
@@ -474,6 +475,7 @@ class FeedbackManager:
             FeedbackRecordNotFoundError: If the record is missing.
             InvalidTransitionError: If the record is not in ``correcting`` state.
             FeedbackRecordNotFoundError: If the correction run is missing or not complete.
+
         """
         record = await self.get_feedback_record(record_id)
         if record is None:
