@@ -7,6 +7,9 @@ code:
   - backend/src/modulo/core/license.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
   - backend/src/modulo/api/routes/admin_license.py
+  - backend/src/modulo/api/routes/stripe_webhook.py
+  - backend/src/modulo/core/license_signing.py
+  - backend/src/modulo/core/stripe_fulfilment.py
   - backend/src/modulo/api/routes/viewmodel.py
   - backend/src/modulo/db/crud/tier_catalog.py
   - frontend/src/views/AdminFeatureFlagsView.vue
