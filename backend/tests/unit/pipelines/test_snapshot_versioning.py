@@ -78,12 +78,12 @@ class TestDiffSnapshots:
 
         result = await diff_snapshots(session, sid, sid)
         assert result is not None
-        assert len(result["nodes_added"]) == 0
-        assert len(result["nodes_removed"]) == 0
-        assert len(result["nodes_modified"]) == 0
-        assert len(result["edges_added"]) == 0
-        assert len(result["edges_removed"]) == 0
-        assert len(result["edges_modified"]) == 0
+        assert not result["nodes_added"]
+        assert not result["nodes_removed"]
+        assert not result["nodes_modified"]
+        assert not result["edges_added"]
+        assert not result["edges_removed"]
+        assert not result["edges_modified"]
 
     async def test_diff_with_added_node(self):
         sid_a = uuid.uuid4()
@@ -101,8 +101,8 @@ class TestDiffSnapshots:
         assert result is not None
         assert len(result["nodes_added"]) == 1
         assert result["nodes_added"][0]["id"] == "b"
-        assert len(result["nodes_removed"]) == 0
-        assert len(result["nodes_modified"]) == 0
+        assert not result["nodes_removed"]
+        assert not result["nodes_modified"]
 
     async def test_diff_with_removed_node(self):
         sid_a = uuid.uuid4()
@@ -120,8 +120,8 @@ class TestDiffSnapshots:
         assert result is not None
         assert len(result["nodes_removed"]) == 1
         assert result["nodes_removed"][0]["id"] == "b"
-        assert len(result["nodes_added"]) == 0
-        assert len(result["nodes_modified"]) == 0
+        assert not result["nodes_added"]
+        assert not result["nodes_modified"]
 
     async def test_diff_modified_node(self):
         sid_a = uuid.uuid4()
@@ -165,8 +165,8 @@ class TestDiffSnapshots:
         result = await diff_snapshots(session, sid_a, sid_b)
         assert result is not None
         assert len(result["edges_added"]) == 1
-        assert len(result["edges_removed"]) == 0
-        assert len(result["edges_modified"]) == 0
+        assert not result["edges_removed"]
+        assert not result["edges_modified"]
         assert result["edges_added"][0]["source"] == "b"
         assert result["edges_added"][0]["target"] == "c"
 
@@ -191,8 +191,8 @@ class TestDiffSnapshots:
         assert len(result["edges_removed"]) == 1
         assert result["edges_removed"][0]["source"] == "b"
         assert result["edges_removed"][0]["target"] == "c"
-        assert len(result["edges_added"]) == 0
-        assert len(result["edges_modified"]) == 0
+        assert not result["edges_added"]
+        assert not result["edges_modified"]
 
     async def test_diff_modified_edge_type(self):
         sid_a = uuid.uuid4()
@@ -208,8 +208,8 @@ class TestDiffSnapshots:
         modified = result["edges_modified"][0]
         assert modified["edge"] == {"source": "a", "target": "b"}
         assert modified["changes"]["edge_type"] == {"old": "normal", "new": "loop"}
-        assert len(result["edges_added"]) == 0
-        assert len(result["edges_removed"]) == 0
+        assert not result["edges_added"]
+        assert not result["edges_removed"]
 
     async def test_diff_modified_edge_hitl_gate_config(self):
         sid_a = uuid.uuid4()

@@ -344,7 +344,7 @@ async def test_hitl_gate_skipped_does_not_record_hitl_gate_state():
     result = await node_fn(state)
 
     # The gate was skipped, so _hitl_gates should NOT have been mutated.
-    assert len(state.get("_hitl_gates", [])) == 0
+    assert not state.get("_hitl_gates", [])
     assert result["artifacts"][0]["status"] == "skipped"
 
 

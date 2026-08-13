@@ -60,7 +60,7 @@ async def test_query_issues_search(connector):
         )
     )
     assert "search=login+bug" in str(route.calls.last.request.url)
-    assert len(result.records) == 0
+    assert not result.records
 
 
 @respx.mock

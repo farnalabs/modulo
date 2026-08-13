@@ -166,7 +166,7 @@ class TestAuditWarning:
             result = await good_node(_LIVE_STATE)
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 0
+        assert not warnings
         assert result["artifact"]["result"] == "done"
 
     async def test_violation_logs_attempted_fields(self, caplog):
@@ -193,7 +193,7 @@ class TestAuditWarning:
             result = await setter(_LIVE_STATE)
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 0
+        assert not warnings
         assert result["run_context"]["setting"] == "value"
 
     async def test_node_with_no_role_cannot_write_context(self):

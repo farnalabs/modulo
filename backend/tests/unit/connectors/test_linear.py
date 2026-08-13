@@ -80,7 +80,7 @@ async def test_query_issue(connector):
 async def test_query_issue_not_found(connector):
     respx.post(_GRAPHQL).mock(return_value=_mock_response({"data": {"issue": None}}))
     result = await connector.query(ConnectorQuery(resource="issue", filters={"id": "nonexistent"}))
-    assert len(result.records) == 0
+    assert not result.records
 
 
 @respx.mock

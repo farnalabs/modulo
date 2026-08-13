@@ -74,7 +74,7 @@ class TestCrossRunCooldown:
         alerts1 = await engine.evaluate(_ORG_ID, session, _GROUP_ID, "fp123", "error", 1)
         assert len(alerts1) == 1
         alerts2 = await engine.evaluate(_ORG_ID, session, _GROUP_ID, "fp123", "error", 1)
-        assert len(alerts2) == 0
+        assert not alerts2
 
     async def test_different_fingerprint_not_suppressed(self) -> None:
         rule = _make_rule()
@@ -123,7 +123,7 @@ class TestPerRunEnumeration:
         a1 = await engine.evaluate(_ORG_ID, session, _GROUP_ID, "fp123", "error", 1, run_id="run-A")
         assert len(a1) == 1
         a2 = await engine.evaluate(_ORG_ID, session, _GROUP_ID, "fp123", "error", 1, run_id="run-A")
-        assert len(a2) == 0
+        assert not a2
         b1 = await engine.evaluate(_ORG_ID, session, _GROUP_ID, "fp123", "error", 1, run_id="run-B")
         assert len(b1) == 1
 
@@ -155,7 +155,7 @@ class TestSignalRuleMatching:
         session = _session_with_rules([rule])
 
         alerts = await engine.evaluate(_ORG_ID, session, _GROUP_ID, "fp123", "critical", 1, signal="agent.no_op")
-        assert len(alerts) == 0
+        assert not alerts
 
     async def test_signal_rule_never_fires_on_legacy_event(self) -> None:
         """A signal-keyed rule must never fire on an event with no signal."""
@@ -164,7 +164,7 @@ class TestSignalRuleMatching:
         session = _session_with_rules([rule])
 
         alerts = await engine.evaluate(_ORG_ID, session, _GROUP_ID, "fp123", "critical", 1)
-        assert len(alerts) == 0
+        assert not alerts
 
     async def test_legacy_rule_fires_on_signal_event_by_level(self) -> None:
         """NULL-signal (legacy) rules keep matching signal events by level."""

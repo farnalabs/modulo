@@ -112,7 +112,7 @@ class TestFeedbackFlowUnit:
         mgr = FeedbackManager(rls_session, test_org)
         result = await mgr.get_feedback_records()
         assert result["total"] == 0
-        assert len(result["items"]) == 0
+        assert not result["items"]
 
     async def test_update_status_transition(
         self,

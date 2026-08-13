@@ -674,7 +674,7 @@ class TestApplyGroupMappings:
         await apply_group_mappings(session, account, _ORG_ID, ["design"], mappings)
 
         add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
-        assert len(add_calls) == 0
+        assert not add_calls
 
     async def test_skips_empty_mappings(self) -> None:
         from modulo.auth.sso import apply_group_mappings
@@ -687,7 +687,7 @@ class TestApplyGroupMappings:
         await apply_group_mappings(session, account, _ORG_ID, ["engineering"], [])
 
         add_calls = [c for c in session.add.call_args_list if c[0][0].__class__.__name__ == "TeamMembership"]
-        assert len(add_calls) == 0
+        assert not add_calls
 
     async def test_updates_existing_membership_role(self) -> None:
         from modulo.auth.sso import apply_group_mappings

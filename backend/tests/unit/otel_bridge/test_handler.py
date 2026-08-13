@@ -336,7 +336,7 @@ def test_chat_model_start_creates_span(bridge: LangGraphOtelBridge, exporter: In
     assert str(run_id) in bridge._spans
     span_name = bridge._spans[str(run_id)].name  # type: ignore[attr-defined]
     assert "gpt-4" in span_name
-    assert len(exporter.get_finished_spans()) == 0
+    assert not exporter.get_finished_spans()
 
 
 def test_chat_model_end_finishes_span_ok(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:

@@ -50,11 +50,11 @@ class TestDocumentationIndexBuild:
 
     def test_parse_empty_text_returns_empty_index(self) -> None:
         index = DocumentationIndex._parse("")
-        assert len(index.entries) == 0
+        assert not index.entries
 
     def test_parse_text_with_no_headings(self) -> None:
         index = DocumentationIndex._parse("Just some plain text without headings.")
-        assert len(index.entries) == 0
+        assert not index.entries
 
     def test_parse_first_paragraph_extraction(self) -> None:
         md = textwrap.dedent("""\
@@ -83,7 +83,7 @@ class TestDocumentationIndexBuild:
         missing = tmp_path / "nonexistent.md"
         index = DocumentationIndex.build(missing)
         assert isinstance(index, DocumentationIndex)
-        assert len(index.entries) == 0
+        assert not index.entries
 
     def test_build_from_existing_file(self, tmp_path: Path) -> None:
         md_file = tmp_path / "prd.md"
@@ -131,16 +131,16 @@ class TestDocumentationIndexSearch:
 
     def test_search_no_match(self, index: DocumentationIndex) -> None:
         results = index.search("nonexistent")
-        assert len(results) == 0
+        assert not results
 
     def test_search_empty_query(self, index: DocumentationIndex) -> None:
         results = index.search("")
-        assert len(results) == 0
+        assert not results
 
     def test_search_empty_index(self) -> None:
         index = DocumentationIndex()
         results = index.search("pipeline")
-        assert len(results) == 0
+        assert not results
 
     def test_search_with_section_filter(self, index: DocumentationIndex) -> None:
         results = index.search("pipeline", section="Pipelines")
@@ -148,7 +148,7 @@ class TestDocumentationIndexSearch:
 
     def test_search_with_section_filter_excludes_other(self, index: DocumentationIndex) -> None:
         results = index.search("schema", section="Pipelines")
-        assert len(results) == 0
+        assert not results
 
 
 class TestDocumentationIndexFormatResults:

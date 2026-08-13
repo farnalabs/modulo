@@ -155,7 +155,7 @@ class TestBrowseRegistry:
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 0
-        assert len(data["items"]) == 0
+        assert not data["items"]
 
 
 # ============================================================================

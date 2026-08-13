@@ -498,7 +498,7 @@ class TestEdgeCases:
         _cache_set("https://example.com/jwks", [{"kty": "RSA"}])
         assert len(_jwks_cache) == 1
         clear_jwks_cache()
-        assert len(_jwks_cache) == 0
+        assert not _jwks_cache
 
 
 # ---------------------------------------------------------------------------
