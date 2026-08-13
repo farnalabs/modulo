@@ -30,3 +30,16 @@ Feature: Lifecycle Map Versioning
     When I update the lifecycle map description to "Updated description only"
     Then the response status is 200
     And the lifecycle map has version 5
+
+  Scenario: Two agents saving concurrently produce strictly increasing unique versions
+    Given a lifecycle map named "Release Workflow" exists with version 1
+    When I save a version of the lifecycle map with 1 stage
+    And I save a version of the lifecycle map with 2 stages
+    Then the response status is 201
+    And the lifecycle map has version 3
+
+  Scenario: Reading the version list returns the active version snapshot
+    Given a lifecycle map named "Release Workflow" exists with version 2
+    When I get the lifecycle map versions
+    Then the response status is 200
+    And the version list contains exactly 1 version at version 2

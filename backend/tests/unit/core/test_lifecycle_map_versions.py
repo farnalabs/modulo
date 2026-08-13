@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Table
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.lifecycle_maps import (
@@ -35,6 +36,7 @@ from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
     delete_lifecycle_map,
     derive_lifecycle_map_stages,
+    get_lifecycle_map,
     graduate_stage,
     restore_lifecycle_map,
     save_map_version,
@@ -469,10 +471,219 @@ async def test_update_lifecycle_map_normalizes_content_and_derives(session: Asyn
 
 
 # ---------------------------------------------------------------------------
-# create_lifecycle_map — friendly pipeline-uniqueness pre-check
+# Concurrent-save semantics — atomic version counter via SELECT ... FOR UPDATE
+#
+# FAR-176: two agents saving versions of the same map concurrently must never
+# produce duplicate version numbers. Every version-bumping write path must fetch
+# the row with FOR UPDATE so, on Postgres (READ COMMITTED), the later save
+# blocks, re-reads the earlier save's committed version and bumps from there.
+# These tests assert the compiled SQL carries the lock — they FAIL if a write
+# path regresses back to a plain read-then-increment.
 # ---------------------------------------------------------------------------
 
 
+async def test_save_map_version_locks_row_for_update(session: AsyncMock) -> None:
+    lm = _make_map(version=2)
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    await save_map_version(
+        session,
+        _MAP_ID,
+        stages=[{"id": "s1", "name": "Build", "type": "manual"}],
+        edges=[],
+        notes="",
+    )
+
+    sql = _compiled_sql(_stmt(session, 0))
+    assert "FOR UPDATE" in sql.upper(), f"save must lock the map row, got: {sql}"
+
+
+async def test_graduate_stage_locks_row_for_update(session: AsyncMock) -> None:
+    lm = _make_map(
+        version=1,
+        content_json={"stages": [{"id": "s1", "name": "Approve", "type": "manual"}], "edges": []},
+    )
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    await graduate_stage(session, _MAP_ID, stage_id="s1", pipeline_id=None)
+
+    sql = _compiled_sql(_stmt(session, 0))
+    assert "FOR UPDATE" in sql.upper(), f"graduate must lock the map row, got: {sql}"
+
+
+async def test_update_lifecycle_map_content_path_locks_row_for_update(session: AsyncMock) -> None:
+    lm = _make_map(version=1)
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    await update_lifecycle_map(
+        session,
+        _MAP_ID,
+        {"content_json": {"stages": [{"id": "s1", "name": "Build", "type": "modulo"}]}},
+    )
+
+    sql = _compiled_sql(_stmt(session, 0))
+    assert "FOR UPDATE" in sql.upper(), f"content update must lock the map row, got: {sql}"
+
+
+async def test_update_lifecycle_map_metadata_only_reads_without_lock(session: AsyncMock) -> None:
+    lm = _make_map(version=4)
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    await update_lifecycle_map(session, _MAP_ID, {"description": "renamed only"})
+
+    sql = _compiled_sql(_stmt(session, 0))
+    assert "FOR UPDATE" not in sql.upper(), f"metadata update must not take a write lock, got: {sql}"
+
+
+async def test_update_lifecycle_map_bumps_version_internally_on_content_change(session: AsyncMock) -> None:
+    """The service owns the version bump under the row lock — the caller must
+    not pre-compute it (a stale pre-computed value reintroduces duplicates)."""
+    lm = _make_map(version=2)
+    session.execute.return_value = MagicMock(
+        scalar_one_or_none=MagicMock(return_value=lm),
+        all=MagicMock(return_value=[]),
+    )
+
+    result = await update_lifecycle_map(
+        session,
+        _MAP_ID,
+        {"content_json": {"stages": []}, "version": 99},
+    )
+
+    assert result is lm
+    assert lm.version == 3, "the service must bump from the locked row, not trust a caller-supplied version"
+
+
+async def test_update_lifecycle_map_metadata_only_keeps_version(session: AsyncMock) -> None:
+    lm = _make_map(version=5)
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    result = await update_lifecycle_map(session, _MAP_ID, {"description": "docs only"})
+
+    assert result is lm
+    assert lm.version == 5
+
+
+# ---------------------------------------------------------------------------
+# Concurrent-save semantics — real DB (SQLite) pin of the documented behaviour
+#
+# SQLite serialises writes and ignores FOR UPDATE, so true interleaving is only
+# provable on Postgres (see the integration test). These tests pin the *result*
+# semantics on a real DB: two saves produce strictly increasing unique version
+# numbers, the active version is last-write-wins, and a version-list read never
+# observes a partially-written map.
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleMapConcurrentSaves:
+    async def _engine(self, tmp_path: Path) -> AsyncEngine:
+        return create_async_engine(
+            f"sqlite+aiosqlite:///{tmp_path / 'lm_concurrency.db'}",
+            connect_args={"timeout": 30},
+            poolclass=NullPool,
+        )
+
+    async def _seed(self, engine: AsyncEngine, *, version: int, content: dict[str, object] | None = None) -> None:
+        tables: list[Table] = cast(
+            list[Table],
+            [Organisation.__table__, LifecycleMap.__table__, LifecycleMapStage.__table__],
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as s, s.begin():
+            s.add(Organisation(id=_ORG_ID, name="org", slug="org"))
+            s.add(
+                LifecycleMap(
+                    id=_MAP_ID,
+                    organisation_id=_ORG_ID,
+                    name="SDLC",
+                    account_id=_ACCOUNT_ID,
+                    visibility="org",
+                    version=version,
+                    content_json=content if content is not None else {"stages": [], "edges": [], "notes": ""},
+                )
+            )
+
+    async def test_sequential_saves_yield_strictly_increasing_unique_versions(self, tmp_path: Path) -> None:
+        engine = await self._engine(tmp_path)
+        try:
+            await self._seed(engine, version=1)
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+
+            async def _save(stage_id: str) -> int:
+                async with maker() as s, s.begin():
+                    lm = await save_map_version(
+                        s,
+                        _MAP_ID,
+                        stages=[{"id": stage_id, "name": stage_id, "type": "manual"}],
+                        edges=[],
+                        notes=stage_id,
+                    )
+                    assert lm is not None
+                    return lm.version
+
+            first = await _save("a")
+            second = await _save("b")
+            assert (first, second) == (2, 3), "saves must produce strictly increasing unique version numbers"
+
+            async with maker() as s, s.begin():
+                final = await get_lifecycle_map(s, _MAP_ID)
+            assert final is not None
+            assert final.version == 3
+            # Last-write-wins: the active content is exactly the second save's.
+            assert final.content_json["stages"] == [{"id": "b", "name": "b", "type": "manual"}]
+        finally:
+            await engine.dispose()
+
+    async def test_read_during_open_write_transaction_sees_committed_snapshot(self, tmp_path: Path) -> None:
+        """A version-list read concurrent with an uncommitted save must see the
+        last committed snapshot — never a half-written map."""
+        engine = await self._engine(tmp_path)
+        try:
+            await self._seed(engine, version=2)
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+
+            async with maker() as session_a, session_a.begin():
+                lm = await save_map_version(
+                    session_a,
+                    _MAP_ID,
+                    stages=[{"id": "s1", "name": "Build", "type": "manual"}],
+                    edges=[],
+                    notes="v3",
+                )
+                assert lm is not None
+                assert lm.version == 3
+
+                # Transaction A is still open (save flushed but not committed):
+                # a reader on a separate connection must observe the committed v2.
+                async with maker() as session_b, session_b.begin():
+                    snapshot = await get_lifecycle_map(session_b, _MAP_ID)
+                assert snapshot is not None
+                assert snapshot.version == 2, "reader must not see the uncommitted save"
+                assert snapshot.content_json["stages"] == []
+
+            async with maker() as s, s.begin():
+                final = await get_lifecycle_map(s, _MAP_ID)
+            assert final is not None
+            assert final.version == 3
+            assert final.content_json["stages"] == [{"id": "s1", "name": "Build", "type": "manual"}]
+        finally:
+            await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# create_lifecycle_map — friendly pipeline-uniqueness pre-check
+# ---------------------------------------------------------------------------
 async def test_create_lifecycle_map_rejects_pipeline_registered_elsewhere(session: AsyncMock) -> None:
     """The create path runs the friendly pipeline-uniqueness pre-check, so a
     duplicate pipeline-in-active-map fails with a clear conflict error before

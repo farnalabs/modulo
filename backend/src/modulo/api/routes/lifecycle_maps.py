@@ -511,8 +511,6 @@ async def update_lifecycle_map_endpoint(
             current = await get_lifecycle_map(session, lifecycle_map_id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
-            if "content_json" in updates:
-                updates["version"] = current.version + 1
             lifecycle_map = await update_lifecycle_map(session, lifecycle_map_id, updates)
             await session.refresh(lifecycle_map)
     except LifecycleMapPipelineConflictError as exc:
