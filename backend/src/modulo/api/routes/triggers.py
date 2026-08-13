@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
-from modulo.api.middleware.sensitive_mask import mask_config_json
+from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 from modulo.core.exceptions import OrgDeletedError
@@ -674,7 +674,19 @@ async def update_trigger(
             if "daily_spend_limit" in req.model_fields_set:
                 trigger.daily_spend_limit = req.daily_spend_limit
             if req.config_json is not None:
-                trigger.config_json = req.config_json
+                current_cfg = trigger.config_json or {}
+                merged_cfg = dict(current_cfg)
+                for k, v in req.config_json.items():
+                    if isinstance(v, str) and v == SENSITIVE_VALUE_MASK:
+                        # A masked placeholder must never clobber the stored secret
+                        # (read-modify-write round-trip guard). Keep the existing value.
+                        continue
+                    if v is None:
+                        # Explicit null clears the key; a missing key leaves it intact.
+                        merged_cfg.pop(k, None)
+                    else:
+                        merged_cfg[k] = v
+                trigger.config_json = merged_cfg
             if req.cron_expression is not None:
                 trigger.cron_expression = req.cron_expression
             if req.cron_timezone is not None:
