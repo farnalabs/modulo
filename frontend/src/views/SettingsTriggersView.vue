@@ -260,11 +260,12 @@
             <input id="settingstriggersview-field-5"
               v-model="form.poll_interval"
               type="number"
-              min="10"
+              min="60"
               class="input-base"
               :placeholder="$t('views.SettingsTriggersView.poll_interval_placeholder')"
               data-testid="settings-triggers-form-polling-interval"
             />
+            <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SettingsTriggersView.poll_interval_seconds_hint') }}</p>
           </div>
           <div>
             <label for="settingstriggersview-field-4" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.condition_expression') }}</label>
@@ -608,6 +609,10 @@ async function saveTrigger() {
     }
 
     if (triggerType === 'polling') {
+      if (!form.value.poll_interval || form.value.poll_interval < 60) {
+        formError.value = t('views.SettingsTriggersView.poll_interval_seconds_too_low')
+        return
+      }
       if (form.value.connector_instance_id) configJson.connector_instance_id = form.value.connector_instance_id
       if (form.value.poll_query) configJson.poll_query = form.value.poll_query
       configJson.poll_interval_seconds = form.value.poll_interval

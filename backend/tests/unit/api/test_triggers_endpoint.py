@@ -766,6 +766,72 @@ def test_update_polling_config_clears_daily_spend_limit_returns_200(client: Test
     client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
 
+def test_update_polling_config_interval_below_60_returns_422(client: TestClient) -> None:
+    """FAR-169: poll_interval_seconds < 60 must be rejected (the scheduler ticks
+    every 60s, so sub-60 intervals are misleading — the effective cadence is
+    always >= 60s)."""
+    trigger = _make_mock_trigger(trigger_type="polling")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"poll_interval_seconds": 30},
+        )
+
+    assert resp.status_code == 422
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_polling_config_interval_59_returns_422(client: TestClient) -> None:
+    """FAR-169: the floor is exactly 60 — 59 is still rejected."""
+    trigger = _make_mock_trigger(trigger_type="polling")
+    session = _make_mock_session()
+    session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    client.app.dependency_overrides[get_db_session] = override_session
+    resp = client.patch(
+        f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+        json={"poll_interval_seconds": 59},
+    )
+
+    assert resp.status_code == 422
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
+def test_update_polling_config_interval_60_returns_200(client: TestClient) -> None:
+    """FAR-169: the 60s floor is the inclusive lower bound — 60 is accepted."""
+    trigger = _make_mock_trigger(trigger_type="polling")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"poll_interval_seconds": 60},
+        )
+
+    assert resp.status_code == 200
+    assert trigger.config_json["poll_interval_seconds"] == 60
+    client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+
 def test_list_triggers_returns_daily_spend_limit(client: TestClient) -> None:
     trigger = _make_mock_trigger(trigger_type="polling", daily_spend_limit=Decimal("15.25"))
     with (
