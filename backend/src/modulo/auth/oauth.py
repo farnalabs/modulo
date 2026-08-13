@@ -26,7 +26,6 @@ from authlib.oauth2 import OAuth2Error as _OAuth2Error  # type: ignore[import-un
 from authlib.oauth2.rfc6749 import (  # type: ignore[import-untyped]
     AuthorizationCodeMixin,
     ClientMixin,
-    TokenMixin,
     list_to_scope,
     scope_to_list,
 )
@@ -80,11 +79,6 @@ class InvalidScopeError(OAuthError):
 class UnauthorizedClientError(OAuthError):
     def __init__(self, description: str = "Client not authorized for requested scopes") -> None:
         super().__init__("unauthorized_client", description)
-
-
-class AccessDeniedError(OAuthError):
-    def __init__(self, description: str = "Resource owner denied access") -> None:
-        super().__init__("access_denied", description)
 
 
 # ---------------------------------------------------------------------------
@@ -141,41 +135,6 @@ class AuthlibCodeWrapper(AuthorizationCodeMixin):  # type: ignore[misc]
 
     def get_scope(self) -> str:
         return self._code.scopes
-
-
-class AuthlibTokenWrapper(TokenMixin):  # type: ignore[misc]
-    """Wraps decoded JWT claims for authlib token validation."""
-
-    def __init__(self, client_id: str, scopes: list[str], expires_at: datetime) -> None:
-        self._client_id = client_id
-        self._scope = " ".join(scopes)
-        self._expires_at = expires_at
-
-    def get_client_id(self) -> str:
-        return self._client_id
-
-    def get_scope(self) -> str:
-        return self._scope
-
-    def get_expires_in(self) -> int:
-        remaining = self._expires_at - datetime.now(UTC)
-        return max(0, int(remaining.total_seconds()))
-
-    def is_expired(self) -> bool:
-        return datetime.now(UTC) >= self._expires_at
-
-    def is_revoked(self) -> bool:
-        return False
-
-
-def wrap_oauth_client(client: OAuthClient) -> AuthlibClientWrapper:
-    """Create an authlib-compatible client wrapper for the given ORM model."""
-    return AuthlibClientWrapper(client)
-
-
-def wrap_oauth_code(code: OAuthAuthorizationCode) -> AuthlibCodeWrapper:
-    """Create an authlib-compatible code wrapper for the given ORM model."""
-    return AuthlibCodeWrapper(code)
 
 
 # ---------------------------------------------------------------------------
@@ -847,11 +806,6 @@ def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> 
     if not valid:
         raise UnauthorizedClientError("None of the requested scopes are allowed for this client")
     return valid  # type: ignore[no-any-return]
-
-
-def validate_token_scope(token_scopes: str, required_scope: str) -> bool:
-    """Check whether token scopes satisfy a required scope using authlib scope matching."""
-    return required_scope in scope_to_list(token_scopes) if required_scope else True
 
 
 # ---------------------------------------------------------------------------

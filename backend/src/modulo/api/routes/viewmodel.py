@@ -66,10 +66,6 @@ class MeResponse(BaseModel):
     is_system_admin: bool = False
 
 
-class UpdatePreferencesRequest(BaseModel):
-    preferences: dict[str, Any] = Field(default_factory=dict)
-
-
 class PipelineSummary(BaseModel):
     id: uuid.UUID
     name: str

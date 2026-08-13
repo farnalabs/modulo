@@ -403,12 +403,6 @@ async def delete_profile(
 # ---------------------------------------------------------------------------
 
 
-class TestStepEvent(BaseModel):
-    event: str
-    detail: str
-    timestamp: str
-
-
 async def _sandbox_test_stream(profile: EnvironmentProfile) -> AsyncIterator[str]:
     """Stream sandbox lifecycle events as SSE."""
     provider_ref: str | None = None
