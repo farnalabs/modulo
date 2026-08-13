@@ -240,7 +240,7 @@ def test_no_precision_fragile_float_equality():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Compare):
                 continue
-            for left, op, right in zip([node.left] + node.comparators[:-1], node.ops, node.comparators):
+            for left, op, right in zip([node.left, *node.comparators[:-1]], node.ops, node.comparators, strict=True):
                 if not isinstance(op, ast.Eq):
                     continue
                 for side in (left, right):
@@ -252,7 +252,8 @@ def test_no_precision_fragile_float_equality():
                     if Fraction(side.value) == Fraction(str(side.value)):
                         continue
                     violations.append(
-                        f"  {path.relative_to(TESTS)}:{node.lineno}  compares value == {side.value!r} (no exact binary representation)"
+                        f"  {path.relative_to(TESTS)}:{node.lineno}  compares "
+                        f"value == {side.value!r} (no exact binary representation)"
                     )
     assert not violations, (
         f"Found {len(violations)} precision-fragile float comparison(s).\n"
