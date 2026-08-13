@@ -175,7 +175,7 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
         select(func.count()).where(
             Run.trigger_id == trigger_id,
             Run.status.in_(_ACTIVE_STATUSES),
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     return int(result.scalar_one() or 0)
