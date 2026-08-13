@@ -204,7 +204,6 @@ async def test_0074_migration_round_trip(
     # tables (the fixture ordering must not be implicit).
     org_id, account_id, pipeline_id, snapshot_id = await _seed_roundtrip_entities(db_engine)
 
-    seeded_run_ids: list[uuid.UUID] = []
     try:
         # Seed rows that only exist under the OLD schema.
         null_token_run = await _seed_run(
@@ -216,7 +215,6 @@ async def test_0074_migration_round_trip(
             run_number=1,
             claim_token=None,
         )
-        seeded_run_ids.append(null_token_run)
         waiting_run = await _seed_run(
             db_engine,
             org_id=org_id,
@@ -226,7 +224,6 @@ async def test_0074_migration_round_trip(
             run_number=2,
             claim_token="seed-token",
         )
-        seeded_run_ids.append(waiting_run)
 
         # Apply 0074.
         await asyncio.to_thread(_run_migration, config, sync_url, "heads", downgrade=False)
@@ -327,21 +324,11 @@ async def test_0074_migration_round_trip(
         # DB is session-scoped). Order matters for FKs: child runs first, then
         # pipeline_snapshots/pipelines, then the org-scoped account/org.
         async with db_engine.begin() as conn:
-            if seeded_run_ids:
-                await conn.execute(
-                    text("DELETE FROM runs WHERE id IN (:a, :b)"),
-                    {"a": str(seeded_run_ids[0]), "b": str(seeded_run_ids[1])},
-                )
-            await conn.execute(
-                text("DELETE FROM pipeline_snapshots WHERE organisation_id = :oid"),
-                {"oid": str(org_id)},
-            )
-            await conn.execute(
-                text("DELETE FROM pipelines WHERE organisation_id = :oid"),
-                {"oid": str(org_id)},
-            )
-            await conn.execute(text("DELETE FROM accounts WHERE id = :uid"), {"uid": str(account_id)})
-            await conn.execute(text("DELETE FROM organisations WHERE id = :oid"), {"oid": str(org_id)})
+            await conn.execute(text("DELETE FROM runs WHERE organisation_id = :id"), {"id": str(org_id)})
+            await conn.execute(text("DELETE FROM pipeline_snapshots WHERE id = :id"), {"id": str(snapshot_id)})
+            await conn.execute(text("DELETE FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
+            await conn.execute(text("DELETE FROM accounts WHERE id = :id"), {"id": str(account_id)})
+            await conn.execute(text("DELETE FROM organisations WHERE id = :id"), {"id": str(org_id)})
         # Always restore heads — a failed assertion must not leave the shared
         # session-scoped DB downgraded for the tests that follow.
         if await _current_revision(db_engine) != _REVISION_AFTER:

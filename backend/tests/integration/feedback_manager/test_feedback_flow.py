@@ -288,9 +288,10 @@ async def _create_seed_run(
         },
     )
     # Allocate run_number via the same per-org atomic counter the production
-    # create_run path uses (FAR-168). The old MAX(run_number)+1 here could hand
-    # out a number already consumed by a counter-allocated run in the same org,
-    # tripping uq_runs_org_run_number.
+    # create_run path uses (FAR-168) — reuse the production helper instead of
+    # hand-copying the upsert so this seed can never drift from real behaviour.
+    # The old MAX(run_number)+1 here could hand out a number already consumed by
+    # a counter-allocated run in the same org, tripping uq_runs_org_run_number.
     run_number = await _allocate_run_number(session, org_id)
     await session.execute(
         text(

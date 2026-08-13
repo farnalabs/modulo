@@ -599,12 +599,11 @@ async def test_pause_does_not_mutate_running_run(
     snapshot_id = await _seed_snapshot(db_engine, org_a, pipeline_a)
     async with db_engine.connect() as conn, conn.begin():
         # Allocate run_number via the per-org atomic counter (FAR-168), matching
-        # production create_run. MAX(run_number)+1 here desyncs the counter, so
-        # the later API-created run collides with this seed (uq_runs_org_run_number).
-        run_number_row = await conn.execute(
-            _ATOMIC_RUN_NUMBER_SQL,
-            {"org_id": str(org_a)},
-        )
+        # production create_run — reuse the production SQL constant rather than
+        # hand-copying the upsert so this seed can never drift from real
+        # behaviour. MAX(run_number)+1 here desyncs the counter, so the later
+        # API-created run collides with this seed (uq_runs_org_run_number).
+        run_number_row = await conn.execute(_ATOMIC_RUN_NUMBER_SQL, {"org_id": org_a.hex})
         run_number = int(run_number_row.scalar_one())
         await conn.execute(
             text(
