@@ -1,4 +1,15 @@
+import pytest
+
 from modulo.core.feature_flags import FeatureFlag, FeatureFlagRegistry
+
+
+@pytest.fixture(autouse=True)
+def _clean_global_overrides() -> None:
+    """``_overrides`` is class-level and shared across instances; isolate each
+    test so the lifecycle/override tests cannot pollute each other."""
+    FeatureFlagRegistry._overrides.clear()
+    yield
+    FeatureFlagRegistry._overrides.clear()
 
 
 class TestSavedViewsFlag:
@@ -73,6 +84,70 @@ class TestFeatureFlagModel:
     def test_description_defaults_to_empty(self) -> None:
         flag = FeatureFlag(name="no_desc", tier="community", description="")
         assert flag.description == ""
+
+
+class TestRegistryLifecycle:
+    """Sync registry API surfaced to the admin UI and plan-context code:
+    ``refresh``, ``set_override``/``get_override``/``clear_override``, and the
+    ``tier_gap_flags`` community-gap report."""
+
+    def test_refresh_recomputes_active_state_from_tier(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="community")
+        sso = registry.get_flag("sso")
+        assert sso is not None
+        assert sso.tier == "team"
+        assert sso.currently_active is False
+
+        registry.refresh("team", has_license_key=True)
+        assert registry.current_tier == "team"
+        assert registry.has_license_key is True
+        assert sso.currently_active is True
+
+        registry.refresh("community", has_license_key=False)
+        assert registry.has_license_key is False
+        assert sso.currently_active is False
+
+    def test_set_override_forces_flag_active_at_lower_tier(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="community")
+        registry.set_override("sso", True)
+
+        assert registry.get_override("sso") is True
+        sso = registry.get_flag("sso")
+        assert sso is not None
+        assert sso.currently_active is True
+
+    def test_clear_override_restores_tier_computed_state(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="community")
+        registry.set_override("sso", True)
+        assert registry.get_flag("sso").currently_active is True
+
+        registry.clear_override("sso")
+        assert registry.get_override("sso") is None
+        assert registry.get_flag("sso").currently_active is False
+
+    def test_get_override_returns_none_when_unset(self) -> None:
+        registry = FeatureFlagRegistry()
+        assert registry.get_override("sso") is None
+
+    def test_tier_gap_flags_empty_when_not_community(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="team")
+        assert registry.tier_gap_flags() == []
+
+    def test_tier_gap_flags_reports_inactive_team_flags(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="community")
+        gaps = registry.tier_gap_flags()
+
+        assert gaps, "expected at least one inactive above-community flag"
+        assert all(flag.tier != "community" for flag in gaps)
+        assert all(not flag.currently_active for flag in gaps)
+        assert any(flag.name == "sso" for flag in gaps)
+
+    def test_tier_gap_flags_exclude_override_active_flags(self) -> None:
+        registry = FeatureFlagRegistry(current_tier="community")
+        registry.set_override("sso", True)
+
+        gaps = {flag.name for flag in registry.tier_gap_flags()}
+        assert "sso" not in gaps
 
 
 class TestAllFlagsRegistered:
