@@ -317,7 +317,7 @@ class TestDispatchEmail:
         failed.assert_called_once()
         assert any("alert.email_send_failed" in rec.message for rec in caplog.records)
 
-    async def test_email_send_false_noop(self) -> None:
+    async def test_email_send_false_noop(self, caplog: pytest.LogCaptureFixture) -> None:
         account_id = uuid.uuid4()
         session = self._session_with_org(
             memberships=[self._admin_membership(account_id)],
@@ -329,8 +329,16 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=False),
             patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+            patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
+            caplog.at_level("INFO", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
             await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+
+        # A False return from send_email is not a delivery failure: nothing is
+        # recorded, no failure warning is raised, and the send is just skipped.
+        failed.assert_not_called()
+        assert not any("alert.email_send_failed" in rec.message for rec in caplog.records)
+        assert any("alert.email_pending" in rec.message for rec in caplog.records)
 
     async def test_email_unexpected_error_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         account_id = uuid.uuid4()
