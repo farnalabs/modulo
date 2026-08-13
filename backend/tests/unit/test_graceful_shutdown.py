@@ -116,8 +116,18 @@ class TestShutdownMiddleware:
         inner_app = AsyncMock()
         middleware.app = inner_app
 
+        # Capture the active-request count while the inner app is running.
+        observed: list[int] = []
+
+        async def observe(*_: object) -> None:
+            observed.append(manager._active_requests)
+
+        inner_app.side_effect = observe
+
         await middleware({"type": "http"}, receive, send)
         inner_app.assert_awaited_once()
+        assert observed == [1], "middleware did not track the in-flight request"
+        assert manager._active_requests == 0, "request was not released after completion"
 
     async def test_skips_non_http_scopes(self) -> None:
         manager = ShutdownManager(timeout=5.0)
