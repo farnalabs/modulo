@@ -274,6 +274,52 @@ def check_5_results(ctx):
     assert len(data.get("results", [])) == 5
 
 
+@when("I POST /api/v1/errors/ingest with a breadcrumb trail")
+def ingest_with_breadcrumbs(client, ctx, request):
+    body = {
+        "events": [
+            {
+                "level": "error",
+                "message": "Error with breadcrumbs",
+                "source": "backend",
+                "context_json": {"url": "/api/runs"},
+                "breadcrumbs": [{"type": "click", "timestamp": "2026-08-13T00:00:00Z", "data": {"target": "button"}}],
+            }
+        ]
+    }
+    result = {"group_id": str(uuid.uuid4()), "is_new": True}
+
+    with (
+        patch("modulo.api.routes.errors._key_store") as ks,
+        patch("modulo.core.error_tracking.ErrorIngestionService.ingest_batch", new_callable=AsyncMock) as ingest,
+    ):
+        ks.verify_hmac = AsyncMock(return_value=True)
+        ingest.return_value = [result]
+        resp = client.post(
+            "/api/v1/errors/ingest",
+            json=body,
+            headers={"X-Modulo-Error-Token": "test-hmac-key"},
+        )
+        ctx["ingested_events"] = ingest.call_args.args[2]
+    request.node._resp = resp
+    ctx["_last_resp"] = resp
+
+
+@then("the event context_json carries the breadcrumbs")
+def context_json_carries_breadcrumbs(ctx):
+    (event,) = ctx["ingested_events"]
+    assert event["context_json"]["breadcrumbs"] == [
+        {"type": "click", "timestamp": "2026-08-13T00:00:00Z", "data": {"target": "button"}}
+    ]
+    assert event["context_json"]["url"] == "/api/runs"
+
+
+@then("the top-level breadcrumbs field is excluded from storage")
+def top_level_breadcrumbs_excluded(ctx):
+    (event,) = ctx["ingested_events"]
+    assert "breadcrumbs" not in event
+
+
 # ============================================================================
 # error_dashboard.feature
 # ============================================================================

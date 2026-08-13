@@ -29,3 +29,8 @@ Feature: Error Ingestion
     When I POST /api/v1/errors/ingest with 5 error events
     Then the response status is 201
     And the response contains 5 results
+
+  Scenario: Breadcrumbs are persisted inside context_json
+    When I POST /api/v1/errors/ingest with a breadcrumb trail
+    Then the event context_json carries the breadcrumbs
+    And the top-level breadcrumbs field is excluded from storage
