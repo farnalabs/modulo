@@ -38,13 +38,13 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 from redis.asyncio import Redis as AsyncRedis
 from saq.queue.redis import RedisQueue
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import TriggersPausedError
-from modulo.db.models.run import ACTIVE_RUN_STATUSES
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, ONGOING_ACTIVE_STATUSES, Run
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
 from modulo.settings import get_settings
 
@@ -84,6 +84,25 @@ _CATCHUP_MARKER_TTL = FIRE_JOB_TIMEOUT * (FIRE_JOB_RETRIES + 1) + 60  # 960s >= 
 REPORT_BACKOFF_SECONDS = 300
 REPORT_MAX_CONSECUTIVE_FAILURES = 5
 _REPORT_FAILURE_COUNTER_TTL = 6 * 3600  # 6h — long enough to count 5 x 5min
+
+# Ongoing trigger (FAR-158) — worker-pool top-up semantics. The scheduler tick
+# is 60s, so a scan interval below that is meaningless (also validated >= 60 at
+# create/update). ``next_fire_at`` is advanced by at least this far on every
+# enqueue so a topped-up trigger is not re-scanned every tick.
+ONGOING_MIN_INTERVAL_SECONDS = 60
+
+# Per-tick enqueue cap for the ongoing scan — a burst of newly-created ongoing
+# triggers must not flood the runs queue in one tick (mirrors
+# ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK). Past the cap a row STILL advances
+# next_fire_at (skip-not-defer — no double-fire on the next tick).
+ONGOING_MAX_ENQUEUE_PER_TICK = 50
+
+# Persistent-failure deactivation (report pattern): after this many consecutive
+# no_pipeline / invalid-snapshot failures the ongoing trigger is deactivated to
+# stop the ~1440 events/day flood on a deleted pipeline (the next_fire_at
+# advance stops once active=False).
+ONGOING_MAX_CONSECUTIVE_FAILURES = 5
+_ONGOING_FAILURE_COUNTER_TTL = 6 * 3600  # 6h
 
 # dispatcher_reconcile (system cron) — every 60s.
 RECONCILE_STALE_HEARTBEAT_FACTOR = 2  # 2 * SAQ_JOB_HEARTBEAT = 600s
@@ -375,6 +394,31 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
     return int(result.scalar_one() or 0)
 
 
+async def _count_ongoing_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
+    """Count a trigger's in-flight runs for the ``ongoing`` top-up (FAR-158).
+
+    Status-only count over ``ONGOING_ACTIVE_STATUSES`` (pending/running/claimed
+    — see the set's comment in ``modulo.db.models.run`` for why awaiting_human
+    is excluded: a never-answered HITL gate must not permanently starve the
+    pool). DELIBERATELY NO ``cancellation_requested`` filter — unlike
+    ``_count_active_runs``, a run whose cancellation was requested has already
+    transitioned to the terminal ``cancelled`` status, so it falls out of the
+    status set naturally and needs no extra predicate. This keeps the count a
+    simple index-backed ``(trigger_id, status)`` scan (migration 0086).
+    """
+    from sqlalchemy import func
+
+    from modulo.db.models.run import Run
+
+    result = await session.execute(
+        select(func.count()).where(
+            Run.trigger_id == trigger_id,
+            Run.status.in_(ONGOING_ACTIVE_STATUSES),
+        )
+    )
+    return int(result.scalar_one() or 0)
+
+
 async def _log_event(
     session: AsyncSession,
     *,
@@ -417,6 +461,33 @@ async def _log_poll_event(
         organisation_id=org_id,
         trigger_id=trigger.id,
         trigger_type="polling",
+        raw_payload_hash=payload_hash,
+        validation_result=result,
+        run_id=run_id,
+        error_detail=error_detail,
+    )
+    session.add(event)
+    await session.flush()
+    return event
+
+
+async def _log_ongoing_event(
+    session: AsyncSession,
+    *,
+    trigger: Any,
+    org_id: uuid.UUID,
+    result: str,
+    run_id: uuid.UUID | None = None,
+    error_detail: str | None = None,
+) -> Any:
+    """Log one ``ongoing`` TriggerEvent (mirrors ``_log_poll_event``, FAR-158)."""
+    from modulo.db.models.trigger_event import TriggerEvent
+
+    payload_hash = hashlib.sha256(f"ongoing:{trigger.id}:{result}".encode()).hexdigest()
+    event = TriggerEvent(
+        organisation_id=org_id,
+        trigger_id=trigger.id,
+        trigger_type="ongoing",
         raw_payload_hash=payload_hash,
         validation_result=result,
         run_id=run_id,
@@ -1063,6 +1134,398 @@ async def _clear_report_failure_counter(redis_client: AsyncRedis, report_id: uui
         _log.warning("cron_helpers.clear_report_failure_counter failed for %s", report_id)
 
 
+# ---------------------------------------------------------------------------
+# Ongoing triggers (FAR-158) — worker-pool top-up semantics.
+#
+# The ``ongoing`` trigger keeps its pipeline topped up to ``max_concurrent_runs``
+# in-flight (pending/running/claimed) runs. The per-item fire job splits into
+# two phases at a hard commit boundary:
+#
+#   * ``_ongoing_topup``        — DB phase, inside the caller's transaction.
+#                                 Creates the missing runs (effective_target -
+#                                 in_flight), logs one 'accepted' event per run,
+#                                 updates last_fired_at. Returns the runs UNCOMMITTED.
+#   * ``_dispatch_ongoing_runs`` — queue phase, called ONLY after that
+#                                 transaction committed. Dispatches each created
+#                                 run to SAQ; NEVER raises post-commit (a SAQ
+#                                 retry re-counts committed pendings — idempotent),
+#                                 and committed-but-never-dispatched pendings are
+#                                 recovered by dispatcher_reconcile's existing
+#                                 ``pending + dispatched_at IS NULL`` branch.
+# ---------------------------------------------------------------------------
+
+
+def _ongoing_failure_key(trigger_id: uuid.UUID) -> str:
+    return f"saq:trigger:consecutive_failures:{trigger_id}"
+
+
+async def _bump_ongoing_failure(
+    session: AsyncSession,
+    redis_client: AsyncRedis | None,
+    trigger_id: uuid.UUID,
+) -> None:
+    """Increment the consecutive-failure counter; deactivate after the cap.
+
+    Report-pattern persistent-failure guard: a deleted pipeline (auto-create
+    failure) or a broken pinned snapshot would otherwise log ~1440 no_pipeline
+    events/day forever. After ``ONGOING_MAX_CONSECUTIVE_FAILURES`` consecutive
+    failures the trigger is set ``active=False`` (the scan's ``active IS TRUE``
+    filter then stops advancing next_fire_at). Best-effort — a Redis failure
+    must never crash the top-up job.
+    """
+    if redis_client is None:
+        return
+    try:
+        key = _ongoing_failure_key(trigger_id)
+        count = await redis_client.incr(key)
+        await redis_client.expire(key, _ONGOING_FAILURE_COUNTER_TTL)
+        if count >= ONGOING_MAX_CONSECUTIVE_FAILURES:
+            from sqlalchemy import update
+
+            from modulo.db.models.trigger import Trigger
+
+            await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(active=False))
+            _log.warning(
+                "ongoing trigger %s deactivated after %d consecutive failures",
+                trigger_id,
+                ONGOING_MAX_CONSECUTIVE_FAILURES,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.ongoing_failure_counter_unavailable trigger=%s", trigger_id)
+
+
+async def _clear_ongoing_failure(redis_client: AsyncRedis | None, trigger_id: uuid.UUID) -> None:
+    """Clear the consecutive-failure counter after a successful top-up."""
+    if redis_client is None:
+        return
+    try:
+        await redis_client.delete(_ongoing_failure_key(trigger_id))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.clear_ongoing_failure failed for %s", trigger_id)
+
+
+async def _ongoing_topup(
+    session: AsyncSession,
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    now: datetime,
+    latest_snapshot_id: uuid.UUID | None = None,
+    redis_client: AsyncRedis | None = None,
+    outcome: dict[str, Any] | None = None,
+) -> list[Run]:
+    """DB phase of the ongoing top-up — create the missing runs in the caller's tx.
+
+    Must be called inside an ``async with session.begin()`` with the org RLS
+    context set. Takes a NON-blocking advisory xact lock on the trigger; returns
+    ``[]`` (never raises) when another worker holds the lock or the trigger is
+    missing/inactive/soft-deleted. The returned runs are NOT committed — the
+    caller commits when the ``async with`` exits, then dispatches.
+
+    ``outcome`` is an optional mutable dict the caller may pass to receive the
+    reason for an empty return (``{'status': 'skipped', 'reason': ...}``); when
+    runs are created the caller infers ``status='fired'`` from the non-empty list.
+    """
+    from sqlalchemy import func, update
+
+    from modulo.core.connector_hub.locking import _uuid_to_lock_keys
+    from modulo.db.crud.run import create_run
+    from modulo.db.models.trigger import Trigger
+
+    if outcome is not None:
+        outcome.clear()
+
+    key1, key2 = _uuid_to_lock_keys(trigger_id)
+    lock_result = await session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:key1, :key2)"),
+        {"key1": key1, "key2": key2},
+    )
+    if not lock_result.scalar_one():
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": "trigger_busy"})
+        return []
+
+    trigger_result = await session.execute(
+        select(Trigger).where(
+            Trigger.id == trigger_id,
+            Trigger.organisation_id == org_id,
+            Trigger.deleted_at.is_(None),
+        )
+    )
+    trigger = trigger_result.scalar_one_or_none()
+    if trigger is None or not trigger.active:
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": "trigger_inactive_or_missing"})
+        return []
+
+    # Org-wide pause (kill-switch) — race backstop before the spend gate / count
+    # (the create_run gate is the authority). Degraded on a pre-migration
+    # ProgrammingError (not-paused) inside a savepoint, matching cron/polling.
+    if await _org_is_paused_degraded(session, org_id):
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
+        return []
+
+    # Daily spend gate (mirrors fire_cron_trigger) — run BEFORE the count so an
+    # over-budget daemon stops creating runs. Skip-not-defer: last_fired_at is
+    # still stamped so the trigger's cadence is not misread as stalled.
+    spend_limit = trigger.daily_spend_limit
+    if spend_limit is not None:
+        from modulo.core.cost_controller import created_at_day_start
+        from modulo.db.models.run import Run
+
+        today_start = created_at_day_start()
+        cost_result = await session.execute(
+            select(func.coalesce(func.sum(Run.total_cost_usd), 0)).where(
+                Run.trigger_id == trigger_id,
+                Run.organisation_id == org_id,
+                Run.created_at >= today_start,
+            )
+        )
+        today_cost = cost_result.scalar_one()
+        if today_cost is not None and today_cost >= spend_limit:
+            await _log_ongoing_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="spend_limit_reached",
+                error_detail=(f"Daily spend limit {spend_limit} reached (today: {today_cost})"),
+            )
+            await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now))
+            if outcome is not None:
+                outcome.update(
+                    {
+                        "status": "skipped",
+                        "reason": "spend_limit",
+                        "daily_spend_limit": str(spend_limit),
+                        "today_cost": str(today_cost),
+                    }
+                )
+            return []
+
+    in_flight = await _count_ongoing_runs(session, trigger_id)
+
+    from modulo.db.models.pipeline import Pipeline
+
+    pipeline_result = await session.execute(select(Pipeline.max_concurrent_runs).where(Pipeline.id == pipeline_id))
+    pipeline_max = pipeline_result.scalar_one_or_none()
+    if pipeline_max is None:
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": "pipeline_not_found"})
+        return []
+    # Effective target = min(trigger target, pipeline cap) — handles a pipeline
+    # cap lowered after create. Multiple ongoing triggers on one pipeline each
+    # top up to their own target, so combined in-flight may exceed the cap; that
+    # is bounded downstream by capacity/claim demotion, not by this min().
+    effective_target = min(int(trigger.max_concurrent_runs), int(pipeline_max))
+    if in_flight >= effective_target:
+        # At/above target — genuine no-op. NO event, NO last_fired_at write.
+        if outcome is not None:
+            outcome.update({"status": "noop", "in_flight": in_flight, "target": effective_target})
+        return []
+
+    # Snapshot resolution: pinned config snapshot_id (invalid/missing -> explicit
+    # no_pipeline event + skip, NEVER silent auto-create) > latest_snapshot_id
+    # (pre-resolved by the scan) > auto-create once.
+    config = trigger.config_json or {}
+    snapshot_id: uuid.UUID | None = None
+    pinned = config.get("snapshot_id")
+    if pinned:
+        try:
+            candidate = uuid.UUID(str(pinned))
+        except (ValueError, TypeError):
+            candidate = None
+        if candidate is None:
+            await _log_ongoing_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="no_pipeline",
+                error_detail=f"Invalid snapshot_id pinned in ongoing trigger config: {pinned!r}",
+            )
+            await _bump_ongoing_failure(session, redis_client, trigger_id)
+            if outcome is not None:
+                outcome.update({"status": "skipped", "reason": "invalid_pinned_snapshot"})
+            return []
+        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+
+        snap_result = await session.execute(select(PipelineSnapshot.id).where(PipelineSnapshot.id == candidate))
+        if snap_result.scalar_one_or_none() is None:
+            await _log_ongoing_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="no_pipeline",
+                error_detail=f"Pinned snapshot_id not found: {candidate}",
+            )
+            await _bump_ongoing_failure(session, redis_client, trigger_id)
+            if outcome is not None:
+                outcome.update({"status": "skipped", "reason": "pinned_snapshot_missing"})
+            return []
+        snapshot_id = candidate
+    elif latest_snapshot_id is not None:
+        snapshot_id = latest_snapshot_id
+    else:
+        from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+
+        new_snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id, account_id=None)
+        if new_snapshot is None:
+            await _log_ongoing_event(
+                session,
+                trigger=trigger,
+                org_id=org_id,
+                result="no_pipeline",
+                error_detail="Pipeline not found when trying to auto-create snapshot",
+            )
+            await _bump_ongoing_failure(session, redis_client, trigger_id)
+            if outcome is not None:
+                outcome.update({"status": "skipped", "reason": "pipeline_not_found"})
+            return []
+        snapshot_id = new_snapshot.id
+        _log.info("Auto-created snapshot %s for ongoing trigger %s", snapshot_id, trigger_id)
+
+    to_create = effective_target - in_flight
+    if to_create <= 0:
+        if outcome is not None:
+            outcome.update({"status": "noop", "in_flight": in_flight, "target": effective_target})
+        return []
+
+    created: list[Run] = []
+    try:
+        for _ in range(to_create):
+            run = await create_run(
+                session,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                snapshot_id=snapshot_id,
+                trigger_type="ongoing",
+                trigger_id=trigger_id,
+                input_payload=config.get("input_template", {}),
+            )
+            created.append(run)
+            await _log_ongoing_event(session, trigger=trigger, org_id=org_id, result="accepted", run_id=run.id)
+    except TriggersPausedError:
+        # TOCTOU race backstop: the org was paused mid-loop. Stop creating —
+        # the runs already created stay (they are dispatched below).
+        _log.info("triggers.paused.skip trigger=%s org=%s", trigger_id, org_id)
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
+
+    if created:
+        await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now))
+        await _clear_ongoing_failure(redis_client, trigger_id)
+        _log.info("Ongoing trigger %s topped up -> %d run(s)", trigger_id, len(created))
+
+    return created
+
+
+async def _dispatch_ongoing_runs(
+    q_or_none: Any,
+    org_id: uuid.UUID,
+    run_ids: list[uuid.UUID],
+    redis_client: AsyncRedis | None = None,
+) -> list[dict[str, Any]]:
+    """Queue phase of the ongoing top-up — dispatch each created run to SAQ.
+
+    Called ONLY after the top-up transaction committed (``q_or_none`` is a
+    placeholder kept for seam parity; the queue name resolves from settings).
+    Per-run try/except collects ``{'run_id', 'outcome', 'job_id'?}`` and NEVER
+    raises after commit — a SAQ retry would re-count the committed pendings
+    (idempotent), and committed-but-never-dispatched pendings are recovered by
+    ``dispatcher_reconcile``'s existing ``pending + dispatched_at IS NULL``
+    branch.
+    """
+    from modulo.core.dispatch import dispatch_run
+
+    settings = get_settings()
+    outcomes: list[dict[str, Any]] = []
+    for run_id in run_ids:
+        try:
+            outcome, job_id = await dispatch_run(str(run_id), str(org_id), queue=settings.saq_runs_queue)
+            outcomes.append({"run_id": str(run_id), "outcome": outcome, "job_id": job_id})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("fire_ongoing_trigger: dispatch failed for run %s", run_id)
+            outcomes.append({"run_id": str(run_id), "outcome": "dispatch_error", "job_id": None})
+    return outcomes
+
+
+async def fire_ongoing_trigger(
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    latest_snapshot_id: str = "",
+) -> dict[str, Any]:
+    """Per-item ongoing fire job — top up + dispatch the created runs (SAQ).
+
+    The DB phase (``_ongoing_topup``) runs inside ONE transaction; once the
+    ``async with`` exits (commit) the created runs are dispatched in the queue
+    phase (``_dispatch_ongoing_runs``), which never raises post-commit.
+    """
+    settings = get_settings()
+    factory = _open_factory()
+    parsed_snapshot: uuid.UUID | None = None
+    if latest_snapshot_id:
+        try:
+            parsed_snapshot = uuid.UUID(str(latest_snapshot_id))
+        except (ValueError, TypeError):
+            parsed_snapshot = None
+    redis_client = AsyncRedis.from_url(settings.redis_url, socket_connect_timeout=5)
+    try:
+        outcome: dict[str, Any] = {}
+        created: list[Run] = []
+        async with factory() as session, session.begin():
+            await _set_rls_org(session, org_id)
+            created = await _ongoing_topup(
+                session,
+                trigger_id=trigger_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                now=datetime.now(UTC),
+                latest_snapshot_id=parsed_snapshot,
+                redis_client=redis_client,
+                outcome=outcome,
+            )
+        # Committed here — safe to dispatch.
+        dispatched = await _dispatch_ongoing_runs(None, org_id, [r.id for r in created], redis_client=redis_client)
+        if created:
+            summary: dict[str, Any] = {
+                "status": "fired",
+                "created": len(created),
+                "dispatched": dispatched,
+                "run_ids": [str(r.id) for r in created],
+            }
+        else:
+            summary = {
+                "status": outcome.get("status", "noop"),
+                "reason": outcome.get("reason"),
+                "created": 0,
+                "dispatched": [],
+                "in_flight": outcome.get("in_flight"),
+                "target": outcome.get("target"),
+            }
+        # Per-item outcome persistence (debug-only — NOT wired to /healthz/ready).
+        # Best-effort: a stats write failure must never fail the fire job.
+        try:
+            await redis_client.set(f"saq:cron:stats:ongoing:{trigger_id}", json.dumps(summary))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("cron_helpers.ongoing_stats_persist_failed trigger=%s", trigger_id)
+        _log.info("fire_ongoing_trigger summary: %s", summary)
+        return summary
+    finally:
+        with _suppress_aclose():
+            await redis_client.aclose()
+
+
 def _suppress_aclose() -> Any:
     from contextlib import suppress
 
@@ -1140,6 +1603,22 @@ async def _advance_polling_next_fire(session: AsyncSession, trigger_id: uuid.UUI
     r = await session.execute(
         _atomic_advance_stmt(),
         {"nf": nf, "tid": str(trigger_id), "ttype": "polling"},
+    )
+    return r.fetchone() is not None
+
+
+async def _advance_ongoing_next_fire(session: AsyncSession, trigger_id: uuid.UUID, scan_interval: int) -> bool:
+    """Atomically advance an ongoing trigger's ``next_fire_at`` (multi-machine).
+
+    Mirrors ``_advance_polling_next_fire`` with ``trigger_type='ongoing'``. The
+    advance is floored at ``ONGOING_MIN_INTERVAL_SECONDS`` (the scheduler tick)
+    so a topped-up trigger is not re-scanned every tick; the trigger's own
+    ``scan_interval_seconds`` config may be larger.
+    """
+    nf = datetime.now(UTC) + timedelta(seconds=max(int(scan_interval), ONGOING_MIN_INTERVAL_SECONDS))
+    r = await session.execute(
+        _atomic_advance_stmt(),
+        {"nf": nf, "tid": str(trigger_id), "ttype": "ongoing"},
     )
     return r.fetchone() is not None
 
@@ -1417,7 +1896,7 @@ async def _fire_missed_cron_epochs(
 
 
 async def fire_due_triggers() -> dict[str, Any]:
-    """System cron — read due cron/polling/report rows and enqueue per-item fire jobs.
+    """System cron — read due cron/polling/report/ongoing rows and enqueue fire jobs.
 
     Multi-machine safety (plan F1): each due row's ``next_fire_at`` is advanced
     ATOMICALLY (conditional ``UPDATE ... RETURNING id``) and a per-item fire job
@@ -1427,6 +1906,8 @@ async def fire_due_triggers() -> dict[str, Any]:
     next tick re-selects the epoch; a bounded missed-fire catch-up scan re-fires
     an epoch that was consumed-but-never-fired (worker killed between advance
     and enqueue) — see ``_rollback_cron_advance`` / ``_fire_missed_cron_epochs``.
+    The ``ongoing`` scan (FAR-158) is LAST, before the catch-up, and is
+    intentionally excluded from catch-up (it self-heals from current state).
 
     Runs per-org (RLS-safe): the org context is set per transaction so the
     scheduler sees all orgs under FORCE RLS (integration) and behaves
@@ -1449,6 +1930,10 @@ async def fire_due_triggers() -> dict[str, Any]:
         "polling_skipped_paused": 0,
         "report_due": 0,
         "report_enqueued": 0,
+        "ongoing_due": 0,
+        "ongoing_enqueued": 0,
+        "ongoing_skipped_paused": 0,
+        "ongoing_enqueue_failures": 0,
         "enqueue_failures": 0,
     }
 
@@ -1800,6 +2285,11 @@ async def fire_due_triggers() -> dict[str, Any]:
                 # failure whose rollback could not apply). Gated on the org not
                 # being paused: paused fires are SKIP-not-defer, so catch-up
                 # never fires a trigger while its org is paused.
+                #
+                # ``ongoing`` is INTENTIONALLY excluded from catch-up — it
+                # self-heals: the top-up recomputes from current state every
+                # scan, so a missed tick needs no re-fire, and an at-target
+                # no-op is NOT a missed fire.
                 if not org_paused:
                     await _fire_missed_cron_epochs(
                         session,
@@ -1810,6 +2300,109 @@ async def fire_due_triggers() -> dict[str, Any]:
                         summary=summary,
                         advanced_this_tick=advanced_this_tick,
                     )
+
+                # ---- ongoing triggers (FAR-158) ----
+                # Worker-pool top-up scan. Runs in the tick's transaction ONLY
+                # for the atomic next_fire_at advance + enqueue (like cron/
+                # polling); the top-up itself happens in the per-item job.
+                # Selection: active, not soft-deleted, next_fire_at due OR never
+                # set (a fresh trigger with NULL next_fire_at must fire on the
+                # first tick). Placed LAST in the per-org tick so the existing
+                # fixed-order _MockSession unit tests (whose sequences end at
+                # the report/catch-up reads) hit the exhausted MagicMock and
+                # iterate empty.
+                try:
+                    ongoing_rows = (
+                        await session.execute(
+                            select(
+                                Trigger.id,
+                                Trigger.pipeline_id,
+                                Trigger.config_json,
+                                Trigger.next_fire_at,
+                            ).where(
+                                Trigger.trigger_type == "ongoing",
+                                Trigger.active.is_(True),
+                                Trigger.deleted_at.is_(None),
+                                or_(
+                                    Trigger.next_fire_at.is_(None),
+                                    Trigger.next_fire_at <= now,
+                                ),
+                            )
+                        )
+                    ).all()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("fire_due_triggers: ongoing read failed (org %s)", org_id)
+                    ongoing_rows = []
+
+                # Pre-resolve latest snapshots per pipeline for ongoing rows
+                # WITHOUT a pinned snapshot_id (DISTINCT ON, mirroring cron).
+                ongoing_needing_snapshots = {
+                    row.pipeline_id for row in ongoing_rows if not (row.config_json or {}).get("snapshot_id")
+                }
+                ongoing_latest_snapshots: dict[uuid.UUID, uuid.UUID] = {}
+                if ongoing_needing_snapshots:
+                    opids = list(ongoing_needing_snapshots)
+                    osnap_result = await session.execute(
+                        text(
+                            "SELECT DISTINCT ON (pipeline_id) pipeline_id, id "
+                            "FROM pipeline_snapshots "
+                            "WHERE pipeline_id = ANY(:pids) "
+                            "ORDER BY pipeline_id, created_at DESC"
+                        ),
+                        {"pids": [str(p) for p in opids]},
+                    )
+                    ongoing_latest_snapshots = {row[0]: row[1] for row in osnap_result}
+
+                ongoing_enqueued = 0
+                for row in ongoing_rows:
+                    config = row.config_json or {}
+                    interval = max(int(config.get("scan_interval_seconds") or 60), 60)
+                    summary["ongoing_due"] += 1
+                    try:
+                        if not await _advance_ongoing_next_fire(session, row.id, interval):
+                            continue  # another machine advanced this epoch
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.exception("fire_due_triggers: ongoing advance failed %s", row.id)
+                        continue
+                    if org_paused:
+                        # SKIP-not-defer: the epoch is consumed (advance above)
+                        # but no fire job is enqueued.
+                        summary["ongoing_skipped_paused"] += 1
+                        continue
+                    if ongoing_enqueued >= ONGOING_MAX_ENQUEUE_PER_TICK:
+                        # Per-tick enqueue cap — defer to the next tick. The
+                        # advance already happened (no double-fire).
+                        continue
+                    snapshot_id = _resolve_snapshot_id(row, ongoing_latest_snapshots)
+                    try:
+                        job_id = await _enqueue_fire_job_async(
+                            q,
+                            "modulo.core.saq_worker.fire_ongoing_trigger",
+                            f"fire:{row.id}:{int(now.timestamp())}",
+                            trigger_id=str(row.id),
+                            org_id=str(org_id),
+                            pipeline_id=str(row.pipeline_id),
+                            latest_snapshot_id=str(snapshot_id) if snapshot_id else "",
+                        )
+                        if job_id is not None:
+                            summary["ongoing_enqueued"] += 1
+                            ongoing_enqueued += 1
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        summary["ongoing_enqueue_failures"] += 1
+                        _log.exception("fire_due_triggers: ongoing enqueue failed %s", row.id)
+                        await _ingest_saq_error(
+                            session,
+                            org_id,
+                            function="fire_due_triggers",
+                            message=f"fire_due_triggers: enqueue failed for ongoing trigger {row.id}",
+                            context={"trigger_id": str(row.id), "trigger_type": "ongoing"},
+                        )
     finally:
         with _suppress_aclose():
             await redis_client.aclose()
