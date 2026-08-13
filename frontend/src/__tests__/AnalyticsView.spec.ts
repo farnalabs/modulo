@@ -931,4 +931,50 @@ describe('AnalyticsView', () => {
     // Restore the shared useRoute mock for other tests.
     routeMock.mockImplementation(() => ({ query: {} }) as never)
   })
+
+  it('debounces the error-code text filter so a full query does not fire per keystroke', async () => {
+    setupMocks()
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    const errorCodeInput = wrapper.find('[data-testid="analytics-filter-error-code"]')
+    expect(errorCodeInput.exists()).toBe(true)
+
+    vi.useFakeTimers()
+    await errorCodeInput.setValue('exec')
+    await errorCodeInput.setValue('executor')
+    await errorCodeInput.setValue('executor_stalled')
+    await nextTick()
+
+    // Debounce window has not elapsed — no query carrying the error code yet.
+    let queryCalls = mockGet.mock.calls.filter((c) => c[0] === '/api/v1/analytics/query')
+    let lastQuery = (queryCalls.at(-1)?.[1] as { params: { query: Record<string, unknown> } } | undefined)?.params.query
+    expect(lastQuery?.error_code).toBeUndefined()
+
+    vi.advanceTimersByTime(300)
+    vi.useRealTimers()
+    await flushPromises()
+    await nextTick()
+
+    // Exactly the settled value fires, once, after the debounce window.
+    queryCalls = mockGet.mock.calls.filter((c) => c[0] === '/api/v1/analytics/query')
+    lastQuery = (queryCalls.at(-1)?.[1] as { params: { query: Record<string, unknown> } } | undefined)?.params.query
+    expect(lastQuery?.error_code).toBe('executor_stalled')
+    wrapper.unmount()
+  })
+
+  it('still fetches immediately when a select-based filter changes (not debounced)', async () => {
+    setupMocks()
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    const statusSelect = wrapper.find('[data-testid="analytics-filter-status"]')
+    expect(statusSelect.exists()).toBe(true)
+
+    await statusSelect.setValue('failed')
+    await flushPromises()
+
+    const queryCalls = mockGet.mock.calls.filter((c) => c[0] === '/api/v1/analytics/query')
+    const lastQuery = (queryCalls.at(-1)?.[1] as { params: { query: Record<string, unknown> } } | undefined)?.params.query
+    expect(lastQuery?.status).toBe('failed')
+    wrapper.unmount()
+  })
 })

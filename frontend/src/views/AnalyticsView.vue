@@ -103,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PageHeader from "../components/shared/PageHeader.vue";
@@ -184,14 +184,45 @@ const tableRows = computed<TableRow[]>(() => {
   });
 });
 
+// The error-code filter is free-text: a full analytics query (two backend calls:
+// current + previous window) must not fire per keystroke, or typing a code like
+// `executor_stalled` trips the backend's 60-queries/org/60s rate limit mid-typing.
+// Mirror RunsListView's SEARCH_DEBOUNCE_MS: debounce the fetch for text-input
+// changes while keeping select-based filter changes on immediate fetch.
+const ERROR_CODE_DEBOUNCE_MS = 300;
+let errorCodeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 function onFiltersChanged(filters: AnalyticsFilters): void {
+  const prevErrorCode = store.filters.errorCode ?? null;
   store.setFilters(filters);
+  const errorCodeChanged = (filters.errorCode ?? null) !== prevErrorCode;
+  if (errorCodeChanged) {
+    if (errorCodeDebounceTimer) clearTimeout(errorCodeDebounceTimer);
+    errorCodeDebounceTimer = setTimeout(() => {
+      errorCodeDebounceTimer = null;
+      void store.fetchQuery();
+    }, ERROR_CODE_DEBOUNCE_MS);
+    return;
+  }
+  // A select-based change supersedes any pending error-code debounce: the
+  // immediate fetch below already reads the latest errorCode from the store.
+  if (errorCodeDebounceTimer) {
+    clearTimeout(errorCodeDebounceTimer);
+    errorCodeDebounceTimer = null;
+  }
   void store.fetchQuery();
 }
 
 function onMeasureChanged(measure: AnalyticsMeasure): void {
   store.setMeasure(measure);
 }
+
+onBeforeUnmount(() => {
+  if (errorCodeDebounceTimer) {
+    clearTimeout(errorCodeDebounceTimer);
+    errorCodeDebounceTimer = null;
+  }
+});
 
 function arrowGlyph(direction: TrendDirection): string {
   if (direction === "up") return "▲";
