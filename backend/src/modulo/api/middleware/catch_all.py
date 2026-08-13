@@ -43,6 +43,10 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
             try:
                 await _ingest_unhandled_error(request)
             except Exception:
+                # Best-effort ingest must never abort the 500 response. The helper
+                # swallows most failures internally, but this guard guarantees the
+                # catch-all contract (a structured 500 for every unhandled
+                # exception) even if the ingest path itself raises.
                 logger.exception("middleware.error_ingest_dispatch_failed")
             return _make_500_response(rid)
 
