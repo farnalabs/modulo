@@ -447,7 +447,6 @@ def make_node_fn(
     When *token_budget* is set, per-node token budget is enforced at the
     executor level via ``node_token_budgets`` during ``_stream_graph()``.
     """
-
     node_id: str = str(node_def["id"])
 
     @cancellable_node(timeout=timeout, role=role)
@@ -768,7 +767,6 @@ def make_manual_node_fn(
     The node immediately interrupts and waits for human output. On resume the
     output is validated against output_schema_id (if defined) before continuing.
     """
-
     node_id: str = str(node_def["id"])
     output_schema_json: dict[str, Any] | None = node_def.get("output_schema_json")
     manual_prompt: str = node_def.get("manual_prompt", "")
@@ -833,8 +831,7 @@ def make_connector_fn(
     *,
     timeout: float | None = None,
 ) -> Any:
-    """
-    Return a decorated async node function that resolves a connector
+    """Return a decorated async node function that resolves a connector
     from the ConnectorHub and executes a connector action (query/write).
 
     The node_def must have a 'connector_binding' dict with:
@@ -843,7 +840,6 @@ def make_connector_fn(
       - operation: 'query' or 'write' (optional, default 'query')
       - input: dict of input parameters (optional)
     """
-
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
     op: str = binding.get("operation", "query")
@@ -1024,7 +1020,6 @@ def make_sandbox_agent_fn(
     provided) and fall back to the process environment, so secret rotation
     takes effect on the next run and secrets never enter the compiled graph.
     """
-
     node_id: str = str(node_def["id"])
     agent_prompt = node_def.get("agent_prompt")
     if not agent_prompt or not str(agent_prompt).strip():

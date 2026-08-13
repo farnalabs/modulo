@@ -178,6 +178,7 @@ def cancellable_node(
     Args:
         timeout: Maximum seconds the node may run. None means no timeout.
         role:    Node role string. Pass "context_setter" to allow run_context writes.
+
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:

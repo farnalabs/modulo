@@ -400,7 +400,6 @@ def _build_custom_stub_backend(fixture_map: dict[str, str]) -> ModelBackendBase:
     _StubAdapter pattern used throughout the test suite. The lazy import preserves
     module-level import isolation (see test_import_does_not_load_provider_adapters).
     """
-
     from modulo.model_backends.stub.backend import StubModelBackend
 
     class _CustomStubBackend(ModelBackendBase):

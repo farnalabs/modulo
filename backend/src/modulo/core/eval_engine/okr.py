@@ -127,6 +127,7 @@ async def track_okr_progress(
     Raises:
         ValueError: If no eval definitions exist with the given suite_id.
         SQLAlchemyError: If a database error occurs.
+
     """
     if not suite_id:
         raise ValueError("suite_id must not be empty")
@@ -242,5 +243,6 @@ def alert_on_breach(pass_threshold: float, current_pass_rate: float) -> bool:
 
     Returns:
         True if the current pass rate is below the threshold.
+
     """
     return current_pass_rate < pass_threshold

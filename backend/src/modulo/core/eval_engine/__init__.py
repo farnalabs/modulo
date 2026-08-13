@@ -205,6 +205,7 @@ class EvalEngine:
 
         Raises:
             EvalBlockedError: When eval fails and failure_behaviour == "block".
+
         """
         run_id = run_id or uuid4()
         match eval_def.eval_type:
@@ -559,6 +560,7 @@ def evaluate_suite(
 
     Returns:
         SuiteEvalResult with aggregate score and pass/fail decision.
+
     """
     total = len(eval_results)
     if total == 0:

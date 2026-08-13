@@ -265,6 +265,7 @@ class PermissionDenied(Exception):  # noqa: N818 — name mandated by ADR 017 ex
         permission: the ``resource.operation`` key (or subject) that was checked.
         required_role: the minimum org role required.
         actual_role: the role the principal actually holds (``None`` if absent).
+
     """
 
     def __init__(

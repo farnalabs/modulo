@@ -51,7 +51,6 @@ class LicenseUploadResponse(BaseModel):
 
 def _resolve_effective_license(settings: Settings, org: Organisation | None = None) -> LicenseStatusResponse:
     """Resolve the effective license, checking org-level, then system-level (env var), then in-memory."""
-
     # 1. Org-level license key
     if org is not None:
         org_key = org.settings_json.get("license_key") if org.settings_json else None

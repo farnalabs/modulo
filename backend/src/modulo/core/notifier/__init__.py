@@ -358,7 +358,6 @@ class Notifier:
         retain_payload: bool,
     ) -> DispatchResult:
         """Send a single notification to one endpoint with retry logic."""
-
         signature = await self._sign_payload(body, endpoint)
 
         last_error: str | None = None

@@ -165,7 +165,8 @@ def _sanitize_mcp_string(value: str) -> str:
 def _clamp_mcp_number(value: float) -> float:
     """Magnitude-clamp any numeric field that can carry a hostile raw value
     (e.g. ``basis.raw_reported`` of 1e300) at 1e6 for display — the MCP surface
-    cannot render 1e300. Mirrors the breakdown serializer's display clamp."""
+    cannot render 1e300. Mirrors the breakdown serializer's display clamp.
+    """
     try:
         d = Decimal(str(value))
     except (TypeError, ValueError, ArithmeticError):

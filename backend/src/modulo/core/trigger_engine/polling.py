@@ -134,7 +134,8 @@ _fire_polling_trigger = fire_polling_trigger
 
 async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
     """Compute and persist the next fire time based on poll_interval_seconds,
-    also updating last_fired_at to now. Only call this when a run was actually created."""
+    also updating last_fired_at to now. Only call this when a run was actually created.
+    """
     config = trigger.config_json or {}
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
     now = datetime.datetime.now(datetime.UTC)
@@ -146,7 +147,8 @@ async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
 
 async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> None:
     """Advance next_fire_at without touching last_fired_at.
-    Used when the condition was NOT met — the trigger didn't actually fire."""
+    Used when the condition was NOT met — the trigger didn't actually fire.
+    """
     config = trigger.config_json or {}
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
     now = datetime.datetime.now(datetime.UTC)
