@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import math
 import random
 from typing import Any
 
@@ -40,12 +41,20 @@ _RATE_LIMIT_RESET_HEADERS = ("X-RateLimit-Reset",)
 
 
 def _safe_int(value: object, default: int = 0) -> int:
-    """Coerce *value* to int, returning *default* for None or unparseable values."""
+    """Coerce *value* to int, returning *default* for None, non-finite, or unparseable values.
+
+    Guards against non-finite floats (``inf``/``nan``) which otherwise raise
+    ``OverflowError``/``ValueError`` on ``int()`` — Python's json parser
+    produces ``inf`` for overflowing literals such as ``1e999``, so a corrupt
+    or hostile Jira response must not be able to crash pagination.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    if isinstance(value, float) and not math.isfinite(value):
         return default
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
