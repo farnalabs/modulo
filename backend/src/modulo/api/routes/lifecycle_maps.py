@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -11,14 +11,16 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
 from modulo.core.lifecycle_map.journeys import (
     get_map_journey,
     list_journey_runs,
     list_map_journeys,
 )
+from modulo.core.lifecycle_map.self_report import validate_and_normalise_reported_refs
 from modulo.core.lifecycle_map.service import (
     create_lifecycle_map,
     delete_lifecycle_map,
@@ -219,6 +221,34 @@ class JourneyRunHistoryItem(BaseModel):
 
 class JourneyDetailResponse(JourneySummaryResponse):
     runs: list[JourneyRunHistoryItem] = Field(default_factory=list)
+
+
+class JourneySelfReportRequest(BaseModel):
+    """Workflow-reported work-item refs (advisory self-report).
+
+    ``work_item_refs`` entries are arbitrary JSON (not strictly dicts) so a
+    malformed entry (non-dict, missing kind/ref, bad status) is REJECTED and
+    counted per-ref by ``validate_and_normalise_reported_refs`` instead of
+    failing the whole request with a 422 — fail-open per ref.
+    ``pipeline_id`` is the optional Modulo pipeline that completed the stage;
+    when it is a stage of this map, the matched journey advances into it.
+    """
+
+    work_item_refs: list[Any] = Field(default_factory=list)
+    pipeline_id: uuid.UUID | None = None
+
+
+class JourneySelfReportResponse(BaseModel):
+    """Per-ref outcome summary for one self-report request.
+
+    ``accepted`` refs matched an existing journey and were advanced;
+    ``unmatched`` refs were valid but had no journey row (dropped â€” never
+    minted); ``rejected`` refs were malformed or dropped by the 100-entry cap.
+    """
+
+    accepted: int
+    rejected: int
+    unmatched: int
 
 
 def _content_dict(lm: Any) -> dict[str, Any]:
@@ -484,6 +514,7 @@ async def update_lifecycle_map_endpoint(
             if "content_json" in updates:
                 updates["version"] = current.version + 1
             lifecycle_map = await update_lifecycle_map(session, lifecycle_map_id, updates)
+            await session.refresh(lifecycle_map)
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -565,6 +596,8 @@ async def restore_lifecycle_map_endpoint(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await restore_lifecycle_map(session, lifecycle_map_id)
+            if lifecycle_map is not None:
+                await session.refresh(lifecycle_map)
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
         raise HTTPException(
@@ -656,6 +689,8 @@ async def save_lifecycle_map_version_endpoint(
                 edges=req.edges,
                 notes=req.notes,
             )
+            if lifecycle_map is not None:
+                await session.refresh(lifecycle_map)
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -701,7 +736,7 @@ async def update_lifecycle_map_version_endpoint(
     principal: TenantPrincipal = require_permission("lifecycle_map.update"),
 ) -> LifecycleMapVersionResponse:
     """Update a version. v1 semantics: the active map state is the only version,
-    so this behaves identically to save — ``version_id`` is validated as a UUID
+    so this behaves identically to save â€” ``version_id`` is validated as a UUID
     for contract compatibility but the save targets the map itself.
     """
     try:
@@ -715,6 +750,8 @@ async def update_lifecycle_map_version_endpoint(
                 edges=req.edges,
                 notes=req.notes,
             )
+            if lifecycle_map is not None:
+                await session.refresh(lifecycle_map)
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -811,6 +848,8 @@ async def graduate_lifecycle_map_stage_endpoint(
                 stage_id=stage_id,
                 pipeline_id=req.pipeline_id,
             )
+            if lifecycle_map is not None:
+                await session.refresh(lifecycle_map)
     except LifecycleMapPipelineConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     except LifecycleMapContentError as exc:
@@ -1012,4 +1051,86 @@ async def get_journey_endpoint(
             )
             for r in runs
         ],
+    )
+
+
+@handle_db_errors("lifecycle_maps.self_report_journeys_endpoint")
+@router.post("/{lifecycle_map_id}/journeys/self-report", response_model=JourneySelfReportResponse)
+async def self_report_journeys_endpoint(
+    lifecycle_map_id: uuid.UUID,
+    req: JourneySelfReportRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
+) -> JourneySelfReportResponse:
+    """Ingest workflow-reported work-item refs to advance existing journeys.
+
+    Called by external workflows (merge queue, deploy agent) that completed a
+    lifecycle-map stage and want the journeys they touched to reflect it.
+    Per the FAR-143 spec v6 rule, self-report is ADVISORY: a reported ref can
+    only CONFIRM / MATCH an existing journey keyed by the same canonical
+    ``(org, kind, ref)`` â€” a ref with no journey row is dropped (counted as
+    unmatched) and is NEVER minted, and no runs are created or touched. Each
+    confirmed journey is advanced via ``advance_journeys`` with ``status``
+    ``"complete"`` (the workflow reached this endpoint, so its stage
+    completed), ``completed_at`` = now and no backing run (the run's
+    ``latest_terminal_run_id`` is preserved, not overwritten).
+
+    The request body is already the self-report wire shape, so entries flow
+    straight through ``validate_and_normalise_reported_refs`` â€” the same
+    per-entry validation/canonicalisation the run-finalise path applies to
+    merged run outputs (``parse_self_report_refs`` is only needed for nested
+    run-output trees). A malformed entry is rejected and counted, never a
+    whole-request 422 (fail-open per ref).
+
+    Auth: the documented CI/CD credential path (PRD Â§5.2) â€” a user JWT or an
+    org API key (``mk_...``). A GitHub Actions workflow calls this with
+    ``Authorization: Bearer mk_<key>`` for a key whose owner holds the
+    ``runner`` role. There is no ``run.create`` permission in the registry;
+    ``run.trigger`` (runner) is the least-privilege gate that accepts org API
+    keys, matching how workflows already trigger runs.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
+            if lifecycle_map is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+            reported, counters = validate_and_normalise_reported_refs(req.work_item_refs)
+            confirmed, unmatched = await confirm_reported_refs(session, principal.organisation_id, reported)
+            now = datetime.now(UTC)
+            advanced = await advance_journeys(
+                session,
+                principal.organisation_id,
+                run_id=None,
+                pipeline_id=req.pipeline_id,
+                refs=confirmed,
+                status="complete",
+                completed_at=now,
+                run_created_at=now,
+            )
+    except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.self_report_journeys_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.self_report_journeys_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("lifecycle_maps.self_report_journeys")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    return JourneySelfReportResponse(
+        accepted=advanced,
+        rejected=counters["malformed"] + counters["capped"],
+        unmatched=unmatched,
     )

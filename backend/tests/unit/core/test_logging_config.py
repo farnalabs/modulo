@@ -5,7 +5,7 @@ import logging
 import sys
 import time
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pythonjsonlogger.json import JsonFormatter
@@ -587,3 +587,94 @@ class TestApplyPerModuleLevels:
             assert logger.level == logging.ERROR
         finally:
             logger.setLevel(logging.NOTSET)
+def test_resolve_log_level_per_module_override_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A per-module MODULO_LOG_LEVEL_<MODULE> override beats the global default."""
+    monkeypatch.setenv("MODULO_LOG_LEVEL", "ERROR")
+    monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "WARNING")
+    assert _resolve_log_level("modulo.core.pipeline_engine") == "WARNING"
+
+
+def test_resolve_log_level_falls_back_to_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a per-module override the global MODULO_LOG_LEVEL applies."""
+    monkeypatch.setenv("MODULO_LOG_LEVEL", "DEBUG")
+    assert _resolve_log_level("modulo.core.unrelated") == "DEBUG"
+
+
+def test_resolve_log_level_defaults_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With neither env var set the level defaults to INFO."""
+    monkeypatch.delenv("MODULO_LOG_LEVEL", raising=False)
+    monkeypatch.delenv("MODULO_LOG_LEVEL_MODULO_UNKNOWN", raising=False)
+    assert _resolve_log_level("modulo.unknown") == "INFO"
+
+
+def test_log_async_emit_error_reports_exception(caplog: pytest.LogCaptureFixture) -> None:
+    """A failing async-emit task surfaces its exception through the module logger."""
+    future = MagicMock()
+    future.exception.return_value = RuntimeError("boom")
+    with caplog.at_level(logging.ERROR):
+        _log_async_emit_error(future)
+    assert any("ErrorTrackingLogHandler.async_emit_failed" in r.getMessage() for r in caplog.records)
+
+
+def test_log_async_emit_error_ignores_clean_future(caplog: pytest.LogCaptureFixture) -> None:
+    """A healthy async-emit task logs nothing."""
+    future = MagicMock()
+    future.exception.return_value = None
+    with caplog.at_level(logging.ERROR):
+        _log_async_emit_error(future)
+    assert not [r for r in caplog.records if "async_emit_failed" in r.getMessage()]
+
+
+def test_apply_per_module_levels_sets_logger_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MODULO_LOG_LEVEL_<MODULE> env vars map to the matching logger's level."""
+    monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "WARNING")
+    _apply_per_module_levels()
+    assert logging.getLogger("modulo.core.pipeline.engine").level == logging.WARNING
+    logging.getLogger("modulo.core.pipeline.engine").setLevel(logging.NOTSET)
+
+
+def test_apply_per_module_levels_invalid_level_falls_back_to_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrecognised level string falls back to INFO rather than raising."""
+    monkeypatch.setenv("MODULO_LOG_LEVEL_MODULO_CORE_PIPELINE_ENGINE", "VERBOSE")
+    _apply_per_module_levels()
+    assert logging.getLogger("modulo.core.pipeline.engine").level == logging.INFO
+    logging.getLogger("modulo.core.pipeline.engine").setLevel(logging.NOTSET)
+
+
+def test_apply_per_module_levels_ignores_dup_module_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Duplicate module paths (case/underscore variants) are applied only once."""
+    monkeypatch.setenv("MODULO_LOG_LEVEL_A_B", "WARNING")
+    monkeypatch.setenv("MODULO_LOG_LEVEL_a.b", "WARNING")
+    _apply_per_module_levels()
+    assert logging.getLogger("a.b").level == logging.WARNING
+    logging.getLogger("a.b").setLevel(logging.NOTSET)
+
+
+def test_emit_swallows_missing_event_loop() -> None:
+    """emit() must not raise when no asyncio event loop is running."""
+    token = org_id_var.set("00000000-0000-0000-0000-000000000001")
+    try:
+        handler = ErrorTrackingLogHandler()
+        with patch("asyncio.get_running_loop", side_effect=RuntimeError("no running loop")):
+            handler.emit(
+                logging.LogRecord(
+                    name="test",
+                    level=logging.ERROR,
+                    pathname=__file__,
+                    lineno=1,
+                    msg="boom",
+                    args=(),
+                    exc_info=None,
+                )
+            )
+        assert handler._pending_tasks == 0
+    finally:
+        org_id_var.reset(token)

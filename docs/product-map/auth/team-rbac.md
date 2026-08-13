@@ -175,11 +175,8 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - [x] Create team concurrent duplicate name returns 409 (TOCTOU race guard)
 - [x] Duplicate name on update returns 409 (application-level check before DB)
 
-### Stage board and UI
-- [ ] The Stage board only surfaces pipelines and stages the user has access to
+### Team visibility in UI
 - [ ] Team-private resources do not reveal "(N hidden)" — total absence for non-members
-- [ ] Admin has a "View as: All / Team: X" toggle in the Stage board
-- [ ] Team badge appears on pipeline and stage cards (tooltip with team name)
 - [ ] User profile panel shows "My Teams" with role in each
 - [ ] Team management UI is at `/settings/teams` and is accessible to admins and team operators
 - [ ] Team management UI shows member count and owned resource count per team
@@ -234,9 +231,8 @@ Org-level and team-level role hierarchy with privilege cap, team membership mana
 - JWT payload does not carry team_memberships list (PRD §9.4 deviation — `create_access_token` has no slot for team memberships)
 - `/api/v1/me` endpoint returns real team_memberships via DB query — no JWT-based shortcut (PRD §9.4 requires ViewModel resolution from JWT claims, but every request does a DB round-trip)
 - Team-scoped API key application-level enforcement is not implemented (team_id stored on key record, but route handlers don't filter by it — RLS-only)
-- No application-level team-visibility enforcement on list/get routes for pipelines, connectors, model backends, stages, library primitives (DB columns exist, Pydantic models validate, but query filters don't restrict by team membership — any org member with access can see all resources)
+- No application-level team-visibility enforcement on list/get routes for pipelines, connectors, model backends, library primitives (DB columns exist, Pydantic models validate, but query filters don't restrict by team membership — any org member with access can see all resources)
 - No BDD scenarios for resource ownership/visibility enforcement
-- No frontend Stage Board team filtering UI (v1)
 - Audit event failures on team create/update/delete do not propagate to the caller — the operation completes but the event is lost silently (logged as warning only)
 - `remove_member_endpoint` requires admin or team operator — but there's no guard against removing the last operator from a team (design choice, not a bug)
 - `add_member_endpoint` validates team operator self-escalation at REST layer but does not check membership existence limit (no cap on memberships per team)

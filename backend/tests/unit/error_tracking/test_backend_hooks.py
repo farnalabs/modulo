@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
+from sqlalchemy.exc import ProgrammingError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -276,6 +277,7 @@ class TestAsyncEmitEventData:
     @pytest.mark.parametrize(
         ("level", "expected"),
         [
+            (logging.INFO, "error"),
             (logging.WARNING, "warning"),
             (logging.ERROR, "error"),
             (logging.CRITICAL, "critical"),
@@ -420,6 +422,88 @@ class TestAsyncEmitEventData:
 
         service.assert_awaited_once()
         assert "ValueError: kaboom" in service.await_args.args[2]["stacktrace"]
+
+    async def test_stacktrace_from_exc_text(
+        self,
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
+    ) -> None:
+        """exc_text set on the record is used verbatim as the stacktrace."""
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        service, _set_rls, _session = async_emit_chain
+        record = logging.LogRecord(
+            name="test.logger",
+            level=logging.ERROR,
+            pathname="pipeline.py",
+            lineno=7,
+            msg="failed",
+            args=(),
+            exc_info=None,
+        )
+        record.exc_text = "Traceback (most recent call last):\nboom"
+        token = org_id_var.set(str(_ORG_ID))
+        try:
+            handler = ErrorTrackingLogHandler()
+            await handler._async_emit(record)
+        finally:
+            org_id_var.reset(token)
+
+        service.assert_awaited_once()
+        assert service.await_args.args[2]["stacktrace"] == record.exc_text
+
+    async def test_skips_emit_when_org_context_unset(
+        self,
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
+    ) -> None:
+        """A record emitted with no org context never reaches the DB chain."""
+        from modulo.core.logging_config import ErrorTrackingLogHandler
+
+        service, set_rls, _session = async_emit_chain
+        handler = ErrorTrackingLogHandler()
+        await handler._async_emit(self._make_record(logging.ERROR, "no org"))
+
+        service.assert_not_awaited()
+        set_rls.assert_not_awaited()
+
+    async def test_programming_error_logged_and_suppressed(
+        self,
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A ProgrammingError from the DB chain is logged, not propagated."""
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        service, _set_rls, _session = async_emit_chain
+        service.side_effect = ProgrammingError("select * from error_events", {}, Exception("db down"))
+        token = org_id_var.set(str(_ORG_ID))
+        try:
+            handler = ErrorTrackingLogHandler()
+            await handler._async_emit(self._make_record(logging.ERROR, "db fail"))
+        finally:
+            org_id_var.reset(token)
+
+        assert any("Database unavailable while forwarding a log event" in r.getMessage() for r in caplog.records)
+        assert any("ErrorTrackingLogHandler.ingest_failed" in r.getMessage() for r in caplog.records)
+
+    async def test_async_emit_unexpected_exception_suppressed(
+        self,
+        async_emit_chain: tuple[AsyncMock, AsyncMock, MagicMock],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Any unexpected failure in _async_emit is logged and swallowed."""
+        from modulo.core.logging_config import ErrorTrackingLogHandler, org_id_var
+
+        service, _set_rls, _session = async_emit_chain
+        service.side_effect = RuntimeError("kaboom")
+        token = org_id_var.set(str(_ORG_ID))
+        try:
+            handler = ErrorTrackingLogHandler()
+            await handler._async_emit(self._make_record(logging.ERROR, "boom"))
+        finally:
+            org_id_var.reset(token)
+
+        service.assert_awaited_once()
+        assert any("ErrorTrackingLogHandler.ingest_failed" in r.getMessage() for r in caplog.records)
 
 
 class TestEnrichment:

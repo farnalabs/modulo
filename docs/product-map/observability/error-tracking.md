@@ -221,6 +221,9 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - [x] Forwarder config CRUD + test routes wrap DB in ProgrammingError→501
 - [x] All 13 DB-accessing error-tracking route handlers also catch SQLAlchemyError→503 (connection failures, deadlocks)
 - [x] `resolved_at` set on error group when `update_error_group` sets status to `"resolved"`
+- [x] Resolving a group cascades to its events — `new`/`acknowledged` events in the group become
+  `resolved` with `resolved_at` populated (`_mark_group_events_resolved()`); already-resolved events
+  keep their original timestamp and archived events are untouched
 - [x] `POST /api/v1/errors/ingest` — catches Exception → 500
 - [x] `POST /api/v1/errors/ingest/public` — catches Exception → 500
 - [x] `GET /api/v1/errors` — catches Exception → 500
@@ -257,6 +260,13 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
   SQLite end-to-end).~~
 - **`ErrorEvent.resolved_at` never set when group resolved:** The column exists but no code populates
   it when a group's status changes to `"resolved"`. Only `ErrorGroup.resolved_at` is set.
+  — ~~**RESOLVED 2026-08-12**: `update_error_group()` now cascades a group resolution to its events
+  via `_mark_group_events_resolved()` — a bulk `UPDATE` flips `new`/`acknowledged` events in the
+  group (same `organisation_id` + `fingerprint`) to `status='resolved'` with `resolved_at` set;
+  already-terminal events (`resolved`/`archived`) keep their existing state so original resolution
+  timestamps are preserved. 3 unit tests (`TestUpdateErrorGroup`: update-statement emitted on
+  resolve, no bulk update on non-resolve statuses, real in-memory SQLite end-to-end verifying
+  event status/resolved_at propagation and terminal-event preservation).~~
 - **Breadcrumbs not persisted:** Frontend sends breadcrumbs (validated max 50) but
   backend strips them before DB insert
 - **No notification rules UI:** API exists but no frontend views for managing rules
@@ -270,6 +280,27 @@ Datadog, PagerDuty, Rollbar, OpsGenie, Loki) sources.
 - **Public ingest daily cap memory leak (fixed 2026-07-07):** `_public_daily_event_count` entries for stale IPs are now pruned by `_prune_stale_ip_counters()`. See QA History 2026-07-07.
 
 ## QA History
+
+### 2026-08-12 — improve-architecture (event-resolution cascade gap→resolved)
+
+- **Fixed feature gap:** `ErrorEvent.resolved_at` was never populated — resolving an
+  error group (`update_error_group(status="resolved")`) set `ErrorGroup.resolved_at`
+  but left every event in the group stuck at `status='new'` with no resolution
+  timestamp, so the event-level lifecycle was permanently out of sync with the group.
+  Implemented `_mark_group_events_resolved()` in `db/crud/error_tracking.py`: a single
+  bulk `UPDATE` transitions the group's `new`/`acknowledged` events (matched by
+  `organisation_id` + `fingerprint`) to `status='resolved'` with `resolved_at` set.
+  Already-terminal events are excluded from the update — a previously-resolved event
+  keeps its original `resolved_at` and archived events stay archived.
+- **Test coverage:** added 3 unit tests in `test_error_models.py`
+  (`TestUpdateErrorGroup`): (1) resolving a group emits an `UPDATE` against
+  `error_events` setting `status` + `resolved_at`; (2) non-resolve statuses
+  (`acknowledged`) never touch events; (3) a real in-memory SQLite end-to-end test —
+  resolves a group over `new`/`acknowledged`/`resolved`/`archived` events and verifies
+  the first two flip to resolved with a timestamp, the pre-resolved event keeps its
+  original timestamp, and the archived event is untouched. 51/51 `test_error_models.py`
+  + 336/336 error_tracking unit tests pass; ruff check + format clean; mypy --strict
+  clean. Updated product map behaviour checkbox and known gaps.
 
 ### 2026-08-12 — improve-architecture (active-groups gauge gap→implemented)
 

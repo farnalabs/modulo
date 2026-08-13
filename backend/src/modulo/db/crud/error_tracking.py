@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -256,8 +256,32 @@ async def update_error_group(
         group.status = status
         if status == "resolved":
             group.resolved_at = datetime.now(UTC)
+            await _mark_group_events_resolved(session, org_id, group.fingerprint)
     if assigned_to is not None:
         group.assigned_to = assigned_to
 
     await session.flush()
     return group
+
+
+async def _mark_group_events_resolved(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    fingerprint: str,
+) -> None:
+    """Propagate a group resolution to its events.
+
+    Events already in a terminal state (``resolved``/``archived``) keep their
+    existing state; only ``new``/``acknowledged`` events are transitioned so the
+    group's events reflect the same resolution timestamp.
+    """
+    now = datetime.now(UTC)
+    await session.execute(
+        update(ErrorEvent)
+        .where(
+            ErrorEvent.organisation_id == org_id,
+            ErrorEvent.fingerprint == fingerprint,
+            ErrorEvent.status.in_(("new", "acknowledged")),
+        )
+        .values(status="resolved", resolved_at=now)
+    )

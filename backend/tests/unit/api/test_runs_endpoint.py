@@ -766,6 +766,59 @@ def test_list_runs_child_cost_zero_when_no_children(client: TestClient) -> None:
     assert item["aggregate_cost_usd"] == "3.000000"
 
 
+def test_list_runs_includes_truncated_error_detail_preview(client: TestClient) -> None:
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+    run.error_code = "task_failure"
+    run.error_detail = "e" * 500
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["error_code"] == "task_failure"
+    assert item["error_detail"].endswith("…")
+    assert len(item["error_detail"]) == 201
+
+
+def test_list_runs_error_detail_none_for_success(client: TestClient) -> None:
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)  # error_detail defaults to None
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["error_code"] is None
+    assert item["error_detail"] is None
+
+
 def test_run_response_all_new_fields_present_in_trigger_endpoint(client: TestClient) -> None:
     pipeline = _make_pipeline()
     run = _make_run(status="pending")

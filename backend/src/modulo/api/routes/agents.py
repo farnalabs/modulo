@@ -114,13 +114,13 @@ class AgentResponse(BaseModel):
     name: str
     description: str | None
     is_executable: bool
-    input_schema_id: uuid.UUID
-    input_schema_version: str
-    output_schema_id: uuid.UUID
-    output_schema_version: str
+    input_schema_id: uuid.UUID | None
+    input_schema_version: str | None
+    output_schema_id: uuid.UUID | None
+    output_schema_version: str | None
     prompt_template: str
     prompt_version_history: list[dict[str, Any]]
-    model_backend_id: uuid.UUID
+    model_backend_id: uuid.UUID | None
     connector_type_refs: list[dict[str, Any]]
     evals: list[dict[str, Any]] | None
     retry_policy: dict[str, Any]

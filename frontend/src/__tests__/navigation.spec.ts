@@ -13,7 +13,6 @@ const mockManifest = vi.hoisted(() => ({
     '/pipelines': { name: 'pipeline-list', breadcrumb: 'Pipelines', sidebar_group: 'core', sidebar_order: 3, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/library': { name: 'library', breadcrumb: 'Library', sidebar_group: 'core', sidebar_order: 4, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null },
     '/runs': { name: 'runs-list', breadcrumb: 'Runs', sidebar_group: 'core', sidebar_order: 5, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
-    '/stages': { name: 'stages', breadcrumb: 'Stages Board', sidebar_group: 'core', sidebar_order: 7, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
     '/runs/:id': { name: 'run-detail', breadcrumb: 'Run Detail', sidebar_group: 'core', sidebar_order: 8, type: 'detail_page', required_tier: null, required_roles: null, required_permissions: null },
     '/lifecycle-maps': { name: 'lifecycle-maps', breadcrumb: 'Lifecycle Maps', sidebar_group: 'core', sidebar_order: 9, type: 'list_page', required_tier: null, required_roles: null, required_permissions: null, exact: true },
     '/runs/diff': { name: 'runs-diff', breadcrumb: 'Output Diff', sidebar_group: 'monitor', sidebar_order: 1, type: 'page', required_tier: null, required_roles: null, required_permissions: null },
@@ -93,9 +92,9 @@ describe('navigation.ts', () => {
 
   it('items within groups are sorted by sidebar_order', () => {
     const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.length).toBe(6)
+    expect(core.items.length).toBe(5)
     expect(core.items[0].to).toBe('/')
-    expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs', '/stages', '/lifecycle-maps'])
+    expect(core.items.map(i => i.to)).toEqual(['/', '/pipelines', '/library', '/runs', '/lifecycle-maps'])
   })
 
   it('excludes detail_page items from sidebar', () => {
@@ -280,9 +279,9 @@ describe('navigation.ts', () => {
     expect(admin.defaultCollapsed).toBe(true)
   })
 
-  it('core has exactly 6 items (lifecycle-maps restored, connectors moved)', () => {
+  it('core has exactly 5 items (lifecycle-maps restored, connectors moved, stages removed)', () => {
     const core = navGroups.find((g) => g.id === 'core')!
-    expect(core.items.length).toBe(6)
+    expect(core.items.length).toBe(5)
   })
 
   it('monitor has evals, diff, observability, etc', () => {
