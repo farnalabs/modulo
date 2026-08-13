@@ -31,7 +31,7 @@ class Trigger(SoftDeleteMixin, OrgScoped):
         # spend limit is REQUIRED (non-null, > 0) and the target pool size
         # ``max_concurrent_runs`` is bounded 1..20. Both are partial CHECKs — they
         # only apply to ``trigger_type = 'ongoing'`` rows — mirroring migration
-        # 0092_ongoing_trigger_type.
+        # 0094_ongoing_trigger_type.
         CheckConstraint(
             "trigger_type <> 'ongoing' OR (daily_spend_limit IS NOT NULL AND daily_spend_limit > 0)",
             name="ck_triggers_ongoing_spend_limit",

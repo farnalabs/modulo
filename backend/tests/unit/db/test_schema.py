@@ -59,6 +59,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "remy_skills",
         "run_daily_facts",
         "run_evidence",
+        "run_number_counters",
         "runs",
         "saved_views",
         "scheduled_reports",

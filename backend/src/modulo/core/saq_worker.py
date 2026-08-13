@@ -590,6 +590,34 @@ async def webhook_dedup_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"deleted": total}
 
 
+async def trigger_events_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — age-based retention for trigger_events (90-day default).
+
+    Deletes ``trigger_events`` rows whose ``received_at`` is older than the
+    retention window (default 90 days, aligned with the run-retention policy)
+    in bounded batches. The retention comfortably exceeds the webhook replay
+    window, so replayable events are never purged.
+
+    Mirrors ``webhook_dedup_cleanup``: the system session factory is
+    ``autobegin=False`` (the codebase DI convention), so every batch needs an
+    explicit transaction — the first ``session.execute`` would otherwise raise
+    ``InvalidRequestError: Autobegin is disabled on this Session``. The
+    transaction must begin PER BATCH (not once around the loop) because
+    ``cleanup_old_trigger_events`` commits at the end of each pass.
+    """
+    from modulo.core.cleanup_jobs.trigger_events_cleanup import BATCH_SIZE, cleanup_old_trigger_events
+
+    total = 0
+    async with _make_session_factory()() as session:
+        while True:
+            async with session.begin():
+                deleted = await cleanup_old_trigger_events(session)
+            total += deleted
+            if deleted < BATCH_SIZE:
+                break
+    return {"deleted": total}
+
+
 # Cross-process stats key for the stale-run recovery sweep (D1). The sweep runs
 # in the SYSTEM WORKER process; /healthz/ready runs in the WEB process. Mirroring
 # the dispatcher_reconcile stats pattern, the cron job persists its outcome here
@@ -775,6 +803,7 @@ def _system_functions() -> list[Any]:
         claim_expiry,
         retention_cleanup,
         webhook_dedup_cleanup,
+        trigger_events_cleanup,
         stale_run_recovery,
         cost_probe,
         analytics_facts_maintenance,
@@ -831,6 +860,18 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # webhook-dedup cleanup: hourly (matches _CLEANUP_INTERVAL_SECONDS).
         CronJob(
             webhook_dedup_cleanup,
+            cron="0 * * * *",
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # trigger_events retention: hourly, unique=True so overlapping ticks
+        # cannot interleave (bounded + idempotent — a second instance can only
+        # find nothing left to delete).
+        CronJob(
+            trigger_events_cleanup,
             cron="0 * * * *",
             unique=True,
             timeout=300,
