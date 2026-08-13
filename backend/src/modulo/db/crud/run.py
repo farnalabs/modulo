@@ -851,7 +851,7 @@ async def _count_active_runs(
         .select_from(Run)
         .where(
             Run.status.in_(_active_run_statuses(include_pending)),
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     if pipeline_id is not None:
@@ -963,7 +963,7 @@ async def count_active_sandbox_runs_for_org(
         .where(
             Run.organisation_id == org_id,
             Run.status == "running",
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     if exclude_run_id is not None:

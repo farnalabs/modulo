@@ -198,16 +198,6 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["enqueue_failed_capped"] = stats.get("enqueue_failed_capped", 0)
 
 
-def get_dispatcher_reconcile_stats() -> dict[str, Any]:
-    """Read the last dispatcher_reconcile outcome (thread-safe).
-
-    In-process only: this returns the dict of THIS process. The system cron
-    writes it in the system-worker process; the web process /healthz/ready
-    reads the shared Redis key (see ``read_dispatcher_reconcile_stats``).
-    """
-    return dict(_dispatcher_reconcile_stats)
-
-
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
 # The dispatcher_reconcile cron runs in the SYSTEM WORKER process; /healthz/ready
 # runs in the WEB process (PR dist/separate-workers: workers on ``worker``

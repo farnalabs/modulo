@@ -55,7 +55,7 @@ async def fire_agent_signal(
 
     stmt = select(Trigger).where(
         Trigger.trigger_type == "agent_signal",
-        Trigger.active == True,  # noqa: E712
+        Trigger.active.is_(True),
         Trigger.organisation_id == org_id,
     )
     result = await session.execute(stmt)
@@ -288,7 +288,7 @@ async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> in
         select(sa_func.count()).where(
             Run.trigger_id == trigger_id,
             Run.status.in_(_ACTIVE_STATUSES),
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     return int(result.scalar_one() or 0)
