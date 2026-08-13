@@ -121,13 +121,18 @@ describe('LifecycleMapEditor version loading', () => {
     await flushPromises()
 
     const dropdown = wrapper.findComponent(VersionHistoryDropdown)
-    dropdown.vm.$emit('select', 'ver-1')
+    expect(dropdown.props('currentVersionId')).toBe('ver-1')
+
+    dropdown.vm.$emit('select', 'ver-2')
     await flushPromises()
+
+    expect(wrapper.findComponent(VersionHistoryDropdown).props('currentVersionId')).toBe('ver-2')
 
     const flow = wrapper.findComponent(VueFlowStub)
     const nodes = flow.props('nodes') as { data: { name: string } }[]
     const edges = flow.props('edges') as unknown[]
-    expect(nodes[0].data.name).toBe('Stage A')
-    expect(edges).toHaveLength(1)
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].data.name).toBe('Stage B')
+    expect(edges).toHaveLength(0)
   })
 })
