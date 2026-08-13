@@ -24,7 +24,7 @@ _MIGRATION_PATH = (
 )
 
 # The migration this branch introduces — the current head of the chain.
-_HEAD_MIGRATION_NAME = "0088_drop_stages"
+_HEAD_MIGRATION_NAME = "0089_agents_nullable_schema_fields"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
