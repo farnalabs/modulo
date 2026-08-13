@@ -190,15 +190,22 @@ def test_no_assert_under_swallowing_except():
         parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
 
         def _reports_failure(handler):
-            for stmt in ast.walk(ast.Module(body=handler.body, type_ignores=[])):
-                if isinstance(stmt, ast.Raise):
-                    return True
-                if isinstance(stmt, ast.Call):
-                    f = stmt.func
-                    name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
-                    if name in ("fail", "skip", "xfail"):
+            def _scan(nodes):
+                for stmt in nodes:
+                    if isinstance(stmt, ast.Raise):
                         return True
-            return False
+                    if isinstance(stmt, ast.Call):
+                        f = stmt.func
+                        name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+                        if name in ("fail", "skip", "xfail"):
+                            return True
+                    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        continue
+                    if _scan(ast.iter_child_nodes(stmt)):
+                        return True
+                return False
+
+            return _scan(handler.body)
 
         def _catches_assertion(handler):
             if handler.type is None:
@@ -208,16 +215,16 @@ def test_no_assert_under_swallowing_except():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assert):
                 continue
-            parent = parents.get(node)
+            current = node
+            parent = parents.get(current)
             while parent is not None:
-                if isinstance(parent, ast.Try):
-                    if node not in parent.body:
-                        break
+                if isinstance(parent, ast.Try) and current in parent.body:
                     swallowing = [h for h in parent.handlers if _catches_assertion(h) and not _reports_failure(h)]
                     if swallowing:
                         violations.append(f"  {rel}:{node.lineno}  assert inside try guarded by swallowing except")
-                    break
-                parent = parents.get(parent)
+                        break
+                current = parent
+                parent = parents.get(current)
     assert not violations, (
         f"Found {len(violations)} assert(s) inside a try/except that swallows failures.\n"
         "Move the assert outside the try or re-raise/pytest.fail in the handler.\n" + "\n".join(violations)
