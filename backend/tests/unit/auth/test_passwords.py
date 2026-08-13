@@ -36,6 +36,11 @@ def test_verify_password_bad_hash_returns_false() -> None:
     assert verify_password("any", "not-a-valid-hash") is False
 
 
+def test_hash_password_rejects_over_72_utf8_bytes() -> None:
+    with pytest.raises(ValueError, match="exceeds 72 bytes"):
+        hash_password("a" * 73)
+
+
 # ---------------------------------------------------------------------------
 # authenticate_db_user
 # ---------------------------------------------------------------------------
@@ -105,6 +110,11 @@ def test_validate_low_entropy_long_password() -> None:
     # digits-only: 8 * log2(10) ≈ 26.6 bits < 30 minimum
     with pytest.raises(ValueError, match="too weak"):
         validate_password_strength("12345678")
+
+
+def test_validate_strength_rejects_over_72_utf8_bytes() -> None:
+    with pytest.raises(ValueError, match="72 UTF-8 bytes"):
+        validate_password_strength("a" * 73)
 
 
 def test_validate_all_lowercase_12_chars() -> None:

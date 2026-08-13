@@ -79,6 +79,7 @@ class TestFunctionsWiring:
         assert "fire_due_triggers" in names
         assert "dispatcher_reconcile" in names
         assert "claim_expiry" in names
+        assert "hitl_overdue" in names
         assert "retention_cleanup" in names
         assert "webhook_dedup_cleanup" in names
         assert "trigger_events_cleanup" in names
@@ -92,6 +93,7 @@ class TestFunctionsWiring:
             "fire_due_triggers",
             "dispatcher_reconcile",
             "claim_expiry",
+            "hitl_overdue",
             "retention_cleanup",
             "webhook_dedup_cleanup",
             "trigger_events_cleanup",
@@ -114,6 +116,15 @@ class TestFunctionsWiring:
         assert dr.timeout == 120
         assert dr.cron == "* * * * *"
         assert dr.unique is True
+        # hitl_overdue: every 5 minutes (overdue thresholds are hour-scale),
+        # unique so overlapping ticks cannot double-dispatch.
+        ho = jobs["hitl_overdue"]
+        assert ho.cron == "*/5 * * * *"
+        assert ho.timeout == 120
+        assert ho.retries == 2
+        assert ho.heartbeat == 30
+        assert ho.ttl == 300
+        assert ho.unique is True
         # check_missed_fire_alerts: hourly, 5-field form (NOT 6-field — the bug
         # class #680 croniter seconds-field misparse), unique so overlaps are
         # impossible (the probe has its own in-memory cooldown).
@@ -1296,6 +1307,64 @@ class TestClaimExpiry:
         expire.assert_awaited_once()
         assert expire.await_args.kwargs["notifier"] is None
         assert "claim_expiry: notifier init failed" in caplog.text
+
+
+class TestHitlOverdue:
+    @staticmethod
+    def _make_factory() -> MagicMock:
+        session = AsyncMock()
+        factory = MagicMock()
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=session)
+        context.__aexit__ = AsyncMock(return_value=False)
+        factory.return_value = context
+        return factory
+
+    @pytest.mark.asyncio
+    async def test_dispatches_overdue_notifications_with_notifier(self) -> None:
+        factory = self._make_factory()
+        engine = MagicMock()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=engine),
+            patch("modulo.core.notifier.Notifier") as notifier_cls,
+            patch(
+                "modulo.core.hitl_manager.overdue_warning.dispatch_overdue_notifications",
+                new_callable=AsyncMock,
+                return_value=["claim-1", "claim-2"],
+            ) as dispatch,
+        ):
+            result = await sw.hitl_overdue({})
+
+        assert result == {"dispatched": 2}
+        dispatch.assert_awaited_once()
+        assert dispatch.await_args.kwargs["notifier"] is notifier_cls.return_value
+        notifier_cls.assert_called_once_with(engine, _settings().fernet_key)
+
+    @pytest.mark.asyncio
+    async def test_notifier_init_failure_does_not_block_dispatch(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A Notifier init failure must be swallowed — overdue dispatch still
+        runs with ``notifier=None`` (the sweep must not depend on alerting)."""
+        factory = self._make_factory()
+        with (
+            patch.object(sw, "get_settings", return_value=_settings()),
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            patch.object(sw, "_get_async_engine", return_value=MagicMock()),
+            patch("modulo.core.notifier.Notifier", side_effect=RuntimeError("fernet boom")),
+            patch(
+                "modulo.core.hitl_manager.overdue_warning.dispatch_overdue_notifications",
+                new_callable=AsyncMock,
+                return_value=["claim-1"],
+            ) as dispatch,
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            result = await sw.hitl_overdue({})
+
+        assert result == {"dispatched": 1}
+        dispatch.assert_awaited_once()
+        assert dispatch.await_args.kwargs["notifier"] is None
+        assert "hitl_overdue: notifier init failed" in caplog.text
 
 
 class TestCancellationPropagation:

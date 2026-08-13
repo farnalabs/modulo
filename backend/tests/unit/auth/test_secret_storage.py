@@ -6,6 +6,7 @@ from cryptography.fernet import Fernet
 from modulo.auth.secret_storage import (
     CorruptSecretError,
     DecryptionError,
+    InvalidFernetKeyError,
     InvalidSecretTypeError,
     decode_stored_secret,
     encrypt_stored_secret,
@@ -21,6 +22,11 @@ def test_encrypt_stored_secret_roundtrip() -> None:
     assert encrypted != plaintext.encode()
     decoded = decode_stored_secret(encrypted, _FERNET_KEY)
     assert decoded == plaintext
+
+
+def test_encrypt_stored_secret_with_invalid_key_raises() -> None:
+    with pytest.raises(InvalidFernetKeyError, match="Fernet key is not valid"):
+        encrypt_stored_secret("secret", "not-a-valid-fernet-key")
 
 
 def test_decode_stored_secret_with_fernet_bytes() -> None:
@@ -45,6 +51,11 @@ def test_decode_stored_secret_with_invalid_token_raises() -> None:
     wrong_encrypted = Fernet(wrong_key.encode()).encrypt(b"other-data")
     with pytest.raises(DecryptionError, match="cannot be decrypted"):
         decode_stored_secret(wrong_encrypted, _FERNET_KEY)
+
+
+def test_decode_stored_secret_with_invalid_key_raises() -> None:
+    with pytest.raises(InvalidFernetKeyError, match="Fernet key is not valid"):
+        decode_stored_secret(b"gAAAAA-some-ciphertext", "not-a-valid-fernet-key")
 
 
 def test_decode_stored_secret_with_non_utf8_bytes_raises() -> None:

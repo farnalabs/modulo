@@ -13,12 +13,16 @@ unit-tests:
   - backend/tests/unit/notifier/test_notification_endpoints_api.py
   - backend/tests/unit/api/test_delivery_log.py
   - backend/tests/unit/hitl_manager/test_overdue_warning.py
+  - backend/tests/unit/test_saq_worker.py
 code:
   - backend/src/modulo/core/notifier/__init__.py
   - backend/src/modulo/api/routes/admin_notifications.py
   - backend/src/modulo/db/models/notification_endpoint.py
   - backend/src/modulo/db/models/notification_delivery.py
   - backend/src/modulo/core/hitl_manager/expiry_job.py
+  - backend/src/modulo/core/hitl_manager/overdue_warning.py
+  - backend/src/modulo/core/saq_worker.py
+  - backend/src/modulo/db/migrations/versions/0096_hitl_claims_overdue_notified.py
 depends-on: [feat-teams-team-crud]
 status: partial
 ---
@@ -34,7 +38,7 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] `hitl_awaiting` event dispatches when a run reaches a HITL gate
 - [x] `run_failed` event dispatches when a pipeline node raises an unhandled exception
 - [x] `claim_expired` event dispatches when a HITL claim expires (via ClaimExpiryJob) — Notifier.dispatch_event called in ClaimExpiryJob._expire_once
-- [ ] `hitl_overdue` event dispatches when a HITL gate passes its configurable threshold — event type constant exists but no background job dispatches it
+- [x] `hitl_overdue` event dispatches when a HITL gate passes its configurable threshold — dispatched by the `hitl_overdue` SAQ system cron via `dispatch_overdue_notifications` (once per claim, idempotent via `hitl_claims.overdue_notified_at`)
 - [x] `budget_exceeded` event type is defined in PRD §8.11 and AVAILABLE_EVENTS — EVENT_BUDGET_EXCEEDED constant exists and is now in AVAILABLE_EVENTS list
 - [x] `circuit_breaker_tripped` event type is defined in PRD §8.11 and AVAILABLE_EVENTS — EVENT_CIRCUIT_BREAKER_TRIPPED constant added to notifier/__init__.py and AVAILABLE_EVENTS list
 - [x] Webhook POST body includes event type, ISO timestamp, and event-specific payload
@@ -115,6 +119,16 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - [x] Job errors logged and caught (one org failure does not crash the loop) — outer try/except in _run, inner try/except per notification dispatch
 - [x] Job cancels cleanly on application shutdown — _stop_event + task.cancel() pattern
 
+### Overdue notification background job
+
+- [x] `hitl_overdue` notifications dispatched by the `hitl_overdue` SAQ system cron (every 5 min) via `dispatch_overdue_notifications(factory, notifier)` in `overdue_warning.py`
+- [x] Selects claimed-but-undecided claims past the warning threshold (`claimed_at < now - warning_hours`, default 4h) with `overdue_notified_at IS NULL`
+- [x] Payload carries `run_id`, `gate_id`, `pipeline_name` (joined from `pipelines`), and `minutes_overdue` — matches the notifier/event_mapper contract
+- [x] Idempotent per claim — `hitl_claims.overdue_notified_at` is stamped after a successful dispatch so a claim is never re-alerted on later ticks
+- [x] Per-org RLS scoping + `pg_try_advisory_xact_lock` (dedicated `_OVERDUE_LOCK_KEY`, distinct from the expiry sweep) so concurrent ticks on multiple workers never double-dispatch
+- [x] Runs per-org; one org's failure does not crash the sweep; notification dispatch errors are logged and the claim stays unstamped (retried next tick)
+- [x] Notifier init failure degrades to `notifier=None` — the sweep still runs, just without dispatch
+
 ### Security
 
 - [x] All admin notification routes require admin role — _require_admin guard on every route
@@ -145,7 +159,6 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 - SAQ-cron-based dispatcher isolation (PRD v1) — dispatcher still runs in FastAPI process
 - Multi-worker advisory lock for expiry job not yet implemented
 - Team notification endpoint configuration (team_id field) not exposed in admin API create/update routes — NotificationEndpoint model has team_id column but API does not surface it
-- `hitl_overdue` event type constant exists in AVAILABLE_EVENTS and event_mapper but no background job dispatches it
 - Website docs stub at `Website/modulo-website/src/docs/notifications/webhooks.md` does not exist — needs creation
 - `Notifier.dispatch_event` lacked top-level try/except — fixed in QA (index 154)
 - `Notifier._record_delivery`, `_increment_dead_letter`, `_reset_dead_letter` lacked try/except — fixed in QA (index 154)
@@ -165,3 +178,6 @@ Outbound webhook notifications for pipeline lifecycle events, with HMAC signing,
 
 ## QA History (index 386)
 - 2026-07-09: Cross-cutting QA — added EVENT_CIRCUIT_BREAKER_TRIPPED constant to notifier/__init__.py. Added budget_exceeded and circuit_breaker_tripped to AVAILABLE_EVENTS in admin_notifications.py. Aligned RETRY_DELAYS with PRD §8.11 ([1.0, 5.0, 30.0]). Added Retry-After header handling for 429 responses (capped at 60s) in _dispatch_to_endpoint. Wired NotificationEventMapper into _dispatch_inline so in-app notifications are created alongside webhook dispatches. Moved all inline imports (httpx, hashlib, hmac, logging) to module level in admin_notifications.py. Removed duplicate inner ProgrammingError catch in _list_deliveries. Added dead-letter counter updates (increment/reset + auto-disable) to retry_delivery and retry_all_failed_deliveries routes. Moved func import to module level. Created semgrep rule for inline imports in route files.
+
+## QA History (index 405)
+- 2026-08-13: improve-architecture — **RESOLVED the "`hitl_overdue` event constant exists but no background job dispatches it" known gap** (`core/hitl_manager/overdue_warning.py` + `core/saq_worker.py`). Added `dispatch_overdue_notifications(factory, notifier, warning_hours=DEFAULT_WARNING_HOURS)` — a per-org, RLS-scoped, advisory-lock-guarded sweep that selects claimed-but-undecided claims past the warning threshold (default 4h) with `overdue_notified_at IS NULL`, joins `pipelines` for the name, computes `minutes_overdue`, and dispatches `hitl_overdue` events (`run_id`, `gate_id`, `pipeline_name`, `minutes_overdue`) via the Notifier. New `hitl_overdue` SAQ system cron (every 5 min, `unique=True`, `retries=2`, timeout 120s) with the same notifier-init-failure resilience as `claim_expiry`. **Idempotency**: new `hitl_claims.overdue_notified_at` column (migration 0096) stamped after a successful dispatch so a claim is never re-alerted on later ticks; a failed dispatch leaves the claim unstamped for the next tick. Dedicated `_OVERDUE_LOCK_KEY` (distinct from the expiry sweep's) prevents cross-cron contention. Added 12 unit tests (`test_overdue_warning.py`: dispatch payload incl. minutes_overdue 600/2880, event_type `hitl_overdue`, org_id + run_id kwargs, empty-when-none, no-notifier skip, notifier-failure no-crash, lock-denied skip, lock-query-failure proceeds, lock + dispatch cancellation propagation, negative warning_hours ValueError; `test_saq_worker.py`: system-functions registration, cron knobs `*/5 * * * *`, dispatch-with-notifier + notifier-init-failure worker tests). Updated product map (behaviour `[ ]`→`[x]`, new "Overdue notification background job" section, Known Gap → RESOLVED, unit-tests/code frontmatter, QA History). 26/26 `test_overdue_warning.py` + 28/28 relevant `test_saq_worker.py` classes + full hitl_manager/notifier suites pass, ruff check + format clean, mypy --strict clean (5 pre-existing `test_saq_worker.py` env failures unchanged). Status: partial (Slack native integration, PRD §8.11 5-within-24h auto-disable, `X-Modulo-Timestamp` signing, SAQ-cron dispatcher isolation, expiry-job multi-worker advisory lock, team_id API surface, website docs stub remain).

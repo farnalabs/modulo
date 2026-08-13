@@ -24,7 +24,7 @@
           <VersionHistoryDropdown
             :versions="versions"
             :current-version-id="currentVersionId"
-            @select="$emit('load-version', $event)"
+            @select="onLoadVersion"
           />
 
           <span class="mx-2 h-4 w-px bg-border" />
@@ -173,7 +173,6 @@ const props = defineProps<{
 
 const emitEvent = defineEmits<{
   saved: []
-  'load-version': [versionId: string]
 }>()
 
 const { get, post, put } = useApi()
@@ -320,6 +319,16 @@ async function handleSave() {
   } finally {
     saving.value = false
   }
+}
+
+function onLoadVersion(versionId: string) {
+  const version = versions.value.find((v) => v.id === versionId)
+  if (!version) return
+  flowNodes.value = (version.stages ?? []).map(createFlowNode)
+  flowEdges.value = (version.edges ?? []).map(createFlowEdge)
+  currentVersionId.value = versionId
+  selectedNode.value = null
+  selectedEdge.value = null
 }
 
 function onDragOver(event: unknown) {
