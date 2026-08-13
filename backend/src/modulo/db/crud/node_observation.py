@@ -49,21 +49,3 @@ async def observe_node(
     session.add(obs)
     await session.flush()
     return obs
-
-
-async def get_node_observation(
-    session: AsyncSession,
-    *,
-    organisation_id: uuid.UUID,
-    run_id: uuid.UUID,
-    node_id: str,
-) -> NodeObservation | None:
-    """Return the observation record for a given run + node, if any."""
-    result = await session.execute(
-        select(NodeObservation).where(
-            NodeObservation.run_id == run_id,
-            NodeObservation.node_id == node_id,
-            NodeObservation.organisation_id == organisation_id,
-        )
-    )
-    return result.scalar_one_or_none()
