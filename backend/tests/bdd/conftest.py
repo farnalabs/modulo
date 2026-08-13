@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from playwright.sync_api import Page
 
 os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 os.environ.setdefault("REDIS_URL", "")
@@ -40,12 +39,6 @@ def browser_context_args(browser_context_args):
         "viewport": {"width": 1440, "height": 900},
         "color_scheme": "dark",
     }
-
-
-@pytest.fixture
-def agent_page(page: Page) -> Page:
-    page.add_init_script("document.documentElement.setAttribute('data-theme', 'agent')")
-    return page
 
 
 @pytest.fixture(scope="session")
@@ -311,16 +304,4 @@ def operator_client(mock_session: AsyncMock) -> Generator[TestClient, None, None
         organisation_id=ORG_ID,
         account_id=uuid.uuid4(),
         org_role="operator",
-    )
-
-
-@pytest.fixture
-def system_admin_client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
-    yield from _make_test_client(
-        mock_session,
-        username="sysadmin",
-        organisation_id=ORG_ID,
-        account_id=USER_ID,
-        org_role="admin",
-        is_system_admin=True,
     )

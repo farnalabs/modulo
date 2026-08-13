@@ -28,28 +28,10 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# Fixtures — seed orgs, users, test role
+# Fixtures — seed orgs, users
 # These use separate org IDs (not the shared test_org) to test cross-tenant
 # isolation. Users are created via accounts + org_memberships.
 # ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="module")
-async def rls_role(db_engine: AsyncEngine) -> str:
-    role = f"test_env_rls_{uuid.uuid4().hex[:8]}"
-    async with db_engine.connect() as conn:
-        await conn.execute(text(f'CREATE ROLE "{role}"'))
-        await conn.execute(text(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{role}"'))
-        await conn.execute(text(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{role}"'))
-        await conn.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
-        for tbl in ("environment_profiles", "workspace_leases", "organisations", "org_memberships", "runs", "agents"):
-            await conn.execute(text(f"ALTER TABLE {tbl} FORCE ROW LEVEL SECURITY"))
-        await conn.execute(text("COMMIT"))
-    yield role
-    async with db_engine.connect() as conn:
-        await conn.execute(text(f'DROP OWNED BY "{role}"'))
-        await conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
-        await conn.execute(text("COMMIT"))
 
 
 @pytest_asyncio.fixture(scope="module")
