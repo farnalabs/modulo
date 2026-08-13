@@ -23,6 +23,7 @@ from modulo.core.exceptions import OrgDeletedError
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.lifecycle_refs import (
     _RESERVED_INPUT_PAYLOAD_KEYS,
     canonical_work_item_id,
@@ -356,6 +357,16 @@ async def create_run(
     )
     canonical_refs = _canonicalise_ref_entries(work_item_refs)
 
+    # Team-boundary stamping: a run inherits its owner team from the pipeline
+    # it belongs to when no explicit team is passed. ``Run.owner_team_id`` is
+    # the source of truth for the MCP team-boundary guards and the analytics
+    # facts (``RunDailyFact.team_id``); without this stamp, every guard reads a
+    # NULL owner and silently treats cross-team runs as org-level.
+    if owner_team_id is None:
+        owner_team_id = (
+            await session.execute(select(Pipeline.owner_team_id).where(Pipeline.id == pipeline_id))
+        ).scalar_one_or_none()
+
     run = Run(
         id=run_id,
         organisation_id=org_id,
@@ -425,6 +436,7 @@ async def list_runs(
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
+    team_id: uuid.UUID | None = None,
 ) -> PageResult[Run]:
     q = (
         select(Run)
@@ -438,6 +450,16 @@ async def list_runs(
         .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
         .where(Pipeline.deleted_at.is_(None))
     )
+    if team_id is not None:
+        # A team-scoped caller sees runs for its own team's pipelines plus
+        # org-level pipelines (no owner team) — the same boundary the MCP
+        # guard applies. The run's stamped owner is the source of truth;
+        # runs predating the create-time stamp (NULL) fall back to the
+        # pipeline's owner so a NULL stamp can never widen the boundary.
+        effective_owner = func.coalesce(Run.owner_team_id, Pipeline.owner_team_id)
+        team_scope = team_scope_clause(effective_owner, team_id)
+        q = q.where(team_scope)
+        count_q = count_q.where(team_scope)
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
         count_q = count_q.where(Run.pipeline_id == pipeline_id)

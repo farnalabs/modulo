@@ -37,6 +37,13 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
     return cm
 
 
+def _make_run_lookup_result(run: MagicMock | None = None) -> MagicMock:
+    """A session.execute() result that resolves a run for the get_run boundary check."""
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = run if run is not None else MagicMock()
+    return result
+
+
 def _make_page_result(items: list, *, total: int | None = None, next_cursor=None, has_more: bool = False) -> MagicMock:
     result = MagicMock()
     result.items = items
@@ -666,6 +673,7 @@ class TestReviewHitl(_AuthContext):
         manager.claim = AsyncMock(return_value=claimed)
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -689,11 +697,13 @@ class TestReviewHitl(_AuthContext):
         self._set_role_operator()
         manager = MagicMock()
         manager.approve = AsyncMock()
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
         gate_row_result = MagicMock()
         gate_row_result.scalar_one_or_none.return_value = None
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(return_value=gate_row_result)
+        mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_row_result])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -717,6 +727,7 @@ class TestReviewHitl(_AuthContext):
         manager.reject = AsyncMock()
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -740,6 +751,7 @@ class TestReviewHitl(_AuthContext):
         manager.deliver_manual = AsyncMock()
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -770,6 +782,8 @@ class TestReviewHitl(_AuthContext):
 
         gate_row = MagicMock()
         gate_row.pipeline_id = uuid.uuid4()
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
         gate_row_result = MagicMock()
         gate_row_result.scalar_one_or_none.return_value = gate_row
         edge = MagicMock()
@@ -778,7 +792,7 @@ class TestReviewHitl(_AuthContext):
         edge_result.scalars.return_value.first.return_value = edge
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(side_effect=[gate_row_result, edge_result])
+        mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_row_result, edge_result])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -802,6 +816,7 @@ class TestReviewHitl(_AuthContext):
         manager.claim = AsyncMock(side_effect=GateNotFoundError(run_id_uuid, "gate-1"))
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -825,6 +840,7 @@ class TestReviewHitl(_AuthContext):
         manager.claim = AsyncMock(side_effect=AlreadyClaimedError(uuid.uuid4(), "gate-1"))
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -845,6 +861,7 @@ class TestReviewHitl(_AuthContext):
         manager.claim = AsyncMock(side_effect=NotTeamMemberError(uuid.uuid4(), "gate-1", uuid.uuid4(), uuid.uuid4()))
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -866,7 +883,11 @@ class TestReviewHitl(_AuthContext):
         manager.approve = AsyncMock(side_effect=ClaimTokenInvalidError())
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+        gate_result = MagicMock()
+        gate_result.scalar_one_or_none.return_value = None
+        mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_result])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -888,6 +909,7 @@ class TestReviewHitl(_AuthContext):
         manager.reject = AsyncMock(side_effect=ClaimTokenExpiredError())
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -910,7 +932,11 @@ class TestReviewHitl(_AuthContext):
         manager.approve = AsyncMock(side_effect=GateAlreadyDecidedError(uuid.uuid4(), "gate-1"))
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+        gate_result = MagicMock()
+        gate_result.scalar_one_or_none.return_value = None
+        mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_result])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -931,6 +957,7 @@ class TestReviewHitl(_AuthContext):
         manager.claim = AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("boom")))
 
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_run_lookup_result())
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 
@@ -952,7 +979,11 @@ class TestReviewHitl(_AuthContext):
         manager.approve = AsyncMock(side_effect=RuntimeError("boom"))
 
         mock_sesh = AsyncMock()
-        mock_sesh.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=lambda: None))
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = MagicMock()  # the run
+        gate_result = MagicMock()
+        gate_result.scalar_one_or_none.return_value = None
+        mock_sesh.execute = AsyncMock(side_effect=[run_result, gate_result])
         mock_session.return_value = _make_session_context(mock_sesh)
         mock_manager_cls.return_value = manager
 

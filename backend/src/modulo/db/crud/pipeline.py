@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import Connection, delete, func, select, update
+from sqlalchemy import ColumnElement, Connection, delete, func, select, update
 from sqlalchemy.exc import InvalidRequestError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
@@ -33,6 +33,7 @@ from modulo.db.crud.hitl_gate_guard import (
     resolve_effective_privilege,
 )
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -129,6 +130,7 @@ async def list_pipelines(
     include_archived: bool = False,
     include_deleted: bool = False,
     folder_id: uuid.UUID | None = None,
+    team_id: uuid.UUID | None = None,
 ) -> PageResult[Pipeline]:
     base = select(Pipeline)
     if not include_deleted:
@@ -137,6 +139,10 @@ async def list_pipelines(
         base = base.where(Pipeline.archived_at.is_(None))
     if folder_id is not None:
         base = base.where(Pipeline.folder_id == folder_id)
+    if team_id is not None:
+        # A team-scoped caller sees its own team's pipelines plus org-level
+        # pipelines (no owner team) — the same boundary the MCP guard applies.
+        base = base.where(team_scope_clause(Pipeline.owner_team_id, team_id))
 
     if cursor is not None:
         paginator = CursorPaginator()
@@ -159,11 +165,15 @@ async def list_pipelines(
 
     offset = (page - 1) * page_size
     try:
-        count_where = []
+        count_where: list[ColumnElement[bool]] = []
         if not include_deleted:
             count_where.append(Pipeline.deleted_at.is_(None))
         if not include_archived:
             count_where.append(Pipeline.archived_at.is_(None))
+        if folder_id is not None:
+            count_where.append(Pipeline.folder_id == folder_id)
+        if team_id is not None:
+            count_where.append(team_scope_clause(Pipeline.owner_team_id, team_id))
         total = (await session.execute(select(func.count()).select_from(Pipeline).where(*count_where))).scalar_one()
     except ProgrammingError:
         return PageResult(items=[], total=0, page=page, page_size=page_size)
