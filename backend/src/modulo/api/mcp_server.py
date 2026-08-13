@@ -106,6 +106,7 @@ from modulo.core.library_service import (
     list_primitives,
 )
 from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope
+from modulo.core.pipeline_engine.error_codes import present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.db.crud.hitl_gate_guard import HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
@@ -1021,6 +1022,7 @@ async def list_runs(
             child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
             child_cost = _quantize_mcp_cost_rollup(child_cost)
             own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
+            _error_code, error_detail = present_error(r.error_code, r.error_detail, limit=200)
             items.append(
                 {
                     "id": str(r.id),
@@ -1032,7 +1034,7 @@ async def list_runs(
                     "started_at": r.started_at.isoformat() if r.started_at else None,
                     "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                     "error_code": r.error_code,
-                    "error_detail": r.error_detail,
+                    "error_detail": error_detail,
                     "total_cost_usd": float(r.total_cost_usd) if r.total_cost_usd is not None else None,
                     "child_runs_cost_usd": float(child_cost),
                     "child_runs_count": child_count,
@@ -1700,6 +1702,9 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             result["completed_at"] = run.completed_at.isoformat()
         if run.error_code:
             result["error_code"] = run.error_code
+        if run.error_detail is not None:
+            _, error_detail = present_error(run.error_code, run.error_detail, limit=5000)
+            result["error_detail"] = error_detail
         if detail:
             from modulo.api.routes.runs import _clamp_node_token_usage_union
 

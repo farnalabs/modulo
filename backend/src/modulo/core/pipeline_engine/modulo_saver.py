@@ -8,6 +8,7 @@ any tenant's checkpoints.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -164,6 +165,11 @@ def _deserialize_checkpoint(raw: str) -> Checkpoint:
 
 _log = logging.getLogger(__name__)
 
+# Bound on a single reconnect attempt (monkeypatchable in tests). A reconnect
+# that hangs past this budget must NOT surface as a bare timeout — the retry
+# sites re-raise the ORIGINAL error instead (see aput / aput_writes).
+_RECONNECT_TIMEOUT_SECONDS = 10.0
+
 
 class ModuloPostgresSaver(AsyncPostgresSaver):
     """PostgresSaver with org_id isolation, SET LOCAL enforcement, and encryption.
@@ -194,6 +200,12 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         super().__init__(conn, **kwargs)
         self._org_id = organisation_id
         self._conn_string = conn_string
+        # Serializes _reconnect() so concurrent callers (parallel aput on a
+        # stale conn) perform ONE reconnection and the rest skip via the
+        # stale double-check. Scoped to _reconnect() ONLY — never wraps a
+        # cursor block (the base AsyncPostgresSaver._cursor already holds
+        # self.lock; nesting would deadlock).
+        self._reconnect_lock = asyncio.Lock()
         self._fernet = Fernet(fernet_key.encode()) if fernet_key else None
         self._fernet_old = Fernet(fernet_key_old.encode()) if fernet_key_old else None
         if fernet_key is None:
@@ -407,6 +419,15 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         metadata: CheckpointMetadata,
         new_versions: dict[str, str | int | float | bool] | None = None,
     ) -> dict[str, Any]:
+        """Write a checkpoint, retrying once on a connection-drop OperationalError.
+
+        The write path (aput / aput_writes) reconnects + retries because a
+        dropped connection there would fail the whole run. The READ paths
+        (aget_tuple / alist / setup) are NOT retried: the ``_cursor`` stale
+        pre-check covers pre-detected drops, and mid-flight read drops are out
+        of scope (a read failure surfaces to the caller for LangGraph to
+        decide).
+        """
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"].get("checkpoint_id")
@@ -424,27 +445,52 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
         encrypted_checkpoint = self._encrypt_checkpoint(checkpoint)
 
-        async with self._cursor() as cur:
-            await cur.execute(
-                self.UPSERT_CHECKPOINTS_SQL,
-                (
-                    self._org_id,
-                    thread_id,
-                    checkpoint_ns,
-                    checkpoint_id,
-                    parent_checkpoint_id,
-                    encrypted_checkpoint,
-                    json.dumps(metadata, default=str),
-                ),
-            )
-
-        return {
+        # 2-attempt retry on a connection-drop OperationalError, mirroring
+        # aput_writes: the drop typically fires at CURSOR ACQUIRE inside
+        # _cursor, so the WHOLE ``async with self._cursor()`` block is wrapped,
+        # not just cur.execute. Reconnect is bounded by
+        # _RECONNECT_TIMEOUT_SECONDS; a timed-out reconnect re-raises the
+        # ORIGINAL OperationalError (never a bare timeout).
+        result = {
             "configurable": {
                 "thread_id": thread_id,
                 "checkpoint_ns": checkpoint_ns,
                 "checkpoint_id": checkpoint_id,
             }
         }
+        for _attempt in range(2):
+            try:
+                async with self._cursor() as cur:
+                    await cur.execute(
+                        self.UPSERT_CHECKPOINTS_SQL,
+                        (
+                            self._org_id,
+                            thread_id,
+                            checkpoint_ns,
+                            checkpoint_id,
+                            parent_checkpoint_id,
+                            encrypted_checkpoint,
+                            json.dumps(metadata, default=str),
+                        ),
+                    )
+                return result
+            except Exception as exc:
+                is_conn_drop = type(exc).__name__ == "OperationalError"
+                if _attempt == 0 and is_conn_drop and self._conn_string:
+                    _log.warning(
+                        "checkpoint.aput_retry",
+                        extra={"error": str(exc)[:300]},
+                    )
+                    try:
+                        await self._reconnect()
+                    except TimeoutError:
+                        # A reconnect that hung past the budget must not surface
+                        # as a bare timeout replacing the real error — re-raise
+                        # the ORIGINAL OperationalError.
+                        raise exc from None
+                    continue
+                raise
+        return result
 
     # ------------------------------------------------------------------
     # Override: aput_writes — write with org_id
@@ -497,21 +543,47 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
     # ------------------------------------------------------------------
 
     async def _reconnect(self) -> None:
-        """Re-establish the DB connection after a connection-drop OperationalError."""
+        """Re-establish the DB connection after a connection-drop OperationalError.
+
+        Lock-serialized (``self._reconnect_lock``) with a stale double-check
+        inside the lock: when two coroutines detect the same stale connection,
+        the first performs the reconnect and the second observes the fresh
+        connection and skips — one ``AsyncConnection.connect`` instead of two.
+        The connect itself is bounded by :data:`_RECONNECT_TIMEOUT_SECONDS`;
+        a timeout closes the (old) connection and re-raises ``TimeoutError`` so
+        the retry call sites can fall back to the ORIGINAL error.
+        """
         if not self._conn_string:
             return
-        with suppress(Exception):
-            await self.conn.close()
-        # Match the AsyncPostgresSaver.from_conn_string connection setup
-        from psycopg import AsyncConnection
-        from psycopg.rows import dict_row
+        async with self._reconnect_lock:
+            # Double-check inside the lock: a concurrent coroutine may have
+            # already reconnected while we waited — skip rather than replace a
+            # fresh connection / leak a second one.
+            if not self._connection_is_stale():
+                return
+            with suppress(Exception):
+                await self.conn.close()
+            try:
+                # Match the AsyncPostgresSaver.from_conn_string connection setup
+                from psycopg import AsyncConnection
+                from psycopg.rows import dict_row
 
-        self.conn = await AsyncConnection.connect(
-            self._conn_string,
-            autocommit=True,
-            prepare_threshold=0,
-            row_factory=dict_row,
-        )
+                self.conn = await asyncio.wait_for(
+                    AsyncConnection.connect(
+                        self._conn_string,
+                        autocommit=True,
+                        prepare_threshold=0,
+                        row_factory=dict_row,
+                    ),
+                    timeout=_RECONNECT_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                # Clean up before re-raising: the old conn was already closed;
+                # make sure nothing half-open survives.
+                with suppress(Exception):
+                    await self.conn.close()
+                _log.exception("checkpoint.reconnect_timeout")
+                raise
 
     def _connection_is_stale(self) -> bool:
         """True when the current DB connection can no longer be used."""
@@ -530,7 +602,9 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
         checkpoint write (aput/aget_tuple/alist/setup), failing the whole run.
         Detect the stale connection up front and reconnect before opening a
         cursor. Only reconnects when a conn_string is available; without one
-        the base behavior (raise) is preserved.
+        the base behavior (raise) is preserved. The reconnect is
+        lock-serialized + timeout-bounded inside :meth:`_reconnect`, so
+        concurrent callers dedupe and a hung reconnect is bounded.
         """
         if self._conn_string and self._connection_is_stale():
             _log.warning(
@@ -620,8 +694,6 @@ class ModuloPostgresSaver(AsyncPostgresSaver):
 
     @staticmethod
     def _run_sync(coro: Any) -> Any:
-        import asyncio
-
         try:
             asyncio.get_running_loop()
         except RuntimeError:

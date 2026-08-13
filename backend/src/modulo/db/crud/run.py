@@ -744,7 +744,12 @@ async def transition_run(
     claim_token: str | None = None,
     allowed_from: frozenset[str] | None = None,
 ) -> bool:
-    """The single fenced run-transition authority (dist/runtime-core A1).
+    """The primary fenced run-transition authority (dist/runtime-core A1).
+
+    The single fenced run-transition authority for the REST/executor paths —
+    ``saq_hooks._mark_run_failed`` is a deliberate SECOND fenced authority for
+    the guarded SAQ task_failure path (PR #1003), so this is the primary, not
+    the only, fence.
 
     Performs ONE conditional ``UPDATE ... WHERE ... RETURNING id`` that is safe
     under concurrency:
