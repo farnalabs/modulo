@@ -575,19 +575,20 @@ def test_migrate_data_audit_programming_error_returns_200(client: TestClient) ->
 
 
 def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:
-    resp = client.post(
-        "/api/v1/schemas/migrate/plan",
-        json={
-            "from_definition": {
-                "type": "object",
-                "properties": {"full_name": {"type": "string"}, "age": {"type": "integer"}},
+    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock):
+        resp = client.post(
+            "/api/v1/schemas/migrate/plan",
+            json={
+                "from_definition": {
+                    "type": "object",
+                    "properties": {"full_name": {"type": "string"}, "age": {"type": "integer"}},
+                },
+                "to_definition": {
+                    "type": "object",
+                    "properties": {"display_name": {"type": "string"}, "email": {"type": "boolean"}},
+                },
             },
-            "to_definition": {
-                "type": "object",
-                "properties": {"display_name": {"type": "string"}, "email": {"type": "boolean"}},
-            },
-        },
-    )
+        )
     assert resp.status_code == 200
     body = resp.json()
     assert "full_name" in body["renames"]
@@ -598,24 +599,81 @@ def test_migration_plan_endpoint_returns_200(client: TestClient) -> None:
 
 
 def test_migration_plan_no_changes(client: TestClient) -> None:
-    resp = client.post(
-        "/api/v1/schemas/migrate/plan",
-        json={
-            "from_definition": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
+    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock):
+        resp = client.post(
+            "/api/v1/schemas/migrate/plan",
+            json={
+                "from_definition": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                },
+                "to_definition": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                },
             },
-            "to_definition": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-            },
-        },
-    )
+        )
     assert resp.status_code == 200
     body = resp.json()
     assert body["field_additions"] == {}
     assert body["field_removals"] == []
     assert body["renames"] == {}
+
+
+def test_migration_plan_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
+    resp = unauth_client.post(
+        "/api/v1/schemas/migrate/plan",
+        json={
+            "from_definition": {"type": "object", "properties": {"a": {"type": "string"}}},
+            "to_definition": {"type": "object", "properties": {"b": {"type": "string"}}},
+        },
+    )
+    assert resp.status_code in (401, 403)
+
+
+def test_migration_plan_records_audit_event(client: TestClient) -> None:
+    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_append:
+        resp = client.post(
+            "/api/v1/schemas/migrate/plan",
+            json={
+                "from_definition": {
+                    "type": "object",
+                    "properties": {"full_name": {"type": "string"}, "age": {"type": "integer"}},
+                },
+                "to_definition": {
+                    "type": "object",
+                    "properties": {"display_name": {"type": "string"}, "email": {"type": "boolean"}},
+                },
+            },
+        )
+    assert resp.status_code == 200
+    mock_append.assert_awaited_once()
+    call = mock_append.await_args
+    assert call.kwargs["org_id"] == _ORG_ID
+    assert call.kwargs["event_type"] == "schema_migration_planned"
+    assert call.kwargs["resource_type"] == "schema"
+    payload = call.kwargs["payload_json"]
+    assert payload["field_additions"] == 1
+    assert payload["field_removals"] == 1
+    assert payload["type_changes"] == 0
+    assert payload["renames"] == 1
+
+
+def test_migration_plan_audit_failure_does_not_break_response(client: TestClient) -> None:
+    with patch(
+        "modulo.api.routes.schemas.append_audit_event",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("audit boom"),
+    ):
+        resp = client.post(
+            "/api/v1/schemas/migrate/plan",
+            json={
+                "from_definition": {"type": "object", "properties": {"a": {"type": "string"}}},
+                "to_definition": {"type": "object", "properties": {"b": {"type": "string"}}},
+            },
+        )
+    assert resp.status_code == 200
+    assert "field_additions" in resp.json()
 
 
 # ---------------------------------------------------------------------------

@@ -226,7 +226,30 @@ def step_migrate_plan(request, client):
     source_def = getattr(request.node, "_source_def", {})
     target_def = getattr(request.node, "_target_def", {})
 
-    resp = client.post(
+    with patch("modulo.api.routes.schemas.append_audit_event", new_callable=AsyncMock) as mock_audit_append:
+        request.node._audit_append = mock_audit_append
+        resp = client.post(
+            "/api/v1/schemas/migrate/plan",
+            json={
+                "from_definition": source_def,
+                "to_definition": target_def,
+            },
+        )
+    request.node._resp = resp
+
+
+@when("I POST /api/v1/schemas/migrate/plan unauthenticated")
+def step_migrate_plan_unauthenticated(request, unauth_client):
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
+
+    for dep in (get_current_user, get_current_tenant_user, get_current_tenant_user_or_api_key):
+        app.dependency_overrides.pop(dep, None)
+
+    source_def = getattr(request.node, "_source_def", {})
+    target_def = getattr(request.node, "_target_def", {})
+
+    resp = unauth_client.post(
         "/api/v1/schemas/migrate/plan",
         json={
             "from_definition": source_def,
