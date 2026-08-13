@@ -2,11 +2,20 @@
 
 ``record_run_facts`` is the LIVE writer: called from every terminal finalize
 path (``cost_controller.finalize``) INSIDE the same transaction as the run
-status write, AND — as a compensating row — from the SAQ task_failure hook
-(``saq_hooks``) in its own separate session after the run is marked failed. It
-NEVER raises (fail-open), NEVER feeds ``_fallback_write`` / ``_reduced_escape``,
-and NEVER influences the cost result. A facts-write failure rolls back only the
-fact (a savepoint), not the run's finalization.
+status write, AND — as a compensating row — from every raw terminal writer that
+bypasses ``finalize_cost``: the SAQ task_failure hook (``saq_hooks``), the
+stale-run sweep terminalizers (``never_dispatched`` / ``capacity_timeout`` /
+``worker_lost`` in ``pipeline_execution``), the ``dispatcher_reconcile``
+terminalizers (``executor_superseded`` / ``claim_cap_exhausted`` /
+``dispatch_failed``) and ``fail_run_terminal`` (``executor_stalled`` /
+``executor_heartbeat_lost`` / ``executor_failed`` / ``executor_setup_failed``).
+Each compensating write runs in its OWN separate session AFTER the run is
+marked failed, so a facts failure can never roll back the terminal transition.
+``record_fact_for_terminal_failed_run`` is the shared fail-open entry point for
+those paths. ``record_run_facts`` NEVER raises (fail-open), NEVER feeds
+``_fallback_write`` / ``_reduced_escape``, and NEVER influences the cost
+result. A facts-write failure rolls back only the fact (a savepoint), not the
+run's finalization.
 """
 
 from __future__ import annotations
@@ -34,7 +43,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-__all__ = ["TERMINAL_STATUSES", "compute_delta", "record_run_facts"]
+__all__ = ["TERMINAL_STATUSES", "compute_delta", "record_fact_for_terminal_failed_run", "record_run_facts"]
 
 
 def compute_delta(prev: float | None, curr: float | None) -> float | None:
@@ -318,3 +327,29 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             extra={"run_id": str(run.id), "org_id": str(run.organisation_id), "status": run.status},
             exc_info=True,
         )
+
+
+async def record_fact_for_terminal_failed_run(session: AsyncSession, run: Run | None) -> None:
+    """Best-effort daily-fact write for a run terminalised outside finalize (P6').
+
+    Shared fail-open entry point for the raw terminal writers (the SAQ
+    task_failure hook, the stale-run sweep, ``dispatcher_reconcile`` and
+    ``fail_run_terminal``) that write ``status='failed'`` directly and never
+    run ``cost_controller.finalize`` — without this compensating row the run
+    would be invisible to the analytics failure/stall dimensions.
+
+    The caller supplies a session whose RLS org context is set and a Run
+    re-selected AFTER the terminal status write (a pre-write entity would
+    record ``status='running'`` with a NULL ``completed_at``). None-guarded and
+    fail-open: a missing run is logged and skipped; any write failure is logged
+    and swallowed — it must never fail the already-committed terminal write.
+    """
+    if run is None:
+        _log.warning("analytics.terminal_failed_facts_run_missing")
+        return
+    try:
+        await record_run_facts(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("analytics.terminal_failed_facts_failed run=%s", run.id)

@@ -181,6 +181,7 @@ async def _run_reconcile(
             new_callable=AsyncMock,
             return_value=awaiting_committed,
         ) as awaiting_guard,
+        patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock) as record_facts,
     ):
         if capacity_free is False:
             with patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=5):
@@ -189,6 +190,7 @@ async def _run_reconcile(
             with patch("modulo.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0):
                 summary = await ch.dispatcher_reconcile()
 
+    session.record_facts = record_facts
     return summary, reenqueue, ingest, redis_client, awaiting_guard, session
 
 
@@ -490,7 +492,7 @@ class TestEnqueueFailedRecovery:
     ) -> None:
         """enqueue_failed_at older than the backstop -> terminal-failed
         'dispatch_failed' ONLY when Redis is verifiably reachable."""
-        summary, reenqueue, ingest, redis_client, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, redis_client, _, session = await _run_reconcile(
             monkeypatch, [self._enqueue_failed_row(RUN_EVICTED, marker_minutes_ago=61)]
         )
         assert summary["dispatch_failed_terminalized"] == 1
@@ -499,6 +501,8 @@ class TestEnqueueFailedRecovery:
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
         redis_client.ping.assert_awaited_once()
+        # FAR-162 (P6'): the dispatch_failed run gets a compensating daily fact.
+        session.record_facts.assert_awaited_once_with(RUN_EVICTED, ORG)
 
     @pytest.mark.asyncio
     async def test_enqueue_failed_ttl_backstop_keeps_pending_when_redis_down(
@@ -563,7 +567,7 @@ class TestMidGraphWedgeTerminalizer:
     @pytest.mark.asyncio
     async def test_aged_running_run_terminalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
         row = _run_row(RUN_RUNNING, "running", stale=False)  # FRESH heartbeat
-        summary, reenqueue, ingest, _, _, _ = await _run_reconcile(
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
             monkeypatch,
             [],
             terminalizer_ids={"executor_superseded": [row.id]},
@@ -573,6 +577,22 @@ class TestMidGraphWedgeTerminalizer:
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
+        # FAR-162 (P6'): the terminalized run gets a compensating daily fact.
+        session.record_facts.assert_awaited_once_with(row.id, ORG)
+
+    @pytest.mark.asyncio
+    async def test_claim_cap_exhausted_run_terminalized_records_facts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        row = _run_row(RUN_RUNNING, "running", stale=True)
+        summary, reenqueue, ingest, _, _, session = await _run_reconcile(
+            monkeypatch,
+            [],
+            terminalizer_ids={"claim_cap_exhausted": [row.id]},
+        )
+        assert summary["claim_cap_terminalized"] == 1
+        assert summary["repaired"] == 0
+        reenqueue.assert_not_awaited()
+        ingest.assert_not_awaited()
+        session.record_facts.assert_awaited_once_with(row.id, ORG)
 
 
 class TestCapacityMarkerExclusion:

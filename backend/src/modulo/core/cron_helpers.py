@@ -2194,7 +2194,7 @@ async def _terminalize_mid_graph_wedges(
     org_id: uuid.UUID,
     *,
     max_age_minutes: int,
-) -> int:
+) -> list[uuid.UUID]:
     """Terminal-fail SAQ runs wedged mid-graph for longer than *max_age_minutes*.
 
     DB-only, org-scoped (B4): a run stuck ``running`` with ``dispatcher='saq'``
@@ -2202,7 +2202,8 @@ async def _terminalize_mid_graph_wedges(
     — a mid-graph stall can keep a fresh heartbeat alive (the in-process
     executor may be gone while the job hash lingers), so the stale-heartbeat
     branch never matches it. The age gate bounds the damage: ``executor_superseded``.
-    Runs ``UPDATE ... RETURNING id`` so each failure is logged.
+    Runs ``UPDATE ... RETURNING id`` so each failure is logged and the returned
+    run ids drive the post-commit compensating analytics fact (P6', FAR-162).
     """
     result = await session.execute(
         text(
@@ -2226,7 +2227,7 @@ async def _terminalize_mid_graph_wedges(
             run_id,
             max_age_minutes,
         )
-    return len(rows)
+    return [run_id for (run_id,) in rows]
 
 
 async def _terminalize_claim_cap_exhausted(
@@ -2235,7 +2236,7 @@ async def _terminalize_claim_cap_exhausted(
     *,
     claim_cap: int,
     stale_seconds: int,
-) -> int:
+) -> list[uuid.UUID]:
     """Terminal-fail SAQ runs at the claim cap whose heartbeat is STALE.
 
     DB-only, org-scoped, selected INDEPENDENTLY of the other reconcile
@@ -2245,7 +2246,9 @@ async def _terminalize_claim_cap_exhausted(
     claim, so a legitimately-running final claim could trip the cap while the
     executor is mid-node). Gating on a stale heartbeat means a capped run with
     checkpoints is still caught once nothing claims it for *stale_seconds*; a
-    fresh-heartbeat capped run is left alone.
+    fresh-heartbeat capped run is left alone. Returns the terminalized run ids
+    (``UPDATE ... RETURNING id``) to drive the post-commit compensating
+    analytics fact (P6', FAR-162).
     """
     result = await session.execute(
         text(
@@ -2264,7 +2267,7 @@ async def _terminalize_claim_cap_exhausted(
             run_id,
             claim_cap,
         )
-    return len(rows)
+    return [run_id for (run_id,) in rows]
 
 
 async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -2287,6 +2290,35 @@ async def _fail_run_dispatch_failed(session: AsyncSession, run_id: uuid.UUID, or
             "detail": _DISPATCH_FAILED_ERROR_DETAIL,
         },
     )
+
+
+async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Best-effort daily-fact write for a run terminalised by dispatcher_reconcile (P6').
+
+    The terminalizer UPDATEs commit inside the per-org session transaction;
+    this helper opens its OWN session AFTER that commit, sets the RLS org
+    context, re-selects the Run ORM (a pre-write entity would record
+    ``status='running'`` with a NULL ``completed_at``), and records the daily
+    fact via the shared ``record_fact_for_terminal_failed_run`` wrapper.
+    None-guarded and fail-open: a facts-write failure is logged and swallowed —
+    it must never fail the reconcile tick or roll back the already-committed
+    terminal write.
+    """
+    try:
+        from modulo.core.analytics import record_fact_for_terminal_failed_run
+        from modulo.db.crud.run import get_run
+
+        async with _open_factory()() as session, session.begin():
+            await _set_rls_org(session, org_id)
+            run = await get_run(session, run_id)
+            if run is None:
+                _log.warning("cron_helpers.terminalized_facts_run_missing run=%s", run_id)
+                return
+            await record_fact_for_terminal_failed_run(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.terminalized_facts_failed run=%s", run_id, exc_info=True)
 
 
 async def dispatcher_reconcile() -> dict[str, Any]:
@@ -2371,6 +2403,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     Re-dispatch type (discriminator): awaiting_human/claimed -> ``resume_run``;
     pending/running -> ``execute_run``. Capacity-deferred runs are re-dispatched
     only when their pipeline has free capacity.
+
+    Every run terminalised this tick (``executor_superseded`` /
+    ``claim_cap_exhausted`` / ``dispatch_failed``) gets a compensating
+    ``run_daily_facts`` row (FAR-162, P6') written after the per-org
+    transactions commit — the terminalizers never run ``finalize_cost``, so
+    without this the failed runs would be invisible to analytics.
     """
     from sqlalchemy import or_
 
@@ -2402,6 +2440,11 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
     }
+    # Runs terminalised by this tick's terminalizers — (run_id, org_id) — whose
+    # compensating daily fact must be recorded once the per-org transactions
+    # commit (FAR-162, P6'): the terminalizers write raw UPDATEs and never run
+    # finalize_cost.
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
 
     redis_client = AsyncRedis.from_url(
         settings.redis_url,
@@ -2446,17 +2489,19 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                     # org-scoped). Runs stuck 'running' past the max plausible
                     # duration are wedged — fail them BEFORE the row select so
                     # they are excluded from re-dispatch.
-                    summary["mid_graph_wedge_terminalized"] += await _terminalize_mid_graph_wedges(
-                        session, org_id, max_age_minutes=max_age_minutes
-                    )
+                    wedged = await _terminalize_mid_graph_wedges(session, org_id, max_age_minutes=max_age_minutes)
+                    summary["mid_graph_wedge_terminalized"] += len(wedged)
                     summary["age_terminalized"] = summary["mid_graph_wedge_terminalized"]
+                    terminalized_run_ids.extend((run_id, org_id) for run_id in wedged)
                     # B5: claim-cap terminalizer — INDEPENDENT of the reconcile
                     # predicates, stale-heartbeat gated (a LIVE run on its final
                     # claim is never killed; a capped run whose heartbeat froze
                     # is still caught).
-                    summary["claim_cap_terminalized"] += await _terminalize_claim_cap_exhausted(
+                    capped = await _terminalize_claim_cap_exhausted(
                         session, org_id, claim_cap=claim_cap, stale_seconds=stale_window
                     )
+                    summary["claim_cap_terminalized"] += len(capped)
+                    terminalized_run_ids.extend((run_id, org_id) for run_id in capped)
                     rows = (
                         await session.execute(
                             select(
@@ -2521,6 +2566,7 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                                 # for a later tick.
                                 continue
                             await _fail_run_dispatch_failed(session, row.id, org_id)
+                            terminalized_run_ids.append((row.id, org_id))
                             summary["dispatch_failed_terminalized"] += 1
                             summary["enqueue_failed_ttl_terminalized"] += 1
                             continue
@@ -2700,6 +2746,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
                             message=f"dispatcher_reconcile: re-enqueue failed for run {row.id}",
                             context={"run_id": str(row.id), "job_type": job_type},
                         )
+        # FAR-162 (P6') — record a daily fact for every run terminalised this
+        # tick (executor_superseded / claim_cap_exhausted / dispatch_failed):
+        # the terminalizers write raw UPDATEs and never run finalize_cost, so
+        # without this the failed runs would be invisible to the analytics
+        # failure/stall dimensions. All per-org terminalizer transactions have
+        # committed by now; each facts write opens its own RLS-scoped session.
+        for run_id, run_org_id in terminalized_run_ids:
+            await _record_fact_for_terminalized_run(run_id, run_org_id)
         # Record the outcome for /healthz/ready BEFORE the client is closed:
         # the shared Redis key is what the WEB process reads (the in-process
         # dict lives only in this worker process).

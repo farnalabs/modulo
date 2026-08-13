@@ -122,6 +122,37 @@ Every run-level failure is terminal-failed with a named `error_code`. This runbo
 
 Monitoring surfaces for all of the above: `/healthz/ready` exposes the `dispatcher_reconcile` counters (`claim_cap_terminalized`, `age_terminalized`, `nodeless_failed`, `dispatch_failed_terminalized`, `enqueue_failed_*`, ...) and the `stale_run_recovery` advisory check; when telemetry is enabled the OTel metrics `runs_running_count`, `runs_oldest_running_age_seconds`, `runs_stall_reason_total`, and `runs_claim_count_total` are updated every reconcile tick.
 
+### Analytics facts for raw-terminalised runs (FAR-162 / P6')
+
+Every raw terminal writer that bypasses `finalize_cost` records a compensating
+`run_daily_facts` row through the shared `record_fact_for_terminal_failed_run`
+wrapper (fail-open, its own separate RLS-scoped session, idempotent upsert on
+`run_id`). This covers: the SAQ `task_failure` hook, the stale-run sweep
+(`never_dispatched` / `capacity_timeout` / `worker_lost`), `dispatcher_reconcile`
+(`executor_superseded` / `claim_cap_exhausted` / `dispatch_failed`) and
+`fail_run_terminal` (`executor_stalled` / `executor_heartbeat_lost` /
+`executor_failed` / `executor_setup_failed`). A run failing through any of these
+paths is therefore visible in the analytics failure/stall dimensions. The
+writes are best-effort: a facts failure is logged and swallowed, never rolled
+back against (or propagated from) the already-committed terminal status write.
+
+### Synthetic `error_detail` on the sweep writers and the hang-death detector (FAR-164)
+
+The `never_dispatched` and `worker_lost` sweep writers stamp a synthetic
+`error_detail` ("Run was not dispatched within the stale threshold." /
+"Worker lost heartbeat for this run.") so the runs list / detail view always
+has something to show for these genuinely detail-less failures. This is safe
+for the daily-watcher **hang-death detector**
+(`Repos/devtools/dogfood/pipeline-scripts/_hang_deaths.py`): it keys on
+`error_code == "node_cancelled"` ONLY — `worker_lost` / `never_dispatched` are
+never `node_cancelled`, so adding a string detail to them can never be
+miscounted as a hang death. Do NOT "fix" the detector to count these codes —
+they are dispatch/harness failures, not sandbox-agent hang deaths. Note the
+detector's `detail_available` page flag is now near-permanently `True` anyway
+(P6' writes string detail for `task_failure` runs), so the effective gate for a
+hang-death count is the `"likely hung"` marker in the detail of a
+`node_cancelled` run.
+
 ---
 
 ## Log Locations

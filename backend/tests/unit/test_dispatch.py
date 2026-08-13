@@ -1435,6 +1435,7 @@ class TestReconcileF6aRecovery:
             patch.object(ch, "RedisQueue", MagicMock(return_value=q)),
             patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock) as reenqueue,
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
+            patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock) as record_facts,
         ):
             summary = await ch.dispatcher_reconcile()
 
@@ -1442,6 +1443,8 @@ class TestReconcileF6aRecovery:
         assert summary["repaired"] == 0
         reenqueue.assert_not_awaited()
         ingest.assert_not_awaited()
+        # FAR-162 (P6'): the terminalized run gets a compensating daily fact.
+        record_facts.assert_awaited_once_with(row.id, org)
 
     @pytest.mark.asyncio
     async def test_claim_cap_fresh_heartbeat_not_terminalized(self, monkeypatch) -> None:

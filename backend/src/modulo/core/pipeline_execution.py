@@ -515,6 +515,16 @@ async def fail_run_terminal(
         # FAR-143 — same raw-writer gap as mark_complete: advance journeys from
         # the run's CREATE-STAMPED refs (fail-open).
         await _advance_journeys_from_stored_refs(aeng, run_id, org_id, "failed")
+        # FAR-162 — compensating analytics fact for the raw terminal failure
+        # (separate session, fail-open). Idempotent vs a later finalize write.
+        # Call-site guard keeps a best-effort facts regression from ever
+        # surfacing out of the terminal-fail path (the helper is also fail-open).
+        try:
+            await _record_fact_for_terminal_failed_run(aeng, run_id, org_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("pipeline_execution.terminal_failed_facts_failed run=%s", run_id, exc_info=True)
     return ok
 
 
@@ -563,6 +573,37 @@ async def _advance_journeys_from_stored_refs(
         raise
     except Exception:
         _log.warning("pipeline_execution.journey_advance_failed run=%s", run_id, exc_info=True)
+
+
+async def _record_fact_for_terminal_failed_run(aengine: AsyncEngine, run_id: str, org_id: str) -> None:
+    """Best-effort daily-fact write for a run terminalised by a raw writer (P6').
+
+    ``fail_run_terminal`` / the stale-run sweep write ``status='failed'`` with
+    a raw ``text()`` UPDATE on a connection and never run ``finalize_cost``, so
+    those runs would never appear in ``run_daily_facts`` (invisible in the
+    analytics failure/stall dimensions). This helper opens its OWN session/
+    transaction AFTER the raw terminal UPDATE commits, sets the RLS org
+    context, re-selects the Run ORM (a pre-update entity would record
+    ``status='running'`` with a NULL ``completed_at``), and records the daily
+    fact via the shared :func:`record_fact_for_terminal_failed_run` wrapper.
+    None-guarded and fail-open: any failure logs and is swallowed — it must
+    never roll back or fail the already-committed terminal write.
+    """
+    try:
+        from modulo.core.analytics import record_fact_for_terminal_failed_run
+
+        factory = async_sessionmaker(aengine, expire_on_commit=False, autobegin=False)
+        async with factory() as session, session.begin():
+            await set_rls_org(session, uuid.UUID(org_id))
+            run = await get_run(session, uuid.UUID(run_id))
+            if run is None:
+                _log.warning("pipeline_execution.terminal_failed_facts_run_missing run=%s", run_id)
+                return
+            await record_fact_for_terminal_failed_run(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("pipeline_execution.terminal_failed_facts_failed run=%s", run_id, exc_info=True)
 
 
 async def zombie_watchdog(
@@ -919,6 +960,16 @@ async def stale_run_recovery_sweep(
       without this the swept runs' journeys would never move. Fail-open per
       run; stranded capacity-blocked runs are re-dispatched, never terminal,
       and so never advance.
+    - Every run terminalised by the sweep also gets a compensating
+      ``run_daily_facts`` row (FAR-162, P6'): the raw UPDATEs never run
+      ``finalize_cost``, so without this the swept runs would be invisible to
+      the analytics failure/stall dimensions. Written in its own separate
+      RLS-scoped session after the sweep's UPDATEs commit; fail-open per run.
+
+    The ``never_dispatched`` / ``worker_lost`` writers stamp a synthetic
+    ``error_detail`` (FAR-164): the daily-watcher hang-death detector keys on
+    ``error_code == 'node_cancelled'`` ONLY, so a string detail on these
+    legacy-dispatch codes can never be miscounted as a hang death.
 
     Legacy windows default to today's beat-sweep values — never_dispatched=300s
     (settings ``SAQ_NEVER_DISPATCHED_WINDOW``), worker_lost=600s (settings
@@ -969,7 +1020,8 @@ async def stale_run_recovery_sweep(
                 never_result = await conn.execute(
                     text(
                         "UPDATE runs "
-                        "SET status = 'failed', error_code = 'never_dispatched', completed_at = now() "
+                        "SET status = 'failed', error_code = 'never_dispatched', "
+                        "error_detail = :detail, completed_at = now() "
                         "WHERE status = 'pending' "
                         "AND organisation_id = :oid "
                         "AND created_at < now() - (:nd_window * interval '1 second') "
@@ -979,7 +1031,11 @@ async def stale_run_recovery_sweep(
                         "AND (dispatcher IS NULL OR dispatcher != 'saq') "
                         "RETURNING id"
                     ),
-                    {"oid": str(org_id), "nd_window": nd_window},
+                    {
+                        "oid": str(org_id),
+                        "nd_window": nd_window,
+                        "detail": "Run was not dispatched within the stale threshold.",
+                    },
                 )
                 never_count += never_result.rowcount or 0
                 terminalised_run_ids.extend((row[0], org_id) for row in never_result.all())
@@ -1030,7 +1086,8 @@ async def stale_run_recovery_sweep(
                 lost_result = await conn.execute(
                     text(
                         "UPDATE runs "
-                        "SET status = 'failed', error_code = 'worker_lost', completed_at = now() "
+                        "SET status = 'failed', error_code = 'worker_lost', "
+                        "error_detail = :detail, completed_at = now() "
                         "WHERE status = 'running' "
                         "AND organisation_id = :oid "
                         "AND heartbeat_at < now() - (:wl_window * interval '1 second') "
@@ -1038,7 +1095,11 @@ async def stale_run_recovery_sweep(
                         "AND (dispatcher IS NULL OR dispatcher != 'saq') "
                         "RETURNING id"
                     ),
-                    {"oid": str(org_id), "wl_window": wl_window},
+                    {
+                        "oid": str(org_id),
+                        "wl_window": wl_window,
+                        "detail": "Worker lost heartbeat for this run.",
+                    },
                 )
                 lost_count += lost_result.rowcount or 0
                 terminalised_run_ids.extend((row[0], org_id) for row in lost_result.all())
@@ -1060,6 +1121,15 @@ async def stale_run_recovery_sweep(
         # ``failed`` with ``completed_at`` set.
         for run_id, run_org_id in terminalised_run_ids:
             await _advance_journeys_from_stored_refs(async_engine, str(run_id), str(run_org_id), "failed")
+            # FAR-162 (P6') — compensating daily fact for the same terminal
+            # runs (separate RLS-scoped session, fail-open per run — one run's
+            # facts failure must not fail the whole sweep).
+            try:
+                await _record_fact_for_terminal_failed_run(async_engine, str(run_id), str(run_org_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning("pipeline_execution.sweep_terminal_facts_failed run=%s", run_id, exc_info=True)
 
         if never_count or lost_count or capacity_timeout_count or stranded_count:
             _log.info(
