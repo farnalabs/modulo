@@ -120,6 +120,9 @@ async def stripe_webhook(
 
     raw_body = await request.body()
     signature_header = request.headers.get("Stripe-Signature")
+    if not signature_header:
+        _log.warning("stripe.webhook.invalid_signature")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
     if not verify_stripe_signature(settings.stripe_webhook_secret, signature_header, raw_body):
         _log.warning("stripe.webhook.invalid_signature")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")

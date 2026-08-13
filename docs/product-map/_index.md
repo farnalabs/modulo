@@ -100,6 +100,7 @@ status: covered | partial | gap    # auto-updated by graph-validate
 - [feat-core-secrets-backend](core/secrets-backend.md) => PRD 7.13
 - [feat-core-shared-manifest](core/shared-manifest.md) => PRD 8.28
 - [feat-core-soc2-evidence-export](core/soc2-evidence-export.md) => PRD 8.12
+- [feat-core-stripe-purchase](core/stripe-purchase.md) => PRD 6.2, 7.7
 - [feat-core-system-config](core/system-config.md) => PRD 6
 - [feat-core-tier-catalog](core/tier-catalog.md) => PRD 6
 - [feat-core-trigger-system](core/trigger-system.md) => PRD 8.5

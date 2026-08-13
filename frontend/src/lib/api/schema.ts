@@ -701,6 +701,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/license/issue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue License
+         * @description Manually issue (sign) an enterprise license key for a customer.
+         *
+         *     Uses the same signing service as the Stripe purchase fulfilment webhook.
+         *     When ``email`` is provided, the license key is also emailed to the customer
+         *     via a background task so this request stays fast.
+         */
+        post: operations["issue_license_api_v1_admin_license_issue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/rate-limits": {
         parameters: {
             query?: never;
@@ -3897,6 +3921,23 @@ export interface paths {
          *     signature failure, 400 on duplicate/parse failure.
          */
         post: operations["receive_slack_event_api_v1_triggers__trigger_id__slack_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/stripe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stripe Webhook */
+        post: operations["stripe_webhook_api_v1_webhooks_stripe_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9950,6 +9991,35 @@ export interface components {
              */
             is_valid: boolean;
         };
+        /** LicenseIssueRequest */
+        LicenseIssueRequest: {
+            /** Org Name */
+            org_name: string;
+            /**
+             * Term Months
+             * @default 12
+             */
+            term_months: number;
+            /** Features */
+            features?: string[] | null;
+            /** Email */
+            email?: string | null;
+        };
+        /** LicenseIssueResponse */
+        LicenseIssueResponse: {
+            /** License Key */
+            license_key: string;
+            /** Expires At */
+            expires_at: string;
+            /** Org Name */
+            org_name: string;
+            /** Tier */
+            tier: string;
+            /** Features */
+            features: string[];
+            /** Org Id */
+            org_id: string;
+        };
         /** LicenseStatusResponse */
         LicenseStatusResponse: {
             /** Has License */
@@ -13393,6 +13463,13 @@ export interface components {
              */
             exclude_ui_tools: boolean;
         };
+        /** StripeWebhookResponse */
+        StripeWebhookResponse: {
+            /** Received */
+            received: boolean;
+            /** Event Id */
+            event_id: string;
+        };
         /** TargetInjection */
         TargetInjection: {
             /**
@@ -16462,6 +16539,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LicenseUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_license_api_v1_admin_license_issue_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LicenseIssueRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LicenseIssueResponse"];
                 };
             };
             /** @description Validation Error */
@@ -23987,6 +24099,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stripe_webhook_api_v1_webhooks_stripe_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StripeWebhookResponse"];
                 };
             };
             /** @description Validation Error */
