@@ -5,13 +5,10 @@ Accounts are global entities (not org-scoped).
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
-from sqlalchemy import func, select, update
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.account import Account
 
 
@@ -44,19 +41,6 @@ async def create_account(
     return account
 
 
-async def update_account(
-    session: AsyncSession,
-    account_id: uuid.UUID,
-    updates: dict[str, object],
-) -> Account | None:
-    account = await get_account_by_id(session, account_id)
-    if account is None:
-        return None
-    apply_updates(account, updates)
-    await session.flush()
-    return account
-
-
 async def update_last_login(session: AsyncSession, account_id: uuid.UUID) -> None:
     await session.execute(update(Account).where(Account.id == account_id).values(last_login=datetime.now(UTC)))
 
@@ -71,33 +55,3 @@ async def update_account_preferences(
     merged = {**current, **preferences}
     await session.execute(update(Account).where(Account.id == account_id).values(preferences=merged))
     return merged
-
-
-async def list_accounts(
-    session: AsyncSession,
-    *,
-    page: int = 1,
-    page_size: int = 20,
-    search: str | None = None,
-) -> PageResult[Account]:
-    conditions: list[Any] = []
-    if search:
-        conditions.append(Account.email.ilike(f"%{search}%"))
-
-    try:
-        count_q = select(func.count()).select_from(Account).where(*conditions)
-        total = (await session.execute(count_q)).scalar() or 0
-
-        query = (
-            select(Account)
-            .where(*conditions)
-            .order_by(Account.created_at)
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
-        result = await session.execute(query)
-        items = list(result.scalars().all())
-    except ProgrammingError:
-        return PageResult(items=[], total=0, page=page, page_size=page_size)
-
-    return PageResult(items=items, total=total, page=page, page_size=page_size)
