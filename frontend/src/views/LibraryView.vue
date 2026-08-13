@@ -131,7 +131,7 @@
           show-auto-update
           :toggle-loading="toggleLoading"
           @create-pipeline="createPipeline"
-@create-lifecycle-map="createLifecycleMap"
+          @create-lifecycle-map="createLifecycleMap"
           @view-details="viewPrimitive"
           @toggle-auto-update="toggleAutoUpdate"
         />
@@ -149,7 +149,7 @@
             badge="preview"
             :show-tags="false"
             @create-pipeline="createPipeline"
-@create-lifecycle-map="createLifecycleMap"
+            @create-lifecycle-map="createLifecycleMap"
             @view-details="viewPrimitive"
             @toggle-auto-update="toggleAutoUpdate"
           />
@@ -163,7 +163,7 @@
           :prim="prim"
           badge="community"
           @create-pipeline="createPipeline"
-@create-lifecycle-map="createLifecycleMap"
+          @create-lifecycle-map="createLifecycleMap"
           @view-details="viewPrimitive"
           @toggle-auto-update="toggleAutoUpdate"
         />
