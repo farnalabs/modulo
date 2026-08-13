@@ -103,6 +103,149 @@ def post_create_lifecycle_map(name: str, visibility: str, ctx: dict[str, Any], r
     ctx["created_map"] = mock_lm
 
 
+@when("I export the lifecycle map")
+def get_export_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+    lm.content_json = {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []}
+    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+        mock_get.return_value = lm
+        resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/export")
+    _store_response(request, ctx, resp)
+
+
+@then("the response is a lifecycle map export envelope")
+def response_is_export_envelope(request: Any) -> None:
+    resp = request.node._resp
+    data = resp.json()
+    assert data.get("primitive_type") == "lifecycle_map", data
+    assert data.get("format_version") == "1", data
+    assert "content_json" in data, data
+    assert "name" in data, data
+
+
+@when(parsers.parse('I import a lifecycle map named "{name}"'))
+def post_import_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": name,
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+    }
+    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+        mock_lm = _make_lifecycle_map(name=name)
+        mock_import.return_value = mock_lm
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+    ctx["imported_map"] = mock_lm
+
+
+@given("a lifecycle map primitive exists")
+def lifecycle_map_primitive_exists(ctx: dict[str, Any]) -> None:
+    p = MagicMock()
+    p.id = uuid.uuid4()
+    p.primitive_type = "lifecycle_map"
+    p.name = "SDLC Workflow"
+    p.description = "shared"
+    p.content_json = {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []}
+    ctx["primitive"] = p
+
+
+@given("a non-lifecycle-map primitive exists")
+def non_lifecycle_map_primitive_exists(ctx: dict[str, Any]) -> None:
+    p = MagicMock()
+    p.id = uuid.uuid4()
+    p.primitive_type = "workflow"
+    p.name = "Some Workflow"
+    p.content_json = {}
+    ctx["primitive"] = p
+
+
+@when("I create a lifecycle map from the primitive")
+def post_create_lifecycle_map_from_primitive(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    prim = ctx.get("primitive") or MagicMock(id=uuid.uuid4(), primitive_type="lifecycle_map")
+    from modulo.core.lifecycle_map.import_export import LifecycleMapBundleError
+    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+
+    async def _fake_materialize(session, *, org_id, account_id, primitive, owner_team_id=None, visibility="org"):
+        if prim.primitive_type != "lifecycle_map":
+            raise LifecycleMapBundleError(f"Primitive type '{prim.primitive_type}' is not 'lifecycle_map'")
+        if not isinstance(prim.content_json, dict) or "stages" not in prim.content_json:
+            raise LifecycleMapContentError("content_json.stages must be an array")
+        return _make_lifecycle_map(name=prim.name)
+
+    with (
+        patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
+        patch("modulo.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
+    ):
+        resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
+    _store_response(request, ctx, resp)
+    ctx["created_map"] = _make_lifecycle_map(name=prim.name)
+
+
+@when("I create a lifecycle map from a primitive that conflicts with an existing map's pipeline")
+def post_create_lifecycle_map_from_conflicting_primitive(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    prim = ctx.get("primitive") or MagicMock(id=uuid.uuid4(), primitive_type="lifecycle_map", name="SDLC Workflow")
+    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+
+    async def _fake_materialize(session, *, org_id, account_id, primitive, owner_team_id=None, visibility="org"):
+        raise LifecycleMapPipelineConflictError("pipeline(s) already a stage of another active lifecycle map")
+
+    with (
+        patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=prim)),
+        patch("modulo.api.routes.library.materialize_map_from_primitive", new=_fake_materialize),
+    ):
+        resp = client.post(f"/api/v1/libraries/{prim.id}/create-lifecycle-map")
+    _store_response(request, ctx, resp)
+
+
+@when("I create a lifecycle map from missing primitive")
+def post_create_lifecycle_map_from_missing_primitive(request: Any, client: Any) -> None:
+    missing_id = uuid.uuid4()
+    with patch("modulo.api.routes.library.get_primitive", new=AsyncMock(return_value=None)):
+        resp = client.post(f"/api/v1/libraries/{missing_id}/create-lifecycle-map")
+    _store_response(request, ctx={}, resp=resp)
+
+
+@when("I import a lifecycle map that conflicts with an existing map's pipeline")
+def post_import_lifecycle_map_conflict(request: Any, client: Any) -> None:
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": "Conflicting",
+        "content_json": {
+            "stages": [{"id": "s1", "name": "Inbox", "type": "modulo", "pipeline_id": str(uuid.uuid4())}],
+            "edges": [],
+        },
+    }
+    from modulo.core.lifecycle_map.validation import LifecycleMapPipelineConflictError
+
+    conflict_error = LifecycleMapPipelineConflictError("pipeline(s) already a stage of another active lifecycle map")
+    with patch(
+        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        new=AsyncMock(side_effect=conflict_error),
+    ):
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx={}, resp=resp)
+
+
+@when("I import a lifecycle map with invalid content")
+def post_import_lifecycle_map_invalid(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": "Broken",
+        "content_json": {"stages": "not-an-array"},
+    }
+    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+
+    with patch(
+        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        new=AsyncMock(side_effect=LifecycleMapContentError("content_json.stages must be an array")),
+    ):
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+
+
 @when("I list lifecycle maps")
 def get_list_lifecycle_maps(ctx: dict[str, Any], request: Any, client: Any) -> None:
     with patch("modulo.api.routes.lifecycle_maps.list_lifecycle_maps", new=AsyncMock()) as mock_list:

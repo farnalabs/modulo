@@ -178,6 +178,26 @@ def test_suggest_import_name_supports_custom_suffix() -> None:
     assert suggest_import_name({"Copy"}, "Copy", suffix="(copy)") == "Copy (copy)"
 
 
+def test_suggest_import_name_clamps_base_to_fit_column_width() -> None:
+    """A max-width name must not overflow String(255) once a suffix is appended.
+
+    FAR-174 review: ``suggest_import_name`` appended ``" (imported)"`` without
+    clamping, so a 255-char name (the Pydantic max) became 255+ chars and hit a
+    ``DataError`` mapped to a misleading 503.
+    """
+    long_name = "N" * 255
+    taken = {long_name}
+    candidate = suggest_import_name(taken, long_name)
+    assert len(candidate) <= 255, f"suffixed name overflowed: {len(candidate)} chars"
+    assert candidate.startswith("N" * 239)
+    assert candidate.endswith("(imported)")
+
+    taken.add(candidate)
+    numbered = suggest_import_name(taken, long_name)
+    assert len(numbered) <= 255, f"numbered name overflowed: {len(numbered)} chars"
+    assert numbered.endswith("(imported) 2")
+
+
 # ---------------------------------------------------------------------------
 # extract_bundle_json_from_zip — archive gates
 # ---------------------------------------------------------------------------
