@@ -19,6 +19,7 @@ from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from modulo.db.crud import run as run_crud
@@ -62,6 +63,25 @@ class TestPathSelection:
         assert "RETURNING next_run_number" in sql
         assert session.execute.call_args.args[1] == {"org_id": _ORG.hex}
 
+    async def test_postgres_self_heals_absent_counter_from_existing_runs(self) -> None:
+        """A missing counter row seeds from MAX(run_number)+1, not a hardcoded 1.
+
+        Orgs whose runs predate the counter (raw inserts that bypass
+        ``create_run``) would collide on ``run_number = 1`` if the INSERT
+        seeded the counter with ``1``. The seed must come from the runs table so
+        the first allocation continues the existing sequence.
+        """
+        session, p = await _mock_session("postgresql", 42)
+        with p:
+            value = await _allocate_run_number(session, _ORG)
+
+        assert value == 42
+        sql = str(session.execute.call_args.args[0])
+        assert "COALESCE(MAX(run_number), 0) + 1" in sql
+        assert "FROM runs WHERE organisation_id = :org_id" in sql
+        # The hardcoded ``1`` seed must be gone — the counter self-heals.
+        assert "VALUES (:org_id, 1) " not in sql
+
     async def test_generic_backend_falls_back_to_max_plus_one(self) -> None:
         session, p = await _mock_session("sqlite", 9)
         with p:
@@ -92,7 +112,10 @@ async def file_engine(tmp_path) -> AsyncGenerator[AsyncEngine, None]:
     """File-backed SQLite so concurrent sessions share one database.
 
     The busy timeout lets concurrent atomic upserts serialize on the counter
-    row instead of raising ``database is locked``.
+    row instead of raising ``database is locked``. A minimal ``runs`` table is
+    created alongside the counter so the atomic upsert's self-heal subquery
+    (``SELECT MAX(run_number) FROM runs`` when the counter row is absent) has a
+    target in every test.
     """
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path / 'runnumber.db'}",
@@ -100,17 +123,17 @@ async def file_engine(tmp_path) -> AsyncGenerator[AsyncEngine, None]:
     )
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[RunNumberCounter.__table__]))
+        await conn.exec_driver_sql(
+            "CREATE TABLE runs (organisation_id VARCHAR(32) NOT NULL, run_number INTEGER NOT NULL)"
+        )
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
     yield engine
     await engine.dispose()
 
 
 async def _seed_minimal_runs(engine: AsyncEngine, org_id: uuid.UUID, max_run_number: int) -> None:
-    """Create a minimal ``runs`` table and seed it so the MAX+1 fallback sees a max."""
+    """Seed a pre-existing run so the self-heal/fallback paths see an existing max."""
     async with engine.begin() as conn:
-        await conn.exec_driver_sql(
-            "CREATE TABLE runs (organisation_id VARCHAR(32) NOT NULL, run_number INTEGER NOT NULL)"
-        )
         await conn.exec_driver_sql(
             "INSERT INTO runs (organisation_id, run_number) VALUES (:oid, :rn)",
             {"oid": org_id.hex, "rn": max_run_number},
@@ -164,6 +187,47 @@ class TestAtomicCounterBehaviour:
         assert org_a == 1
         assert org_b == 1
         assert org_a2 == 2
+
+    async def test_self_heals_absent_counter_from_existing_runs(self, file_engine: AsyncEngine) -> None:
+        """A missing counter row continues the org's existing run_number sequence.
+
+        Orgs whose runs predate the counter (raw inserts that bypass
+        ``create_run``) have NO counter row. The first allocation must seed
+        from ``MAX(run_number) + 1`` (here 5 + 1 = 6), not a hardcoded ``1``
+        which would collide with the pre-existing run_number=1 row under
+        ``uq_runs_org_run_number``.
+        """
+        await _seed_minimal_runs(file_engine, _ORG, max_run_number=5)
+        maker = _make_maker(file_engine)
+        with patch.object(run_crud, "_get_dialect_name", _postgres_dialect):
+            first = await _alloc(maker, _ORG)
+            second = await _alloc(maker, _ORG)
+
+        assert first == 6
+        assert second == 7
+
+    async def test_self_heals_stale_counter_behind_raw_inserted_runs(self, file_engine: AsyncEngine) -> None:
+        """An existing counter row that drifted below MAX(run_number) catches up.
+
+        A raw insert that bypasses ``create_run`` bumps ``runs.run_number``
+        without touching the counter, leaving the counter row stale. The next
+        allocation must jump to ``MAX(run_number) + 1`` (here 5 + 1 = 6) rather
+        than blindly incrementing the stale counter (which would re-allocate a
+        number that is already in use).
+        """
+        maker = _make_maker(file_engine)
+        async with maker() as session, session.begin():
+            await session.execute(
+                text("INSERT INTO run_number_counters (organisation_id, next_run_number) VALUES (:oid, 1)"),
+                {"oid": _ORG.hex},
+            )
+        await _seed_minimal_runs(file_engine, _ORG, max_run_number=5)
+        with patch.object(run_crud, "_get_dialect_name", _postgres_dialect):
+            first = await _alloc(maker, _ORG)
+            second = await _alloc(maker, _ORG)
+
+        assert first == 6
+        assert second == 7
 
 
 class TestMaxPlusOneFallback:
