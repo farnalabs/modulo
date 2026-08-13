@@ -23,6 +23,7 @@ import asyncio
 import time
 import uuid
 from typing import Annotated, Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -31,6 +32,7 @@ from langgraph.types import interrupt
 
 from modulo.core.graph_validator import GraphValidator
 from modulo.core.graph_validator._types import ValidationResult
+from modulo.core.pipeline_engine.event_broker import RunEventBroker
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.core.pipeline_engine.graph_cache import _pipeline_state_reducer, build_graph_from_json
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
@@ -369,6 +371,316 @@ class TestHitlInterplay:
         assert "gate-b" in node_ids
         resumed = [a for a in final["artifacts"] if a["node_id"] == "gate-b"]
         assert resumed[0]["action"] == "approved"
+
+
+# ---------------------------------------------------------------------------
+# 6a. Criterion 2 THROUGH THE REAL EXECUTOR — both parallel outputs land in
+#     completed_node_outputs under their own node ids via _stream_graph
+# ---------------------------------------------------------------------------
+
+
+class TestExecutorParallelNodeOutput:
+    async def test_stream_graph_captures_both_parallel_outputs_under_own_ids(self) -> None:
+        """The REAL executor handler (_stream_graph) collects both parallel
+        branch outputs keyed by their own node ids and completes the run.
+
+        The implementer's ``test_completed_node_outputs_keep_node_id_keys``
+        only drives a SEQUENTIAL chain (branch-a -> branch-b) through a manual
+        mirror of the handler; this test drives the actual fan-out through the
+        real ``_stream_graph`` with a real ``RunEventBroker``.
+        """
+        graph: dict[str, Any] = {
+            "nodes": [
+                {"id": "fanout", "role": None},
+                {"id": "branch-a", "role": None},
+                {"id": "branch-b", "role": None},
+            ],
+            "edges": [
+                {"source": "fanout", "target": "branch-a", "type": "normal"},
+                {"source": "fanout", "target": "branch-b", "type": "normal"},
+            ],
+        }
+        compiled = build_graph_from_json(graph)
+        executor = PipelineExecutor(MagicMock())
+        broker = RunEventBroker(uuid.uuid4())
+        completed_node_outputs: dict[str, Any] = {}
+
+        final_status, error_code, error_detail, _usage = await executor._stream_graph(
+            compiled,
+            {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+            {"fanout", "branch-a", "branch-b"},
+            broker,
+            uuid.uuid4(),
+            completed_node_outputs=completed_node_outputs,
+        )
+
+        assert final_status == "complete"
+        assert error_code is None
+        assert error_detail is None
+        # Both branches captured under their OWN node ids — no clobbering.
+        assert set(completed_node_outputs.keys()) == {"fanout", "branch-a", "branch-b"}
+        assert completed_node_outputs["branch-a"]["artifacts"][0]["node_id"] == "branch-a"
+        assert completed_node_outputs["branch-b"]["artifacts"][0]["node_id"] == "branch-b"
+
+    async def test_stream_graph_fanout_does_not_double_count_guard_steps(self) -> None:
+        """Driving the real fan-out through _stream_graph with a real guard
+        records exactly 3 steps (entry + 2 branches) and completes cleanly."""
+        graph: dict[str, Any] = {
+            "nodes": [
+                {"id": "fanout", "role": None},
+                {"id": "branch-a", "role": None},
+                {"id": "branch-b", "role": None},
+            ],
+            "edges": [
+                {"source": "fanout", "target": "branch-a", "type": "normal"},
+                {"source": "fanout", "target": "branch-b", "type": "normal"},
+            ],
+        }
+        compiled = build_graph_from_json(graph)
+        executor = PipelineExecutor(MagicMock())
+        guard = RunawayGuard(max_steps=3)
+        final_status, error_code, _detail, _usage = await executor._stream_graph(
+            compiled,
+            {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+            {"fanout", "branch-a", "branch-b"},
+            RunEventBroker(uuid.uuid4()),
+            uuid.uuid4(),
+            guard=guard,
+        )
+        assert final_status == "complete"
+        assert error_code is None
+        # Exactly 3 nodes counted — max_steps=3 was NOT exceeded on a fan-out.
+        assert guard._step_count == 3
+
+    async def test_stream_graph_runaway_fires_when_fanout_exceeds_max_steps(self) -> None:
+        """A parallel fan-out that completes MORE nodes than max_steps is
+        terminated as runaway through the real executor path."""
+        graph: dict[str, Any] = {
+            "nodes": [
+                {"id": "fanout", "role": None},
+                {"id": "branch-a", "role": None},
+                {"id": "branch-b", "role": None},
+            ],
+            "edges": [
+                {"source": "fanout", "target": "branch-a", "type": "normal"},
+                {"source": "fanout", "target": "branch-b", "type": "normal"},
+            ],
+        }
+        compiled = build_graph_from_json(graph)
+        executor = PipelineExecutor(MagicMock())
+        guard = RunawayGuard(max_steps=2)
+        final_status, error_code, _detail, _usage = await executor._stream_graph(
+            compiled,
+            {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+            {"fanout", "branch-a", "branch-b"},
+            RunEventBroker(uuid.uuid4()),
+            uuid.uuid4(),
+            guard=guard,
+        )
+        assert final_status == "failed"
+        assert error_code == "runaway"
+
+
+# ---------------------------------------------------------------------------
+# 6b. Criterion 5 — HITL interrupt in ONE parallel branch, sibling survives,
+#     resume completes both
+# ---------------------------------------------------------------------------
+
+
+class TestParallelHitlSibling:
+    async def test_parallel_interrupt_does_not_corrupt_sibling_and_resume_completes(self) -> None:
+        """Real parallel fan-out: branch-a runs in the same superstep as gate-b,
+        which interrupts. The sibling's completed output survives, and resume
+        with a decision completes the gate without replaying/losing branch-a."""
+        graph = StateGraph(_STATE_SCHEMA)
+        graph.add_node("entry", _make_sleepy_node("entry", 0.05))
+        graph.add_node("branch-a", _make_sleepy_node("branch-a", 0.2))
+        graph.add_node("gate-b", _gate_branch)
+        graph.set_entry_point("entry")
+        # Parallel fan-out from entry — same superstep.
+        graph.add_edge("entry", "branch-a")
+        graph.add_edge("entry", "gate-b")
+        compiled = graph.compile(checkpointer=InMemorySaver())
+
+        thread = str(uuid.uuid4())
+        config = {"configurable": {"thread_id": thread}}
+        initial: dict[str, Any] = {"run_context": {"cancelled": False, "input": {}}, "artifacts": [], "_hitl_gates": []}
+
+        interrupted = await compiled.ainvoke(initial, config)
+        assert interrupted.get("__interrupt__"), "expected a HITL interrupt in the gate branch"
+
+        # Resume the interrupted gate branch.
+        await compiled.aupdate_state(config, {"_hitl_decision": {"action": "approved"}})
+        final = await compiled.ainvoke(None, config)
+        node_ids = [a["node_id"] for a in final["artifacts"]]
+
+        # BOTH the surviving sibling AND the resumed gate completed.
+        assert "branch-a" in node_ids
+        gate_artifacts = [a for a in final["artifacts"] if a["node_id"] == "gate-b"]
+        assert gate_artifacts, "gate branch never completed after resume"
+        assert gate_artifacts[0]["action"] == "approved"
+
+
+# ---------------------------------------------------------------------------
+# 6c. Criterion 3 & 7 THROUGH THE PUBLIC VALIDATOR — the PARALLEL_RUN_CONTEXT_WRITE
+#     warning surfaces at save time, and a fan-out graph is ACCEPTED (no error)
+# ---------------------------------------------------------------------------
+
+
+class TestParallelValidatorPublicPath:
+    def _fanout_graph(self, roles: dict[str, str]) -> dict[str, Any]:
+        return {
+            "nodes": [
+                {"id": "fanout", "role": None},
+                {"id": "branch-a", "role": roles.get("branch-a")},
+                {"id": "branch-b", "role": roles.get("branch-b")},
+            ],
+            "edges": [
+                {"source": "fanout", "target": "branch-a", "type": "normal"},
+                {"source": "fanout", "target": "branch-b", "type": "normal"},
+            ],
+        }
+
+    async def test_validate_definition_emits_parallel_run_context_write_warning(self) -> None:
+        """The warning fires through the PUBLIC save-time validation path, not
+        just when the private check is invoked directly."""
+        validator = GraphValidator()
+        result = await validator.validate_definition(
+            self._fanout_graph({"branch-a": "context_setter", "branch-b": "context_setter"}),
+            AsyncMock(),
+        )
+        codes = [i.code for i in result.issues]
+        assert "PARALLEL_RUN_CONTEXT_WRITE" in codes
+        # Warning only — the fan-out graph is ACCEPTED (criterion 7).
+        assert result.is_valid
+
+    async def test_validate_definition_accepts_parallel_fanout_without_error(self) -> None:
+        """A plain parallel fan-out (no context setters) passes validation."""
+        validator = GraphValidator()
+        result = await validator.validate_definition(
+            self._fanout_graph({"branch-a": "agent", "branch-b": "agent"}),
+            AsyncMock(),
+        )
+        assert result.is_valid
+        assert not any(i.code == "PARALLEL_RUN_CONTEXT_WRITE" for i in result.issues)
+
+    async def test_validate_definition_no_warning_for_disjoint_declared_keys(self) -> None:
+        """Parallel context-setters that declare DISJOINT run_context_writes are
+        safe — no warning through the public path."""
+        graph = self._fanout_graph({"branch-a": "context_setter", "branch-b": "context_setter"})
+        graph["nodes"][1]["run_context_writes"] = ["model_tier"]
+        graph["nodes"][2]["run_context_writes"] = ["estimated_tokens"]
+        validator = GraphValidator()
+        result = await validator.validate_definition(graph, AsyncMock())
+        assert not any(i.code == "PARALLEL_RUN_CONTEXT_WRITE" for i in result.issues)
+        assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# 6d. Backward compatibility — single-outgoing-edge graphs behave identically
+# ---------------------------------------------------------------------------
+
+
+class TestBackwardCompat:
+    async def test_single_outgoing_edge_graph_runs_sequentially_as_before(self) -> None:
+        """A source with ONE normal outgoing edge compiles and runs exactly as
+        before the fan-out change (sequential chain preserved)."""
+        graph: dict[str, Any] = {
+            "nodes": [
+                {"id": "start", "role": None},
+                {"id": "middle", "role": None},
+                {"id": "end", "role": None},
+            ],
+            "edges": [
+                {"source": "start", "target": "middle", "type": "normal"},
+                {"source": "middle", "target": "end", "type": "normal"},
+            ],
+        }
+        compiled = build_graph_from_json(graph)
+        result = await compiled.ainvoke(
+            {"run_context": {"cancelled": False, "input": {}}, "artifacts": []},
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+        )
+        node_ids = [a["node_id"] for a in result["artifacts"]]
+        assert node_ids == ["start", "middle", "end"]
+
+    async def test_sequential_run_context_write_still_replaces_legacy_semantics(self) -> None:
+        """A single context-setter write through the sequential path behaves as
+        before — its own key lands (per-key merge on a single writer is
+        equivalent to the legacy whole-dict replacement for that key)."""
+        current: dict[str, Any] = {"run_context": {"cancelled": False, "seeded": "keep"}}
+        merged = _pipeline_state_reducer(current, {"run_context": {"model_tier": "large"}})
+        assert merged["run_context"]["model_tier"] == "large"
+        assert merged["run_context"]["seeded"] == "keep"
+        assert merged["run_context"]["cancelled"] is False
+
+
+# ---------------------------------------------------------------------------
+# 6e. Conditional edges never fan out — a conditional source routes SINGLE-target
+# ---------------------------------------------------------------------------
+
+
+class TestConditionalSingleTarget:
+    async def test_conditional_source_with_normal_edge_routes_single_target(self) -> None:
+        """A source with a conditional edge PLUS a normal edge routes to ONE
+        target (no accidental fan-out): the normal edge is the router fallback,
+        never a parallel branch."""
+        graph: dict[str, Any] = {
+            "nodes": [
+                {"id": "decider", "role": None},
+                {"id": "target-ok", "role": None},
+                {"id": "target-else", "role": None},
+            ],
+            "edges": [
+                {
+                    "source": "decider",
+                    "target": "target-ok",
+                    "type": "conditional",
+                    "condition_expression": "run_context.input.route == 'ok'",
+                },
+                {"source": "decider", "target": "target-else", "type": "normal"},
+            ],
+        }
+        compiled = build_graph_from_json(graph)
+        result = await compiled.ainvoke(
+            {"run_context": {"cancelled": False, "input": {"route": "ok"}}, "artifacts": []},
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+        )
+        node_ids = [a["node_id"] for a in result["artifacts"]]
+        # Exactly ONE downstream target ran — the conditional winner.
+        assert "target-ok" in node_ids
+        assert "target-else" not in node_ids
+
+    async def test_conditional_source_falls_back_to_normal_single_target(self) -> None:
+        """When the conditional expression is falsy, the router returns the
+        NORMAL target — still exactly one branch, never both."""
+        graph: dict[str, Any] = {
+            "nodes": [
+                {"id": "decider", "role": None},
+                {"id": "target-ok", "role": None},
+                {"id": "target-else", "role": None},
+            ],
+            "edges": [
+                {
+                    "source": "decider",
+                    "target": "target-ok",
+                    "type": "conditional",
+                    "condition_expression": "run_context.input.route == 'ok'",
+                },
+                {"source": "decider", "target": "target-else", "type": "normal"},
+            ],
+        }
+        compiled = build_graph_from_json(graph)
+        result = await compiled.ainvoke(
+            {"run_context": {"cancelled": False, "input": {"route": "nope"}}, "artifacts": []},
+            {"configurable": {"thread_id": str(uuid.uuid4())}},
+        )
+        node_ids = [a["node_id"] for a in result["artifacts"]]
+        assert "target-else" in node_ids
+        assert "target-ok" not in node_ids
 
 
 # ---------------------------------------------------------------------------
