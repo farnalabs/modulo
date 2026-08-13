@@ -1001,6 +1001,10 @@ async def check_missed_fire_alerts(
                         Trigger.organisation_id == oid_uuid,
                         Trigger.active.is_(True),
                         Trigger.deleted_at.is_(None),
+                        # ``ongoing`` is INTENTIONALLY excluded here (FAR-158):
+                        # the type self-heals — the top-up recomputes from
+                        # current state every scan, so a missed tick needs no
+                        # alert, and an at-target no-op is NOT a missed fire.
                         Trigger.trigger_type.in_(("cron", "polling")),
                     )
                 )

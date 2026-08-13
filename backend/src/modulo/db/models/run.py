@@ -45,6 +45,19 @@ TERMINAL_STATUSES: frozenset[str] = frozenset(
 # run is active but does not hold capacity (see crud.run._active_run_statuses).
 ACTIVE_RUN_STATUSES: frozenset[str] = frozenset({"pending", "running", "awaiting_human", "claimed"})
 
+# In-flight run statuses for the ``ongoing`` trigger type (FAR-158). An ongoing
+# trigger keeps its pipeline topped up to ``max_concurrent_runs`` runs whose
+# status is in this set. pending = "queued" (the user-facing semantics — a
+# queued run counts toward the target because it will claim a slot shortly).
+# ``awaiting_human`` is DELIBERATELY EXCLUDED: a never-answered HITL gate must
+# not permanently starve the pool (verified: claim expiry resets the claim but
+# the run stays ``awaiting_human``; dispatcher_reconcile only resumes an
+# ``awaiting_human`` run when a committed decision exists), so a run parked on a
+# human must not count against the target. This set is what separates the
+# ongoing top-up count (``cron_helpers._count_ongoing_runs``) from the general
+# ``_count_active_runs``.
+ONGOING_ACTIVE_STATUSES: frozenset[str] = frozenset({"pending", "running", "claimed"})
+
 
 class _GenRandomUuid(expression.FunctionElement[str]):
     """Dialect-portable server_default for ``runs.claim_token``.
@@ -74,7 +87,7 @@ class Run(OrgScoped):
     __tablename__ = "runs"
     __table_args__ = (
         CheckConstraint(
-            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'correction')",
+            "trigger_type IN ('manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'correction')",
             name="ck_runs_trigger_type",
         ),
         CheckConstraint(

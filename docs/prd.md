@@ -5,6 +5,7 @@
 **Status**: Pre-development
 **Changelog**:
 - v0.35 — §8.31 Lifecycle Map Journeys: work-item journeys minted from run work_item_refs, map-scoped journey reads with keyset pagination, journey detail with run history + provenance badges, advancement service (compare-and-set stage resolution), self-report parse, reconciliation, persisted map version history, stage junction (one active map per pipeline), restore endpoint. §8.26.2 sidebar restructure to 4 flat groups (BUILD/MONITOR/CONFIGURE/ADMIN, no subgroups). Team Comparison + API Changelog features removed (PR #1018).
+- v0.35 — §8.2 Trigger Entity + §8.7 concurrency: new `ongoing` trigger type (FAR-158) that keeps a pipeline topped up to a target number of in-flight (active or queued) runs, like a daemon/worker pool. Scheduler scan (~60s) + per-item top-up job; `pending`/`running`/`claimed` counted, `awaiting_human` excluded; effective pool = `min(trigger, pipeline)` cap; required daily spend limit (DB partial CHECKs); snapshot pin/latest/auto-create; persistent-failure deactivation; `ongoing_trigger` feature flag.
 - v0.34 — §8.32 Analytics: rolling-window run/cost/quality series (Last 24h/7d/30d/90d) over a retained `run_daily_facts` table, typed-params query surface (no query language in this delivery), per-org `analytics_page` feature gate. ADR 020.
 - v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (search_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
@@ -1011,7 +1012,7 @@ Errors shown inline on canvas with user-readable messages.
 ### 8.5 Trigger System
 
 #### Trigger Entity
-`id`, `organisation_id`, `pipeline_id`, `trigger_type` (`manual` | `webhook` | `cron` | `polling` | `agent_signal`), `active` (boolean — disabled triggers log events but do not create runs), `max_concurrent_runs` (int, default 1), `daily_spend_limit` (nullable decimal USD), `config_json` (type-discriminated; see below), `created_at`, `created_by`.
+`id`, `organisation_id`, `pipeline_id`, `trigger_type` (`manual` | `webhook` | `cron` | `polling` | `agent_signal` | `ongoing`), `active` (boolean — disabled triggers log events but do not create runs), `max_concurrent_runs` (int, default 1), `daily_spend_limit` (nullable decimal USD), `config_json` (type-discriminated; see below), `created_at`, `created_by`.
 
 **`config_json` by type**:
 - `manual`: empty `{}`
@@ -1019,6 +1020,9 @@ Errors shown inline on canvas with user-readable messages.
 - `cron` (v1): `{schedule: cron-string, timezone: IANA-tz, input_template: JSON-object}`
 - `polling` (v1): `{connector_instance_id, poll_query, condition_expression, poll_interval_seconds}`
 - `agent_signal` (v1): `{source_pipeline_id, source_node_id, signal_schema_id}`
+- `ongoing` (v1): `{scan_interval_seconds: int >= 60 (default 60), input_template: JSON-object (default {}), snapshot_id?: uuid (optional pin — invalid/missing pins skip the fire and are never silently auto-created)}`
+
+**`ongoing` semantics (FAR-158)**: an ongoing trigger keeps its pipeline topped up to `max_concurrent_runs` in-flight (active **or queued**) runs, forever — like a daemon / worker pool. The SAQ system scheduler scans active, non-soft-deleted ongoing triggers every ~60s (or the trigger's own `scan_interval_seconds`, floored at 60) and enqueues a per-item top-up job. The top-up counts runs whose status is `pending` (queued), `running`, or `claimed`; **`awaiting_human` is NOT counted** — a never-answered HITL gate must not permanently starve the pool (claim expiry resets the claim but the run stays awaiting_human; dispatcher_reconcile only resumes awaiting_human with a committed decision). The effective pool is `min(trigger.max_concurrent_runs, pipeline.max_concurrent_runs)` — read at top-up time so a pipeline cap lowered after create (and multiple ongoing triggers on one pipeline) are honoured. When the in-flight count is at/above the effective target the fire is a no-op (no event, no `last_fired_at` write); below target, `target - in_flight` runs are created in one transaction, one `accepted` TriggerEvent each, then dispatched to SAQ post-commit. Committed-but-never-dispatched pendings are recovered by `dispatcher_reconcile`'s existing `pending + dispatched_at IS NULL` branch. **A daily spend limit is REQUIRED** at create/update for ongoing triggers (a never-terminating daemon with no cost ceiling is a runaway hazard) and is enforced per batch inside the top-up transaction (skip-not-defer, `last_fired_at` still stamped); the DB also enforces the target range 1..20 (partial CHECKs `ck_triggers_ongoing_spend_limit` / `ck_triggers_ongoing_target_range`). A pinned `snapshot_id` that is invalid or missing logs a `no_pipeline` event and skips (never silent auto-create); otherwise the latest snapshot is used (pre-resolved by the scan) or auto-created once. Persistent-failure deactivation mirrors the report pattern: after 5 consecutive no_pipeline/snapshot failures the trigger is deactivated. Ongoing is intentionally excluded from the missed-fire catch-up scan and the hourly missed-fire alert — it self-heals (the top-up recomputes from current state) and an at-target no-op is not a missed fire.
 
 Cron expressions are evaluated as wall-clock schedules in their named IANA timezone, while `next_fire_at` is persisted in UTC. Across daylight-saving transitions, a nonexistent local time advances to the first valid instant and an ambiguous local time uses its first occurrence, matching `croniter` with `zoneinfo`.
 
@@ -1031,6 +1035,7 @@ Cron expressions are evaluated as wall-clock schedules in their named IANA timez
 | `cron` | v1 | Schedule-based |
 | `polling` | v1 | Polls connector for condition |
 | `agent_signal` | v1 | Fired by another pipeline's output |
+| `ongoing` | v1 | Keeps pipeline topped up to a target number of in-flight (active or queued) runs |
 
 #### WebhookTrigger Spec
 - System-generated `webhook_secret` per trigger instance
@@ -1165,6 +1170,7 @@ Before run start: all referenced connector instances are health-checked. Failed 
 |---|---|---|
 | `max_concurrent_runs` | Per pipeline | New run requests blocked (queued or rejected) when limit reached. Default: 5. |
 | `max_concurrent_runs` | Per trigger | New trigger fires blocked when limit reached. Default: 1. |
+| `max_concurrent_runs` | `ongoing` trigger (FAR-158) | The **target pool size**: the top-up keeps `min(trigger.max_concurrent_runs, pipeline.max_concurrent_runs)` runs in-flight (active or queued; `awaiting_human` NOT counted). Bounded 1..20 by the DB partial CHECK `ck_triggers_ongoing_target_range` and by validation at every write surface. |
 | `sandbox_concurrency_limit` | Per organisation | Max concurrently `running` sandbox-agent runs across all pipelines in the org. Default: `null` (unlimited). Runs beyond the cap are demoted back to `pending` with `error_code='org_capacity_limited'` and retried in the background; after the capacity-timeout TTL they terminal-fail with `capacity_timeout`. Stored in `Organisation.settings_json`. |
 | `run_concurrency_limit` | Per organisation | Max concurrently executing/claimed runs across ALL pipelines in the org (sandbox-agent and otherwise). Default: `null` (unlimited). Runs dispatched while the org is at this cap are deferred back to `pending` with `error_code='org_capacity_limited'` and retried in the background; after the capacity-timeout TTL they terminal-fail with `capacity_timeout`. Stored in `Organisation.settings_json`. Independent of `sandbox_concurrency_limit`; both org caps share the same `org_capacity_limited` marker on deferred runs. |
 | Write lock | Per connector instance + target resource | Advisory lock on (connector_instance_id, target_resource) for write operations. Prevents concurrent runs corrupting shared state (e.g. two runs pushing to the same git branch). |

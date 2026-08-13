@@ -155,6 +155,7 @@
               <SelectItem value="cron">{{ $t('views.SettingsTriggersView.cron') }}</SelectItem>
               <SelectItem value="polling">{{ $t('views.SettingsTriggersView.polling') }}</SelectItem>
               <SelectItem value="agent_signal">{{ $t('views.SettingsTriggersView.agent_signal') }}</SelectItem>
+              <SelectItem value="ongoing">{{ $t('views.SettingsTriggersView.ongoing') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -303,6 +304,67 @@
           </div>
         </template>
 
+        <!-- Ongoing config -->
+        <template v-if="form.trigger_type === 'ongoing'">
+          <p class="text-sm text-muted-foreground">{{ $t('views.SettingsTriggersView.ongoing_description') }}</p>
+          <div>
+            <label for="settingstriggersview-ongoing-target" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.target_runs') }}</label>
+            <input id="settingstriggersview-ongoing-target"
+              v-model.number="form.max_concurrent_runs"
+              type="number"
+              min="1"
+              max="20"
+              class="input-base"
+              :placeholder="$t('views.SettingsTriggersView.target_runs_placeholder')"
+              data-testid="settings-triggers-form-ongoing-target"
+            />
+          </div>
+          <div>
+            <label for="settingstriggersview-ongoing-interval" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.scan_interval') }}</label>
+            <input id="settingstriggersview-ongoing-interval"
+              v-model.number="form.ongoing_scan_interval"
+              type="number"
+              min="60"
+              class="input-base"
+              :placeholder="$t('views.SettingsTriggersView.scan_interval_placeholder')"
+              data-testid="settings-triggers-form-ongoing-interval"
+            />
+          </div>
+          <div>
+            <label for="settingstriggersview-ongoing-template" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.input_template_json') }}</label>
+            <textarea id="settingstriggersview-ongoing-template"
+              v-model="form.input_template"
+              rows="3"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.input_template_placeholder')"
+              data-testid="settings-triggers-form-ongoing-template"
+            />
+          </div>
+          <div>
+            <label for="settingstriggersview-ongoing-spend" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.daily_spend_limit') }} <span class="text-destructive">*</span></label>
+            <input id="settingstriggersview-ongoing-spend"
+              v-model="form.daily_spend_limit"
+              type="number"
+              min="0.01"
+              step="0.01"
+              class="input-base"
+              :placeholder="$t('views.SettingsTriggersView.daily_spend_limit_placeholder')"
+              data-testid="settings-triggers-form-ongoing-spend"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">{{ $t('views.SettingsTriggersView.daily_spend_limit_required') }}</p>
+          </div>
+          <div>
+            <label for="settingstriggersview-ongoing-snapshot" class="mb-1 block text-sm font-medium">{{ $t('views.SettingsTriggersView.snapshot_id') }}</label>
+            <input id="settingstriggersview-ongoing-snapshot"
+              v-model="form.snapshot_id"
+              type="text"
+              class="input-base font-mono"
+              :placeholder="$t('views.SettingsTriggersView.snapshot_id_placeholder')"
+              data-testid="settings-triggers-form-ongoing-snapshot"
+            />
+          </div>
+        </template>
+
         <div class="flex items-center gap-2">
           <label for="settingstriggersview-field-1" class="flex items-center gap-2 text-sm">
             <input id="settingstriggersview-field-1"
@@ -425,6 +487,8 @@ interface TriggerItem {
   pipeline_id: string
   trigger_type: string
   active: boolean
+  max_concurrent_runs?: number
+  daily_spend_limit?: number | null
   config_json: Record<string, unknown>
   cron_expression?: string | null
   cron_timezone?: string | null
@@ -449,6 +513,10 @@ interface TriggerForm {
   condition_expression: string
   signal_source_pipeline: string
   signal_source_node: string
+  max_concurrent_runs: number
+  daily_spend_limit: string
+  ongoing_scan_interval: number
+  snapshot_id: string
 }
 
 const { error, data: triggersData, load: loadTriggers, fetched: triggersLoaded } = useDataFetch(
@@ -492,6 +560,10 @@ const defaultForm: TriggerForm = {
   condition_expression: '',
   signal_source_pipeline: '',
   signal_source_node: '',
+  max_concurrent_runs: 1,
+  daily_spend_limit: '',
+  ongoing_scan_interval: 60,
+  snapshot_id: '',
 }
 
 const form = ref<TriggerForm>({ ...defaultForm })
@@ -503,6 +575,7 @@ function typeLabel(type: string): string {
     cron: t('views.SettingsTriggersView.cron'),
     polling: t('views.SettingsTriggersView.polling'),
     agent_signal: t('views.SettingsTriggersView.agent_signal'),
+    ongoing: t('views.SettingsTriggersView.ongoing'),
   }
   return labels[type] || type
 }
@@ -514,6 +587,7 @@ function typeBadgeClass(type: string): string {
     cron: 'badge badge-context-amber',
     polling: 'badge badge-context-cyan',
     agent_signal: 'badge badge-context-indigo',
+    ongoing: 'badge badge-context-emerald',
   }
   return classes[type] || 'badge badge-context-slate'
 }
@@ -568,6 +642,10 @@ function openEditDialog(trigger: TriggerItem) {
     condition_expression: (cfg as any).condition_expression || '',
     signal_source_pipeline: (cfg as any).source_pipeline_id || '',
     signal_source_node: (cfg as any).source_node_id || '',
+    max_concurrent_runs: trigger.max_concurrent_runs ?? 1,
+    daily_spend_limit: trigger.daily_spend_limit != null ? String(trigger.daily_spend_limit) : '',
+    ongoing_scan_interval: (cfg as any).scan_interval_seconds || 60,
+    snapshot_id: (cfg as any).snapshot_id ? String((cfg as any).snapshot_id) : '',
   }
   dialogOpen.value = true
 }
@@ -590,8 +668,21 @@ async function saveTrigger() {
     return
   }
 
+  const triggerType = editingId.value ? editingType.value : form.value.trigger_type
+
+  if (triggerType === 'ongoing') {
+    // FAR-158: the ongoing spend limit is REQUIRED (backend rejects None).
+    if (!form.value.daily_spend_limit || Number(form.value.daily_spend_limit) <= 0) {
+      formError.value = t('views.SettingsTriggersView.daily_spend_limit_required')
+      return
+    }
+    if (!form.value.max_concurrent_runs || form.value.max_concurrent_runs < 1 || form.value.max_concurrent_runs > 20) {
+      formError.value = t('views.SettingsTriggersView.target_runs_invalid')
+      return
+    }
+  }
+
   try {
-    const triggerType = editingId.value ? editingType.value : form.value.trigger_type
     const configJson: Record<string, unknown> = {}
 
     if (triggerType === 'webhook') {
@@ -628,12 +719,31 @@ async function saveTrigger() {
       if (form.value.signal_source_node) configJson.source_node_id = form.value.signal_source_node
     }
 
+    if (triggerType === 'ongoing') {
+      configJson.scan_interval_seconds = form.value.ongoing_scan_interval || 60
+      if (form.value.input_template) {
+        try {
+          configJson.input_template = JSON.parse(form.value.input_template)
+        } catch {
+          formError.value = t('views.SettingsTriggersView.input_template_must_be_valid_json')
+          return
+        }
+      }
+      if (form.value.snapshot_id) configJson.snapshot_id = form.value.snapshot_id
+    }
+
     saving.value = true
 
     if (editingId.value) {
       const body: Record<string, unknown> = {
         active: form.value.active,
         config_json: Object.keys(configJson).length > 0 ? configJson : undefined,
+        // max_concurrent_runs was previously never sent on PUT — send it now
+        // so an edited target persists (FAR-158).
+        max_concurrent_runs: form.value.max_concurrent_runs,
+      }
+      if (triggerType === 'ongoing') {
+        body.daily_spend_limit = form.value.daily_spend_limit
       }
       if (triggerType === 'cron') {
         if (form.value.cron_expression) body.cron_expression = form.value.cron_expression
@@ -652,6 +762,10 @@ async function saveTrigger() {
         trigger_type: triggerType,
         active: form.value.active,
         config_json: configJson,
+      }
+      if (triggerType === 'ongoing') {
+        body.max_concurrent_runs = form.value.max_concurrent_runs
+        body.daily_spend_limit = form.value.daily_spend_limit
       }
       if (triggerType === 'cron') {
         if (form.value.cron_expression) body.cron_expression = form.value.cron_expression

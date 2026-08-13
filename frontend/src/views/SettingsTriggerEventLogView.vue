@@ -17,6 +17,7 @@
               <SelectItem value="cron">{{ $t('views.SettingsTriggerEventLogView.cron') }}</SelectItem>
               <SelectItem value="polling">{{ $t('views.SettingsTriggerEventLogView.polling') }}</SelectItem>
               <SelectItem value="agent_signal">{{ $t('views.SettingsTriggerEventLogView.agent_signal') }}</SelectItem>
+              <SelectItem value="ongoing">{{ $t('views.SettingsTriggerEventLogView.ongoing') }}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -212,6 +213,7 @@ function typeBadge(type: string): string {
   if (type === 'cron') return 'badge badge-context-amber'
   if (type === 'polling') return 'badge badge-context-cyan'
   if (type === 'agent_signal') return 'badge badge-context-indigo'
+  if (type === 'ongoing') return 'badge badge-context-emerald'
   return 'badge badge-context-slate'
 }
 
