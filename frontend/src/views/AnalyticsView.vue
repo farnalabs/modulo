@@ -104,6 +104,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
+import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PageHeader from "../components/shared/PageHeader.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
@@ -125,6 +126,7 @@ import {
 } from "../stores/analytics";
 
 const { t } = useI18n();
+const route = useRoute();
 const store = useAnalyticsStore();
 
 interface TableRow {
@@ -204,6 +206,11 @@ function arrowClass(direction: TrendDirection): string {
 }
 
 onMounted(async () => {
-  await Promise.all([store.fetchOptions(), store.fetchQuery()]);
+  await store.fetchOptions();
+  // Pre-filter from a deep link (e.g. Remy's /analytics?group_by=day&date_from=...).
+  if (route.query && Object.keys(route.query).length > 0) {
+    store.applyQueryParams(route.query);
+  }
+  await store.fetchQuery();
 });
 </script>

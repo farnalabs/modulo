@@ -47,6 +47,46 @@
           <div class="remy-turn-line" />
         </div>
         <div
+          v-else-if="isAnalyticsChartMessage(msg)"
+          class="remy-analytics-card"
+          role="region"
+          :aria-label="$t('components.remy.RemyChat.analytics_chart_title')"
+          data-testid="remy-analytics-card"
+        >
+          <div class="remy-analytics-header">
+            <span class="remy-analytics-title">{{ $t('components.remy.RemyChat.analytics_chart_title') }}</span>
+            <div
+              class="remy-analytics-measures"
+              role="group"
+              :aria-label="$t('components.remy.RemyChat.analytics_measure_label')"
+            >
+              <button
+                v-for="m in analyticsMeasures"
+                :key="m.value"
+                class="remy-measure-btn"
+                :class="{ active: analyticsMeasureFor(msg) === m.value }"
+                :aria-pressed="analyticsMeasureFor(msg) === m.value"
+                @click="setAnalyticsMeasureFor(msg, m.value)"
+              >
+                {{ $t(m.labelKey) }}
+              </button>
+            </div>
+          </div>
+          <AnalyticsChart
+            :series="analyticsSeriesFor(msg)"
+            :measure="analyticsMeasureFor(msg)"
+            :group-by="analyticsGroupByFor(msg)"
+          />
+          <a
+            v-if="analyticsDeepLinkFor(msg)"
+            class="remy-analytics-link"
+            :href="analyticsDeepLinkFor(msg)"
+            @click.prevent="navigateToAnalytics(analyticsDeepLinkFor(msg))"
+          >
+            {{ $t('components.remy.RemyChat.view_full_analytics') }} <span aria-hidden="true">→</span>
+          </a>
+        </div>
+        <div
           v-else-if="msg.role === 'tool_result' && msg.tool_results_json"
           class="remy-tool-card"
         >
@@ -285,7 +325,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onUnmounted } from "vue";
+import { ref, watch, nextTick, computed, reactive, onUnmounted } from "vue";
+import { useRouter } from "vue-router";
 import { useRemyStore } from "@/composables/useRemyStore";
 import { usePlanStore } from "@/stores/planStore";
 import { useRemyStream } from "@/composables/useRemyStream";
@@ -293,10 +334,13 @@ import { abortUiCommands } from "@/composables/useUiCommandExecutor";
 import { Button } from "@/components/ui/button";
 import { getAccessToken } from "@/lib/api/client";
 import { ShieldAlertIcon, LoaderIcon } from "@lucide/vue";
-import type { ToolResult } from "@/types/remy";
+import AnalyticsChart from "../analytics/AnalyticsChart.vue";
+import { MEASURES, type AnalyticsBucket, type AnalyticsMeasure } from "../../stores/analytics";
+import type { ChatMessage, ToolResult } from "@/types/remy";
 
 const store = useRemyStore();
 const planStore = usePlanStore();
+const router = useRouter();
 const props = defineProps<{ remyOnly?: boolean }>();
 const { connectStream, disconnectStream } = useRemyStream();
 const scrollRef = ref<HTMLDivElement | null>(null);
@@ -482,6 +526,55 @@ function formatToolDetails(tc: { tool_call_id: string; tool_name: string; succes
     lines.push('Error:', tc.error)
   }
   return lines.join('\n')
+}
+
+interface AnalyticsToolResult {
+  group_by?: string
+  dimension?: string | null
+  date_from?: string | null
+  date_to?: string | null
+  buckets?: Array<Record<string, unknown>>
+  deep_link?: string
+}
+
+function isAnalyticsToolResult(result: unknown): result is AnalyticsToolResult {
+  if (!result || typeof result !== 'object') return false
+  const r = result as Record<string, unknown>
+  return typeof r.group_by === 'string' && Array.isArray(r.buckets)
+}
+
+function isAnalyticsChartMessage(msg: ChatMessage): boolean {
+  if (msg.role !== 'tool_result' || !msg.tool_results_json) return false
+  const tr = msg.tool_results_json as ToolResult
+  if (!tr.success || tr.tool_name !== 'query_analytics') return false
+  return isAnalyticsToolResult(tr.result)
+}
+
+const analyticsMeasures = MEASURES
+const analyticsMeasureByMsg = reactive(new Map<string, AnalyticsMeasure>())
+function analyticsMeasureFor(msg: ChatMessage): AnalyticsMeasure {
+  return analyticsMeasureByMsg.get(msg.id) ?? 'count'
+}
+function setAnalyticsMeasureFor(msg: ChatMessage, measure: AnalyticsMeasure): void {
+  analyticsMeasureByMsg.set(msg.id, measure)
+}
+function analyticsSeriesFor(msg: ChatMessage): AnalyticsBucket[] {
+  const result = (msg.tool_results_json as ToolResult | null)?.result
+  if (!isAnalyticsToolResult(result)) return []
+  return result.buckets as unknown as AnalyticsBucket[]
+}
+function analyticsGroupByFor(msg: ChatMessage): string {
+  const result = (msg.tool_results_json as ToolResult | null)?.result
+  if (!isAnalyticsToolResult(result)) return 'day'
+  return result.group_by ?? 'day'
+}
+function analyticsDeepLinkFor(msg: ChatMessage): string | undefined {
+  const result = (msg.tool_results_json as ToolResult | null)?.result
+  if (!isAnalyticsToolResult(result) || !result.deep_link) return undefined
+  return result.deep_link
+}
+function navigateToAnalytics(link: string | undefined): void {
+  if (link) router.push(link)
 }
 
 const nogoCountdown = ref(0)
@@ -858,6 +951,41 @@ function renderMarkdown(text: string): string {
   @apply rounded-lg border text-sm overflow-hidden;
   background-color: hsl(var(--card));
   border-color: hsl(var(--border));
+}
+.remy-analytics-card {
+  @apply rounded-lg border p-3 space-y-2 text-sm;
+  background-color: hsl(var(--card));
+  border-color: hsl(var(--border));
+}
+.remy-analytics-header {
+  @apply flex flex-wrap items-center justify-between gap-2;
+}
+.remy-analytics-title {
+  @apply text-sm font-semibold;
+  color: hsl(var(--foreground));
+}
+.remy-analytics-measures {
+  @apply flex items-center gap-1 flex-wrap;
+}
+.remy-measure-btn {
+  @apply rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors;
+  color: hsl(var(--muted-foreground));
+}
+.remy-measure-btn:hover {
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--accent));
+}
+.remy-measure-btn.active {
+  color: hsl(var(--primary-foreground));
+  background-color: hsl(var(--primary));
+}
+.remy-analytics-link {
+  @apply inline-flex items-center gap-1 text-xs font-medium hover:opacity-80;
+  color: hsl(var(--primary));
+}
+.remy-analytics-link:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
 }
 .remy-tool-header {
   @apply flex items-center gap-2 w-full px-3 py-2 text-left cursor-pointer;

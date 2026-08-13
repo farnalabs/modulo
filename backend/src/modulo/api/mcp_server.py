@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from jwt import InvalidTokenError as JWTError
 from mcp.server.fastmcp import FastMCP
@@ -1090,6 +1090,39 @@ def _parse_mcp_datetime(value: str, name: str) -> datetime:
         raise AnalyticsValidationError(f"{name}: invalid date value {value!r}") from None
 
 
+def _analytics_deep_link(result: dict[str, Any], params: AnalyticsParams) -> str:
+    """Relative /analytics deep link carrying the same filters as the query.
+
+    Built from the RESOLVED result (``group_by``/``dimension``/``date_from``/
+    ``date_to`` reflect the service's normalised effective range) plus the raw
+    ``params`` filters (trigger/status/pipeline/folder/error_code). Emitted only
+    on the MCP surface so Remy can hand the user a clickable, pre-filtered link
+    to the /analytics view. The REST route keeps its clean ``AnalyticsResponse``
+    contract — this field is presentation-only.
+    """
+    parts: list[tuple[str, str]] = [("group_by", str(result.get("group_by") or params.group_by.value))]
+    dimension = result.get("dimension")
+    if dimension:
+        parts.append(("dimension", str(dimension)))
+    if params.trigger_type is not None:
+        parts.append(("trigger_type", params.trigger_type.value))
+    if params.status is not None:
+        parts.append(("status", params.status.value))
+    for pid in params.pipeline_ids:
+        parts.append(("pipeline_id", str(pid)))
+    if params.error_code is not None:
+        parts.append(("error_code", params.error_code))
+    if params.folder_id is not None:
+        parts.append(("folder_id", str(params.folder_id)))
+    date_from = result.get("date_from")
+    if date_from:
+        parts.append(("date_from", str(date_from)))
+    date_to = result.get("date_to")
+    if date_to:
+        parts.append(("date_to", str(date_to)))
+    return "/analytics?" + urlencode(parts)
+
+
 @mcp.tool(
     name="query_analytics",
     description=(
@@ -1097,8 +1130,10 @@ def _parse_mcp_datetime(value: str, name: str) -> datetime:
         "(hour/day/week) with per-bucket count, cost, tokens, duration, success rate, "
         "failure and stall counts, queue wait, final idle, and output size. "
         "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
-        "and error_code for filtering/grouping by failure code. Requires the "
-        "analytics.query permission and the analytics_page plan feature."
+        "and error_code for filtering/grouping by failure code. The result also "
+        "carries a `deep_link` to the /analytics view pre-filtered with the same "
+        "parameters — share that link instead of dumping the raw buckets. Requires "
+        "the analytics.query permission and the analytics_page plan feature."
     ),
 )
 @_RETRY_DB
@@ -1172,7 +1207,7 @@ async def query_analytics(
             date_to=_parse_mcp_datetime(date_to, "date_to") if date_to is not None else None,
             limit=max(1, min(limit, 1000)),
         )
-        return await run_analytics_query(
+        result = await run_analytics_query(
             org_id=org_id,
             params=params,
             factory=_get_session_factory(),
@@ -1180,6 +1215,8 @@ async def query_analytics(
             account_id=_ctx_user_id_val(),
             org_role=_ctx_role_val() or "",
         )
+        result["deep_link"] = _analytics_deep_link(result, params)
+        return result
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except AnalyticsRateLimitedError:

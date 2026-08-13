@@ -25,6 +25,7 @@ import {
   aggregateByKey,
   formatBucketDate,
   previousWindowParams,
+  applyQueryParamsToFilters,
   type AnalyticsBucket,
 } from '../stores/analytics'
 
@@ -180,6 +181,90 @@ describe('serializeFilters', () => {
       expect(params.date_to).not.toContain('T')
       expect(params.group_by).toBe('day')
     }
+  })
+
+  it('honours an explicit deep-link date range over the timespan derivation', () => {
+    const params = serializeFilters(
+      {
+        timespan: '7d',
+        groupBy: 'week',
+        dateFrom: '2026-06-01',
+        dateTo: '2026-08-06',
+      },
+      FIXED_NOW,
+    )
+    expect(params.date_from).toBe('2026-06-01')
+    expect(params.date_to).toBe('2026-08-06')
+    expect(params.group_by).toBe('week')
+  })
+
+  it('honours an hour-granular deep-link range with ISO datetimes', () => {
+    const params = serializeFilters(
+      {
+        timespan: '7d',
+        groupBy: 'hour',
+        dateFrom: '2026-08-06T08:00:00+00:00',
+        dateTo: '2026-08-06T12:00:00+00:00',
+      },
+      FIXED_NOW,
+    )
+    expect(params.group_by).toBe('hour')
+    expect(params.date_from).toBe('2026-08-06T08:00:00+00:00')
+    expect(params.date_to).toBe('2026-08-06T12:00:00+00:00')
+  })
+})
+
+describe('applyQueryParamsToFilters', () => {
+  const base = { timespan: '7d' as const, groupBy: 'day' as const }
+
+  it('maps a deep-link query onto filters', () => {
+    const { filters, applied } = applyQueryParamsToFilters(
+      {
+        group_by: 'week',
+        date_from: '2026-06-01',
+        date_to: '2026-08-06',
+        dimension: 'trigger_type',
+        trigger_type: 'webhook',
+        status: 'failed',
+        pipeline_id: 'p-1',
+        folder_id: 'f-1',
+      },
+      base,
+    )
+    expect(applied).toBe(true)
+    expect(filters.groupBy).toBe('week')
+    expect(filters.dateFrom).toBe('2026-06-01')
+    expect(filters.dateTo).toBe('2026-08-06')
+    expect(filters.dimension).toBe('trigger_type')
+    expect(filters.triggerType).toBe('webhook')
+    expect(filters.status).toBe('failed')
+    expect(filters.pipelineId).toBe('p-1')
+    expect(filters.folderId).toBe('f-1')
+    // Timespan is untouched — the explicit range overrides it.
+    expect(filters.timespan).toBe('7d')
+  })
+
+  it('ignores unknown group_by/dimension values and malformed dates', () => {
+    const { filters, applied } = applyQueryParamsToFilters(
+      {
+        group_by: 'fortnight',
+        dimension: 'bogus',
+        date_from: 'not-a-date',
+        date_to: '2026-08-06',
+      },
+      base,
+    )
+    expect(applied).toBe(false)
+    expect(filters).toEqual(base)
+  })
+
+  it('rejects a partial date range (only one bound set)', () => {
+    const { filters, applied } = applyQueryParamsToFilters(
+      { date_from: '2026-06-01' },
+      base,
+    )
+    expect(applied).toBe(false)
+    expect(filters.dateFrom).toBeUndefined()
   })
 })
 
@@ -416,6 +501,27 @@ describe('analytics store', () => {
     expect(store.groupBy).toBe('hour')
     store.setFilters({ timespan: '7d', groupBy: 'week' })
     expect(store.groupBy).toBe('week')
+  })
+
+  it('applies deep-link query params and reflects the explicit range in the effective granularity', () => {
+    const store = useAnalyticsStore()
+    const applied = store.applyQueryParams({
+      group_by: 'hour',
+      date_from: '2026-08-06T08:00:00+00:00',
+      date_to: '2026-08-06T12:00:00+00:00',
+    })
+    expect(applied).toBe(true)
+    expect(store.filters.dateFrom).toBe('2026-08-06T08:00:00+00:00')
+    expect(store.groupBy).toBe('hour')
+  })
+
+  it('clears the explicit deep-link range when the user changes the timespan', () => {
+    const store = useAnalyticsStore()
+    store.applyQueryParams({ date_from: '2026-06-01', date_to: '2026-08-06', group_by: 'day' })
+    expect(store.filters.dateFrom).toBe('2026-06-01')
+    store.setFilters({ timespan: '30d' })
+    expect(store.filters.dateFrom).toBeUndefined()
+    expect(store.filters.dateTo).toBeUndefined()
   })
 
   it('fetches and validates the query response', async () => {
@@ -694,5 +800,35 @@ describe('AnalyticsView', () => {
     expect(arrows.length).toBe(2)
     expect(arrows[0].text()).toContain('▲')
     expect(arrows[1].text()).toContain('▼')
+  })
+
+  it('pre-filters from a deep-link query on mount (e.g. Remy /analytics link)', async () => {
+    setupMocks()
+    const { useRoute } = await import('vue-router')
+    const routeMock = vi.mocked(useRoute)
+    routeMock.mockImplementation(() =>
+      ({
+        query: {
+          group_by: 'week',
+          date_from: '2026-06-01',
+          date_to: '2026-08-06',
+          pipeline_id: 'p-1',
+        },
+      }) as never,
+    )
+    mount(AnalyticsView)
+    await flushPromises()
+    const store = useAnalyticsStore()
+    expect(store.filters.groupBy).toBe('week')
+    expect(store.filters.dateFrom).toBe('2026-06-01')
+    expect(store.filters.dateTo).toBe('2026-08-06')
+    expect(store.filters.pipelineId).toBe('p-1')
+    const queryCall = mockGet.mock.calls.find((c) => c[0] === '/api/v1/analytics/query')
+    const q = (queryCall?.[1] as { params: { query: Record<string, unknown> } } | undefined)?.params.query
+    expect(q?.group_by).toBe('week')
+    expect(q?.date_from).toBe('2026-06-01')
+    expect(q?.pipeline_id).toBe('p-1')
+    // Restore the shared useRoute mock for other tests.
+    routeMock.mockImplementation(() => ({ query: {} }) as never)
   })
 })

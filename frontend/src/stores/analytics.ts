@@ -13,7 +13,7 @@ export type AnalyticsMeasure =
   | "duration"
   | "success_rate";
 export type AnalyticsTimespan = "1h" | "24h" | "3d" | "7d" | "30d" | "90d";
-export type AnalyticsGroupBy = "day" | "week";
+export type AnalyticsGroupBy = "day" | "week" | "hour";
 export type AnalyticsDimension =
   | "trigger_type"
   | "status"
@@ -48,6 +48,11 @@ export interface AnalyticsFilters {
   status?: string | null;
   pipelineId?: string | null;
   folderId?: string | null;
+  /** Explicit range override from a deep link (e.g. /analytics?date_from=...).
+   * When both are set they win over the timespan derivation in serializeFilters.
+   */
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export interface AnalyticsQueryParams {
@@ -172,7 +177,13 @@ export function serializeFilters(
   let groupBy: string;
   let dateFrom: string;
   let dateTo: string;
-  if (timespan.granularity === "hour") {
+  if (filters.dateFrom && filters.dateTo) {
+    // Explicit range from a deep link (e.g. Remy's /analytics?date_from=...):
+    // send the range verbatim and respect the carried granularity.
+    groupBy = filters.groupBy;
+    dateFrom = filters.dateFrom;
+    dateTo = filters.dateTo;
+  } else if (timespan.granularity === "hour") {
     // Hour-granular window: derive the span from the preset (`hours` for 1h,
     // `days * 24` for 24h) and send ISO datetimes so the backend grids by hour.
     const spanHours = timespan.hours ?? (timespan.days ?? 1) * 24;
@@ -201,6 +212,62 @@ export function serializeFilters(
   if (filters.pipelineId) params.pipeline_id = filters.pipelineId;
   if (filters.folderId) params.folder_id = filters.folderId;
   return params;
+}
+
+function firstQueryParam(value: unknown): string | null {
+  if (typeof value === "string" && value) return value;
+  if (Array.isArray(value)) {
+    const first = value.find((v) => typeof v === "string" && v);
+    return typeof first === "string" ? first : null;
+  }
+  return null;
+}
+
+const GROUP_BY_VALUES: AnalyticsGroupBy[] = ["day", "week", "hour"];
+const DIMENSION_VALUES: AnalyticsDimension[] = [
+  "trigger_type",
+  "status",
+  "pipeline",
+  "folder",
+  "team",
+];
+
+/**
+ * Map an /analytics URL query (from a deep link such as Remy's
+ * `/analytics?group_by=day&date_from=...&pipeline_id=...`) onto the store's
+ * filter state. Returns true when at least one filter was applied.
+ * Explicit date ranges are kept as an override so the query round-trips
+ * exactly; changing the timespan later returns to timespan-derived ranges.
+ */
+export function applyQueryParamsToFilters(
+  query: Record<string, unknown>,
+  current: AnalyticsFilters,
+): { filters: AnalyticsFilters; applied: boolean } {
+  const patch: Partial<AnalyticsFilters> = {};
+  const groupBy = firstQueryParam(query.group_by);
+  if (groupBy && (GROUP_BY_VALUES as string[]).includes(groupBy)) {
+    patch.groupBy = groupBy as AnalyticsGroupBy;
+  }
+  const dimension = firstQueryParam(query.dimension);
+  if (dimension && (DIMENSION_VALUES as string[]).includes(dimension)) {
+    patch.dimension = dimension as AnalyticsDimension;
+  }
+  const triggerType = firstQueryParam(query.trigger_type);
+  if (triggerType) patch.triggerType = triggerType;
+  const status = firstQueryParam(query.status);
+  if (status) patch.status = status;
+  const pipelineId = firstQueryParam(query.pipeline_id);
+  if (pipelineId) patch.pipelineId = pipelineId;
+  const folderId = firstQueryParam(query.folder_id);
+  if (folderId) patch.folderId = folderId;
+  const dateFrom = firstQueryParam(query.date_from);
+  const dateTo = firstQueryParam(query.date_to);
+  if (dateFrom && dateTo && isValid(parseISO(dateFrom)) && isValid(parseISO(dateTo))) {
+    patch.dateFrom = dateFrom;
+    patch.dateTo = dateTo;
+  }
+  const applied = Object.keys(patch).length > 0;
+  return { filters: applied ? { ...current, ...patch } : current, applied };
 }
 
 /**
@@ -395,12 +462,16 @@ function validateResponse(data: unknown): data is AnalyticsResponse {
 
 // The analytics endpoint lands in the generated OpenAPI client only after the
 // schema is regenerated; until then call it through an untyped alias so the
-// typed client's path-union never sees an unknown route.
+// typed client's path-union never sees an unknown route. The client is resolved
+// lazily at call time (not module scope) so importing the store never touches
+// `api` — specs that mock the client without an `api` object still import fine.
 type RawGet = (
   url: string,
   options?: unknown,
 ) => Promise<{ data?: unknown; error?: unknown }>;
-const rawGet = api.GET as unknown as RawGet;
+function rawGet(url: string, options?: unknown): ReturnType<RawGet> {
+  return (api.GET as unknown as RawGet)(url, options);
+}
 
 export const useAnalyticsStore = defineStore("analytics", () => {
   const filters = ref<AnalyticsFilters>({ ...DEFAULT_FILTERS });
@@ -425,12 +496,22 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     ),
   );
   const groupBy = computed(() => {
+    if (filters.value.dateFrom && filters.value.dateTo) {
+      return filters.value.groupBy;
+    }
     const timespan = TIMESPANS.find((t) => t.value === filters.value.timespan);
     return timespan?.granularity === "hour" ? "hour" : filters.value.groupBy;
   });
 
   function setFilters(patch: Partial<AnalyticsFilters>): void {
-    filters.value = { ...filters.value, ...patch };
+    // Any timespan interaction returns to timespan-derived ranges; the explicit
+    // deep-link override only applies until the user changes the window.
+    const next = { ...filters.value, ...patch };
+    if ("timespan" in patch) {
+      next.dateFrom = undefined;
+      next.dateTo = undefined;
+    }
+    filters.value = next;
   }
 
   function setMeasure(value: AnalyticsMeasure): void {
@@ -439,6 +520,14 @@ export const useAnalyticsStore = defineStore("analytics", () => {
 
   function resetFilters(): void {
     filters.value = { ...DEFAULT_FILTERS };
+  }
+
+  function applyQueryParams(query: Record<string, unknown>): boolean {
+    const { filters: next, applied } = applyQueryParamsToFilters(query, filters.value);
+    if (applied) {
+      filters.value = next;
+    }
+    return applied;
   }
 
   async function fetchWindow(params: AnalyticsQueryParams): Promise<AnalyticsResponse> {
@@ -533,6 +622,7 @@ export const useAnalyticsStore = defineStore("analytics", () => {
     setFilters,
     setMeasure,
     resetFilters,
+    applyQueryParams,
     fetchQuery,
     fetchOptions,
   };
