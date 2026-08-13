@@ -18,6 +18,55 @@ OpenSSL.
 These are typically installed via your system package manager or the
 Postgres distribution.
 
+## The `modulo` CLI (recommended)
+
+The `modulo` console script (installed with the backend package) is the primary
+backup/restore interface. It runs a real `pg_dump` of the whole database,
+exports the LangGraph checkpoint tables to JSON, records encrypted credential
+references, and writes a `backup-info.json` manifest with per-file SHA-256
+checksums. It is the tool exercised by the automated backup/restore CI gate
+(`.github/workflows/backup-restore-nightly.yml`), which runs the full
+backup -> restore -> downgrade -> upgrade round-trip against a real Postgres.
+
+### Back up
+
+```bash
+cd /opt/modulo/backend
+uv run modulo backup --db-url "$DATABASE_URL" --output-dir /backups/2026-08-13
+```
+
+This writes a directory (default `./modulo-backup-<timestamp>-<suffix>`, or the
+`--output-dir` you pass) containing:
+
+| File | Contents |
+|------|----------|
+| `database.sql` | `pg_dump --clean --if-exists --no-owner --no-acl` SQL dump (schema + data) |
+| `checkpoint_blobs.json`, `checkpoints.json`, `checkpoint_writes.json` | LangGraph checkpoint tables as JSON |
+| `credentials_references.json` | Encrypted credential rows (`connector_instances`, `model_backends`) |
+| `backup-info.json` | Manifest: timestamp, DB version, schema heads, `fernet_key_hash`, per-file checksums |
+
+Options: `--db-url` (default: `DATABASE_URL`), `--output-dir` / `-o`.
+
+### Restore
+
+```bash
+uv run modulo restore /backups/2026-08-13 --db-url "$DATABASE_URL" --yes
+```
+
+Validates every file's checksum against the manifest, restores `database.sql`
+via `psql`, re-inserts the checkpoint tables from the JSON exports, and — if
+`FERNET_KEY` changed since the backup — re-encrypts stored credentials, which
+requires `--previous-fernet-key <old-key>`. Pass `--yes` to skip the
+confirmation prompt.
+
+Requirements: `pg_dump` and `psql` from the Postgres client tools on `PATH`,
+with a client major version >= the server's major version.
+
+> The `modulo backup` CLI and the `scripts/backup.py` encrypted-archive tool
+> both run a real `pg_dump`; the CLI additionally exports checkpoint data and
+> supports credential re-encryption on restore. Pick one strategy per
+> deployment and always test your restore in a staging environment first.
+
 ## Backup
 
 ### Usage
@@ -134,6 +183,55 @@ systemctl start modulo
 # 5. Check health
 curl https://modulo.example.com/health
 ```
+
+## Upgrade Path: Backup Before Migrate, Restore After
+
+Every schema upgrade is a migration event — never run `alembic upgrade head`
+without a backup you can restore from. See also
+[`docs/upgrade-process.md`](../upgrade-process.md).
+
+1. **Back up first** (safe while the app is running — `pg_dump` produces a
+   consistent snapshot):
+   ```bash
+   uv run modulo backup --db-url "$DATABASE_URL" --output-dir /backups/pre-upgrade
+   ```
+2. **Upgrade**: deploy the new version. The app runs migrations on startup, or
+   run them manually:
+   ```bash
+   uv run alembic upgrade head
+   ```
+3. **Verify the upgrade** before moving on:
+   ```bash
+   uv run alembic current          # should show the head revision
+   curl http://localhost:8000/health
+   ```
+4. **If the upgrade breaks**, restore the pre-upgrade backup into a fresh
+   database and point the app at it:
+   ```bash
+   uv run modulo restore /backups/pre-upgrade --db-url "$DATABASE_URL" --yes
+   ```
+
+Restoring the pre-upgrade dump also restores the pre-upgrade `alembic_version`,
+so the next app boot re-runs migrations against the old schema.
+
+### Downgrade caveats
+
+`alembic downgrade -1` moves the schema back one revision, but:
+
+- **Not every migration ships a working `downgrade()`.** Some are additive
+  only, or include data transforms that cannot be reversed. Treat a downgrade
+  as best-effort, never as the primary rollback path.
+- **Downgrade does not restore data.** Anything removed or transformed by the
+  upgrade's `upgrade()` is not reconstructed. If you need the old data back,
+  restore from backup.
+- **Prefer a forward-fix.** The supported rollback is a new migration that
+  reverts the schema change, plus (if data was affected) restoring from a
+  backup.
+- **The CI gate proves downgrades run.** The nightly backup/restore gate
+  (`.github/workflows/backup-restore-nightly.yml`, runnable on demand via
+  `gh workflow run backup-restore-nightly.yml`) executes `alembic downgrade -1`
+  then `alembic upgrade head` against a restored database and asserts data
+  integrity afterwards — a migration whose downgrade is broken fails the gate.
 
 ## Disaster Recovery Guide
 

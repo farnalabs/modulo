@@ -1,0 +1,75 @@
+name: "Backup/Restore CI Gate (nightly + manual)"
+
+# Proves the full self-hosted disaster-recovery path against a REAL Postgres:
+# alembic upgrade heads from scratch -> seed data -> `modulo backup` (pg_dump) ->
+# `modulo restore` into a fresh database -> alembic downgrade -1 -> upgrade heads.
+# Runs on a schedule and on-demand (workflow_dispatch), NOT on every PR — the
+# gate needs a Postgres container + Postgres client tools and is expensive.
+# Driven by scripts/verify_backup_restore.py.
+
+on:
+  schedule:
+    - cron: "30 4 * * *"    # 04:30 UTC daily
+  workflow_dispatch:
+
+env:
+  SECRET_KEY: "ci-secret-key-for-github-actions-testing-only"
+  FERNET_KEY: "vK-xU7GqHLflg_GqzJ1FqWI7pHWoHSIyukf4wx-tMHI="
+  REDIS_URL: ""
+  MODULO_ADMIN_PASSWORD: "test"
+  MODULO_AUTH_RATE_LIMIT_ENABLED: "false"
+  MODULO_CSRF_ENABLED: "false"
+
+jobs:
+  backup-restore-gate:
+    name: Backup → restore → downgrade → upgrade
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Start Postgres
+        shell: bash
+        run: |
+          docker run -d --name modulo-ci-pg \
+            -e POSTGRES_USER=modulo_test \
+            -e POSTGRES_PASSWORD=modulo_test \
+            -e POSTGRES_DB=modulo_test \
+            -p 5433:5432 postgres:16-alpine
+          for i in $(seq 1 30); do
+            docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
+            sleep 2
+          done
+      - name: Install Postgres client tools (pg_dump / psql)
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lsb-release curl gpg ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            --fail --silent --show-error https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+          pg_dump --version
+      - name: Install backend deps
+        run: uv sync --frozen
+      - name: Run backup/restore round-trip gate
+        shell: bash
+        timeout-minutes: 45
+        env:
+          DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
+        run: uv run --no-sync python ../scripts/verify_backup_restore.py
+      - name: Stop Postgres container
+        if: always()
+        run: docker rm -f modulo-ci-pg 2>/dev/null || true
