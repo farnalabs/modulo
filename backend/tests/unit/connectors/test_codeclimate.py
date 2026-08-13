@@ -338,7 +338,7 @@ async def test_query_repos_with_cursor(connector: CodeClimateConnector) -> None:
 async def test_query_repo_empty_result(connector: CodeClimateConnector) -> None:
     respx.get(f"{_BASE}/repos/nonexistent").mock(return_value=httpx.Response(200, json={"data": {}}))
     result = await connector.query(ConnectorQuery(resource="repo", filters={"id": "nonexistent"}))
-    assert len(result.records) == 0
+    assert not result.records
 
 
 @respx.mock

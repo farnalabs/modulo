@@ -403,7 +403,7 @@ class TestMigrationRegistry:
         registry = MigrationRegistry()
         await registry.register("1.0.0", "2.0.0", lambda d: d)
         registry.clear()
-        assert len(registry) == 0
+        assert not registry
 
     async def test_list_migrations(self) -> None:
         registry = MigrationRegistry()

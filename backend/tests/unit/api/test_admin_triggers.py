@@ -195,7 +195,7 @@ class TestListTriggerEvents:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert len(body["items"]) == 0
+        assert not body["items"]
         assert body["total"] == 0
 
     def test_operator_returns_403(self, operator_client: TestClient) -> None:

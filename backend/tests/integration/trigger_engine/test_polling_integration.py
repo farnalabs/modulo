@@ -323,7 +323,7 @@ async def test_polling_trigger_no_match(
 
         runs_result = await session.execute(select(Run).where(Run.trigger_id == _TRIGGER_ID))
         runs = runs_result.scalars().all()
-        assert len(runs) == 0
+        assert not runs
 
         event_result = await session.execute(
             select(TriggerEvent).where(

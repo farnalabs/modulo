@@ -149,7 +149,7 @@ async def test_query_projects_empty(connector):
         ),
     )
     result = await connector.query(ConnectorQuery(resource="projects", limit=100))
-    assert len(result.records) == 0
+    assert not result.records
     assert result.total == 0
 
 
@@ -276,7 +276,7 @@ async def test_query_issues_with_all_filters(connector):
             },
         )
     )
-    assert len(result.records) == 0
+    assert not result.records
 
 
 # --- query: quality_gates ---
@@ -306,7 +306,7 @@ async def test_query_quality_gates_empty(connector):
         return_value=httpx.Response(200, json={"qualitygates": []}),
     )
     result = await connector.query(ConnectorQuery(resource="quality_gates"))
-    assert len(result.records) == 0
+    assert not result.records
 
 
 # --- query: quality_gate ---

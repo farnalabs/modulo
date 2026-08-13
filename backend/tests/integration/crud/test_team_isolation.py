@@ -201,7 +201,7 @@ async def test_memberships_isolated_between_orgs(db_engine: AsyncEngine) -> None
             {"oid": str(org_b)},
         )
         members_b = await list_team_members(session, team_id=team_b.id, page=1, page_size=50)
-        assert len(members_b.items) == 0
+        assert not members_b.items
 
 
 async def test_membership_unique_per_team_user(db_engine: AsyncEngine) -> None:

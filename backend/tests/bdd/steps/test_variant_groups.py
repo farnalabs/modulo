@@ -389,6 +389,6 @@ def check_selected_variant(expected: str, ctx: dict[str, Any]) -> None:
 
 @then("the batch is rejected with a quota_exceeded error")
 def check_quota_exceeded(ctx: dict[str, Any]) -> None:
-    assert ctx.get("run_results") is None or len(ctx.get("run_results", [])) == 0, (
+    assert ctx.get("run_results") is None or not ctx.get("run_results", []), (
         "Expected no run results when quota is exceeded"
     )

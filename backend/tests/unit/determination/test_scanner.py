@@ -221,7 +221,7 @@ async def test_health_check_failure_still_attempts_queries() -> None:
 async def test_empty_hub_returns_no_samples() -> None:
     hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
     samples = await run_scan(hub)
-    assert len(samples) == 0
+    assert not samples
 
 
 @respx.mock

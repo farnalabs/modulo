@@ -221,10 +221,10 @@ class TestViewModelListViews:
         assert resp.status_code == 200
         body = resp.json()
         assert body["total"] == 0
-        assert len(body["items"]) == 0
-        assert len(body["run_list_views"]) == 0
-        assert len(body["pipeline_list_views"]) == 0
-        assert len(body["audit_log_views"]) == 0
+        assert not body["items"]
+        assert not body["run_list_views"]
+        assert not body["pipeline_list_views"]
+        assert not body["audit_log_views"]
 
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get("/api/v1/viewmodel/views")

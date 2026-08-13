@@ -289,7 +289,7 @@ class TestEvalDashboardSections:
         app.dependency_overrides[get_db_session] = override_session
         resp = client.get(self.URL)
         data = resp.json()
-        assert len(data["coverage_gaps"]) == 0
+        assert not data["coverage_gaps"]
 
     def test_recent_results_section(self, client: TestClient) -> None:
         resp = client.get(self.URL)

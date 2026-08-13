@@ -821,7 +821,7 @@ async def test_list_org_contributions_empty_when_no_match():
     ):
         result = await list_org_contributions(session, org_id, contribution_status=CONTRIBUTION_PUBLISHED)
 
-    assert len(result.items) == 0
+    assert not result.items
     assert result.total == 0
 
 

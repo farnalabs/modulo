@@ -21,6 +21,9 @@ regression that silently weakens the suite:
 - ``==`` against a float literal that is not exactly representable in binary
   (``0.1``, ``0.04``, ``0.95``, ...) — precision-fragile equality that
   ``pytest.approx`` is designed to replace
+- ``assert len(x) == 0`` / ``assert 0 == len(x)`` where the ``len()`` operand
+  is an attribute access, subscript, call, or container literal — an
+  anti-idiom that should read ``assert not x`` and trips ruff SIM101
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -449,6 +452,48 @@ def test_no_dead_fixtures():
         f"Found {len(violations)} fixture(s) that no test requests.\n"
         "pytest never instantiates an unrequested fixture, so its body is dead code.\n"
         "Remove it, or wire it up (request it / autouse=True) so it does real work.\n" + "\n".join(violations)
+    )
+
+
+def test_no_len_equals_zero_assertions():
+    """``assert len(x) == 0`` should be ``assert not x`` — every sized container
+    is falsy exactly when it is empty, so the explicit length comparison adds
+    noise and trips ruff SIM101 (flake8-simplify, not enabled in ruff.toml).
+    The lens only flags operands whose type is statically a container that
+    cannot override truthiness: attribute access, subscript, call, or literal.
+    A bare ``len(name) == 0`` is left alone because the name may bind a custom
+    object (``__bool__``) or a non-falsy sized type such as a numpy array."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+                continue
+            op = node.ops[0]
+            if not isinstance(op, ast.Eq):
+                continue
+            sides = [(node.left, node.comparators[0]), (node.comparators[0], node.left)]
+            for lhs, rhs in sides:
+                if not (isinstance(rhs, ast.Constant) and rhs.value == 0):
+                    continue
+                if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
+                    continue
+                if not lhs.args:
+                    continue
+                operand = lhs.args[0]
+                if isinstance(operand, ast.Name):
+                    continue
+                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.List, ast.Dict, ast.Tuple)):
+                    continue
+                if any(part in EXCLUDED_PACKAGES for part in path.parts):
+                    continue
+                violations.append(f"  {rel}:{node.lineno}  assert len(...) == 0 — prefer 'assert not ...'")
+    assert not violations, (
+        f"Found {len(violations)} 'assert len(...) == 0' assertion(s).\n"
+        "Sized containers are falsy when empty; write 'assert not <expr>' instead.\n" + "\n".join(violations)
     )
 
 

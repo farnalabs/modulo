@@ -265,7 +265,7 @@ class TestConditionWindow:
             level="error",
             count=10,
         )
-        assert len(alerts) == 0
+        assert not alerts
 
     async def test_window_zero_falls_back_to_lifetime_count(self) -> None:
         rule = _make_rule(condition_min_count=3, condition_window_seconds=0)
@@ -307,7 +307,7 @@ class TestConditionWindow:
             level="error",
             count=5,
         )
-        assert len(alerts) == 0
+        assert not alerts
 
     async def test_window_applied_per_rule_independently(self) -> None:
         windowed = _make_rule(name="Windowed", condition_min_count=2, condition_window_seconds=300)
@@ -375,7 +375,7 @@ class TestAlertEngineCooldown:
             level="error",
             count=1,
         )
-        assert len(alerts2) == 0
+        assert not alerts2
 
     async def test_different_group_not_affected_by_cooldown(self) -> None:
         engine = AlertEngine(redis_client=MagicMock())

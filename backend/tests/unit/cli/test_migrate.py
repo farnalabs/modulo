@@ -111,7 +111,7 @@ class TestGroupRecords:
         records = [{"id": "1"}]
         groups = _group_records(records)
         assert "__orphan__" not in groups
-        assert len(groups) == 0
+        assert not groups
 
     def test_empty_records(self) -> None:
         assert _group_records([]) == {}

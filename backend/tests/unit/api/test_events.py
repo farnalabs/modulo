@@ -152,7 +152,7 @@ class TestEventBusSSEIntegration:
         await bus.publish(org_id, "run", "r1", "updated", version=0)
         await bus.publish(org_id, "run", "r2", "deleted", version=0)
 
-        assert bus._subscribers.get(org_id) is None or len(bus._subscribers.get(org_id, [])) == 0
+        assert bus._subscribers.get(org_id) is None or not bus._subscribers.get(org_id, [])
 
     @pytest.mark.asyncio
     async def test_publish_no_subscribers_does_not_raise(self):
