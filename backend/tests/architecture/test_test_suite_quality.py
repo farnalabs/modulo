@@ -21,6 +21,10 @@ regression that silently weakens the suite:
 - ``==`` against a float literal that is not exactly representable in binary
   (``0.1``, ``0.04``, ``0.95``, ...) — precision-fragile equality that
   ``pytest.approx`` is designed to replace
+- hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
+  ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
+- ``assert`` nested inside ``except`` handlers (a failing assert masks the
+  original exception and discards its traceback context)
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -491,4 +495,65 @@ def test_no_precision_fragile_float_equality():
         f"Found {len(violations)} precision-fragile float comparison(s).\n"
         "Use pytest.approx(<literal>) instead of == against a non-representable float literal.\n"
         + "\n".join(violations)
+    )
+
+
+def test_no_manual_raises_pattern():
+    """A hand-rolled ``try: <call>; raise AssertionError(...) except X: pass``
+    is a fragile substitute for ``pytest.raises``: the success path is guarded
+    only by the ``raise`` line (which is skipped if the code under test is
+    correct), and the ``except: pass`` swallows the failure. It also loses the
+    assertion-context reporting that ``pytest.raises`` gives you. Prefer::
+
+        with pytest.raises(X):
+            <call>
+    """
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            raises_assert = any(
+                isinstance(stmt, ast.Raise)
+                and stmt.exc is not None
+                and isinstance(stmt.exc, ast.Call)
+                and isinstance(stmt.exc.func, ast.Name)
+                and stmt.exc.func.id == "AssertionError"
+                for stmt in node.body
+            )
+            swallows = any(
+                len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass) for handler in node.handlers
+            )
+            if raises_assert and swallows:
+                violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  try/raise AssertionError/except: pass")
+    assert not violations, (
+        f"Found {len(violations)} hand-rolled raises pattern(s).\n"
+        "Replace try/raise AssertionError/except: pass with `with pytest.raises(...):`.\n" + "\n".join(violations)
+    )
+
+
+def test_no_assert_inside_except():
+    """An ``assert`` nested inside an ``except`` handler replaces the original
+    exception with a bare ``AssertionError`` when it fires, discarding the
+    traceback that explains *why* the code under test raised. Capture the
+    exception with ``pytest.raises(...) as exc_info`` and assert on
+    ``exc_info.value`` after the ``with`` block, or record the error and assert
+    in a separate step."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ExceptHandler):
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Assert):
+                    violations.append(f"  {path.relative_to(TESTS)}:{sub.lineno}  assert inside except handler")
+    assert not violations, (
+        f"Found {len(violations)} assertion(s) inside except handler(s).\n"
+        "Use pytest.raises(...) as exc_info and assert on exc_info.value outside the handler.\n" + "\n".join(violations)
     )

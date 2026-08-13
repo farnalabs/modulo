@@ -1006,16 +1006,15 @@ def step_connector_raises_github_error_code(code, ctx):
     connector = ctx["connector"]
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
-        ctx["query_error"] = "unexpected_success"
-    except GitHubError as exc:
-        ctx["query_error"] = str(exc)
-        assert exc.error_code == code, f"Expected error code {code!r} but got {exc.error_code!r}"
+        with pytest.raises(GitHubError) as exc_info:
+            loop.run_until_complete(connector.query(ConnectorQuery(resource="repos", limit=5)))
     except ValueError as exc:
         ctx["query_error"] = str(exc)
         raise AssertionError(f"Expected a GitHubError but got a plain ValueError: {exc}") from exc
     finally:
         loop.close()
+    ctx["query_error"] = str(exc_info.value)
+    assert exc_info.value.error_code == code, f"Expected error code {code!r} but got {exc_info.value.error_code!r}"
 
 
 @given("a GitHub connector whose health check reports an expired token")
