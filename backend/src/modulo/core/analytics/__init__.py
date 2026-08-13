@@ -36,10 +36,6 @@ _log = logging.getLogger(__name__)
 
 __all__ = ["TERMINAL_STATUSES", "compute_delta", "record_run_facts"]
 
-# Re-export the single source of truth so consumers can import it from the
-# analytics package root as well as from the model module.
-TERMINAL_STATUSES = TERMINAL_STATUSES
-
 
 def compute_delta(prev: float | None, curr: float | None) -> float | None:
     """Period-over-period percent change, rounded to 1dp.

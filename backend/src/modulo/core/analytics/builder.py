@@ -414,8 +414,7 @@ def _sweep_peak_and_mean(
             weighted += current * (ts - prev).total_seconds()
             prev = ts
         current += delta
-        if current > peak:
-            peak = current
+        peak = max(peak, current)
     if bucket_end > prev:
         weighted += current * (bucket_end - prev).total_seconds()
     total = (bucket_end - bucket_start).total_seconds()
