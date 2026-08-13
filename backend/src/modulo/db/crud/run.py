@@ -373,23 +373,6 @@ async def update_run_outputs(
     return run
 
 
-async def get_run_io(
-    session: AsyncSession,
-    run_id: uuid.UUID,
-) -> dict[str, Any] | None:
-    """Return the input_payload and outputs_json for a run."""
-    run = await get_run(session, run_id)
-    if run is None:
-        return None
-    return {
-        "run_id": run_id,
-        "run_number": run.run_number,
-        "status": run.status,
-        "input_payload": run.input_payload,
-        "outputs_json": run.outputs_json,
-    }
-
-
 async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
     result = await session.execute(select(Run).where(Run.id == run_id))
     return result.scalar_one_or_none()
