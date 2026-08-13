@@ -13,8 +13,6 @@ provider — see the repo-root AGENTS.md Lessons Learned.
 
 from typing import Any
 
-from langchain_openai import ChatOpenAI  # noqa: F401
-
 from modulo.model_backends.module import OpenAICompatibleBackend, ProviderUnavailableError
 
 __all__ = ["OpenCodeBackend", "ProviderUnavailableError"]

@@ -75,10 +75,6 @@ class LogoutResponse(BaseModel):
     detail: str = "Logged out"
 
 
-class WsTokenRequest(BaseModel):
-    pass
-
-
 class WsTokenResponse(BaseModel):
     ws_token: str
     token_type: str = "ws-opaque"

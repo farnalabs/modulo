@@ -63,17 +63,6 @@ class EvalDefinitionResponse(BaseModel):
     created_by: uuid.UUID = Field(validation_alias="account_id")
 
 
-class EvalResultResponse(BaseModel):
-    id: uuid.UUID
-    run_id: uuid.UUID
-    node_id: uuid.UUID | None
-    eval_id: uuid.UUID
-    passed: bool
-    score: float | None
-    detail: str | None
-    evaluated_at: str
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
