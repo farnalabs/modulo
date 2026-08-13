@@ -11,7 +11,6 @@ Feature: Runner Role
   #   can trigger a pipeline run" now uses a runner JWT principal.
   # - "Runner role is scoped to pipelines they own" (team scope) is deferred to
   #   Phase 3 (team-scope enforcement for run triggering) — marked @skip.
-
   @skip
   Scenario: Runner role is scoped to pipelines they own
     Given org "acme" has pipeline "ci-pipeline" owned by team "ci-team"
