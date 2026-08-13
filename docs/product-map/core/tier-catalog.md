@@ -32,10 +32,8 @@ Plan tier definitions and feature flag catalog governing which features are avai
 ### CRUD
 
 - [x] `list_tiers` — returns all tiers ordered by rank
-- [x] `get_tier` — returns a single tier by tier_id
 - [x] `list_feature_flags` — returns all active flags ordered by name
 - [x] `get_feature_flag` — returns a single flag by name
-- [x] `list_feature_flags_by_tier` — returns flags filtered by tier_id
 
 ### API
 

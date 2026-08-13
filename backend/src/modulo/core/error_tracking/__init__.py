@@ -178,10 +178,6 @@ def _sanitize_context_json(value: Any, sanitize: Any) -> Any:
     return value
 
 
-class FingerprintError(Exception):
-    pass
-
-
 class ErrorIngestionService:
     """Creates error events, upserts groups, batches, and evaluates alert rules.
 

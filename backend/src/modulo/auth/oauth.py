@@ -24,7 +24,6 @@ from typing import Any
 import jwt
 from authlib.oauth2 import OAuth2Error as _OAuth2Error  # type: ignore[import-untyped]
 from authlib.oauth2.rfc6749 import (  # type: ignore[import-untyped]
-    AuthorizationCodeMixin,
     ClientMixin,
     list_to_scope,
     scope_to_list,
@@ -122,19 +121,6 @@ class AuthlibClientWrapper(ClientMixin):  # type: ignore[misc]
         allowed = set(scope_to_list(self._client.scopes))
         requested = set(scope_to_list(scope))
         return list_to_scope(sorted(allowed & requested))  # type: ignore[no-any-return]
-
-
-class AuthlibCodeWrapper(AuthorizationCodeMixin):  # type: ignore[misc]
-    """Wraps an OAuthAuthorizationCode ORM model for authlib."""
-
-    def __init__(self, code: OAuthAuthorizationCode) -> None:
-        self._code = code
-
-    def get_redirect_uri(self) -> str:
-        return self._code.redirect_uri
-
-    def get_scope(self) -> str:
-        return self._code.scopes
 
 
 # ---------------------------------------------------------------------------
