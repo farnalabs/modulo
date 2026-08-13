@@ -70,8 +70,7 @@ Uses the `qa-iterate` skill (`qa-iterate <target-path>` from project root) to ru
 20. **Pipeline canvas** — Vue Flow, node/edge serialisation, connector binding picker, HITL gate edge type.
 21. **HITL review UI** — claim, approve, reject, overdue badge, claimed-by indicator.
 22. **Run inspection UI** — per-node input/output/prompt/response, sensitive payload masking, "Copy as test fixture".
-23. **Stage board** — search, filter by status, `awaiting_human` quick filter.
-24. **Library browser** — list, preview, copy-to-adapt wizard.
+23. **Library browser** — list, preview, copy-to-adapt wizard.
 25. **Demo pipeline + first-run walkthrough** — `MODULO_DEMO_MODE`, pre-loaded `prd-to-requirements`.
 
 ## Phase 6 — Alpha exit checklist

@@ -177,7 +177,6 @@ class TestRunsSpecialCase:
     def test_team_scoped_set_matches_adr(self) -> None:
         assert set(TEAM_SCOPED_RESOLVERS) == {
             "pipelines",
-            "stages",
             "connector_instances",
             "model_backends",
             "environment_profiles",

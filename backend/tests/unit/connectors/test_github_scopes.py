@@ -4,14 +4,130 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.github import REQUIRED_SCOPES, GitHubAuthError, GitHubConnector, GitHubNetworkError
+from modulo.connectors.github import (
+    REQUIRED_FINE_GRAINED_PERMISSIONS,
+    REQUIRED_SCOPES,
+    GitHubAuthError,
+    GitHubConnector,
+    GitHubNetworkError,
+    is_fine_grained_pat,
+)
 
 TOKEN = "ghp_test_token"
+FINE_GRAINED_TOKEN = "github_pat_11AA22BB33CC44DD55"
 
 
 @pytest.fixture
 def connector():
     return GitHubConnector(token=TOKEN)
+
+
+@pytest.fixture
+def fine_grained_connector():
+    return GitHubConnector(token=FINE_GRAINED_TOKEN)
+
+
+def test_is_fine_grained_pat_prefix() -> None:
+    assert is_fine_grained_pat("github_pat_abc123") is True
+    assert is_fine_grained_pat(FINE_GRAINED_TOKEN) is True
+    assert is_fine_grained_pat("ghp_abc123") is False
+    assert is_fine_grained_pat(TOKEN) is False
+    assert is_fine_grained_pat("") is False
+
+
+@respx.mock
+async def test_fine_grained_verify_scopes_passes_without_scopes_header(fine_grained_connector):
+    """A fine-grained PAT must not fail on the classic X-OAuth-Scopes check.
+
+    GitHub never returns X-OAuth-Scopes for fine-grained tokens, so the required
+    set is the PRD §7.11 permissions and an absent permission header means the
+    API remains the enforcement point (fail-open).
+    """
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"}),
+    )
+    missing = await fine_grained_connector.verify_scopes()
+    assert missing == set()
+
+
+@respx.mock
+async def test_fine_grained_verify_scopes_all_permissions_present(fine_grained_connector):
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(
+            200,
+            json={"login": "octocat"},
+            headers={"X-Accepted-GitHub-Permissions": "contents:read, contents:write, pull_requests:write"},
+        ),
+    )
+    missing = await fine_grained_connector.verify_scopes()
+    assert missing == set()
+
+
+@respx.mock
+async def test_fine_grained_verify_scopes_reports_missing_permissions(fine_grained_connector):
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(
+            200,
+            json={"login": "octocat"},
+            headers={"X-Accepted-GitHub-Permissions": "contents:read"},
+        ),
+    )
+    missing = await fine_grained_connector.verify_scopes()
+    assert missing == REQUIRED_FINE_GRAINED_PERMISSIONS - {"contents:read"}
+
+
+@respx.mock
+async def test_fine_grained_verify_scopes_header_ignores_classic_scopes(fine_grained_connector):
+    """Classic scopes in X-OAuth-Scopes are meaningless for fine-grained tokens.
+
+    Even if a (nonstandard) X-OAuth-Scopes header appears, fine-grained tokens
+    are only verified against the PRD §7.11 fine-grained permissions.
+    """
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(
+            200,
+            json={"login": "octocat"},
+            headers={"X-OAuth-Scopes": "repo, read:org"},
+        ),
+    )
+    missing = await fine_grained_connector.verify_scopes()
+    assert missing == set()
+
+
+@respx.mock
+async def test_fine_grained_health_check_ok(fine_grained_connector):
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"}),
+    )
+    result = await fine_grained_connector.health_check()
+    assert result.ok is True
+    assert result.detail == "octocat"
+
+
+@respx.mock
+async def test_fine_grained_health_check_reports_missing_permissions(fine_grained_connector):
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(
+            200,
+            json={"login": "octocat"},
+            headers={"X-Accepted-GitHub-Permissions": "contents:read"},
+        ),
+    )
+    result = await fine_grained_connector.health_check()
+    assert result.ok is False
+    assert "missing_scope:contents:write" in result.detail
+    assert "missing_scope:pull_requests:write" in result.detail
+    assert "contents:read" in result.detail
+
+
+@respx.mock
+async def test_classic_pat_still_requires_classic_scopes(connector):
+    """Classic tokens keep the classic OAuth-scope check unchanged."""
+    respx.get("https://api.github.com/user").mock(
+        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "read:org"}),
+    )
+    missing = await connector.verify_scopes()
+    assert missing == {"repo"}
 
 
 @respx.mock

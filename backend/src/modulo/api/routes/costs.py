@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report
+from modulo.core.cost_controller import build_cost_report_buckets, get_cost_report, reset_pipeline_circuit_breaker
 from modulo.core.cost_settings import (
     COST_CONTROLS_KEY,
     DEFAULT_ALERT_THRESHOLDS,
@@ -556,6 +556,66 @@ async def update_cost_controls(
         circuit_breaker_enabled=_read_circuit_breaker(org),
         currency=_read_currency(org),
         billing_period=_read_billing_period(org),
+    )
+
+
+class CircuitBreakerResetResponse(BaseModel):
+    pipeline_id: str
+    circuit_breaker_tripped: bool
+    triggers_reactivated: int
+
+
+@handle_db_errors("costs.reset_circuit_breaker")
+@router.post("/circuit-breaker/{pipeline_id}/reset", response_model=CircuitBreakerResetResponse)
+async def reset_circuit_breaker(
+    pipeline_id: uuid.UUID,
+    _: object = require_feature("admin_cost_controls"),
+    current_user: TenantPrincipal = require_permission("cost.manage"),
+    session: AsyncSession = Depends(get_db_session),
+) -> CircuitBreakerResetResponse:
+    """Admin re-enable: clear a tripped pipeline circuit breaker.
+
+    Sets ``circuit_breaker_tripped = False`` on the pipeline and re-activates
+    all of its (non-deleted) triggers so new runs are allowed again (spec §8.10
+    ``circuit_breaker``: "Permanently pauses trigger until admin re-enables").
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, current_user.organisation_id)
+            reset = await reset_pipeline_circuit_breaker(
+                session,
+                org_id=current_user.organisation_id,
+                pipeline_id=pipeline_id,
+            )
+            if not reset:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+    except ProgrammingError:
+        _log.exception("reset_circuit_breaker ProgrammingError (pipeline_id=%s)", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("reset_circuit_breaker SQLAlchemyError (pipeline_id=%s)", pipeline_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A database error occurred. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in reset_circuit_breaker")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+
+    return CircuitBreakerResetResponse(
+        pipeline_id=str(pipeline_id),
+        circuit_breaker_tripped=False,
+        triggers_reactivated=0,
     )
 
 

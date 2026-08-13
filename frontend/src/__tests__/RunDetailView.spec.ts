@@ -277,6 +277,44 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('shows an error-code badge on the failed-run diagnostics panel', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            run_id: 'test-run-id',
+            pipeline_id: 'test-pipeline',
+            status: 'failed',
+            error_code: 'task_failure',
+            error_detail: 'boom: worker crashed',
+            total_cost_usd: null,
+            token_consumption: null,
+            node_token_usage: null,
+            trace_id: null,
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Run Error')
+    expect(wrapper.text()).toContain('task_failure')
+    expect(wrapper.text()).toContain('boom: worker crashed')
+    wrapper.unmount()
+  })
+
   async function mockRunDetail(data: Record<string, unknown>) {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((url: string) => {
@@ -425,7 +463,7 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
-  it.each(['complete', 'failed', 'cancelled', 'eval_failed', 'stalled'])('hides the cancel button for %s runs', async (status) => {
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded'])('hides the cancel button for %s runs', async (status) => {
     const wrapper = await mountWithDetail({ ...baseDetail(), status })
     expect(wrapper.find('[data-testid="run-detail-cancel"]').exists()).toBe(false)
     wrapper.unmount()

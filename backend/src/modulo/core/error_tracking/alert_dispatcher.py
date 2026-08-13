@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.email_service import EmailSendingError, send_email
+from modulo.core.error_tracking.metrics import record_alert_delivery_failed
 from modulo.db.models.account import Account
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.org_membership import OrgMembership
@@ -200,6 +201,7 @@ async def _dispatch_email(
                     extra={"rule": alert.rule_name, "to_count": len(to_emails)},
                 )
         except EmailSendingError as exc:
+            record_alert_delivery_failed(str(alert.rule_id), "email")
             _log.warning(
                 "alert.email_send_failed",
                 extra={"rule": alert.rule_name, "error": str(exc)},
@@ -227,6 +229,7 @@ async def _dispatch_webhook(
 
     payload: dict[str, Any] = {
         "event": "error_alert",
+        "alert_id": str(alert.alert_id),
         "rule": alert.rule_name,
         "group_id": str(alert.error_group_id),
         "fingerprint": alert.fingerprint,
@@ -235,6 +238,10 @@ async def _dispatch_webhook(
         "count": alert.count,
         "environment": alert.environment or "",
         "url": admin_url,
+        "signal": alert.signal or "",
+        "elevation_signal": alert.elevation_signal or "",
+        "attempt_n": alert.attempt_n,
+        "run_group_id": str(alert.run_group_id) if alert.run_group_id else None,
     }
 
     if is_slack:
@@ -250,15 +257,76 @@ async def _dispatch_webhook(
                 headers={"Content-Type": "application/json", "User-Agent": "Modulo-Error-Alert/1.0"},
             )
             if not resp.is_success:
+                record_alert_delivery_failed(str(alert.rule_id), "webhook")
                 _log.warning(
                     "alert.webhook_http_error",
                     extra={"status": resp.status_code, "rule_id": str(alert.rule_id)},
                 )
         except httpx.RequestError as exc:
+            record_alert_delivery_failed(str(alert.rule_id), "webhook")
             _log.warning(
                 "alert.webhook_request_failed",
                 extra={"rule_id": str(alert.rule_id), "error": str(exc)},
             )
+
+
+async def dispatch_alert_resolved(
+    org_id: uuid.UUID,
+    *,
+    group_id: uuid.UUID,
+    signal: str,
+    reason: str,
+    session: AsyncSession,
+    webhook_url: str | None = None,
+) -> None:
+    """Emit an ``alert_resolved`` lifecycle event for an earlier critical now moot.
+
+    Recorded in-app (``notification_delivery_log``) and, when the matched rule
+    carries a webhook, delivered to it so a moot critical never stays open
+    (FAR-151 §15.5). Best-effort: failures are logged, never propagated.
+    """
+    from modulo.db.models.notification_delivery import NotificationDeliveryLog
+
+    session.add(
+        NotificationDeliveryLog(
+            organisation_id=org_id,
+            event_type="alert_resolved",
+            status="in_app",
+            attempt_count=1,
+            last_error=f"{signal} resolved: {reason}",
+        )
+    )
+
+    if webhook_url:
+        payload: dict[str, Any] = {
+            "event": "alert_resolved",
+            "group_id": str(group_id),
+            "signal": signal,
+            "reason": reason,
+        }
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    webhook_url,
+                    content=body,
+                    headers={"Content-Type": "application/json", "User-Agent": "Modulo-Error-Alert/1.0"},
+                )
+                if not resp.is_success:
+                    _log.warning(
+                        "alert.resolved_webhook_http_error",
+                        extra={"status": resp.status_code, "signal": signal},
+                    )
+        except httpx.RequestError as exc:
+            _log.warning(
+                "alert.resolved_webhook_request_failed",
+                extra={"signal": signal, "error": str(exc)},
+            )
+
+    _log.info(
+        "alert.resolved",
+        extra={"signal": signal, "group_id": str(group_id)},
+    )
 
 
 def _format_slack_payload(payload: dict[str, Any], emoji: str) -> dict[str, Any]:

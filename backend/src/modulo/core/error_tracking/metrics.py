@@ -20,6 +20,11 @@ _errors_total: Any = None
 _error_groups_active: Any = None
 _error_alerts_total: Any = None
 
+# Alert-health instruments (FAR-151, §15.14): cooldown suppressions and failed
+# notifier forwards — registered lazily alongside the alert counter.
+_alerts_suppressed_total: Any = None
+_alert_delivery_failed_total: Any = None
+
 # Run-runtime instruments (D1) — registered lazily by init_runtime_metrics().
 _runs_running_gauge: Any = None
 _runs_oldest_running_gauge: Any = None
@@ -276,3 +281,51 @@ def record_error_alert(level: str, action_type: str) -> None:
         _init_alert_counter()
     if _error_alerts_total is not None:
         _error_alerts_total.add(1, attributes={"level": level, "action_type": action_type})
+
+
+def _init_suppressed_counter() -> None:
+    global _alerts_suppressed_total
+    if _alerts_suppressed_total is not None:
+        return
+    try:
+        meter = _get_meter()
+        if meter is None:
+            return
+        _alerts_suppressed_total = meter.create_counter(
+            name="modulo_alerts_suppressed_total",
+            description="Total number of alert evaluations suppressed by cooldown",
+            unit="1",
+        )
+    except Exception:
+        _log.warning("metrics.suppressed_counter_failed")
+
+
+def record_alert_suppressed(rule_id: str) -> None:
+    if _alerts_suppressed_total is None:
+        _init_suppressed_counter()
+    if _alerts_suppressed_total is not None:
+        _alerts_suppressed_total.add(1, attributes={"rule_id": rule_id})
+
+
+def _init_delivery_failed_counter() -> None:
+    global _alert_delivery_failed_total
+    if _alert_delivery_failed_total is not None:
+        return
+    try:
+        meter = _get_meter()
+        if meter is None:
+            return
+        _alert_delivery_failed_total = meter.create_counter(
+            name="modulo_alert_delivery_failed_total",
+            description="Total number of alert dispatches that failed to reach a notifier",
+            unit="1",
+        )
+    except Exception:
+        _log.warning("metrics.delivery_failed_counter_failed")
+
+
+def record_alert_delivery_failed(rule_id: str, action_type: str) -> None:
+    if _alert_delivery_failed_total is None:
+        _init_delivery_failed_counter()
+    if _alert_delivery_failed_total is not None:
+        _alert_delivery_failed_total.add(1, attributes={"rule_id": rule_id, "action_type": action_type})

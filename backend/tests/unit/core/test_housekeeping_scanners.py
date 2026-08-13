@@ -631,6 +631,30 @@ class TestOrphanSecrets:
                 account_id=_ACCOUNT,
             )
         )
+        # A connector with no config must not crash the reference scan.
+        session.add(
+            ConnectorInstance(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                name="empty-config",
+                connector_type_id="filesystem",
+                config_json={},
+                credentials_ciphertext=b"x",
+                account_id=_ACCOUNT,
+            )
+        )
+        # A connector whose config holds non-string values must not crash it either.
+        session.add(
+            ConnectorInstance(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                name="non-string-config",
+                connector_type_id="github",
+                config_json={"port": 8080, "retries": 3},
+                credentials_ciphertext=b"x",
+                account_id=_ACCOUNT,
+            )
+        )
         session.add(
             Agent(
                 id=uuid.uuid4(),
@@ -646,11 +670,74 @@ class TestOrphanSecrets:
                 connector_type_refs=[{"secret_key": "agent_secret"}],
             )
         )
+        # Empty or non-dict connector_type_refs entries must be tolerated.
+        session.add(
+            Agent(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                account_id=_ACCOUNT,
+                name="no-refs",
+                input_schema_id=uuid.uuid4(),
+                input_schema_version="1",
+                output_schema_id=uuid.uuid4(),
+                output_schema_version="1",
+                prompt_template="prompt",
+                model_backend_id=uuid.uuid4(),
+                connector_type_refs=[],
+            )
+        )
+        session.add(
+            Agent(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                account_id=_ACCOUNT,
+                name="string-ref",
+                input_schema_id=uuid.uuid4(),
+                input_schema_version="1",
+                output_schema_id=uuid.uuid4(),
+                output_schema_version="1",
+                prompt_template="prompt",
+                model_backend_id=uuid.uuid4(),
+                connector_type_refs=["legacy_string_ref"],
+            )
+        )
+        # A dict ref that carries no secret key name must be tolerated.
+        session.add(
+            Agent(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                account_id=_ACCOUNT,
+                name="keyless-ref",
+                input_schema_id=uuid.uuid4(),
+                input_schema_version="1",
+                output_schema_id=uuid.uuid4(),
+                output_schema_version="1",
+                prompt_template="prompt",
+                model_backend_id=uuid.uuid4(),
+                connector_type_refs=[{"connector_type_id": "github"}],
+            )
+        )
         await session.commit()
 
         candidates = await _scan_orphan_secrets(session, _ORG_A)
 
         assert _candidate_names(candidates) == ["orphan"]
+
+    async def test_returns_empty_when_org_has_no_secrets(self, session: AsyncSession) -> None:
+        session.add(
+            ConnectorInstance(
+                id=uuid.uuid4(),
+                organisation_id=_ORG_A,
+                name="conn",
+                connector_type_id="github",
+                config_json={"token": "conn_secret"},
+                credentials_ciphertext=b"x",
+                account_id=_ACCOUNT,
+            )
+        )
+        await session.commit()
+
+        assert await _scan_orphan_secrets(session, _ORG_A) == []
 
 
 class TestUnboundConnectors:
@@ -710,11 +797,24 @@ class TestUnboundConnectors:
                 connector_bindings_json=[{"connector_instance_id": str(unbound.id)}],
             )
         )
+        # A snapshot with no bindings at all must not crash the bound-id scan.
+        session.add(_snapshot(organisation_id=_ORG_A, pipeline_id=uuid.uuid4(), connector_bindings_json=[]))
+        # A binding entry that references neither id kind must be skipped silently.
+        session.add(
+            _snapshot(
+                organisation_id=_ORG_A,
+                pipeline_id=uuid.uuid4(),
+                connector_bindings_json=[{"connector_type_id": "github"}],
+            )
+        )
         await session.commit()
 
         candidates = await _scan_unbound_connectors(session, _ORG_A)
 
         assert _candidate_names(candidates) == ["unbound"]
+
+    async def test_returns_empty_when_org_has_no_connectors(self, session: AsyncSession) -> None:
+        assert await _scan_unbound_connectors(session, _ORG_A) == []
 
     async def test_malformed_binding_id_is_ignored(self, session: AsyncSession) -> None:
         connector = ConnectorInstance(
@@ -793,6 +893,9 @@ class TestUnusedSsoProviders:
         candidates = await _scan_unused_sso_providers(session, _ORG_A)
 
         assert _candidate_names(candidates) == ["unused"]
+
+    async def test_returns_empty_when_org_has_no_providers(self, session: AsyncSession) -> None:
+        assert await _scan_unused_sso_providers(session, _ORG_A) == []
 
     async def test_skips_when_sso_accounts_exist(self, session: AsyncSession) -> None:
         sso_account = Account(id=uuid.uuid4(), email="sso@example.com", display_name="SSO User", auth_provider="oidc")

@@ -2,9 +2,11 @@
 
 ``record_run_facts`` is the LIVE writer: called from every terminal finalize
 path (``cost_controller.finalize``) INSIDE the same transaction as the run
-status write. It NEVER raises (fail-open), NEVER feeds ``_fallback_write`` /
-``_reduced_escape``, and NEVER influences the cost result. A facts-write
-failure rolls back only the fact (a savepoint), not the run's finalization.
+status write, AND — as a compensating row — from the SAQ task_failure hook
+(``saq_hooks``) in its own separate session after the run is marked failed. It
+NEVER raises (fail-open), NEVER feeds ``_fallback_write`` / ``_reduced_escape``,
+and NEVER influences the cost result. A facts-write failure rolls back only the
+fact (a savepoint), not the run's finalization.
 """
 
 from __future__ import annotations
@@ -33,10 +35,6 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 __all__ = ["TERMINAL_STATUSES", "compute_delta", "record_run_facts"]
-
-# Re-export the single source of truth so consumers can import it from the
-# analytics package root as well as from the model module.
-TERMINAL_STATUSES = TERMINAL_STATUSES
 
 
 def compute_delta(prev: float | None, curr: float | None) -> float | None:

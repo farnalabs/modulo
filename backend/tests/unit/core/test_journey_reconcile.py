@@ -16,9 +16,18 @@ setup in ``test_journey_advancement.py``:
   * ``cancelled`` / ``stalled`` runs are mint-only: a stale row is NOT
     perpetual drift for them;
   * fail-open per run — a per-run advance failure is logged and the sweep
-    continues.
+    continues;
+  * a run selected by the raw-ref drift predicate whose refs canonicalise to
+    current journeys is NOT re-advanced (would double-count);
+  * a run whose refs are all malformed is skipped;
+  * ``asyncio.CancelledError`` is re-raised (never swallowed by fail-open);
+  * the ``_drift_predicate`` SQL is dialect-correct (``jsonb_array_elements``
+    + ``->>`` on Postgres, ``json_each`` + ``json_extract`` elsewhere);
+  * the ``record_*`` metric counters lazy-init against the OTel meter and
+    silently no-op when no meter is available.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
@@ -26,10 +35,17 @@ from typing import Any, cast
 
 import pytest
 from sqlalchemy import Table, select
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+import modulo.core.lifecycle_map.reconcile as reconcile_mod
 from modulo.core.lifecycle_map.advancement import advance_journeys
-from modulo.core.lifecycle_map.reconcile import reconcile_journeys
+from modulo.core.lifecycle_map.reconcile import (
+    _canonical_refs,
+    _drift_predicate,
+    _drift_refs,
+    reconcile_journeys,
+)
 from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
 from modulo.db.models.journey import Journey
@@ -385,6 +401,119 @@ class TestFailOpen:
         assert await _read_journey(session, "github_pr", "2") is None
 
 
+class TestReconcileEdgeCases:
+    async def test_cancelled_error_is_reraised(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The fail-open guard must NOT swallow task cancellation — a
+        # CancelledError has to propagate so the caller can unwind cleanly.
+        await _seed_run(session, refs=[{"kind": "github_pr", "ref": "1", "source": "derived"}])
+
+        async def _cancel(*args: Any, **kwargs: Any) -> int:
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr("modulo.core.lifecycle_map.reconcile.advance_journeys", _cancel)
+        with pytest.raises(asyncio.CancelledError):
+            await reconcile_journeys(session, batch_size=10)
+
+    async def test_malformed_refs_run_is_skipped(self, session: AsyncSession) -> None:
+        # Every ref entry fails canonicalisation → no canonical refs → the run
+        # is skipped (no mint, no advance, no error).
+        await _seed_run(
+            session,
+            refs=[{"kind": "", "ref": "x"}, "not-a-dict", None],
+            completed_at=_T2,
+        )
+        assert await reconcile_journeys(session, batch_size=10) == 0
+        assert await _journey_count(session) == 0
+
+    async def test_raw_ref_matching_current_canonical_journey_is_not_drift(self, session: AsyncSession) -> None:
+        # The journey is keyed canonically ("456"); the run stores the RAW ref
+        # "#456". The sweep's raw-ref drift predicate sees a join miss and
+        # selects the run, but _drift_refs canonicalises FIRST and finds the
+        # journey current — so the sweep must NOT re-advance, or run_count
+        # would be double-counted.
+        current_run = uuid.uuid4()
+        await _seed_journey(
+            session, "github_pr", "456", updated_at=_T3, run_count=1, latest_terminal_run_id=current_run
+        )
+        await _seed_run(
+            session,
+            refs=[{"kind": "github_pr", "ref": "#456", "source": "derived"}],
+            completed_at=_T2,
+        )
+
+        assert await reconcile_journeys(session, batch_size=10) == 0
+
+        journey = await _read_journey(session, "github_pr", "456")
+        assert journey is not None
+        assert journey.run_count == 1  # NOT double-counted
+        assert journey.latest_terminal_run_id == current_run
+        assert journey.updated_at == _T3
+
+    async def test_drift_refs_empty_canonical_returns_empty(self, session: AsyncSession) -> None:
+        assert await _drift_refs(session, _ORG, [], None, advancing=True) == []
+        assert await _drift_refs(session, _ORG, [], _T2, advancing=False) == []
+
+
+class TestAdvanceJourneysDirect:
+    """Direct ``advance_journeys`` fail-open + dedupe guard coverage.
+
+    The reconcile sweep pre-canonicalises refs via ``_canonical_refs``, so the
+    malformed-entry and duplicate-ref guards inside ``advance_journeys`` itself
+    are only reachable by calling it directly (its other consumers, e.g. the
+    run finalise hook, pass raw entries).
+    """
+
+    async def test_malformed_entry_is_dropped_with_warning(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        run_id = uuid.uuid4()
+        with caplog.at_level("WARNING", logger="modulo.core.lifecycle_map.advancement"):
+            advanced = await advance_journeys(
+                session,
+                _ORG,
+                run_id=run_id,
+                pipeline_id=None,
+                refs=[
+                    {"kind": "", "ref": "x", "source": "derived"},
+                    {"kind": "github_pr", "ref": "123", "source": "derived"},
+                ],
+                status="complete",
+                completed_at=_T2,
+                run_created_at=_T1,
+            )
+
+        assert advanced == 1
+        assert any("dropping invalid work-item ref entry" in m for m in caplog.messages)
+        journey = await _read_journey(session, "github_pr", "123")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.run_count == 1
+
+    async def test_duplicate_canonical_refs_advanced_once(self, session: AsyncSession) -> None:
+        run_id = uuid.uuid4()
+        advanced = await advance_journeys(
+            session,
+            _ORG,
+            run_id=run_id,
+            pipeline_id=None,
+            refs=[
+                {"kind": "github_pr", "ref": "123", "source": "derived"},
+                {"kind": "github_pr", "ref": "#123", "source": "derived"},
+            ],
+            status="complete",
+            completed_at=_T2,
+            run_created_at=_T1,
+        )
+
+        assert advanced == 1
+        journey = await _read_journey(session, "github_pr", "123")
+        assert journey is not None
+        assert journey.latest_terminal_run_id == run_id
+        assert journey.run_count == 1
+
+
 class TestJourneyFactModel:
     """The per-writer denominator model is registered, org-scoped and queryable."""
 
@@ -453,3 +582,175 @@ class TestJourneyFactModel:
             .all()
         )
         assert len(rows) == 1
+
+
+class TestDriftPredicateDialects:
+    def test_postgresql_branch_uses_jsonb(self) -> None:
+        stmt = _drift_predicate("postgresql")
+        sql = str(stmt.compile(dialect=postgresql.dialect()))
+        assert "jsonb_array_elements" in sql
+        assert "->>" in sql
+        assert "json_each" not in sql
+
+    def test_sqlite_branch_uses_json_each(self) -> None:
+        stmt = _drift_predicate("sqlite")
+        sql = str(stmt.compile(dialect=sqlite.dialect()))
+        assert "json_each" in sql
+        assert "json_extract" in sql
+        assert "jsonb_array_elements" not in sql
+
+    def test_sqlite_datetime_normalisation(self) -> None:
+        # SQLite stores datetimes as text — the predicate must normalise both
+        # sides with datetime() so an equal-instant evidence anchor never
+        # re-selects a reconciled run.
+        stmt = _drift_predicate("sqlite")
+        sql = str(stmt.compile(dialect=sqlite.dialect()))
+        assert "datetime(" in sql
+
+    def test_unknown_dialect_falls_back_to_generic_json(self) -> None:
+        stmt = _drift_predicate("mariadb")
+        sql = str(stmt.compile(dialect=sqlite.dialect()))
+        assert "json_each" in sql
+
+
+class TestCanonicalRefs:
+    def test_non_list_returns_empty(self) -> None:
+        assert _canonical_refs(None) == []
+        assert _canonical_refs("not-a-list") == []
+        assert _canonical_refs({"kind": "github_pr", "ref": "1"}) == []
+
+    def test_malformed_entries_dropped_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING", logger="modulo.core.lifecycle_map.reconcile"):
+            result = _canonical_refs(
+                [
+                    {"kind": "", "ref": "1"},
+                    "not-a-dict",
+                    {"kind": "github_pr", "ref": ""},
+                    {"kind": "github_pr", "ref": "123", "source": "derived"},
+                ]
+            )
+        # Blank kind, non-dict, blank ref all dropped; the valid entry survives.
+        assert result == [{"kind": "github_pr", "ref": "123", "source": "derived"}]
+        assert len(caplog.messages) == 3
+
+    def test_duplicates_deduped_after_canonicalisation(self) -> None:
+        # "#1" and "1" canonicalise to the same ref → deduped; "#2" survives.
+        result = _canonical_refs(
+            [
+                {"kind": "github_pr", "ref": "#1"},
+                {"kind": "github_pr", "ref": "1"},
+                {"kind": "github_pr", "ref": "#2"},
+            ]
+        )
+        assert result == [
+            {"kind": "github_pr", "ref": "1", "source": "derived"},
+            {"kind": "github_pr", "ref": "2", "source": "derived"},
+        ]
+
+
+class _FakeCounter:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls: list[dict] = []
+
+    def add(self, value: int, attributes: dict | None = None) -> None:
+        self.calls.append({"value": value, "attributes": attributes})
+
+
+class _FakeMeter:
+    def __init__(self) -> None:
+        self.counters: list[_FakeCounter] = []
+
+    def create_counter(self, *, name: str, description: str, unit: str) -> _FakeCounter:
+        counter = _FakeCounter(name)
+        self.counters.append(counter)
+        return counter
+
+    def counter(self, name: str) -> _FakeCounter | None:
+        return next((c for c in self.counters if c.name == name), None)
+
+
+@pytest.fixture
+def fake_meter() -> _FakeMeter:
+    return _FakeMeter()
+
+
+_RECONCILE_HANDLE_NAMES = (
+    "_journey_advance_total",
+    "_journey_parse_failure_total",
+    "_journey_finalise_attempt_total",
+    "_self_report_refs_capped_total",
+    "_unmatched_self_report_refs_total",
+    "_journey_reconcile_drift_total",
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_reconcile_handles(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _RECONCILE_HANDLE_NAMES:
+        monkeypatch.setattr(reconcile_mod, name, None)
+
+
+class TestReconcileMetrics:
+    def test_get_meter_missing_provider_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("opentelemetry.metrics.get_meter_provider", lambda: None)
+        assert reconcile_mod._get_meter() is None
+
+    def test_get_meter_provider_failure_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _boom() -> Any:
+            raise RuntimeError("meter provider down")
+
+        monkeypatch.setattr("opentelemetry.metrics.get_meter_provider", _boom)
+        assert reconcile_mod._get_meter() is None
+
+    def test_record_functions_initialise_and_attribute(
+        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+    ) -> None:
+        monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
+        reconcile_mod.record_journey_advance(2)
+        assert fake_meter.counter("modulo_journey_advance_total").calls == [{"value": 2, "attributes": None}]
+
+        reconcile_mod.record_journey_parse_failure("live", 1)
+        assert fake_meter.counter("modulo_journey_parse_failure_total").calls == [
+            {"value": 1, "attributes": {"writer": "live"}}
+        ]
+
+        reconcile_mod.record_journey_finalise_attempt("live", 3)
+        assert fake_meter.counter("modulo_journey_finalise_attempt_total").calls == [
+            {"value": 3, "attributes": {"writer": "live"}}
+        ]
+
+        reconcile_mod.record_self_report_refs_capped(4)
+        assert fake_meter.counter("modulo_journey_self_report_refs_capped_total").calls == [
+            {"value": 4, "attributes": None}
+        ]
+
+        reconcile_mod.record_unmatched_self_report_refs(1)
+        assert fake_meter.counter("modulo_journey_unmatched_self_report_refs_total").calls == [
+            {"value": 1, "attributes": None}
+        ]
+
+        reconcile_mod.record_journey_reconcile_drift(2, kind="stale")
+        assert fake_meter.counter("modulo_journey_reconcile_drift_total").calls == [
+            {"value": 2, "attributes": {"kind": "stale"}}
+        ]
+
+    def test_ensure_early_return_when_handles_initialised(
+        self, monkeypatch: pytest.MonkeyPatch, fake_meter: _FakeMeter
+    ) -> None:
+        monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: fake_meter)
+        reconcile_mod._ensure()
+        reconcile_mod._ensure()
+        # Only the first call builds the six handles; the second returns early.
+        assert len(fake_meter.counters) == 6
+
+    def test_record_functions_noop_without_meter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(reconcile_mod, "_get_meter", lambda: None)
+        reconcile_mod.record_journey_advance(1)
+        reconcile_mod.record_journey_parse_failure("live")
+        reconcile_mod.record_journey_finalise_attempt("live")
+        reconcile_mod.record_self_report_refs_capped(1)
+        reconcile_mod.record_unmatched_self_report_refs(1)
+        reconcile_mod.record_journey_reconcile_drift(1, kind="missing")
+        for name in _RECONCILE_HANDLE_NAMES:
+            assert getattr(reconcile_mod, name) is None

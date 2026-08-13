@@ -1,9 +1,10 @@
 # Modulo — Product Requirements Document
 
-**Version**: 0.34
-**Date**: 2026-08-05
+**Version**: 0.35
+**Date**: 2026-08-12
 **Status**: Pre-development
 **Changelog**:
+- v0.35 — §8.31 Lifecycle Map Journeys: work-item journeys minted from run work_item_refs, map-scoped journey reads with keyset pagination, journey detail with run history + provenance badges, advancement service (compare-and-set stage resolution), self-report parse, reconciliation, persisted map version history, stage junction (one active map per pipeline), restore endpoint. §8.26.2 sidebar restructure to 4 flat groups (BUILD/MONITOR/CONFIGURE/ADMIN, no subgroups). Team Comparison + API Changelog features removed (PR #1018).
 - v0.34 — §8.32 Analytics: rolling-window run/cost/quality series (Last 24h/7d/30d/90d) over a retained `run_daily_facts` table, typed-params query surface (no query language in this delivery), per-org `analytics_page` feature gate. ADR 020.
 - v0.33 — §8.31 Lifecycle Map: declarative multi-diagram SDLC model with stage node types (`modulo`\|`external`\|`manual`\|`placeholder`), transition edge trigger metadata, fractal double-click navigation, graduation path from model-only to Modulo-managed. v0.31.
 - v0.32 — §8.29 Remy Context Sources: configurable knowledge domains with always-on/tool/off modes, per-skill source_mode, `source_contexts` field on RemyConfig, 4 new MCP retrieval tools (search_documentation, get_integration_status, get_org_config, get_available_features). §8.30 Remy Product Primer: auto-generated always-on product overview in system prompt, primer generator script reading PRD + product map + manifest + live counts. ADR 011.
@@ -27,9 +28,9 @@
 - v0.7 — OAuth 2.0 deferred to v1 (API key only in alpha MCP); review_hitl tool merged; human_only HITL flag; SSE conflation fixed; MCP onboarding page; accessibility spec; dual-layer scope enforcement; per-event SSE org validation; pipeline writes browser-only until v2
 - v0.8 — Team entity and team-scoped RBAC; pipeline ownership (team vs org visibility); team-scoped HITL gates; team-scoped connector and model backend access; multi-workspace pattern via teams
 - v0.9 — Ownership picker on all resource creation; team deletion policy; privilege cap on team operators; JWT stale membership documented + immediate revocation path; DB-live check for required_team_id HITL; view_as_team server-enforced (IDOR fix); human_only + required_team_id additive; Stage spec team ownership; post-snapshot ownership change rules; team notification endpoints; team audit events; owner_team_id stripped on bundle export; copy-to-adapt ownership picker; library primitive visibility; alpha schema includes team columns; team cost attribution moved to v1
-- v0.10 — Credential-in-state rule; webhook timestamp in HMAC; FilesystemConnector base_path chroot; schema validation ≠ sanitisation documented; eval injection surface documented; §6.18 API rate limiting; Ed25519 key rotation mechanism; checkpoint blob self-hosted gap documented; JWT algorithm pinning + SECRET_KEY entropy; ConnectorInstance visibility vocabulary unified (private/team-shared → org/team); §7.16 Eval System (new); Error UX spec; stage board search/filter; agent picker + schema picker; run inspection UI; bundle import schema conflict resolution; community library trust tiers; plugin installation mechanism clarified; org/team-level admin spend limits
+- v0.10 — Credential-in-state rule; webhook timestamp in HMAC; FilesystemConnector base_path chroot; schema validation ≠ sanitisation documented; eval injection surface documented; §6.18 API rate limiting; Ed25519 key rotation mechanism; checkpoint blob self-hosted gap documented; JWT algorithm pinning + SECRET_KEY entropy; ConnectorInstance visibility vocabulary unified (private/team-shared → org/team); §7.16 Eval            System (new); Error UX spec; agent picker + schema picker; run inspection UI;     bundle import schema conflict resolution; community library trust tiers; plugin installation mechanism clarified; org/team-level admin spend limits
 - v0.20 — §7.19 Break-glass Admin Recovery (consolidated): prevention (org-wide last-admin guard on REST/SCIM mutation surfaces), recovery via operator CLI `modulo-break-glass` (activate/deactivate/status/force-last-admin/smoke) synthesising a single-use TTL-bounded credential consumed by the login-hook compare-and-swap, deny surfaces (API-key mint deny, webhook use-time revalidation, login deny), dedicated `modulo_breakglass` role + `MODULO_BREAK_GLASS_DATABASE_URL`, operator-secret auth, exit-code table 0-9, startup-validated settings, boot-time watchdog + daily `status --all` sweep, trust-anchor residual
-- v0.11 — StateGraph compile caching; WebSocket fan-out broker; LangGraph generic dict state (no dynamic TypedDict); ConnectorHub one-decrypt-per-run; StubModelBackend BaseChatModel interface; Alembic+LangGraph startup order; webhook flood protection Postgres-backed; pipeline edge data model; OTel bridge elevated as blocking dependency; AsyncPostgresSaver mandate; claim_token alpha = opaque token; teams/ tests moved to v1; alpha rating system moved to v1; MODULO_DEMO_MODE; alpha exit criteria; V1 split into V1 Core + V1 Extended; alpha documentation requirements; API key item moved to Infrastructure; eval JSON column in alpha schema; stage board alpha filter-by-status only
+- v0.11 — StateGraph compile caching; WebSocket fan-out broker; LangGraph generic dict state (no dynamic TypedDict); ConnectorHub one-decrypt-per-run; StubModelBackend BaseChatModel interface; Alembic+LangGraph startup order; webhook flood protection Postgres-backed; pipeline edge data model; OTel bridge elevated as blocking dependency; AsyncPostgresSaver mandate; claim_token alpha = opaque token; teams/ tests moved to v1; alpha rating system moved to v1; MODULO_DEMO_MODE; alpha exit criteria; V1 split into V1 Core + V1 Extended;            alpha documentation requirements; API key item moved to Infrastructure; eval JSON column in alpha
 - v0.12 — Organisation entity fields; PlanContext interface fully specified; Run entity fields; Trigger entity fields; PipelineSnapshot fields; YAML bundle edges block; token counting mechanism; cancelled state mechanics; ConnectorType registration (in-memory entry_points); local vs community library data model discriminator; claim_token inconsistency fixed in Glossary and §5.4; WebSocket reconnection + event replay spec; Pinia store hydration path; HITL claim failure UX; Vue Flow canvas serialisation note; MCP server URL via MODULO_PUBLIC_URL; Playwright agent theme test strategy; agent output sensitive data caveat; copy-to-adapt ownership picker cross-reference fixed
 - v0.13 — WebSocket event typed patch payloads (hitl_claimed/hitl_reviewed added; Pinia patch strategy); CSS custom property theme mechanism (semantic tokens only; [data-theme] layers); focus ring CSS custom properties (--focus-ring-width/color; never suppressed; agent theme high-visibility); Playwright data-loading attribute convention; modulo-state script block removed (replaced by GET /api/v1/viewmodel/current); CopyToAdaptWizard component spec (multi-step modal with configurable steps); canvas viewport state preserved per drill-down level via Vue Router state
 - v0.16 — Vision rewritten around implement+improve dual job; governance/audit/observability named as enterprise table stakes; off-the-shelf library and evals named as primary selling points; existing SDLC onboarding named as third major selling point; ICP sharpened (DevX/software engineer who wants control not SaaS black box); Product Goals restructured into three tiers; competitive positioning section added (§3); §7.16 Schema Inference added (v1 — LLM-assisted schema draft from connected tool data; SDLC onboarding path)
@@ -929,13 +930,6 @@ An agent definition contains:
 
 ### 8.4 Pipeline Builder
 
-#### Stage Board
-Left-to-right kanban of user-defined Stages. Each card: name, active run count, status, trigger indicator, team badge (if team-owned). Users see only stages and pipelines they have access to — team-private resources do not appear for non-members (no "N hidden" count). Admins see all resources across all teams.
-
-**Stage entity**: carries `owner_team_id` (nullable FK) and `visibility` (`org` | `team`, default `org`). A team-visibility Stage may only contain pipelines owned by the same team. Adding a pipeline from a different team to a team Stage is blocked at the ViewModel layer (`stage_team_mismatch` error).
-
-**Stage board controls**: search by pipeline name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort by last run (default) / name / status. Filter by team added in v1 when team management ships. The `awaiting_human` filter is surfaced prominently — time-sensitive items should be easy to reach.
-
 #### Pipeline Folders
 The pipeline library supports organisation-scoped, nested folders for grouping pipelines. Users can create, rename, reorder, and delete folders, filter the pipeline list by folder, and move a pipeline into a folder or back to the unfiled list. Folder access uses the same organisation RLS context as pipeline access.
 
@@ -1244,7 +1238,8 @@ Removing or weakening an existing HITL gate is a security-sensitive write guarde
 
 #### Long-Running Pipeline Retention
 Pipelines paused at HITL may persist for days or weeks. LangGraph checkpoints accumulate:
-- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled)`. Action: delete the entire `runs` metadata row. LangGraph checkpoint rows (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do NOT cascade on run deletion — the saver schema defines no foreign keys — so the retention job also purges them separately via `batch_delete_langgraph_checkpoints` (same retention window, batch of 500). Job failure is logged to the application logger; does not affect active runs.
+- **Run retention**: configurable TTL after run reaches terminal state (default: 90 days). **Retention job** (`cleanup_old_runs`): processes in batches of 500. Query: runs where `created_at < NOW() - retention_days * interval '1 day'` and `status IN (complete, failed, eval_failed, cancelled, stalled)` (the `TERMINAL_STATUSES` set, §8.32.4). Action: delete the entire `runs` metadata row. LangGraph checkpoint rows (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) do NOT cascade on run deletion — the saver schema defines no foreign keys — so the retention job also purges them separately via `batch_delete_langgraph_checkpoints` (same retention window, batch of 500). Job failure is logged to the application logger; does not affect active runs.
+- **Analytics facts are EXEMPT from the run purge**: `run_daily_facts` (ADR 020) is NOT deleted by the run-retention job — `run_daily_facts.run_id` has no FK to `runs`, so facts survive the 90-day purge and keep dimensioned analytics history alive (see §8.32). Facts have their own retention: **13 months by default**, config-driven via `analytics_facts_retention_months`, enforced by the analytics maintenance cron's `retention_facts` step using **chunked day-slice deletion** (7-day slices, one bounded DELETE per slice) so each statement stays small.
 - **HITL overdue warning**: configurable per-gate. If a run remains in `awaiting_human` beyond N hours, a new notification fires and the UI surfaces a warning badge.
 - **Admin purge action**: admins can force-terminate and archive stale runs.
 
@@ -1258,7 +1253,7 @@ The `TriggerEvent` log accumulates records for every webhook trigger activation.
 
 **Per-node retry policy**: `max_retries` (default: 2), `retry_on` (list: `rate_limit`, `timeout`, `schema_validation_failure`, `connector_error`), `backoff` (`linear` | `exponential`, default: `exponential`).
 
-**Pipeline retry policy (auto re-dispatch)**: a pipeline may declare `retry_policy` as `{"on": ["stall" | "timeout" | "failure"], "max_retries": 0-5}`. When a run ends in a configured state and the retry budget remains, the run is reset to `pending` and automatically re-dispatched as a new attempt instead of terminal-failing — `max_retries` counts actual retries (max_retries=1 yields one retry, i.e. two execution attempts). Known limitation: the `stall` event covers node-idle stalls only (a node returns a stalled output); the executor-level zombie-watchdog stall terminal-fails the run before the retry decision, so it is not retried.
+**Pipeline retry policy (auto re-dispatch)**: a pipeline may declare `retry_policy` as `{"on": ["stall" | "timeout" | "failure"], "max_retries": 0-5}`. When a run ends in a configured state and the retry budget remains, the run is reset to `pending` and automatically re-dispatched as a new attempt instead of terminal-failing — `max_retries` counts actual retries (max_retries=1 yields one retry, i.e. two execution attempts). Re-dispatches wait a jittered, capped exponential backoff (base ~45s doubling per attempt, capped at ~5min, bounded by `max_retries`) so a persistent failure does not re-fire back-to-back. The `"failure"` event excludes sandbox-agent hang deaths: a run that terminalizes as `error_code="node_cancelled"` with `error_detail` containing `"likely hung"` is NOT re-dispatched (each re-dispatch would burn a full node timeout with zero recovery probability); transient `node_cancelled` outcomes stay retryable. Known limitation: the `stall` event covers node-idle stalls only (a node returns a stalled output); the executor-level zombie-watchdog stall terminal-fails the run before the retry decision, so it is not retried.
 
 **Recovery actions on failed runs**:
 - Retry from failed node (same inputs)
@@ -1309,7 +1304,7 @@ Token usage is captured via the LangGraph→OTel callback handler (§5.6). The `
 
 1. On `on_llm_end`: extract `prompt_tokens` + `completion_tokens` from usage metadata. Look up the model's per-token cost from `config/model_pricing.yaml` using the `model_id` stored in `PipelineSnapshot.model_backend_pins_json`. Compute incremental cost.
 2. Accumulate `total_tokens` and `total_cost_usd` in the run record (incremental DB update — not at run end).
-3. After each accumulation: check per-agent `token_budget`. If exceeded → abort the current LangGraph node via exception → run transitions to `budget_exceeded` terminal state.
+3. After each accumulation: check per-agent `token_budget`. If exceeded → the run transitions to `budget_exceeded` terminal state with error message "This run exceeded its token budget." (enforced in the cost controller's finalization path — the run's accumulated tokens across all of an agent's nodes are summed against the agent's `token_budget`).
 4. After each accumulation: check per-run `run_budget`. Same abort path.
 5. After each accumulation: check per-trigger `daily_spend_limit`. If exceeded → mark trigger as `daily_limit_reached` (no new runs today); notify admin; this run continues (the limit applies to future runs, not the in-flight run that pushed it over).
 
@@ -2491,82 +2486,73 @@ Each breadcrumb segment is a `<router-link>` to the parent page, except the curr
 
 The `Breadcrumb.vue` component walks the `parent` chain up to root, rendering each segment. Route definitions are updated with these two fields for all 50 non-auth routes.
 
-#### 8.26.2 Sidebar Hierarchical Groups
+#### 8.26.2 Sidebar Groups
 
-The sidebar supports nested subgroups inside groups. A new `SidebarSubgroup.vue` component renders a collapsible sub-header with indented children, visually nested under its parent group.
+The sidebar is a set of four flat groups — no subgroups. It is driven by `frontend/src/manifest.yaml` as the single source of truth for routes, group membership, ordering, and tier/permission gating (§8.28). Each route declares `sidebar_group` + `sidebar_order`; detail and editor pages (`type: detail_page` or without a `sidebar_group`) are excluded from the sidebar.
 
-**Sidebar structure after restructure:**
+**Sidebar structure:**
 
 ```
-Core (default expanded)
+BUILD (default expanded)
   Dashboard           /
-  Pipelines           (subgroup, default expanded)
-    Library           /library
-    Templates         /templates
-    Copy Pipeline     /pipelines/copy
-    Stages Board      /stages
-  Runs & Evaluation   (subgroup, default collapsed)
-    Run Detail        /runs/:id         (not in sidebar)
-    Output Diff       /runs/diff
-    Evals             /evals/editor
-    Eval Proposals    /evals/proposals
-    Variants          /variants/compare
-    AB Test Models    /variants/ab-test
-  Schemas             (subgroup, default collapsed)
-    Schemas           /schemas
-    Editor            /schemas/editor   (form page, reached via Schemas PageTabs — not a sidebar item)
-    Infer             /schemas/infer    (reached via Schemas PageTabs — not a sidebar item; publicly reachable)
+  Analytics           /analytics         (requires analytics.query permission)
+  Pipelines           /pipelines
+  Library             /library
+  Runs                /runs
+  Lifecycle Maps      /lifecycle-maps
 
-Remy (default collapsed, simple mode)
-  My Skills           /settings/remy
-  Admin Config        /admin/remy
+MONITOR (default expanded)
+  Output Diff         /runs/diff
+  Evals               /evals/editor
+  Eval Proposals      /evals/proposals
+  Variants            /variants/compare
+  AB Test Models      /variants/ab-test
+  Browser Monitoring  /settings/monitoring
+  Error Dashboard     /admin/errors
+  Notification Log    /admin/notification-delivery
 
-Settings (default collapsed, simple mode)
+CONFIGURE (default collapsed)
+  Schemas             /schemas
+  Parameter Schemas   /admin/parameter-schemas
+  Model Backends      /admin/model-backends
+  MCP                 /settings/mcp
+  Triggers            /settings/triggers
+  Connectors          /admin/connectors
+  Runtime Config      /settings/runtime-config
+  Rate Limits         /settings/rate-limits
+  Environment Profiles /environment-profiles
+
+ADMIN (default collapsed)
+  Remy Config         /admin/remy          (private_preview — dev mode only)
+  Remy Skills         /settings/remy       (private_preview — dev mode only)
   Teams               /settings/teams
   SSO                 /settings/sso
   License             /settings/license
-  MCP                 /settings/mcp
-  Triggers            /settings/triggers
-  Runtime Config      /settings/runtime-config
-  Rate Limits         /settings/rate-limits
+  Users               /admin/users
+  Org Settings        /admin/org
+  Audit Log           /admin/audit
+  Costs               /admin/costs
+  Node Categories     /admin/node-categories
+  Feature Flags       /admin/feature-flags
+  Environments        /admin/environments
+  Housekeeping        /admin/housekeeping
+  Run Retention       /admin/run-retention
+  Saved Views         /admin/views
+  Sandbox Concurrency /admin/sandbox-concurrency
   HITL Review         /settings/hitl-review
   Observability       /settings/observability
   Error Forwarders    /settings/error-forwarders
-
-Admin (advanced mode, default collapsed)
-  Access Control      (subgroup)
-    Users             /admin/users
-    Org Settings      /admin/org
-    Audit Log         /admin/audit
-  Cost Management     (single entry — in-page tabs)
-    Costs             /admin/costs   (tabs: Overview, Spend Limits, Cost Components, Cost Controls)
-  System              (subgroup)
-    Connectors        /admin/connectors
-    Model Backends    /admin/model-backends
-    Node Categories   /admin/node-categories
-    Feature Flags     /admin/feature-flags
-    Environments      /admin/environments
-    Run Retention     /admin/run-retention
-    Saved Views       /admin/views
-  Monitoring          (subgroup)
-    Error Dashboard   /admin/errors
-    Notification Log  /admin/notification-delivery
-  Extensions          (subgroup)
-    Plugins           /admin/plugins
-    Remy Config       (moved to Remy group above)
-    Feedback Inbox    /feedback/inbox
-
-System (advanced mode + system_admin, default collapsed)
-  Organisations       /admin/system/orgs
-  System Config       /admin/system/config
+  Email               /settings/email
+  Plugins             /admin/plugins
+  Feedback Inbox      /feedback/inbox
 ```
 
-Key structural changes:
-- Pipelines and Evaluation merged into Core as collapsible subgroups (removes duplicate Library entry)
-- Schemas demoted from standalone group to a subgroup under Core
-- New **Remy** group consolidates user-level skills (`/settings/remy`) and admin config (`/admin/remy`) — both previously scattered across Settings and Admin
-- Admin gets 4 visual subgroups (Access Control, System, Monitoring, Extensions) replacing a flat 20-item list; Cost Management is a single sidebar entry with in-page tabs
-- Sidebar active-state: exact path match wins; child routes no longer highlight parent links to avoid ambiguity
+Key structural points:
+- Four flat groups — BUILD, MONITOR, CONFIGURE, ADMIN — with no subgroups (`SidebarSubgroup.vue` removed). BUILD and MONITOR default expanded; CONFIGURE and ADMIN default collapsed.
+- Remy sits under ADMIN: Remy Config (`/admin/remy`) and Remy Skills (`/settings/remy`), both `private_preview` (dev mode only).
+- Settings/configure/admin pages are distributed across groups per the manifest (MCP, Triggers, Runtime Config, Rate Limits, Connectors, Model Backends under CONFIGURE; Teams, SSO, License, HITL Review, Observability, Error Forwarders, Email under ADMIN).
+- Detail and editor pages (e.g. `/runs/:id`, `/admin/errors/:id`, `/lifecycle-maps/:id`, schema editor/infer) are not sidebar items.
+- The sidebar is driven by `frontend/src/manifest.yaml` as the single source of truth (§8.28): group membership, ordering, tiers, permissions, and dev-mode visibility all come from the manifest.
 
 #### 8.26.3 Secondary Navigation (Page Tabs)
 
@@ -3194,12 +3180,6 @@ Each of the following entities carries `owner_team_id` (nullable) and `visibilit
 - Clearing `owner_team_id` while keeping `visibility: team` is rejected (a team-visible resource must have an owner team).
 - Org `admin` bypasses all team-transition gates (RLS parity).
 
-#### Stage Board and Team Filtering
-
-The Stage board respects team visibility. A user sees only the pipelines and stages they have access to. The board does not reveal the existence of team-private resources to non-members (no "N hidden" indicator — total absence, preventing resource enumeration).
-
-Admins see all resources. An admin "View as: All / Team: X" toggle allows admins to inspect what a specific team sees. **`view_as_team` is server-enforced**: any request carrying this parameter from a non-admin identity returns 403 at the ViewModel command layer. UI hiding is defence-in-depth only (see §6 Security).
-
 #### Team-Scoped Connectors and Model Backends
 
 A connector instance or model backend with `visibility: team` is only usable within pipelines owned by the same team. Connector bindings at pipeline-save time enforce this: binding a team-private connector to a pipeline owned by a different team is blocked at the ViewModel command layer with a named error (`connector_team_mismatch`).
@@ -3227,8 +3207,6 @@ API keys (§5.2) carry an optional `team_id`. A team-scoped API key is restricte
 - Member management: invite by email, set team role, remove member
 - Bulk "Reassign all resources to org-wide" action (admin only, required before deletion)
 - Team notification endpoint config
-
-Team badge on pipeline and stage cards in the Stage board: tooltip shows team name on hover.
 
 User profile panel: "My Teams" — list of teams the user belongs to and their role in each.
 
@@ -3383,7 +3361,7 @@ features/
   mcp/ trigger.feature, review_hitl.feature, human_only.feature, library_browse.feature, onboarding.feature
 
 V1 Feature Tests (separate suite, not in alpha CI — these features do not exist in alpha):
-  teams/ team_create.feature, team_membership.feature, team_pipeline_visibility.feature, team_hitl_gate.feature, cross_team_isolation.feature, admin_override.feature, team_deletion_blocked.feature, ownership_picker.feature, stale_jwt_revocation.feature, view_as_team_non_admin_rejected.feature
+  teams/ team_create.feature, team_membership.feature, team_pipeline_visibility.feature, team_hitl_gate.feature, cross_team_isolation.feature, admin_override.feature, team_deletion_blocked.feature, stale_jwt_revocation.feature, view_as_team_non_admin_rejected.feature
   evals/ eval_llm_judge.feature, eval_regex.feature, eval_block.feature, conditional_hitl.feature
   library/ rating.feature (v1 — community ratings require multiple users)
 ```
@@ -3501,7 +3479,6 @@ V1 Feature Tests (separate suite, not in alpha CI — these features do not exis
 - [ ] HITL review UI: full context, claim button, approve/reject, claimed-by indicator, overdue badge
 - [ ] Run list + detail: state badge, per-node status, error detail (named code + user-facing message, never raw exception), recovery actions, TriggerEvent log; per-node expandable: input payload, rendered prompt, model response, output payload, eval results (if any), error detail; "Copy as test fixture" action; "Copy error details" redacted report
 - [ ] Library browser: list, preview, copy-to-adapt; rating UI
-- [ ] Stage board: search by name, filter by status (`running`, `awaiting_human`, `failed`, `idle`), sort; `awaiting_human` quick filter. Filter by team added in v1.
 - [ ] Demo pipeline pre-loaded; guided first-run walkthrough
 - [ ] Real-time progress via WebSocket
 
@@ -4006,7 +3983,7 @@ From the user's perspective: the Lifecycle Map is the first thing they see when 
 | **Transition Edge** | A directed connection between two stage nodes. Carries trigger metadata describing *how* work moves from one stage to the next — even if Modulo doesn't own the trigger. |
 | **Trigger Metadata** | A structured annotation on a transition edge: `trigger_type: "pipeline_completed" \| "webhook" \| "cron" \| "manual" \| "external"`, a human-readable description of who/what fires it, and optionally a link to the trigger definition if Modulo-managed. |
 | **Graduated Stage** | A stage node that started as `external` or `manual` and was later linked to a Modulo pipeline. The map preserves its history — previous versions show what it looked like before graduation. |
-| **Map Version** | An immutable snapshot of the entire map DAG. Versions are created on explicit save. Older versions remain viewable to track process evolution. V1: a save bumps the version counter and publishes the content as the active version; an immutable version-history table is a later slice. |
+| **Map Version** | A versioned snapshot of the entire map DAG. A version API surface is implemented (list versions, GET a version by number, POST save, PUT update) plus a restore endpoint (`POST /{id}/restore`) that revives a soft-deleted map and frees its pipelines. A save bumps the version counter and publishes the content as the active version; only the active version is served (GET of a non-current version returns 404). Immutable per-version snapshot history with browse-back remains a later slice. |
 
 #### 8.31.2 Stage Node Types
 
@@ -4083,7 +4060,7 @@ The Lifecycle Map editor is an interactive canvas (built on Vue Flow, same as th
 - **Click to configure** each node: type, name, pipeline link, external URL
 - **Draw transition edges** between nodes by dragging from one node's output port to another's input
 - **Edge properties panel**: trigger type picker, description field, condition expression, trigger link
-- **Version history browser**: time-machine slider to see how the map has evolved
+- **Version selector**: the map detail page renders a version dropdown (vN) that can re-fetch the active version; a time-machine browse-back slider over retained snapshots is a later slice
 - **Graduation indicator**: graduated stages show a small badge (shield icon) with the graduation date
 - **Map list page**: card grid of all maps in the org, searchable, filterable by team
 
@@ -4099,8 +4076,7 @@ The editor is available from `/lifecycle-maps` in the sidebar (Core group, or a 
 
 | Existing Concept | How It Relates |
 |---|---|
-| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. A pipeline may be a stage of **one active map at a time** — the lifecycle-map stage junction enforces this (a pipeline graduating into a new map must first be freed from its previous active map by deleting or un-linking it there). |
-| **Stage Board** (§8.4) | The Stage Board shows cards for pipelines. The Lifecycle Map shows the *logical flow* that those pipelines belong to. They are complementary views: the board is "what's running now"; the map is "what are all the steps." |
+| **Pipeline** (§8.4) | An executable pipeline is attached to a `modulo` stage node. A pipeline may be a stage of **one active map at a time** — the lifecycle-map stage junction enforces this via a save-time uniqueness check backed by the partial unique index `uq_lifecycle_map_stages_active_pipeline`. A pipeline graduating into a new map must first be freed from its previous active map by deleting or un-linking it there; `restore` refuses when a stage pipeline is already registered in another active map. |
 | **Trigger** (§8.5) | A transition edge with `trigger_type: "webhook"` or `"cron"` can link to a Modulo Trigger entity. The trigger definition lives separately; the edge just references it. |
 | **Manual Node** (§8.4) | A `manual` stage node is the lifecycle-level equivalent of a Manual pipeline node — a human step with no automation. Manual stages document the handoff; Manual pipeline nodes pause execution for human input. They are independent concepts at different fractal levels. |
 | **Pipeline Template** (library) | A Pipeline Template can be "slotted into" a stage node as a starting point. "Use template" in the stage config creates a new pipeline from the template and links it. |
@@ -4138,7 +4114,7 @@ content_json:
       estimated_frequency: daily
 ```
 
-Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles. **V1 implementation note:** a save (POST/PUT on `/versions`) validates and canonicalises the content, replaces the active `content_json`, and bumps the version counter; the active map state is served as a single version entry. Immutable per-version snapshots with browse-back are a later slice.
+Versioning follows the same pattern as schemas: explicit save creates a new version. Old versions are browsable. The `lifecycle_map` primitive can be exported, imported, and shared via bundles. **Implementation note:** the version API surface is implemented — `GET /{id}/versions` (list), `GET /{id}/versions/{version}` (get; only the current version is served — a non-current version returns 404), `POST /{id}/versions` (save) and `PUT /{id}/versions/{version_id}` (update). A save validates and canonicalises the content, replaces the active `content_json`, and bumps the version counter; the active map state is served as a single version entry. `POST /{id}/restore` revives a soft-deleted map (freed pipelines re-register). Immutable per-version snapshots with browse-back are a later slice.
 
 #### 8.31.10 The 80% Target
 
@@ -4160,6 +4136,8 @@ Metrics surfaced in the map UI:
 7. `task-lm-bdd-tests` (M) — BDD feature files for map CRUD, rendering, navigation, graduation
 8. `task-lm-dogfood` (L) — Modulo's own Lifecycle Map defined, stages graduated to Modulo pipelines progressively, used as the primary onboarding example
 
+> The `task-lm-*` IDs above are from the retired delivery tracker. The feature shipped incrementally via Linear FAR-141 (version persistence + stage junction), FAR-142 (journey data model), FAR-143 (advancement / self-report / reconciliation), FAR-144 (journeys API + provenance badges), FAR-145 (unattributed flag).
+
 **Phase**: `phase-lm` (new — independent of alpha/v1 phases; can ship incrementally)
 
 #### 8.31.12 Flag / Gating
@@ -4176,6 +4154,27 @@ Metrics surfaced in the map UI:
 | Map diff view (version comparison) | Team |
 
 Lifecycle Maps are a core onboarding and documentation feature. The base feature (create, view, navigate stages) is Community-tier. Advanced features (version history, team scoping, analytics) are Team-tier.
+
+
+#### 8.31.13 Journeys
+
+A **journey** is a unit of work — a task, a ticket, a PR, a deploy — tracked as it moves across a lifecycle map's stages. Journeys are the runtime counterpart of the map's declarative stages: the map models the process; journeys observe real work flowing through it.
+
+**Minting (FAR-142):** journeys are minted org-wide at run create time from a run's `work_item_refs` — a JSONB array of canonical `{kind, ref, source, status?}` pairs stamped on the run (from the trigger payload's `work_item_ref_paths` or a node's self-report). Each canonical `(kind, ref)` pair becomes a `journeys` row via `INSERT ... ON CONFLICT (organisation_id, kind, ref) DO NOTHING`; the row's `canonical_work_item_id` is deterministic (`uuid5(org, kind, ref)`), so there is no mint race. Canonicalisation (`modulo.db.lifecycle_refs`) normalises refs (e.g. GitHub `#123` and `123` land on the same ref).
+
+**Map ownership:** a lifecycle map "owns" journeys whose latest-stage identity points at one of its stages, plus journeys whose canonical `(kind, ref)` has already run through one of the map's stage pipelines.
+
+**Map-scoped reads (FAR-144):** `GET /api/v1/lifecycle-maps/{id}/journeys` lists the map's journeys, keyset-paginated over `(updated_at, id)` with an opaque cursor, optionally narrowed to an exact `kind`/`ref`. Journey detail (`GET /api/v1/lifecycle-maps/{id}/journeys/{kind}/{ref}`) adds run history: per-run status, provenance, and completion date. Both endpoints gate on the `run.list` permission (not `lifecycle_map.list`) and are org-scoped via RLS. Journey runs render as provenance badges on the map canvas.
+
+**Advancement (FAR-143):** on run finalise, an advancement service (`core/lifecycle_map/advancement.py`) advances the journey for every canonical ref the run carried. Latest evidence is compare-and-set: only a strictly-newer evidence timestamp overwrites the row's `updated_at` (equal timestamps keep existing evidence — deterministic first-writer-wins). `run_count` increments for terminal advancing statuses (`complete` / `failed` / `eval_failed`); `awaiting_human` updates evidence without counting; non-advancing runs (`cancelled` / `stalled`, replays, variants) are mint-only. Stage columns are set only when the run's pipeline is a lifecycle-map stage (resolved org-scoped via `lifecycle_map_stages`).
+
+**Self-report parse (FAR-143):** `core/lifecycle_map/self_report.py` extracts work-item refs from merged pipeline output under `work_item_refs` / `modulo.work_item_refs` / `touched_work_items` (recursive walk, node-keyed placement supported). Reported entries are advisory: provenance is forced to `reported`, so a reported claim can confirm or match an existing journey but never mints one.
+
+**Reconciliation (FAR-143):** `core/lifecycle_map/reconcile.py` is a bounded, terminal-only safety net that re-derives journey evidence for runs whose journeys never advanced (post-deploy backlog, raw terminal writers skipping the hook, or a self-report confirm dropping a ref the create-time mint never saw). Drift is MISSING (no journey row) or STALE (row `updated_at` older than the run's evidence timestamp); only drifted refs are re-advanced, and the sweep is idempotent and fails open per run.
+
+**Data model (FAR-142):** `journeys` (migration 0084) + `journey_facts` (migration 0085), anchored on `runs.work_item_refs` / `runs.work_item_id` (migration 0083). Org-scoped with strict RLS (`rls_org_isolation`) plus the `enforce_same_organisation` tenant trigger, mirroring `lifecycle_map_stages`. `latest_terminal_run_id` is deliberately not an FK so journeys survive the 90-day run purge. The `unattributed` flag (FAR-145) marks journeys not referenced by any of the map's stage-pipeline runs.
+
+**Dogfooding:** a production lifecycle map "Farnalabs SDLC (dogfooding)" runs with stages Fix / Review / Merge / Deploy.
 
 ---
 
@@ -4203,7 +4202,7 @@ Three distinct run-count denominators exist and are never conflated:
 
 | Denominator | Source | Meaning |
 |---|---|---|
-| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed) |
+| **Facts count** | `run_daily_facts` | All terminal runs (complete / failed / cancelled / eval_failed / stalled — the `TERMINAL_STATUSES` set) |
 | **Ledger count** | `org_daily_run_counts` | Terminal runs with `total_cost_usd > 0` that passed the spend ledger |
 | **Summary count** | `runs` | All runs (including pending/running/awaiting_human) |
 
@@ -4361,7 +4360,6 @@ A dedicated `GET /api/v1/analytics/concurrency` endpoint (and the `query_analyti
 | ConnectorInstance visibility unified | `private`/`team-shared` removed; replaced with `owner_team_id` + `visibility: org|team` consistent with all other resource types. User-private connectors not supported — single-person team is the mechanism. |
 | Eval System scope | v1 feature. Not in alpha. Architecture diagram is forward-looking. Conditional HITL requires Eval Engine — both must ship together in v1. |
 | Error UX | Named error codes map to user-facing messages and suggested actions. Raw exceptions never in UI. "Copy error details" action produces redacted report. |
-| Stage board controls | Search, filter by team/status, sort. `awaiting_human` quick filter prominently surfaced. Alpha scope. |
 | Agent/schema pickers | Slide-out panel with search, description, schema summary. Schema compatibility warning on add. Alpha scope. |
 | Run inspection UI | Per-node input/output/prompt/response/eval viewer. Sensitive payloads masked per DOM rule. "Copy as test fixture" action. Alpha scope. |
 | Bundle import schema conflict | Same abstract_name + same structure → reuse. Same abstract_name + different structure → import with disambiguation suffix + warning. No auto-merge. |

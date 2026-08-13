@@ -1,12 +1,9 @@
 """Unit tests for HITL review endpoint rate limiting.
 
-PRD §7.18 specifies 20/min for HITL review endpoints but they are currently
-covered by the more generous /api/v1/runs rule (60/min) since the HITL paths
-start with /api/v1/runs/{run_id}/hitl/{gate_id}/.
-
-These tests verify the current behaviour: HITL review endpoints ARE rate
-limited, and the rule applied is the /api/v1/runs rule. If a dedicated
-20/min rule is added in the future, these tests should be updated to match.
+PRD §7.18 specifies 20/min for HITL review endpoints. They live under
+/api/v1/runs/{run_id}/hitl/{gate_id}/ where the run/gate ids are variable,
+so they are matched by a dedicated HITL rule (`HITL_RULE`: 20/min) instead of
+the more generous /api/v1/runs rule (60/min) that prefix-matches the path.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -53,15 +50,20 @@ def _make_app(registry: RateLimiterRegistry | None = None) -> FastAPI:
 
 
 class TestHitlReviewRateLimit:
-    """Verify HITL review endpoints are rate limited under the /api/v1/runs rule."""
+    """Verify HITL review endpoints are rate limited under the dedicated 20/min rule."""
 
-    def test_hitl_approve_matches_runs_rule(self) -> None:
-        """The /api/v1/runs prefix catches HITL review POSTs."""
-        rules = RateLimitMiddleware.RULES
-        run_rule = next((r for r in rules if r[0] == "/api/v1/runs"), None)
+    def test_hitl_rule_is_20_per_min(self) -> None:
+        """PRD §7.18 defines a dedicated 20/min rule for HITL review."""
+        hitl_rule = RateLimitMiddleware.HITL_RULE
+        assert hitl_rule[1] == 20
+        assert hitl_rule[2] == 60
+
+    @pytest.mark.parametrize("endpoint", HITL_ENDPOINTS)
+    def test_hitl_rule_is_more_restrictive_than_runs(self, endpoint: str) -> None:
+        """HITL review paths must be capped at 20/min, not the runs 60/min."""
+        run_rule = next((r for r in RateLimitMiddleware.RULES if r[0] == "/api/v1/runs"), None)
         assert run_rule is not None
-        assert run_rule[1] == 60
-        assert run_rule[2] == 60
+        assert RateLimitMiddleware.HITL_RULE[1] < run_rule[1]
 
     @pytest.mark.parametrize("endpoint", HITL_ENDPOINTS)
     def test_hitl_endpoint_is_rate_limited(self, endpoint: str) -> None:
@@ -115,6 +117,20 @@ class TestHitlReviewRateLimit:
         key = mock_registry.check.await_args[0][0]
         assert "/api/v1/runs" in key
 
+    @pytest.mark.parametrize("endpoint", HITL_ENDPOINTS)
+    def test_hitl_check_uses_20_per_min_budget(self, endpoint: str) -> None:
+        """The registry check for HITL review must use the 20/min budget."""
+        mock_registry = MagicMock(spec=RateLimiterRegistry)
+        mock_registry.check = AsyncMock(return_value=True)
+        app = _make_app(registry=mock_registry)
+
+        with TestClient(app) as client:
+            client.post(endpoint)
+
+        mock_registry.check.assert_awaited_once()
+        max_requests = mock_registry.check.await_args.kwargs["max_requests"]
+        assert max_requests == 20
+
     def test_hitl_get_not_rate_limited(self) -> None:
         """GET requests to HITL endpoints should not be rate limited."""
         app = FastAPI()
@@ -137,13 +153,23 @@ class TestHitlReviewRateLimit:
 
         assert resp.status_code != status.HTTP_429_TOO_MANY_REQUESTS
 
-    def test_hitl_prd_documents_20_per_min_intent(self) -> None:
-        """PRD §7.18 specifies 20/min for HITL review — document the gap."""
-        rules = RateLimitMiddleware.RULES
-        run_rule = next((r for r in rules if r[0] == "/api/v1/runs"), None)
-        assert run_rule is not None
-        assert run_rule[1] == 60, (
-            "PRD §7.18 intends 20/min for HITL review. Currently capped at 60/min "
-            "by the /api/v1/runs rule. When a dedicated HITL rule is added, update "
-            "this assertion and the RULES in rate_limiter.py."
-        )
+    def test_hitl_prd_20_per_min_is_enforced(self) -> None:
+        """PRD §7.18 specifies 20/min for HITL review and it must be enforced."""
+        assert RateLimitMiddleware.HITL_RULE == ("/hitl/", 20, 60)
+
+    def test_rule_for_prefers_hitl_rule_over_runs(self) -> None:
+        """_rule_for must resolve HITL paths to the dedicated 20/min rule."""
+        instance = RateLimitMiddleware(app=FastAPI(), settings=_make_settings())
+        for endpoint in HITL_ENDPOINTS:
+            request = MagicMock()
+            request.url.path = endpoint
+            assert instance._rule_for(request)[1] == 20
+
+    def test_rule_for_keeps_runs_rule_for_non_hitl(self) -> None:
+        """Non-HITL runs paths must stay under the 60/min runs rule."""
+        instance = RateLimitMiddleware(app=FastAPI(), settings=_make_settings())
+        request = MagicMock()
+        request.url.path = "/api/v1/runs/run-123/cancel"
+        rule = instance._rule_for(request)
+        assert rule[0] == "/api/v1/runs"
+        assert rule[1] == 60

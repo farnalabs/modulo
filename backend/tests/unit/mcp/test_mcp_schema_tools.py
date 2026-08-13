@@ -1,13 +1,20 @@
-"""Unit tests for the create_agent / create_model_backend / infer_schema /
-list_schemas / validate_payload MCP tools."""
+"""Unit tests for the create_schema / create_agent / create_model_backend /
+infer_schema / list_schemas / validate_payload MCP tools."""
 
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
-from modulo.api.mcp_server import create_agent, create_model_backend, infer_schema, list_schemas, validate_payload
+from modulo.api.mcp_server import (
+    create_agent,
+    create_model_backend,
+    create_schema,
+    infer_schema,
+    list_schemas,
+    validate_payload,
+)
 from modulo.db.crud.base import PageResult
 from tests.unit.mcp.helpers import FERNET_KEY, ORG_ID, USER_ID, AuthContext, make_session_context
 
@@ -103,6 +110,73 @@ class TestCreateAgentSuccess(AuthContext):
         assert call_kwargs["org_id"] == ORG_ID
         assert call_kwargs["account_id"] == USER_ID
         assert call_kwargs["prompt_template"] == "Review PRs"
+
+
+class TestCreateAgentNullableSchemaIds(AuthContext):
+    """FAR-31: creating an agent without schema IDs must not send a sentinel UUID."""
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_omitted_ids_pass_none_not_sentinel(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        agent = MagicMock()
+        agent.id = uuid.uuid4()
+        agent.name = "qa-reviewer"
+        agent.description = None
+        agent.is_executable = True
+        agent.created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        mock_create.return_value = agent
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        result = await create_agent(name="qa-reviewer", prompt_template="Review PRs")
+
+        assert result["id"] == str(agent.id)
+        call_kwargs = mock_create.call_args.kwargs
+        # The old code sent uuid.UUID(int=0), which failed the schema_versions FK.
+        assert call_kwargs["input_schema_id"] is None
+        assert call_kwargs["output_schema_id"] is None
+        assert call_kwargs["model_backend_id"] is None
+        # Version defaults still apply.
+        assert call_kwargs["input_schema_version"] == "latest"
+        assert call_kwargs["output_schema_version"] == "latest"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_provided_ids_are_parsed_to_uuid(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        agent = MagicMock()
+        agent.id = uuid.uuid4()
+        agent.name = "qa-reviewer"
+        agent.description = None
+        agent.is_executable = True
+        agent.created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        mock_create.return_value = agent
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        schema_id = uuid.uuid4()
+        backend_id = uuid.uuid4()
+        await create_agent(
+            name="qa-reviewer",
+            prompt_template="Review PRs",
+            input_schema_id=str(schema_id),
+            output_schema_id=str(schema_id),
+            model_backend_id=str(backend_id),
+        )
+
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["input_schema_id"] == schema_id
+        assert call_kwargs["output_schema_id"] == schema_id
+        assert call_kwargs["model_backend_id"] == backend_id
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +404,120 @@ class TestInferSchemaSuccess(AuthContext):
 
         assert result["definition"] == definition
         assert result["sample_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# create_schema
+# ---------------------------------------------------------------------------
+
+
+def _make_schema_obj(*, name: str, description: str | None = None, abstract_name: str | None = None) -> MagicMock:
+    sc = MagicMock()
+    sc.id = uuid.uuid4()
+    sc.name = name
+    sc.description = description
+    sc.abstract_name = abstract_name
+    sc.created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    return sc
+
+
+class TestCreateSchemaErrors(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
+    async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
+        result = await create_schema(name="customer")
+        assert result["error"] == "auth_expired"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_insufficient_scope(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.mcp.scope_validator import MCPAuthorizationError
+
+        mock_session.return_value = make_session_context(AsyncMock())
+        with patch(
+            "modulo.api.mcp_server.check_tool_scope",
+            side_effect=MCPAuthorizationError("Insufficient scope"),
+        ):
+            result = await create_schema(name="customer")
+        assert result["error"] == "insufficient_scope"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.db_create_schema")
+    async def test_conflict_on_duplicate_name(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_create.side_effect = IntegrityError("INSERT", {}, Exception("duplicate key"))
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        result = await create_schema(name="customer")
+
+        assert result["error"] == "conflict"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.db_create_schema")
+    async def test_migration_required_on_programming_error(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_create.side_effect = ProgrammingError("INSERT", {}, Exception("no table"))
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        result = await create_schema(name="customer")
+
+        assert result["error"] == "migration_required"
+
+
+class TestCreateSchemaSuccess(AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server.db_create_schema")
+    async def test_returns_created_schema_and_latest_version(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        schema = _make_schema_obj(name="customer", description="customer model", abstract_name="v1")
+        mock_create.return_value = schema
+        mock_sesh = AsyncMock()
+        mock_sesh.add = MagicMock()
+        mock_session.return_value = make_session_context(mock_sesh)
+
+        result = await create_schema(name="customer", description="customer model", abstract_name="v1")
+
+        assert result["id"] == str(schema.id)
+        assert result["name"] == "customer"
+        assert result["description"] == "customer model"
+        assert result["abstract_name"] == "v1"
+        assert result["created_at"] == schema.created_at.isoformat()
+
+        mock_create.assert_awaited_once()
+        call_kwargs = mock_create.call_args.kwargs
+        assert call_kwargs["org_id"] == ORG_ID
+        assert call_kwargs["account_id"] == USER_ID
+        assert call_kwargs["name"] == "customer"
+        assert call_kwargs["description"] == "customer model"
+        assert call_kwargs["abstract_name"] == "v1"
+
+        # The agent composite FK references schema_versions(schema_id, version),
+        # so the tool must also create the "latest" version placeholder.
+        mock_sesh.add.assert_called_once()
+        added = mock_sesh.add.call_args.args[0]
+        assert added.schema_id == schema.id
+        assert added.version == "latest"
+        assert added.version_number == 0
+        assert added.organisation_id == ORG_ID
+        assert added.account_id == USER_ID
 
 
 # ---------------------------------------------------------------------------

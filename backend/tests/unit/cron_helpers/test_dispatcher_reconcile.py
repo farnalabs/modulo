@@ -764,6 +764,36 @@ class TestReconcilePrefixAware:
         assert reenqueue.await_args.kwargs["key_suffix"]
 
 
+class TestTerminalizerSyntheticErrorDetail:
+    """P7': the genuinely detail-less failure writers stamp a synthetic
+    error_detail (from the ERROR_CODE_REGISTRY guidance) so the runs list /
+    detail view always has something to show for these failures."""
+
+    @pytest.mark.asyncio
+    async def test_mid_graph_wedge_writes_synthetic_detail(self) -> None:
+        session = _MockSession([])
+        await ch._terminalize_mid_graph_wedges(session, ORG, max_age_minutes=135)
+        stmt, params = session.executed[-1]
+        assert "error_detail" in str(stmt)
+        assert params["detail"] == ch._EXECUTOR_SUPERSEDED_ERROR_DETAIL
+
+    @pytest.mark.asyncio
+    async def test_claim_cap_exhausted_writes_synthetic_detail(self) -> None:
+        session = _MockSession([])
+        await ch._terminalize_claim_cap_exhausted(session, ORG, claim_cap=20, stale_seconds=600)
+        stmt, params = session.executed[-1]
+        assert "error_detail" in str(stmt)
+        assert params["detail"] == ch._CLAIM_CAP_EXHAUSTED_ERROR_DETAIL
+
+    @pytest.mark.asyncio
+    async def test_dispatch_failed_writes_synthetic_detail(self) -> None:
+        session = _MockSession([])
+        await ch._fail_run_dispatch_failed(session, RUN_EVICTED, ORG)
+        stmt, params = session.executed[-1]
+        assert "error_detail" in str(stmt)
+        assert params["detail"] == ch._DISPATCH_FAILED_ERROR_DETAIL
+
+
 class TestAwaitingHumanHasCommittedDecision:
     """F6a auto-approve guard: the payload-requirement keys off the persisted
     ``decision_payload``'s ``action`` member — the ``hitl_claims.decision``

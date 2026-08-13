@@ -39,14 +39,14 @@ class Agent(OrgScoped):
     agent_commands: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=None)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
-    input_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
-    input_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
-    output_schema_id: Mapped[uuid.UUID] = mapped_column(Uuid(), nullable=False)
-    output_schema_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    input_schema_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    input_schema_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    output_schema_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
+    output_schema_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
     prompt_version_history: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
-    model_backend_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=False
+    model_backend_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("model_backends.id", ondelete="RESTRICT"), nullable=True
     )
     connector_type_refs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     required_environment_capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)

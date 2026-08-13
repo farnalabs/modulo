@@ -48,6 +48,7 @@ _EXPECTED_TOOLS = frozenset(
         "list_secrets",
         "delete_secret",
         "create_agent",
+        "create_schema",
         "search_documentation",
         "get_integration_status",
         "get_org_config",

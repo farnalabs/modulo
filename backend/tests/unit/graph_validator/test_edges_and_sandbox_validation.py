@@ -251,6 +251,30 @@ def test_sandbox_float_stall_timeout_exceeding_timeout_warns():
     assert "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT" in _codes(result)
 
 
+def test_sandbox_stall_timeout_with_non_numeric_timeout_is_safe():
+    """A non-numeric timeout_seconds alongside a valid stall timeout must not
+    crash the cross-check — the unparseable timeout degrades to None and the
+    stall-vs-timeout comparison is skipped."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds="abc", stall_timeout_seconds=2.5)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    codes = _codes(result)
+    assert "SANDBOX_TIMEOUT_INVALID" in codes
+    assert "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT" not in codes
+    assert result.is_valid  # warnings only
+
+
+def test_sandbox_stall_timeout_without_timeout_is_safe():
+    """stall_timeout_seconds with no timeout_seconds skips the bound cross-check."""
+    graph = {"nodes": [_sandbox_node(timeout_seconds=None, stall_timeout_seconds=3600.0)], "edges": []}
+    result = ValidationResult()
+    GraphValidator._check_sandbox_agent_config(graph, result)
+    codes = _codes(result)
+    assert "SANDBOX_STALL_TIMEOUT_GT_TIMEOUT" not in codes
+    assert "SANDBOX_STALL_TIMEOUT_INVALID" not in codes
+    assert result.is_valid
+
+
 def test_sandbox_non_positive_stall_timeout_warns():
     """Zero / negative stall_timeout_seconds is not a positive number."""
     for bad in (0, -5):

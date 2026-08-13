@@ -214,7 +214,3 @@ function reQueueWithBackoff(items: PendingItem[]): void {
     }
   }
 }
-
-export function getPendingCount(): number {
-  return PENDING.length
-}

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import CheckConstraint
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.dml import Update
 
 from modulo.db.crud.error_tracking import (
     create_error_event,
@@ -391,6 +392,108 @@ class TestUpdateErrorGroup:
         session.execute.return_value = result_mock
         with pytest.raises(ValueError, match="ErrorGroup not found"):
             await update_error_group(session=session, org_id=_ORG_ID, group_id=uuid.uuid4(), status="resolved")
+
+    async def test_resolve_propagates_to_events(self) -> None:
+        """Resolving a group transitions its non-terminal events to resolved."""
+        session = AsyncMock(spec=AsyncSession)
+        group = MagicMock(spec=ErrorGroup)
+        group.fingerprint = "fp-resolve"
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = group
+        session.execute.return_value = result_mock
+        await update_error_group(session=session, org_id=_ORG_ID, group_id=uuid.uuid4(), status="resolved")
+        assert group.status == "resolved"
+        assert group.resolved_at is not None
+
+        update_call = None
+        for call in session.execute.call_args_list:
+            stmt = call.args[0]
+            if isinstance(stmt, Update):
+                update_call = stmt
+                break
+        assert update_call is not None, "expected a bulk UPDATE on ErrorEvent"
+        compiled = str(update_call)
+        assert "error_events" in compiled
+        assert "resolved_at" in compiled
+        assert "status" in compiled
+
+    async def test_non_resolve_status_does_not_touch_events(self) -> None:
+        """Acknowledging a group must not issue a bulk event update."""
+        session = AsyncMock(spec=AsyncSession)
+        group = MagicMock(spec=ErrorGroup)
+        group.fingerprint = "fp-ack"
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = group
+        session.execute.return_value = result_mock
+        await update_error_group(session=session, org_id=_ORG_ID, group_id=uuid.uuid4(), status="acknowledged")
+        for call in session.execute.call_args_list:
+            assert not isinstance(call.args[0], Update)
+
+    @pytest.mark.asyncio
+    async def test_resolve_end_to_end_sqlite(self) -> None:
+        """Real ORM end-to-end: resolving a group flips new/acknowledged events
+        to resolved with a timestamp while leaving terminal events untouched."""
+        from datetime import UTC, datetime
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(
+                    lambda sync_conn: Base.metadata.create_all(
+                        sync_conn, tables=[ErrorEvent.__table__, ErrorGroup.__table__]
+                    )
+                )
+
+            org_id = uuid.uuid4()
+            fingerprint = "fp-sqlite"
+            already_resolved = datetime.now(UTC)
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session, session.begin():
+                session.add(ErrorGroup(organisation_id=org_id, fingerprint=fingerprint, level_peak="error"))
+                for status in ("new", "acknowledged", "resolved", "archived"):
+                    resolved_at = already_resolved if status == "resolved" else None
+                    session.add(
+                        ErrorEvent(
+                            organisation_id=org_id,
+                            fingerprint=fingerprint,
+                            level="error",
+                            message=f"event-{status}",
+                            source="backend",
+                            status=status,
+                            resolved_at=resolved_at,
+                        )
+                    )
+
+            async with factory() as session:
+                await session.begin()
+                from sqlalchemy import select as _select
+
+                result = await session.execute(_select(ErrorGroup).where(ErrorGroup.organisation_id == org_id))
+                group = result.scalars().first()
+                assert group is not None
+                await update_error_group(session=session, org_id=org_id, group_id=group.id, status="resolved")
+                await session.commit()
+
+            async with factory() as session:
+                result = await session.execute(
+                    _select(ErrorEvent).where(
+                        ErrorEvent.organisation_id == org_id,
+                        ErrorEvent.fingerprint == fingerprint,
+                    )
+                )
+                by_message = {e.message: e for e in result.scalars().all()}
+                for status in ("new", "acknowledged"):
+                    event = by_message[f"event-{status}"]
+                    assert event.status == "resolved"
+                    assert event.resolved_at is not None
+                assert by_message["event-resolved"].status == "resolved"
+                assert by_message["event-resolved"].resolved_at == already_resolved.replace(tzinfo=None)
+                assert by_message["event-archived"].status == "archived"
+                assert by_message["event-archived"].resolved_at is None
+        finally:
+            await engine.dispose()
 
 
 class TestAppendOnly:

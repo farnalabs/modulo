@@ -256,7 +256,6 @@ def migrated_db_url(db_url: str) -> str:
                 "model_backends",
                 "org_api_keys",
                 "schema_versions",
-                "stages",
                 "agents",
                 "pipelines",
                 "pipeline_edges",

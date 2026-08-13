@@ -13,7 +13,6 @@ code:
   - backend/src/modulo/db/crud/pipeline.py
   - backend/src/modulo/api/routes/runs.py
   - backend/src/modulo/api/routes/pipelines.py
-  - backend/src/modulo/api/routes/stages.py
 unit-tests:
   - backend/tests/unit/core/test_pipeline_engine.py
   - backend/tests/unit/api/test_error_handling.py
