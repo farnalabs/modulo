@@ -3041,11 +3041,6 @@ class StorageInfoResponse(BaseModel):
     estimated_saved_bytes: int
 
 
-class StatusCount(BaseModel):
-    status: str
-    count: int
-
-
 @router.get(
     "/runs/retention",
     response_model=RetentionConfigResponse,
