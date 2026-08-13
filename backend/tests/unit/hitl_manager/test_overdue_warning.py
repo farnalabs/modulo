@@ -179,8 +179,13 @@ async def test_query_filters_undecided_claimed_claims_for_org() -> None:
     assert params["organisation_id_1"] == org_id
     cutoff = params["claimed_at_1"]
     assert abs((cutoff - (now - timedelta(hours=5))).total_seconds()) < 5
-    assert "account_id" in str(stmt)
-    assert "decision" in str(stmt)
+    # Predicate assertions must target the WHERE clause, not the full statement:
+    # str(select(HitlClaim)) renders every mapped column, so column-name checks
+    # would pass trivially even if the predicates were removed.
+    where = str(stmt.whereclause)
+    assert "account_id IS NOT NULL" in where
+    assert "decision IS NULL" in where
+    assert "claimed_at IS NOT NULL" in where
 
 
 async def test_default_thresholds_documented() -> None:

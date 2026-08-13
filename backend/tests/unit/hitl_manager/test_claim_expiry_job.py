@@ -501,6 +501,11 @@ def _expire_sql_session(*execute_results: Any) -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Support begin_nested() for savepoint-based audit events (mirrors _tx_session)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=begin_nested_cm)
     if len(execute_results) == 1:
         session.execute = AsyncMock(return_value=execute_results[0])
     else:
@@ -563,7 +568,8 @@ async def test_expire_stale_claims_resets_claim_and_run_sql() -> None:
         MagicMock(),
     )
 
-    await expire_stale_claims(_expire_sql_factory(session))
+    with patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()) as mock_audit:
+        await expire_stale_claims(_expire_sql_factory(session))
 
     claim_update = session.execute.await_args_list[-2][0][0]
     run_update = session.execute.await_args_list[-1][0][0]
@@ -572,6 +578,7 @@ async def test_expire_stale_claims_resets_claim_and_run_sql() -> None:
     params = run_update.compile().params
     assert params["status"] == "awaiting_human"
     assert params["status_1"] == "claimed"
+    mock_audit.assert_awaited_once()
 
 
 async def test_expire_stale_claims_processes_multiple_orgs_independently() -> None:
@@ -591,7 +598,9 @@ async def test_expire_stale_claims_processes_multiple_orgs_independently() -> No
         MagicMock(),
     )
 
-    expired = await expire_stale_claims(_expire_sql_factory(session))
+    with patch("modulo.core.hitl_manager.expiry_job.append_audit_event", new=AsyncMock()) as mock_audit:
+        expired = await expire_stale_claims(_expire_sql_factory(session))
 
     assert {entry["organisation_id"] for entry in expired} == {org_a, org_b}
     assert {entry["gate_id"] for entry in expired} == {"gate-a", "gate-b"}
+    assert mock_audit.await_count == 2
