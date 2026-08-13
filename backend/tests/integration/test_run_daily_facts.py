@@ -925,6 +925,54 @@ class TestLiveWriterEnrichment:
         assert row[1] == 0
         assert row[2] is None, "malformed graph → max timeout None, never a crash"
 
+    async def test_record_run_facts_ongoing_trigger_type(
+        self,
+        db_session: AsyncSession,
+        org: uuid.UUID,
+        pipeline: uuid.UUID,
+        snapshot: uuid.UUID,
+    ) -> None:
+        """A finalized run with trigger_type='ongoing' yields a run_daily_facts
+        row whose trigger_type is 'ongoing' (FAR-158 analytics attribution)."""
+        from modulo.core.analytics import record_run_facts
+
+        run_id = uuid.uuid4()
+        async with db_session.begin():
+            await db_session.execute(
+                text(
+                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, "
+                    "status, input_hash, langgraph_thread_id, run_number, started_at, completed_at) "
+                    "VALUES (:id, :oid, :pid, :sid, 'ongoing', 'complete', :hash, :thread, 7, "
+                    ":started, :completed)"
+                ),
+                {
+                    "id": str(run_id),
+                    "oid": str(org),
+                    "pid": str(pipeline),
+                    "sid": str(snapshot),
+                    "hash": uuid.uuid4().hex,
+                    "thread": f"thread-ongoing-{run_id.hex[:8]}",
+                    "started": datetime(2026, 8, 12, 9, 0, tzinfo=UTC),
+                    "completed": datetime(2026, 8, 12, 9, 30, 0, tzinfo=UTC),
+                },
+            )
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            run = await db_session.get(Run, run_id)
+            assert run is not None
+            await record_run_facts(db_session, run)
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            row = (
+                await db_session.execute(
+                    text("SELECT trigger_type FROM run_daily_facts WHERE run_id = :rid"),
+                    {"rid": str(run_id)},
+                )
+            ).first()
+        assert row is not None
+        assert row[0] == "ongoing"
+
 
 # ---------------------------------------------------------------------------
 # Invariant: TERMINAL_STATUSES ⊆ runs.status CHECK constraint

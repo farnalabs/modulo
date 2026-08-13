@@ -26,10 +26,12 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK, mask_config_json
 from modulo.auth.jwt import TenantPrincipal
-from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
+from modulo.core.cron_helpers import _count_ongoing_runs, compute_next_fire, validate_cron_expression
 from modulo.core.exceptions import OrgDeletedError
 from modulo.core.trigger_engine import TriggerEngine
+from modulo.core.trigger_validation import validate_ongoing_config
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_org
@@ -49,6 +51,19 @@ def _serialize_spend_limit(value: Decimal | None) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+async def _ongoing_in_flight(session: AsyncSession, trigger: Trigger) -> int:
+    """Fresh in-flight count for an ``ongoing`` trigger (0 for other types).
+
+    FAR-158: the trigger detail/list responses carry ``in_flight`` for ongoing
+    triggers so the UI can show the current pool size. Cheap on the
+    migration-0086 ``(trigger_id, status)`` index. Runs inside the request's
+    transaction where the RLS context is already set.
+    """
+    if trigger.trigger_type != "ongoing":
+        return 0
+    return await _count_ongoing_runs(session, trigger.id)
 
 
 @router.get("/triggers", status_code=status.HTTP_200_OK)
@@ -126,8 +141,9 @@ async def list_triggers(
             detail="Internal server error",
         ) from None
 
-    return {
-        "items": [
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        items.append(
             {
                 "id": str(r.id),
                 "pipeline_id": str(r.pipeline_id),
@@ -141,9 +157,12 @@ async def list_triggers(
                 "last_fired_at": r.last_fired_at.isoformat() if r.last_fired_at else None,
                 "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
                 "created_by": str(r.account_id),
+                "in_flight": await _ongoing_in_flight(session, r),
             }
-            for r in rows
-        ],
+        )
+
+    return {
+        "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -456,6 +475,115 @@ async def update_polling_config(
     }
 
 
+class OngoingConfigUpdate(BaseModel):
+    """Request body for PATCH /triggers/{id}/ongoing (FAR-158)."""
+
+    active: bool | None = None
+    scan_interval_seconds: int | None = Field(None, ge=60)
+    input_template: dict[str, Any] | None = None
+    snapshot_id: str | None = None
+    target_runs: int | None = Field(None, ge=1, le=20, description="Ongoing pool target (max_concurrent_runs)")
+
+
+@handle_db_errors("triggers.update_ongoing_config")
+@router.patch(
+    "/triggers/{trigger_id}/ongoing",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deny_break_glass_mint)],
+)
+async def update_ongoing_config(
+    trigger_id: uuid.UUID,
+    req: OngoingConfigUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("trigger.update"),
+) -> dict[str, Any]:
+    """Update the ongoing configuration for an ``ongoing`` trigger.
+
+    Mirrors ``update_polling_config``. Only ``ongoing`` triggers accept this
+    config surface. Sets the ``config_json`` keys ``scan_interval_seconds`` /
+    ``input_template`` / ``snapshot_id`` (merging, never wholesale replacing),
+    updates ``target_runs`` -> ``max_concurrent_runs``, and recomputes
+    ``next_fire_at = now`` when the scan cadence changes or the trigger is
+    turned on so the new configuration is picked up on the next tick.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            result = await session.execute(
+                select(Trigger).where(
+                    Trigger.id == trigger_id,
+                    Trigger.organisation_id == principal.organisation_id,
+                    Trigger.deleted_at.is_(None),
+                )
+            )
+            trigger = result.scalar_one_or_none()
+            if trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+
+            if trigger.trigger_type != "ongoing":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only ongoing triggers can have ongoing configuration",
+                )
+
+            config = dict(trigger.config_json or {})
+            old_scan = int(config.get("scan_interval_seconds") or 60)
+            scan_changed = False
+            if req.scan_interval_seconds is not None:
+                config["scan_interval_seconds"] = req.scan_interval_seconds
+                scan_changed = req.scan_interval_seconds != old_scan
+            if req.input_template is not None:
+                config["input_template"] = req.input_template
+            if req.snapshot_id is not None:
+                config["snapshot_id"] = req.snapshot_id
+            trigger.config_json = config
+
+            prev_max = trigger.max_concurrent_runs
+            if req.target_runs is not None:
+                trigger.max_concurrent_runs = req.target_runs
+            if req.active is not None:
+                trigger.active = req.active
+
+            if trigger.trigger_type == "ongoing":
+                activated = req.active is not None and trigger.active
+                target_changed = req.target_runs is not None and req.target_runs != prev_max
+                if scan_changed or activated or target_changed:
+                    trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+
+            await session.flush()
+            updated_in_flight = await _ongoing_in_flight(session, trigger)
+    except ProgrammingError:
+        _log.exception("triggers.update_ongoing_config")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("triggers.update_ongoing_config")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database operation failed. Please try again later.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("update_ongoing_config failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from None
+
+    return {
+        "id": str(trigger.id),
+        "active": trigger.active,
+        "max_concurrent_runs": trigger.max_concurrent_runs,
+        "daily_spend_limit": _serialize_spend_limit(trigger.daily_spend_limit),
+        "config_json": mask_config_json(trigger.config_json),
+        "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "in_flight": updated_in_flight,
+    }
+
+
 class PollingTestRequest(BaseModel):
     """Request body for POST /triggers/{id}/polling/test."""
 
@@ -535,7 +663,7 @@ async def test_polling_condition(
 
 
 class TriggerCreate(BaseModel):
-    trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling)$")
+    trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling|agent_signal|ongoing)$")
     active: bool = True
     max_concurrent_runs: int = Field(default=1, ge=1)
     daily_spend_limit: Decimal | None = Field(None, ge=0, description="Daily spend ceiling in USD; None = unlimited")
@@ -568,6 +696,21 @@ async def create_trigger(
                         detail="Only cron triggers can have cron configuration",
                     )
                 next_fire_at = _validated_next_fire(req.cron_expression, req.cron_timezone)
+            if req.trigger_type == "ongoing":
+                # FAR-158 ongoing guard: validated BEFORE creating (the shared
+                # validator also loads the pipeline cap for the target check).
+                pipeline = await session.get(Pipeline, pipeline_id)
+                pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+                validate_ongoing_config(
+                    req.trigger_type,
+                    max_concurrent_runs=req.max_concurrent_runs,
+                    daily_spend_limit=req.daily_spend_limit,
+                    config_json=req.config_json,
+                    pipeline_max_concurrent_runs=pipeline_cap,
+                )
+                # A fresh ongoing trigger must fire on the first scheduler tick
+                # (the scan selects next_fire_at IS NULL OR due).
+                next_fire_at = datetime.datetime.now(datetime.UTC)
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
                 pipeline_id=pipeline_id,
@@ -583,6 +726,9 @@ async def create_trigger(
             )
             session.add(trigger)
             await session.flush()
+            # Computed INSIDE the transaction (RLS context set) — after commit
+            # the SET LOCAL is gone and the count could not be scoped.
+            created_in_flight = await _ongoing_in_flight(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.create_trigger")
         raise HTTPException(
@@ -617,6 +763,7 @@ async def create_trigger(
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
         "input_template": trigger.config_json.get("input_template") if trigger.config_json else None,
+        "in_flight": created_in_flight,
     }
 
 
@@ -660,12 +807,54 @@ async def update_trigger(
                     detail="Only cron triggers can have cron configuration",
                 )
 
+            # FAR-158 ongoing guards. The ongoing spend limit is REQUIRED — it
+            # can never be cleared to None (the DB partial CHECK would also
+            # reject the row). When any pool-affecting field changes, re-run the
+            # shared validator against the MERGED (post-update) values.
+            ongoing_scan_interval_changed = False
+            if trigger.trigger_type == "ongoing":
+                if "daily_spend_limit" in req.model_fields_set and req.daily_spend_limit is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail="ongoing triggers require daily_spend_limit; clearing it is not allowed",
+                    )
+                ongoing_fields_changing = any(
+                    x is not None for x in [req.max_concurrent_runs, req.config_json, req.active]
+                ) or ("daily_spend_limit" in req.model_fields_set)
+                if ongoing_fields_changing:
+                    pipeline = await session.get(Pipeline, trigger.pipeline_id)
+                    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+                    validate_ongoing_config(
+                        trigger.trigger_type,
+                        max_concurrent_runs=(
+                            req.max_concurrent_runs
+                            if req.max_concurrent_runs is not None
+                            else trigger.max_concurrent_runs
+                        ),
+                        daily_spend_limit=(
+                            req.daily_spend_limit
+                            if "daily_spend_limit" in req.model_fields_set
+                            else trigger.daily_spend_limit
+                        ),
+                        config_json=(req.config_json if req.config_json is not None else trigger.config_json),
+                        pipeline_max_concurrent_runs=pipeline_cap,
+                    )
+                if req.config_json is not None:
+                    old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
+                    new_scan = int(req.config_json.get("scan_interval_seconds") or 60)
+                    ongoing_scan_interval_changed = new_scan != old_scan
+
             next_fire_at: datetime.datetime | None = None
             if req.cron_expression is not None or req.cron_timezone is not None:
                 next_fire_at = _validated_next_fire(
                     req.cron_expression if req.cron_expression is not None else trigger.cron_expression,
                     req.cron_timezone if req.cron_timezone is not None else trigger.cron_timezone,
                 )
+
+            # Pre-mutation snapshot for the ongoing next_fire_at reset decision
+            # (reset only when the pool/cadence/active actually CHANGES).
+            prev_max = trigger.max_concurrent_runs
+            prev_active = trigger.active
 
             if req.active is not None:
                 trigger.active = req.active
@@ -674,6 +863,9 @@ async def update_trigger(
             if "daily_spend_limit" in req.model_fields_set:
                 trigger.daily_spend_limit = req.daily_spend_limit
             if req.config_json is not None:
+                # MERGE into the existing blob — never wholesale replace (the
+                # PUT only carries the fields the client is changing; a replace
+                # would silently drop unmanaged config keys).
                 current_cfg = trigger.config_json or {}
                 merged_cfg = dict(current_cfg)
                 for k, v in req.config_json.items():
@@ -694,7 +886,17 @@ async def update_trigger(
             if next_fire_at is not None:
                 trigger.next_fire_at = next_fire_at
 
+            # Ongoing triggers recompute next_fire_at when the pool or cadence
+            # actually changes (NOT on metadata-only edits) so the new config
+            # takes effect promptly.
+            if trigger.trigger_type == "ongoing":
+                target_changed = req.max_concurrent_runs is not None and req.max_concurrent_runs != prev_max
+                activated = req.active is not None and trigger.active and not prev_active
+                if target_changed or ongoing_scan_interval_changed or activated:
+                    trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+
             await session.flush()
+            updated_in_flight = await _ongoing_in_flight(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.update_trigger")
         raise HTTPException(
@@ -728,6 +930,7 @@ async def update_trigger(
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "in_flight": updated_in_flight,
     }
 
 
@@ -793,6 +996,11 @@ async def restore_trigger(
             trigger = await _restore_trigger(session, trigger_id)
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
+            # An ongoing trigger restored back into service must fire on the
+            # next tick (its next_fire_at was advanced while it was deleted).
+            if trigger.trigger_type == "ongoing":
+                trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+            restored_in_flight = await _ongoing_in_flight(session, trigger)
     except ProgrammingError:
         _log.exception("triggers.restore_trigger")
         raise HTTPException(
@@ -826,6 +1034,7 @@ async def restore_trigger(
         "cron_timezone": trigger.cron_timezone,
         "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
         "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
+        "in_flight": restored_in_flight,
     }
 
 
@@ -856,6 +1065,10 @@ async def toggle_trigger(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
 
             trigger.active = not trigger.active
+            # An ongoing trigger being turned back ON must fire on the next
+            # tick (its next_fire_at was advanced while it was inactive).
+            if trigger.trigger_type == "ongoing" and trigger.active:
+                trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
             await session.flush()
     except ProgrammingError:
         _log.exception("triggers.toggle_trigger")
@@ -1139,8 +1352,9 @@ async def list_pipeline_triggers(
             detail="Internal server error",
         ) from None
 
-    return {
-        "items": [
+    pipeline_items: list[dict[str, Any]] = []
+    for r in rows:
+        pipeline_items.append(
             {
                 "id": str(r.id),
                 "pipeline_id": str(r.pipeline_id),
@@ -1155,7 +1369,10 @@ async def list_pipeline_triggers(
                 "next_fire_at": r.next_fire_at.isoformat() if r.next_fire_at else None,
                 "created_by": str(r.account_id),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
+                "in_flight": await _ongoing_in_flight(session, r),
             }
-            for r in rows
-        ],
+        )
+
+    return {
+        "items": pipeline_items,
     }

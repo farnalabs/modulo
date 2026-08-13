@@ -159,13 +159,12 @@ async def _export_entity(
     offset = 0
 
     while True:
-        stmt: Any = (
-            select(model_cls)
-            .where(model_cls.organisation_id == org_id)
-            .order_by(model_cls.id)
-            .offset(offset)
-            .limit(PAGE_SIZE)
-        )
+        stmt: Any = select(model_cls)
+        # Not every entity is org-scoped (e.g. Account — users belong to orgs
+        # via OrgMembership), mirroring the guard used by the click-based CLI.
+        if hasattr(model_cls, "organisation_id"):
+            stmt = stmt.where(model_cls.organisation_id == org_id)
+        stmt = stmt.order_by(model_cls.id).offset(offset).limit(PAGE_SIZE)
         batch = (await session.execute(stmt)).scalars().all()
         if not batch:
             break
@@ -283,10 +282,10 @@ async def _do_import(
 
                         existing = None
                         if name_val and name_field:
-                            stmt: Any = select(model_cls).where(
-                                model_cls.organisation_id == org_id,
-                                getattr(model_cls, name_field) == name_val,
-                            )
+                            stmt: Any = select(model_cls)
+                            if hasattr(model_cls, "organisation_id"):
+                                stmt = stmt.where(model_cls.organisation_id == org_id)
+                            stmt = stmt.where(getattr(model_cls, name_field) == name_val)
                             existing = (await session.execute(stmt)).scalars().first()
 
                         if existing is not None:
@@ -302,10 +301,10 @@ async def _do_import(
                                 new_name = base
                                 counter = 2
                                 while counter <= max_attempts:
-                                    chk_stmt: Any = select(model_cls).where(
-                                        model_cls.organisation_id == org_id,
-                                        getattr(model_cls, name_field) == new_name,
-                                    )
+                                    chk_stmt: Any = select(model_cls)
+                                    if hasattr(model_cls, "organisation_id"):
+                                        chk_stmt = chk_stmt.where(model_cls.organisation_id == org_id)
+                                    chk_stmt = chk_stmt.where(getattr(model_cls, name_field) == new_name)
                                     chk = (await session.execute(chk_stmt)).scalars().first()
                                     if chk is None:
                                         break
@@ -333,7 +332,8 @@ async def _do_import(
                                     id_map[old_id_str] = str(existing.id)
                                 counts["overwritten"] += 1
                             else:
-                                row_data["organisation_id"] = org_id
+                                if hasattr(model_cls, "organisation_id"):
+                                    row_data["organisation_id"] = org_id
                                 obj = model_cls(**row_data)
                                 session.add(obj)
                                 await session.flush()

@@ -6,7 +6,8 @@ Two worker processes (plan F1/F2):
   default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
   larger — see :func:`_effective_redis_pool_size`), no web UI. Executes
   ``execute_run``/``resume_run`` jobs and the per-item fire jobs
-  (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``).
+  (``fire_cron_trigger``/``fire_polling_trigger``/``fire_report_trigger``/
+  ``fire_ongoing_trigger``).
 * ``system_settings`` — queue ``system``, concurrency (SAQ_WORKER_CONCURRENCY,
   default 5, deployed at 20 in prod/staging; the Redis pool must stay strictly
   larger — see :func:`_effective_redis_pool_size`), web UI on 8081 bound
@@ -457,6 +458,32 @@ async def fire_report_trigger(ctx: dict[str, Any], *, report_id: str, org_id: st
     return await _ch.fire_report_trigger(report_id=uuid.UUID(report_id), org_id=uuid.UUID(org_id))
 
 
+async def fire_ongoing_trigger(
+    ctx: dict[str, Any],
+    *,
+    trigger_id: str,
+    org_id: str,
+    pipeline_id: str,
+    latest_snapshot_id: str = "",
+) -> dict[str, Any]:
+    """Per-item ongoing fire job — top up + dispatch the created runs (SAQ).
+
+    Thin wrapper mirroring ``fire_polling_trigger``: delegates to
+    ``cron_helpers.fire_ongoing_trigger``, which performs the DB top-up in one
+    transaction and the queue dispatch post-commit inside its own body (the seam
+    lives in cron_helpers so there is one place to test). The dispatch outcomes
+    are already attached to the returned summary; failures are logged there too.
+    """
+    from modulo.core import cron_helpers as _ch
+
+    return await _ch.fire_ongoing_trigger(
+        trigger_id=uuid.UUID(trigger_id),
+        org_id=uuid.UUID(org_id),
+        pipeline_id=uuid.UUID(pipeline_id),
+        latest_snapshot_id=latest_snapshot_id or "",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Job functions — system worker (plan F1 / F3c / PR B step 6)
 # ---------------------------------------------------------------------------
@@ -780,6 +807,7 @@ def _runs_functions() -> list[tuple[str, Any]]:
         ("modulo.core.saq_worker.fire_cron_trigger", fire_cron_trigger),
         ("modulo.core.saq_worker.fire_polling_trigger", fire_polling_trigger),
         ("modulo.core.saq_worker.fire_report_trigger", fire_report_trigger),
+        ("modulo.core.saq_worker.fire_ongoing_trigger", fire_ongoing_trigger),
     ]
 
 

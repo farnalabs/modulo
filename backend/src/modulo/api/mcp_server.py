@@ -23,8 +23,8 @@ import traceback as _traceback
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from datetime import date as _date
-from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import quote
@@ -48,7 +48,19 @@ from modulo.api.dependencies import (
 )
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
-from modulo.auth.api_key import ApiKeyInvalidError, validate_api_key
+from modulo.auth.api_key import (
+    ApiKeyInvalidError,
+    validate_api_key,
+)
+from modulo.auth.api_key import (
+    create_api_key as auth_create_api_key,
+)
+from modulo.auth.api_key import (
+    list_api_keys as auth_list_api_keys,
+)
+from modulo.auth.api_key import (
+    revoke_api_key as auth_revoke_api_key,
+)
 from modulo.auth.dependencies import resolve_role_from_membership
 from modulo.auth.oauth import (
     check_oauth_token_family_valid,
@@ -57,6 +69,7 @@ from modulo.auth.oauth import (
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.analytics.builder import (
     AnalyticsDimension,
     AnalyticsGroupBy,
@@ -90,6 +103,7 @@ from modulo.core.cron_helpers import compute_next_fire, validate_cron_expression
 from modulo.core.dispatch import dispatch_run
 from modulo.core.documentation_indexer import DocumentationIndex
 from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
+from modulo.core.feature_flags import resolve_plan_context
 from modulo.core.hitl_manager import (
     AlreadyClaimedError,
     ClaimTokenExpiredError,
@@ -2570,9 +2584,31 @@ async def create_trigger(
         if daily_spend_limit is not None and daily_spend_limit < 0:
             return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
 
+        from modulo.core.trigger_validation import validate_ongoing_config
+        from modulo.db.models.pipeline import Pipeline
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
+            next_fire_at = None
+            if trigger_type == "ongoing":
+                # FAR-158: identical guards to the REST create surface.
+                from datetime import UTC
+
+                from fastapi import HTTPException
+
+                pipeline = await s.get(Pipeline, pid)
+                pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+                try:
+                    validate_ongoing_config(
+                        trigger_type,
+                        max_concurrent_runs=max_concurrent_runs,
+                        daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
+                        config_json=config_json,
+                        pipeline_max_concurrent_runs=pipeline_cap,
+                    )
+                except HTTPException as exc:
+                    return {"error": "validation", "detail": str(exc.detail)}
+                next_fire_at = datetime.now(UTC)
             trigger = Trigger(
                 organisation_id=org_id,
                 pipeline_id=pid,
@@ -2582,6 +2618,7 @@ async def create_trigger(
                 daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
                 config_json=config_json or {},
                 account_id=account_id,
+                next_fire_at=next_fire_at,
             )
             if cron_expression:
                 trigger.cron_expression = cron_expression
@@ -2627,6 +2664,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
 
         from sqlalchemy import select
 
+        from modulo.core.cron_helpers import _count_ongoing_runs
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
@@ -2636,6 +2674,9 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
                 Trigger.deleted_at.is_(None),
             )
             trigger = (await s.execute(q)).scalar_one_or_none()
+            in_flight = (
+                await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
+            )
 
         if trigger is None:
             return {"error": "not_found", "detail": "Trigger not found"}
@@ -2653,6 +2694,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
             "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
             "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
             "input_template": (trigger.config_json or {}).get("input_template"),
+            "in_flight": in_flight,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -2698,6 +2740,8 @@ async def update_trigger(
 
         from sqlalchemy import select
 
+        from modulo.core.trigger_validation import validate_ongoing_config
+        from modulo.db.models.pipeline import Pipeline
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
@@ -2713,6 +2757,43 @@ async def update_trigger(
             if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
                 return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
 
+            # FAR-158 ongoing guards (identical to REST PUT).
+            ongoing_scan_interval_changed = False
+            if trigger.trigger_type == "ongoing":
+                from fastapi import HTTPException
+
+                if clear_daily_spend_limit:
+                    return {
+                        "error": "validation",
+                        "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
+                    }
+                ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
+                    daily_spend_limit is not None
+                )
+                if ongoing_fields_changing:
+                    pipeline = await s.get(Pipeline, trigger.pipeline_id)
+                    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+                    try:
+                        validate_ongoing_config(
+                            trigger.trigger_type,
+                            max_concurrent_runs=(
+                                max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
+                            ),
+                            daily_spend_limit=(
+                                Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None
+                            )
+                            if daily_spend_limit is not None
+                            else trigger.daily_spend_limit,
+                            config_json=(config_json if config_json is not None else trigger.config_json),
+                            pipeline_max_concurrent_runs=pipeline_cap,
+                        )
+                    except HTTPException as exc:
+                        return {"error": "validation", "detail": str(exc.detail)}
+                if config_json is not None:
+                    old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
+                    new_scan = int(config_json.get("scan_interval_seconds") or 60)
+                    ongoing_scan_interval_changed = new_scan != old_scan
+
             next_fire_at = None
             if cron_expression is not None or cron_timezone is not None:
                 expr = cron_expression if cron_expression is not None else trigger.cron_expression
@@ -2724,6 +2805,9 @@ async def update_trigger(
                     return {"error": "invalid_cron", "detail": error}
                 next_fire_at = compute_next_fire(expr, timezone=tz)
 
+            prev_max = trigger.max_concurrent_runs
+            prev_active = trigger.active
+
             if active is not None:
                 trigger.active = active
             if max_concurrent_runs is not None:
@@ -2733,6 +2817,7 @@ async def update_trigger(
             elif daily_spend_limit is not None:
                 trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
             if config_json is not None:
+                # MERGE into the existing blob — never wholesale replace.
                 current_cfg = trigger.config_json or {}
                 merged_cfg = dict(current_cfg)
                 for k, v in config_json.items():
@@ -2752,7 +2837,20 @@ async def update_trigger(
                 trigger.cron_timezone = cron_timezone
             if next_fire_at is not None:
                 trigger.next_fire_at = next_fire_at
+
+            # Ongoing triggers recompute next_fire_at when the pool / cadence /
+            # active actually changes so the new config takes effect promptly.
+            if trigger.trigger_type == "ongoing":
+                from datetime import UTC
+
+                target_changed = max_concurrent_runs is not None and max_concurrent_runs != prev_max
+                activated = active is not None and trigger.active and not prev_active
+                if target_changed or ongoing_scan_interval_changed or activated:
+                    trigger.next_fire_at = datetime.now(UTC)
             await s.flush()
+            from modulo.core.cron_helpers import _count_ongoing_runs
+
+            in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
 
         return {
             "id": str(trigger.id),
@@ -2767,6 +2865,7 @@ async def update_trigger(
             "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
             "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
             "input_template": (trigger.config_json or {}).get("input_template"),
+            "in_flight": in_flight,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -3090,6 +3189,280 @@ async def delete_secret(
     except Exception:
         _log.exception("delete_secret failed")
         return _tool_error("Failed to delete secret")
+
+
+# ---------------------------------------------------------------------------
+# Organisation API-key management (REST parity with /api/v1/api-keys)
+# ---------------------------------------------------------------------------
+
+
+def _parse_api_key_expires_at(value: str) -> datetime:
+    """Parse an ISO datetime, normalising naive values to UTC (REST parity)."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+async def _deny_break_glass_mint(session: AsyncSession, account_id: uuid.UUID) -> None:
+    """REST-parity deny_break_glass_mint for MCP credential-minting tools.
+
+    Break-glass accounts can never mint or revoke credentials (plan v17,
+    API-key + long-lived deny). Mirrors the FastAPI dependency of the same
+    name: load the account by primary key and deny when the shared
+    ``is_break_glass_denied`` / ``is_break_glass_live`` decision fires. A
+    missing account or a DB read failure raises (fail-closed) rather than
+    silently allowing a mint.
+    """
+    from modulo.db.crud.break_glass_deny import is_break_glass_denied, is_break_glass_live
+    from modulo.db.models.account import Account
+
+    account = await session.get(Account, account_id)
+    if account is not None and account.is_break_glass is True:
+        now = datetime.now(UTC)
+        if is_break_glass_denied(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        ) or is_break_glass_live(
+            is_break_glass=account.is_break_glass,
+            break_glass_expires_at=account.break_glass_expires_at,
+            break_glass_deactivated_at=account.break_glass_deactivated_at,
+            active=account.active,
+            now=now,
+        ):
+            _log.warning(
+                "permission.break_glass_mint_denied",
+                extra={"account_id": str(account_id)},
+            )
+            raise MCPAuthorizationError("Break-glass accounts cannot create or modify secrets/credentials")
+
+
+async def _enforce_api_key_mint_cap(
+    session: AsyncSession,
+    account_id: uuid.UUID,
+    org_id: uuid.UUID,
+    requested_role: str,
+) -> None:
+    """Enforce the API-key role-cap: never mint above the caller's LIVE role.
+
+    Mirrors ``_enforce_mint_cap`` in ``api/routes/api_keys.py`` — the live
+    membership role is the authoritative source, so a runner cannot mint an
+    operator key, an operator can mint operator/runner, and a removed or
+    deactivated member's live role is None, denying the mint outright.
+    """
+    live_role = await resolve_role_from_membership(
+        session,
+        str(account_id),
+        str(org_id),
+    )
+    if live_role is None:
+        _log.warning(
+            "permission.api_key_role_cap",
+            extra={"requested_role": requested_role, "live_role": None},
+        )
+        raise MCPAuthorizationError("Active organisation membership required to manage API keys")
+    if org_role_level(requested_role) > org_role_level(live_role):
+        _log.warning(
+            "permission.api_key_role_cap",
+            extra={"requested_role": requested_role, "live_role": live_role},
+        )
+        raise MCPAuthorizationError(
+            f"Cannot use role '{requested_role}' for an API key while your live role is '{live_role}'"
+        )
+
+
+async def _require_admin_for_team_key(org_id: uuid.UUID) -> None:
+    """REST parity for team-scoped keys: feature + admin guard before setting team_id."""
+    async with _session(org_id) as s:
+        ctx = await resolve_plan_context(get_settings(), s)
+        if not ctx.feature_enabled("team_rbac"):
+            raise MCPAuthorizationError("Team-scoped API keys require an upgraded plan")
+    if ORG_ROLE_HIERARCHY.get(_ctx_role_val() or "", -1) < ORG_ROLE_HIERARCHY["admin"]:
+        raise MCPAuthorizationError("Only admin users can perform this action")
+
+
+@mcp.tool(
+    description=(
+        "Create a new organisation API key. Returns the full mk_... key value "
+        "ONLY at creation — store it immediately, it is never returned again. "
+        "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner'. A key "
+        "cannot be minted above the caller's live org role."
+    ),
+)
+@_RETRY_DB
+async def create_api_key(
+    name: str,
+    role: str = "operator",
+    expires_at: str | None = None,
+    team_id: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_api_key")
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+
+        if role not in ("operator", "runner"):
+            return {
+                "error": "validation_failed",
+                "field": "role",
+                "detail": "role must be 'operator' or 'runner'. admin keys are prohibited.",
+            }
+        name = name.strip()
+        if not name:
+            return {
+                "error": "validation_failed",
+                "field": "name",
+                "detail": "API key name must not be blank",
+            }
+
+        parsed_expires_at: datetime | None = None
+        if expires_at:
+            try:
+                parsed_expires_at = _parse_api_key_expires_at(expires_at)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "expires_at",
+                    "detail": "expires_at must be a valid ISO-8601 datetime",
+                }
+            if parsed_expires_at <= datetime.now(UTC):
+                return {
+                    "error": "validation_failed",
+                    "field": "expires_at",
+                    "detail": "expires_at must be in the future",
+                }
+
+        team_uuid: uuid.UUID | None = None
+        if team_id is not None:
+            try:
+                team_uuid = uuid.UUID(team_id)
+            except ValueError:
+                return {
+                    "error": "invalid_id",
+                    "field": "team_id",
+                    "detail": f"Invalid UUID format: {team_id}",
+                }
+            await _require_admin_for_team_key(org_id)
+
+        async with _session(org_id) as s:
+            await _deny_break_glass_mint(s, account_id)
+            await _enforce_api_key_mint_cap(s, account_id, org_id, role)
+            key, full_key = await auth_create_api_key(
+                s,
+                org_id=org_id,
+                name=name,
+                role=role,
+                account_id=account_id,
+                team_id=team_uuid,
+                expires_at=parsed_expires_at,
+            )
+
+        return {
+            "id": str(key.id),
+            "name": key.name,
+            "role": key.role,
+            "key_value": full_key,
+            "lookup_prefix": f"mk_{key.lookup_prefix}****",
+            "created_at": key.created_at.isoformat() if key.created_at else None,
+            "team_id": str(key.team_id) if key.team_id else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except IntegrityError:
+        _log.exception("create_api_key failed")
+        return {"error": "conflict", "detail": "A resource with this value already exists"}
+    except ProgrammingError:
+        _log.exception("create_api_key failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+    except SQLAlchemyError:
+        _log.exception("create_api_key failed")
+        return _tool_error("Database temporarily unavailable")
+    except Exception:
+        _log.exception("create_api_key failed")
+        return _tool_error("Failed to create API key")
+
+
+@mcp.tool(
+    description=(
+        "List API keys in the organisation. Returns id/name/role/lookup_prefix/"
+        "created_at/team_id — never full key values. Mirrors GET /api/v1/api-keys."
+    ),
+)
+@_RETRY_DB
+async def list_api_keys() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "list_api_keys")
+
+        org_id = _ctx_org_id_val()
+
+        async with _session(org_id) as s:
+            keys = await auth_list_api_keys(s, org_id)
+
+        return {"api_keys": keys, "total": len(keys)}
+    except ProgrammingError:
+        _log.exception("list_api_keys failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+    except SQLAlchemyError:
+        _log.exception("list_api_keys failed")
+        return _tool_error("Database temporarily unavailable")
+    except Exception:
+        _log.exception("list_api_keys failed")
+        return _tool_error("Failed to list API keys")
+
+
+@mcp.tool(
+    description=(
+        "Revoke an API key by ID. The key is immediately invalidated and can "
+        "no longer authenticate. Mirrors DELETE /api/v1/api-keys/{key_id}."
+    ),
+)
+@_RETRY_DB
+async def revoke_api_key(key_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "revoke_api_key")
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        try:
+            kid = uuid.UUID(key_id)
+        except ValueError:
+            return {
+                "error": "invalid_id",
+                "field": "key_id",
+                "detail": f"Invalid UUID format: {key_id}",
+            }
+
+        async with _session(org_id) as s:
+            await _deny_break_glass_mint(s, account_id)
+            revoked = await auth_revoke_api_key(s, kid, org_id)
+
+        if not revoked:
+            return {"error": "not_found", "detail": "API key not found"}
+        return {"id": str(kid), "revoked": True}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except IntegrityError:
+        _log.exception("revoke_api_key failed")
+        return {"error": "conflict", "detail": "A resource with this value already exists"}
+    except ProgrammingError:
+        _log.exception("revoke_api_key failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run alembic upgrade heads."}
+    except SQLAlchemyError:
+        _log.exception("revoke_api_key failed")
+        return _tool_error("Database temporarily unavailable")
+    except Exception:
+        _log.exception("revoke_api_key failed")
+        return _tool_error("Failed to revoke API key")
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
