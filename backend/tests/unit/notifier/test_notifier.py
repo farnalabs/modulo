@@ -847,6 +847,9 @@ async def test_dispatch_event_re_raises_cancelled_error_from_in_app_block(notifi
         await notifier.dispatch_event(_ORG, "hitl_overdue", {"run_id": str(_RUN)})
 
     mapper_instance.create_from_event.assert_not_called()
+
+
+async def test_dispatch_event_retains_payload_end_to_end(notifier: Notifier) -> None:
     """retain_payload must flow from dispatch_event through _dispatch_inline to the
     delivery log, encrypting the actual body that was POSTed (incl. timestamp)."""
     ep = _fake_endpoint()
