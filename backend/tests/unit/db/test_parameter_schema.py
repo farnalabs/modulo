@@ -291,7 +291,7 @@ async def test_resolve_parameters_schema_defaults_only() -> None:
         if isinstance(param, dict) and "name" in param:
             resolved[param["name"]] = param.get("default")
     assert resolved["model_backend"] == "gpt-4"
-    assert resolved["temperature"] == 0.7
+    assert resolved["temperature"] == pytest.approx(0.7)
     assert "prompt" not in resolved or resolved["prompt"] is None
 
 
@@ -314,7 +314,7 @@ async def test_resolve_parameters_set_overrides_defaults() -> None:
         resolved.update(ps.values)
 
     assert resolved["model_backend"] == "claude-3"
-    assert resolved["temperature"] == 0.3
+    assert resolved["temperature"] == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio
@@ -339,7 +339,7 @@ async def test_resolve_parameters_overrides_beat_set() -> None:
         resolved.update(overrides)
 
     assert resolved["model_backend"] == "claude-3"
-    assert resolved["temperature"] == 0.9
+    assert resolved["temperature"] == pytest.approx(0.9)
 
 
 @pytest.mark.asyncio

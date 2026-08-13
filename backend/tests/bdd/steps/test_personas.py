@@ -889,7 +889,7 @@ def jordan_see_downloads_and_rating(ctx):
     detail = ctx.get("primitive_detail", {})
     agg = ctx.get("ratings_aggregate", {})
     assert detail.get("download_count") == 47, f"Expected 47 downloads, got {detail.get('download_count')}"
-    assert agg.get("average_rating") == 4.2, f"Expected 4.2 rating, got {agg.get('average_rating')}"
+    assert agg.get("average_rating") == pytest.approx(4.2), f"Expected 4.2 rating, got {agg.get('average_rating')}"
 
 
 @then("I see user reviews with comments")

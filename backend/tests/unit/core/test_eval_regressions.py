@@ -105,8 +105,8 @@ class TestDetectRegressionsDirect:
         assert a.eval_id == _EVAL_ID_1
         assert a.eval_name == "accuracy-check"
         assert a.prev_pass_rate == 1.0
-        assert a.current_pass_rate == 0.3
-        assert a.drop_pct == 0.7
+        assert a.current_pass_rate == pytest.approx(0.3)
+        assert a.drop_pct == pytest.approx(0.7)
         assert a.trend == "declining"
         assert a.affected_run_ids == [_RUN_ID_1, _RUN_ID_2]
 
@@ -425,7 +425,7 @@ class TestRegressionAlertsEndpoint:
             "lookback_days",
         }
         assert data["total_regressions"] == 1
-        assert data["threshold"] == 0.15
+        assert data["threshold"] == pytest.approx(0.15)
         assert data["recent_window_ratio"] == 0.25
         assert data["lookback_days"] == 7
 
@@ -443,9 +443,9 @@ class TestRegressionAlertsEndpoint:
         }
         assert a["eval_id"] == str(_EVAL_ID_1)
         assert a["eval_name"] == "accuracy-check"
-        assert a["prev_pass_rate"] == 0.9
-        assert a["current_pass_rate"] == 0.3
-        assert a["drop_pct"] == 0.6
+        assert a["prev_pass_rate"] == pytest.approx(0.9)
+        assert a["current_pass_rate"] == pytest.approx(0.3)
+        assert a["drop_pct"] == pytest.approx(0.6)
         assert a["trend"] == "declining"
         assert a["affected_run_ids"] == [str(_RUN_ID_1)]
 
@@ -481,7 +481,7 @@ class TestRegressionAlertsEndpoint:
         resp = TestClient(app).get(self.URL + "?days=14&threshold=0.10")
         data = resp.json()
         assert data["lookback_days"] == 14
-        assert data["threshold"] == 0.1
+        assert data["threshold"] == pytest.approx(0.1)
 
     def test_custom_recent_window_ratio(self) -> None:
         mock_session = _make_mock_session()

@@ -59,7 +59,7 @@ def test_admin_password_set_no_warning(caplog: pytest.LogCaptureFixture) -> None
 
 def test_e2b_sandbox_usd_per_hour_default() -> None:
     """The E2B hourly rate defaults to 0.13 USD/hr when unset."""
-    assert _make().e2b_sandbox_usd_per_hour == 0.13
+    assert _make().e2b_sandbox_usd_per_hour == pytest.approx(0.13)
 
 
 def test_e2b_sandbox_usd_per_hour_env_override() -> None:
