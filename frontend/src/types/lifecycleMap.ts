@@ -89,3 +89,11 @@ export interface JourneyListResponse {
   items: JourneySummary[]
   next_cursor: string | null
 }
+
+export interface LifecycleMapTransfer {
+  primitive_type: 'lifecycle_map'
+  format_version: string
+  name: string
+  description: string | null
+  content_json: Record<string, unknown>
+}

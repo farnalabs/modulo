@@ -18,20 +18,39 @@
             v{{ mapData.current_version }}
           </span>
         </div>
-        <div v-if="mapData" class="flex items-center gap-2">
-          <template v-if="mapData.versions && mapData.versions.length > 1">
-            <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
-            <Select :aria-label="$t('views.LifecycleMapView.version_label')" v-model="selectedVersion" @update:model-value="onVersionChange">
-              <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
-                <SelectValue placeholder="Select version" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
-                  v{{ v.version }}
-                  <template v-if="v.created_by"> — {{ v.created_by }}</template>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+        <div class="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="exporting || !mapData"
+            :data-testid="'lifecycle-map-export'"
+            @click="handleExport"
+          >
+            {{ exporting ? $t('views.LifecycleMapView.exporting') : $t('views.LifecycleMapView.export_map') }}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            :data-testid="'lifecycle-map-import'"
+            @click="openImportDialog"
+          >
+            {{ $t('views.LifecycleMapView.import_map') }}
+          </Button>
+          <template v-if="mapData?.versions && mapData.versions.length > 1">
+            <div class="flex items-center gap-2">
+              <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
+              <Select :aria-label="$t('views.LifecycleMapView.version_label')" v-model="selectedVersion" @update:model-value="onVersionChange">
+                <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
+                  <SelectValue placeholder="Select version" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
+                    v{{ v.version }}
+                    <template v-if="v.created_by"> — {{ v.created_by }}</template>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </template>
           <Button
             variant="outline"
@@ -44,6 +63,14 @@
             {{ $t('views.LifecycleMapView.edit') }}
           </Button>
         </div>
+        <p
+          v-if="exportError"
+          role="alert"
+          class="mt-2 text-sm text-destructive"
+          data-testid="lifecycle-map-export-error"
+        >
+          {{ exportError }}
+        </p>
       </div>
     </header>
 
@@ -178,6 +205,46 @@
         Lifecycle map not found.
       </div>
     </main>
+
+    <!-- Import dialog -->
+    <Dialog :open="showImportDialog" @update:open="showImportDialog = $event">
+      <DialogContent class="sm:max-w-lg" data-testid="lifecycle-map-import-dialog">
+        <DialogHeader>
+          <DialogTitle>{{ $t('views.LifecycleMapView.import_dialog_title') }}</DialogTitle>
+          <DialogDescription>
+            {{ $t('views.LifecycleMapView.import_paste_hint') }}
+          </DialogDescription>
+        </DialogHeader>
+        <textarea
+          v-model="importPayload"
+          rows="10"
+          class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs"
+          :placeholder="$t('views.LifecycleMapView.import_placeholder')"
+          data-testid="lifecycle-map-import-payload"
+          :aria-label="$t('views.LifecycleMapView.import_payload_label')"
+        />
+        <div
+          v-if="importError"
+          role="alert"
+          class="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {{ importError }}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" @click="showImportDialog = false">
+            {{ $t('views.LifecycleMapView.cancel') }}
+          </Button>
+          <Button
+            size="sm"
+            :disabled="!importPayload.trim() || importing"
+            data-testid="lifecycle-map-import-confirm"
+            @click="handleImportConfirm"
+          >
+            {{ importing ? $t('views.LifecycleMapView.importing') : $t('views.LifecycleMapView.import_map') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -193,9 +260,11 @@ import JourneyCard from '../../components/lifecycle-map/JourneyCard.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import { formatRunDate } from '../../utils/runUtils'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { JourneySummary } from '../../types/lifecycleMap'
 import type { LifecycleMapStage } from '../../stores/lifecycleMaps'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { formatApiError } from '../../lib/api/formatError'
 
 const route = useRoute()
 const router = useRouter()
@@ -306,6 +375,67 @@ function handleModuloStageClick(stage: LifecycleMapStage): void {
 function handleExternalStageClick(stage: LifecycleMapStage): void {
   if (stage.external_url) {
     window.open(stage.external_url, '_blank', 'noopener,noreferrer')
+  }
+}
+
+const exporting = ref(false)
+const exportError = ref<string | null>(null)
+
+async function handleExport(): Promise<void> {
+  if (!mapId.value || exporting.value) return
+  exporting.value = true
+  exportError.value = null
+  try {
+    const envelope = await store.exportMap(mapId.value)
+    if (!envelope) return
+    const json = JSON.stringify(envelope, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${envelope.name || 'lifecycle-map'}.lifecycle-map.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    try {
+      await navigator.clipboard.writeText(json)
+    } catch {
+      // Clipboard may be unavailable (e.g. http); the download still succeeded.
+    }
+  } catch (e: unknown) {
+    exportError.value = formatApiError(e)
+  } finally {
+    exporting.value = false
+  }
+}
+
+const showImportDialog = ref(false)
+const importPayload = ref('')
+const importing = ref(false)
+const importError = ref<string | null>(null)
+
+function openImportDialog(): void {
+  importPayload.value = ''
+  importError.value = null
+  showImportDialog.value = true
+}
+
+async function handleImportConfirm(): Promise<void> {
+  if (!importPayload.value.trim() || importing.value) return
+  importing.value = true
+  importError.value = null
+  try {
+    const envelope = JSON.parse(importPayload.value)
+    const created = await store.importMap(envelope)
+    showImportDialog.value = false
+    router.push({ name: 'lifecycle-map-detail', params: { id: created.id } })
+  } catch (e: unknown) {
+    if (e instanceof SyntaxError) {
+      importError.value = t('views.LifecycleMapView.import_invalid_json')
+    } else {
+      importError.value = formatApiError(e)
+    }
+  } finally {
+    importing.value = false
   }
 }
 

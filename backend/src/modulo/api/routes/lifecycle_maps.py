@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field
@@ -15,6 +15,11 @@ from modulo.api.dependencies import get_db_session, require_permission, require_
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
+from modulo.core.lifecycle_map.import_export import (
+    LifecycleMapBundleError,
+    build_export_envelope,
+    import_lifecycle_map_envelope,
+)
 from modulo.core.lifecycle_map.journeys import (
     get_map_journey,
     list_journey_runs,
@@ -57,6 +62,21 @@ class LifecycleMapUpdate(TeamVisibilityMixin):
     owner_team_id: uuid.UUID | None = None
     visibility: str | None = Field(None, pattern=r"^(org|team)$")
     content_json: dict[str, Any] | None = None
+
+
+class LifecycleMapTransfer(BaseModel):
+    """Portable export/import envelope for a lifecycle map (PRD §8.31.9).
+
+    This is the primitive shape ``GET .../export`` returns and ``POST
+    /import`` accepts: ``content_json`` holds the canonical stages/edges/notes
+    graph and is validated with the same rules as an editor save.
+    """
+
+    primitive_type: Literal["lifecycle_map"] = "lifecycle_map"
+    format_version: str = "1"
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    content_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class LifecycleMapResponse(BaseModel):
@@ -456,6 +476,102 @@ async def create_lifecycle_map_endpoint(
             detail="An unexpected error occurred.",
         ) from None
     return LifecycleMapResponse.model_validate(lifecycle_map)
+
+
+@router.post("/import", response_model=LifecycleMapResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("lifecycle_maps.import_lifecycle_map_endpoint")
+async def import_lifecycle_map_endpoint(
+    req: LifecycleMapTransfer,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("lifecycle_map.create"),
+) -> LifecycleMapResponse:
+    """Import an exported lifecycle-map envelope, creating a new map in the org.
+
+    Content is validated with the same rules as an editor save (normalize_content),
+    so a malformed graph returns 422. Imported maps are also registered as
+    ``lifecycle_map`` library primitives so they can be listed and copied-to-adapt.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            lifecycle_map = await import_lifecycle_map_envelope(
+                session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                envelope=req.model_dump(),
+            )
+            await session.refresh(lifecycle_map)
+    except LifecycleMapPipelineConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.import_lifecycle_map_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except IntegrityError as exc:
+        _log.exception("lifecycle_maps.import_lifecycle_map_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Lifecycle map conflicts with an existing resource.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.import_lifecycle_map_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("lifecycle_maps.import")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    return LifecycleMapResponse.model_validate(lifecycle_map)
+
+
+@router.get("/{lifecycle_map_id}/export", response_model=LifecycleMapTransfer)
+@handle_db_errors("lifecycle_maps.export_lifecycle_map_endpoint")
+async def export_lifecycle_map_endpoint(
+    lifecycle_map_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("lifecycle_map.list"),
+) -> LifecycleMapTransfer:
+    """Export a lifecycle map's active-version content as a portable envelope."""
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
+    except ProgrammingError as exc:
+        _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("lifecycle_maps.export")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred.",
+        ) from None
+    if lifecycle_map is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lifecycle map not found")
+    envelope = build_export_envelope(lifecycle_map)
+    return LifecycleMapTransfer(**envelope)
 
 
 @router.get("/{lifecycle_map_id}", response_model=LifecycleMapDetailResponse)
