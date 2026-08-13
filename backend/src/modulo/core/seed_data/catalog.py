@@ -138,6 +138,12 @@ FLAGS: list[dict[str, str | None]] = [
         "depends_on": None,
     },
     {
+        "name": "ongoing_trigger",
+        "description": "Keep a pipeline topped up to a target number of in-flight runs",
+        "tier_id": "community",
+        "depends_on": None,
+    },
+    {
         "name": "environment_profiles",
         "description": "Sandbox environment profiles for code execution",
         "tier_id": "team",

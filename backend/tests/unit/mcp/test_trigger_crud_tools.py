@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.api.mcp_server import delete_trigger, get_trigger, update_trigger
+from modulo.api.mcp_server import create_trigger, delete_trigger, get_trigger, update_trigger
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -559,3 +559,198 @@ class TestDeleteTrigger(_AuthContext):
 
         assert result == {"id": str(trigger.id), "deleted": True}
         mock_soft_delete.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# create_trigger — ongoing guards (FAR-158)
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_cap(cap: int):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(max_concurrent_runs=cap, is_break_glass=False)
+
+
+class TestCreateTriggerOngoing(_AuthContext):
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role, _ctx_user_id
+
+        _ctx_role.set("operator")
+        _ctx_user_id.set(uuid.uuid4())
+
+    def teardown_method(self) -> None:
+        from modulo.api.mcp_server import _ctx_user_id
+
+        _ctx_user_id.set(None)
+        super().teardown_method()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_ongoing_without_spend_limit_rejected(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = AsyncMock()
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(10))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await create_trigger(
+            pipeline_id=str(uuid.uuid4()),
+            trigger_type="ongoing",
+            max_concurrent_runs=3,
+            daily_spend_limit=None,
+        )
+
+        assert result["error"] == "validation"
+        assert "daily_spend_limit" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_ongoing_valid_accepted_with_next_fire_at(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = AsyncMock()
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(10))
+        mock_sesh.add = MagicMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await create_trigger(
+            pipeline_id=str(uuid.uuid4()),
+            trigger_type="ongoing",
+            max_concurrent_runs=3,
+            daily_spend_limit=25.0,
+            config_json={"scan_interval_seconds": 120},
+        )
+
+        assert result.get("error") is None
+        assert result["trigger_type"] == "ongoing"
+        assert result["max_concurrent_runs"] == 3
+        assert result["daily_spend_limit"] == 25.0
+        added_trigger = mock_sesh.add.call_args.args[0]
+        assert added_trigger.next_fire_at is not None, "a fresh ongoing trigger must fire on the first tick"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_ongoing_target_above_pipeline_cap_rejected(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = AsyncMock()
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(5))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await create_trigger(
+            pipeline_id=str(uuid.uuid4()),
+            trigger_type="ongoing",
+            max_concurrent_runs=20,
+            daily_spend_limit=25.0,
+        )
+
+        assert result["error"] == "validation"
+        assert "cannot exceed" in result["detail"]
+
+
+# ---------------------------------------------------------------------------
+# update_trigger / get_trigger — ongoing guards (FAR-158)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTriggerOngoing(_AuthContext):
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_clear_spend_limit_on_ongoing_rejected(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from decimal import Decimal
+
+        trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal("25.00"))
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), clear_daily_spend_limit=True)
+
+        assert result["error"] == "validation"
+        assert "clearing it is not allowed" in result["detail"]
+        mock_sesh.flush.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_raising_target_above_pipeline_cap_rejected(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from decimal import Decimal
+
+        trigger = _make_mock_trigger(trigger_type="ongoing", max_concurrent_runs=3, daily_spend_limit=Decimal("25.00"))
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(5))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), max_concurrent_runs=20)
+
+        assert result["error"] == "validation"
+        assert "cannot exceed" in result["detail"]
+        mock_sesh.flush.assert_not_called()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_ongoing_edit_recomputes_next_fire_at(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from decimal import Decimal
+
+        trigger = _make_mock_trigger(trigger_type="ongoing", max_concurrent_runs=2, daily_spend_limit=Decimal("25.00"))
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_sesh.get = AsyncMock(return_value=_pipeline_cap(10))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await update_trigger(trigger_id=str(trigger.id), max_concurrent_runs=4)
+
+        assert result.get("error") is None
+        assert trigger.max_concurrent_runs == 4
+        assert trigger.next_fire_at is not None, "a target change must reset next_fire_at"
+        assert result["next_fire_at"] is not None
+
+
+class TestGetTriggerOngoing(_AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_get_trigger_includes_in_flight(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from decimal import Decimal
+
+        trigger = _make_mock_trigger(trigger_type="ongoing", daily_spend_limit=Decimal("25.00"))
+        mock_sesh = AsyncMock()
+        trigger_result = _make_execute_result(trigger)
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 2
+        mock_sesh.execute = AsyncMock(side_effect=[trigger_result, count_result])
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        result = await get_trigger(trigger_id=str(trigger.id))
+
+        assert result["trigger_type"] == "ongoing"
+        assert result["in_flight"] == 2

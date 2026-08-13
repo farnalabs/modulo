@@ -20,6 +20,9 @@
           { value: TRIGGER_TYPE.MANUAL, label: 'Manual' },
           { value: TRIGGER_TYPE.WEBHOOK, label: 'Webhook' },
           { value: TRIGGER_TYPE.CRON, label: 'Cron' },
+          { value: TRIGGER_TYPE.POLLING, label: 'Polling' },
+          { value: TRIGGER_TYPE.AGENT_SIGNAL, label: 'Agent Signal' },
+          { value: TRIGGER_TYPE.ONGOING, label: 'Ongoing' },
           { value: TRIGGER_TYPE.CORRECTION, label: 'Correction' },
         ]},
       ]"

@@ -2570,9 +2570,31 @@ async def create_trigger(
         if daily_spend_limit is not None and daily_spend_limit < 0:
             return {"error": "validation", "field": "daily_spend_limit", "detail": "must be >= 0"}
 
+        from modulo.core.trigger_validation import validate_ongoing_config
+        from modulo.db.models.pipeline import Pipeline
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
+            next_fire_at = None
+            if trigger_type == "ongoing":
+                # FAR-158: identical guards to the REST create surface.
+                from datetime import UTC
+
+                from fastapi import HTTPException
+
+                pipeline = await s.get(Pipeline, pid)
+                pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+                try:
+                    validate_ongoing_config(
+                        trigger_type,
+                        max_concurrent_runs=max_concurrent_runs,
+                        daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
+                        config_json=config_json,
+                        pipeline_max_concurrent_runs=pipeline_cap,
+                    )
+                except HTTPException as exc:
+                    return {"error": "validation", "detail": str(exc.detail)}
+                next_fire_at = datetime.now(UTC)
             trigger = Trigger(
                 organisation_id=org_id,
                 pipeline_id=pid,
@@ -2582,6 +2604,7 @@ async def create_trigger(
                 daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
                 config_json=config_json or {},
                 account_id=account_id,
+                next_fire_at=next_fire_at,
             )
             if cron_expression:
                 trigger.cron_expression = cron_expression
@@ -2627,6 +2650,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
 
         from sqlalchemy import select
 
+        from modulo.core.cron_helpers import _count_ongoing_runs
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
@@ -2636,6 +2660,9 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
                 Trigger.deleted_at.is_(None),
             )
             trigger = (await s.execute(q)).scalar_one_or_none()
+            in_flight = (
+                await _count_ongoing_runs(s, tid) if trigger is not None and trigger.trigger_type == "ongoing" else 0
+            )
 
         if trigger is None:
             return {"error": "not_found", "detail": "Trigger not found"}
@@ -2653,6 +2680,7 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
             "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
             "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
             "input_template": (trigger.config_json or {}).get("input_template"),
+            "in_flight": in_flight,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -2698,6 +2726,8 @@ async def update_trigger(
 
         from sqlalchemy import select
 
+        from modulo.core.trigger_validation import validate_ongoing_config
+        from modulo.db.models.pipeline import Pipeline
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
@@ -2713,6 +2743,43 @@ async def update_trigger(
             if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
                 return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
 
+            # FAR-158 ongoing guards (identical to REST PUT).
+            ongoing_scan_interval_changed = False
+            if trigger.trigger_type == "ongoing":
+                from fastapi import HTTPException
+
+                if clear_daily_spend_limit:
+                    return {
+                        "error": "validation",
+                        "detail": "ongoing triggers require daily_spend_limit; clearing it is not allowed",
+                    }
+                ongoing_fields_changing = any(x is not None for x in [max_concurrent_runs, config_json, active]) or (
+                    daily_spend_limit is not None
+                )
+                if ongoing_fields_changing:
+                    pipeline = await s.get(Pipeline, trigger.pipeline_id)
+                    pipeline_cap = pipeline.max_concurrent_runs if pipeline is not None else 0
+                    try:
+                        validate_ongoing_config(
+                            trigger.trigger_type,
+                            max_concurrent_runs=(
+                                max_concurrent_runs if max_concurrent_runs is not None else trigger.max_concurrent_runs
+                            ),
+                            daily_spend_limit=(
+                                Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None
+                            )
+                            if daily_spend_limit is not None
+                            else trigger.daily_spend_limit,
+                            config_json=(config_json if config_json is not None else trigger.config_json),
+                            pipeline_max_concurrent_runs=pipeline_cap,
+                        )
+                    except HTTPException as exc:
+                        return {"error": "validation", "detail": str(exc.detail)}
+                if config_json is not None:
+                    old_scan = int((trigger.config_json or {}).get("scan_interval_seconds") or 60)
+                    new_scan = int(config_json.get("scan_interval_seconds") or 60)
+                    ongoing_scan_interval_changed = new_scan != old_scan
+
             next_fire_at = None
             if cron_expression is not None or cron_timezone is not None:
                 expr = cron_expression if cron_expression is not None else trigger.cron_expression
@@ -2724,6 +2791,9 @@ async def update_trigger(
                     return {"error": "invalid_cron", "detail": error}
                 next_fire_at = compute_next_fire(expr, timezone=tz)
 
+            prev_max = trigger.max_concurrent_runs
+            prev_active = trigger.active
+
             if active is not None:
                 trigger.active = active
             if max_concurrent_runs is not None:
@@ -2733,6 +2803,7 @@ async def update_trigger(
             elif daily_spend_limit is not None:
                 trigger.daily_spend_limit = Decimal(str(daily_spend_limit))
             if config_json is not None:
+                # MERGE into the existing blob — never wholesale replace.
                 current_cfg = trigger.config_json or {}
                 merged_cfg = dict(current_cfg)
                 for k, v in config_json.items():
@@ -2752,7 +2823,20 @@ async def update_trigger(
                 trigger.cron_timezone = cron_timezone
             if next_fire_at is not None:
                 trigger.next_fire_at = next_fire_at
+
+            # Ongoing triggers recompute next_fire_at when the pool / cadence /
+            # active actually changes so the new config takes effect promptly.
+            if trigger.trigger_type == "ongoing":
+                from datetime import UTC
+
+                target_changed = max_concurrent_runs is not None and max_concurrent_runs != prev_max
+                activated = active is not None and trigger.active and not prev_active
+                if target_changed or ongoing_scan_interval_changed or activated:
+                    trigger.next_fire_at = datetime.now(UTC)
             await s.flush()
+            from modulo.core.cron_helpers import _count_ongoing_runs
+
+            in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
 
         return {
             "id": str(trigger.id),
@@ -2767,6 +2851,7 @@ async def update_trigger(
             "last_fired_at": trigger.last_fired_at.isoformat() if trigger.last_fired_at else None,
             "next_fire_at": trigger.next_fire_at.isoformat() if trigger.next_fire_at else None,
             "input_template": (trigger.config_json or {}).get("input_template"),
+            "in_flight": in_flight,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}

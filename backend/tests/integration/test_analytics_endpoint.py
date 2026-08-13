@@ -325,6 +325,24 @@ async def concurrency_user(db_engine: AsyncEngine, concurrency_org: uuid.UUID) -
     return await _seed_user(db_engine, concurrency_org, "analytics-concurrency@test.local")
 
 
+@pytest_asyncio.fixture(scope="module")
+async def ongoing_dimension_org(db_engine: AsyncEngine) -> uuid.UUID:
+    """Dedicated org for the ongoing trigger_type dimension test (FAR-158).
+
+    ``org_a`` is module-scoped and shared with every other test in this file,
+    many of which insert ``run_date=today`` trigger_type facts for it — so an
+    EXACT trigger_type count against ``org_a`` would be order-dependent. A
+    fresh org keeps the exact-count assertion hermetic (the concurrency_org
+    precedent).
+    """
+    return await _seed_org(db_engine, "AnalyticsEndpoint-Ongoing")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def ongoing_dimension_user(db_engine: AsyncEngine, ongoing_dimension_org: uuid.UUID) -> uuid.UUID:
+    return await _seed_user(db_engine, ongoing_dimension_org, "analytics-ongoing@test.local")
+
+
 class TestTwoOrgIsolation:
     async def test_org_b_never_sees_org_a(
         self,
@@ -448,6 +466,37 @@ class TestDimensionedQuery:
         assert any(b["key"] is not None for b in payload["buckets"]), (
             "dimensioned buckets must not all collapse under None"
         )
+
+    async def test_ongoing_trigger_type_dimension_is_hermetic(
+        self,
+        integration_client: AsyncClient,
+        db_engine: AsyncEngine,
+        ongoing_dimension_org: uuid.UUID,
+        ongoing_dimension_user: uuid.UUID,
+    ) -> None:
+        """'ongoing' participates in the trigger_type dimension loop — verified
+        against a DEDICATED org so the exact-count assertion never depends on
+        sibling-test facts inserted into org_a."""
+        today = datetime.now(UTC).date()
+        for tt in ("manual", "cron", "webhook", "ongoing"):
+            await _insert_fact(
+                db_engine,
+                org_id=ongoing_dimension_org,
+                run_id=uuid.uuid4(),
+                run_date=today,
+                trigger_type=tt,
+            )
+
+        token = _token(ongoing_dimension_org, ongoing_dimension_user, "admin")
+        resp = await integration_client.get(
+            f"/api/v1/analytics/query?date_from={today.isoformat()}&date_to={today.isoformat()}&dimension=trigger_type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        payload = resp.json()
+        keys = {b["key"] for b in payload["buckets"]}
+        assert "ongoing" in keys, f"expected an 'ongoing' dimensioned key, got {keys}"
+        assert sum(b["count"] for b in payload["buckets"]) == 4, "exactly the 4 facts inserted in the dedicated org"
 
 
 class TestHourGranularity:
