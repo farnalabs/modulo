@@ -101,6 +101,60 @@ def post_create_lifecycle_map(name: str, visibility: str, ctx: dict[str, Any], r
     ctx["created_map"] = mock_lm
 
 
+@when("I export the lifecycle map")
+def get_export_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+    lm.content_json = {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []}
+    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+        mock_get.return_value = lm
+        resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/export")
+    _store_response(request, ctx, resp)
+
+
+@then("the response is a lifecycle map export envelope")
+def response_is_export_envelope(request: Any) -> None:
+    resp = request.node._resp
+    data = resp.json()
+    assert data.get("primitive_type") == "lifecycle_map", data
+    assert data.get("format_version") == "1", data
+    assert "content_json" in data, data
+    assert "name" in data, data
+
+
+@when(parsers.parse('I import a lifecycle map named "{name}"'))
+def post_import_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": name,
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+    }
+    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+        mock_lm = _make_lifecycle_map(name=name)
+        mock_import.return_value = mock_lm
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+    ctx["imported_map"] = mock_lm
+
+
+@when("I import a lifecycle map with invalid content")
+def post_import_lifecycle_map_invalid(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": "Broken",
+        "content_json": {"stages": "not-an-array"},
+    }
+    from modulo.core.lifecycle_map.validation import LifecycleMapContentError
+
+    with patch(
+        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        new=AsyncMock(side_effect=LifecycleMapContentError("content_json.stages must be an array")),
+    ):
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+
+
 @when("I list lifecycle maps")
 def get_list_lifecycle_maps(ctx: dict[str, Any], request: Any, client: Any) -> None:
     with patch("modulo.api.routes.lifecycle_maps.list_lifecycle_maps", new=AsyncMock()) as mock_list:

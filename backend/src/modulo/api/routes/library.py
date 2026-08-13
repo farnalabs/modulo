@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_in_dev_operator, require_permission
 from modulo.api.models.team_visibility import TeamVisibilityMixin
+from modulo.api.routes.lifecycle_maps import LifecycleMapResponse
 from modulo.auth.dependencies import get_current_tenant_user, require_system_admin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.library_service import (
@@ -30,6 +31,14 @@ from modulo.core.library_service import (
     list_primitives,
     publish_contribution,
 )
+from modulo.core.lifecycle_map.import_export import (
+    PRIMITIVE_TYPE as LIFECYCLE_MAP_PRIMITIVE_TYPE,
+)
+from modulo.core.lifecycle_map.import_export import (
+    LifecycleMapBundleError,
+    materialize_map_from_primitive,
+)
+from modulo.core.lifecycle_map.validation import LifecycleMapContentError, LifecycleMapPipelineConflictError
 from modulo.core.workflow_import_export import (
     export_pipeline_bundle,
     export_pipeline_bundle_v2,
@@ -143,7 +152,7 @@ class LibraryPrimitiveListResponse(BaseModel):
 
 
 class LibraryPrimitiveCreate(TeamVisibilityMixin):
-    primitive_type: str = Field(pattern=r"^(schema|workflow|agent|integration|test_fixture|composite)$")
+    primitive_type: str = Field(pattern=r"^(schema|workflow|agent|integration|test_fixture|composite|lifecycle_map)$")
     name: str = Field(min_length=1, max_length=255)
     slug: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
@@ -1335,6 +1344,70 @@ async def create_pipeline_from_template_endpoint(
         created_at=pipeline.created_at,
         updated_at=pipeline.updated_at,
     )
+
+
+@router.post(
+    "/{primitive_id}/create-lifecycle-map",
+    response_model=LifecycleMapResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@handle_db_errors("library.create_lifecycle_map_from_primitive_endpoint")
+async def create_lifecycle_map_from_primitive_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("library.copy"),
+) -> LifecycleMapResponse:
+    """Copy-to-adapt a ``lifecycle_map`` library primitive into a real map.
+
+    Creates a NEW lifecycle map in the org from the primitive's exported
+    content (name collisions are suffixed with "(imported)"), so a shared map
+    can be copied and adapted without touching the source.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            primitive = await get_primitive(session, principal.organisation_id, primitive_id)
+            if primitive is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+            if primitive.primitive_type != LIFECYCLE_MAP_PRIMITIVE_TYPE:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(f"Primitive type '{primitive.primitive_type}' is not '{LIFECYCLE_MAP_PRIMITIVE_TYPE}'"),
+                )
+            lifecycle_map = await materialize_map_from_primitive(
+                session,
+                org_id=principal.organisation_id,
+                account_id=principal.account_id,
+                primitive=primitive,
+            )
+            await session.refresh(lifecycle_map)
+    except (LifecycleMapBundleError, LifecycleMapContentError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    except LifecycleMapPipelineConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except IntegrityError:
+        _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A resource with this value already exists",
+        ) from None
+    except ProgrammingError:
+        _log.exception("library.create_lifecycle_map_from_primitive_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("create_lifecycle_map_from_primitive_endpoint: SQLAlchemyError")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The library feature is temporarily unavailable due to a database issue. Please retry.",
+        ) from None
+    return LifecycleMapResponse.model_validate(lifecycle_map)
 
 
 # ---------------------------------------------------------------------------
