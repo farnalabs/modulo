@@ -139,12 +139,18 @@ async def _read_work_intact(factory, run_id: uuid.UUID) -> bool | None:
     from sqlalchemy import Uuid, bindparam
 
     async with factory() as session, session.begin():
-        return (
+        value = (
             await session.execute(
                 text("SELECT work_intact FROM runs WHERE id = :rid").bindparams(bindparam("rid", type_=Uuid())),
                 {"rid": run_id},
             )
         ).scalar_one_or_none()
+    # SQLite stores BOOLEAN as INTEGER (0/1), so the raw value is an int, not a
+    # Python bool. Coerce to bool so callers can assert ``is True`` regardless
+    # of backend, while preserving None for "column never written".
+    if value is None:
+        return None
+    return bool(value)
 
 
 class TestApplyWorkIntact:
@@ -153,14 +159,14 @@ class TestApplyWorkIntact:
         run_id, _ = await _insert_run(factory)
         async with factory() as session, session.begin():
             await _apply_work_intact(session, run_id, True, claim_token=None)
-        assert await _read_work_intact(factory, run_id) == True  # noqa: E712
+        assert await _read_work_intact(factory, run_id) is True
 
     async def test_fenced_write_with_matching_token_updates(self, runs_engine) -> None:
         factory = async_sessionmaker(runs_engine, expire_on_commit=False, autobegin=False)
         run_id, token = await _insert_run(factory, claim_token="sentinel")
         async with factory() as session, session.begin():
             await _apply_work_intact(session, run_id, True, claim_token=token)
-        assert await _read_work_intact(factory, run_id) == True  # noqa: E712
+        assert await _read_work_intact(factory, run_id) is True
 
     async def test_fenced_write_with_stale_token_is_noop(self, runs_engine) -> None:
         factory = async_sessionmaker(runs_engine, expire_on_commit=False, autobegin=False)
