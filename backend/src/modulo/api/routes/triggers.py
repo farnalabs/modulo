@@ -663,7 +663,7 @@ async def test_polling_condition(
 
 
 class TriggerCreate(BaseModel):
-    trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling|agent_signal|ongoing)$")
+    trigger_type: str = Field(..., pattern=r"^(manual|webhook|cron|polling|agent_signal|ongoing|slack_app_mention)$")
     active: bool = True
     max_concurrent_runs: int = Field(default=1, ge=1)
     daily_spend_limit: Decimal | None = Field(None, ge=0, description="Daily spend ceiling in USD; None = unlimited")

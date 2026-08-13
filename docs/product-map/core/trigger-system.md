@@ -11,7 +11,9 @@ code:
   - backend/src/modulo/api/routes/triggers.py
   - backend/src/modulo/api/routes/admin_triggers.py
   - backend/src/modulo/api/routes/webhooks.py
+  - backend/src/modulo/api/routes/slack.py
   - backend/src/modulo/core/trigger_engine/__init__.py
+  - backend/src/modulo/core/trigger_engine/slack_app_mention.py
   - backend/src/modulo/core/trigger_engine/polling.py
   - backend/src/modulo/core/trigger_engine/agent_signal.py
   - backend/src/modulo/core/cron_helpers.py
@@ -21,7 +23,9 @@ unit-tests:
   - backend/tests/unit/trigger_engine/test_trigger_engine.py
   - backend/tests/unit/trigger_engine/test_polling.py
   - backend/tests/unit/trigger_engine/test_polling_connector_drift.py
+  - backend/tests/unit/trigger_engine/test_slack_app_mention.py
   - backend/tests/unit/api/test_triggers_endpoint.py
+  - backend/tests/unit/api/test_slack_trigger_endpoint.py
   - backend/tests/bdd/steps/test_cron_triggers.py
   - backend/tests/bdd/steps/test_polling_triggers.py
   - backend/tests/unit/api/test_admin_triggers.py
