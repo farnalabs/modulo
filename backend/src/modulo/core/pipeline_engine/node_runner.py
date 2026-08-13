@@ -1796,11 +1796,8 @@ def make_sandbox_agent_fn(
             raise
         except Exception as _exc:
             elapsed = time.monotonic() - start_time
-            import traceback as _tb
-
             _exc_type = type(_exc).__name__
             _exc_msg = str(_exc)[:_MAX_ERROR_MSG]
-            _exc_tb = _tb.format_exc()
             _log.exception(
                 "sandbox_agent.execution_failed",
                 extra={

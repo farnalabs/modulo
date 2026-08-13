@@ -5,7 +5,6 @@ delivery-tasks: [task-nv1-team-ui]
 bdd:
   - backend/tests/bdd/features/teams/admin_override.feature
   - backend/tests/bdd/features/teams/cross_team_isolation.feature
-  - backend/tests/bdd/features/teams/ownership_picker.feature
   - backend/tests/bdd/features/teams/stale_jwt_revocation.feature
   - backend/tests/bdd/features/teams/team_create.feature
   - backend/tests/bdd/features/teams/team_crud.feature
@@ -151,7 +150,6 @@ status: partial
 - [x] RLS enforces org-level isolation on all team queries
 - [x] RLS applied on all endpoint queries (set_rls_org + set_rls_user_context)
 - [x] Team-scoped API key enforcement (covered by feat-auth-team-api-keys)
-- [ ] Team badge on pipeline/stage cards in Stage board with hover tooltip
 - [ ] "My Teams" section in user profile panel
 
 ### Notification endpoints
@@ -168,7 +166,6 @@ The following behaviours are tracked in dedicated product map entries:
 
 | Behaviour | Product Map Entry | Status |
 |---|---|---|
-| Stage board honours team visibility | feat-teams-team-isolation | partial |
 | Admin "View as: All / Team: X" toggle | feat-teams-team-isolation | partial |
 | `view_as_team` server-enforced — non-admin receives 403 | feat-teams-team-isolation | partial |
 | Team-scoped connectors enforced at pipeline-save time | feat-teams-team-ownership | partial |

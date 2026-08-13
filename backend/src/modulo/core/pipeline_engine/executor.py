@@ -25,6 +25,7 @@ import asyncio
 import logging
 import math
 import os
+import random
 import socket
 import uuid
 from collections import OrderedDict
@@ -35,7 +36,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
-from sqlalchemy import select, text
+from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
@@ -65,6 +66,14 @@ from modulo.core.pipeline_engine.decorator import (
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from modulo.core.pipeline_engine.evidence import (
+    EvidenceProvider,
+    build_default_evidence_provider,
+    compute_work_intact,
+    evidence_enabled,
+    node_declared_success,
+    run_evidence_probe,
+)
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError
@@ -116,9 +125,51 @@ _log = logging.getLogger(__name__)
 # api/routes/pipelines.py and the graph validator). A policy can retry on:
 #   - "stall":    run ended "stalled" / error_code "executor_stalled"
 #   - "timeout":  error_code "node_timeout" / "TimeoutError"
-#   - "failure":  any other "failed" terminal status
+#   - "failure":  any other "failed" terminal status (excluding sandbox-agent
+#                 hang deaths — error_code "node_cancelled" + "likely hung" in
+#                 error_detail — see ``_retry_after_policy``, FAR-136)
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure"})
 _RETRY_POLICY_MAX_RETRIES = 5
+
+# Backoff schedule for a retry_policy re-dispatch (FAR-136). A policy-triggered
+# retry must NOT re-fire back-to-back — the run is re-dispatched only after a
+# jittered, capped exponential delay. ``base`` is the first-attempt wait; the
+# delay doubles per attempt and is capped at ``cap``. Jitter spreads re-dispatch
+# across the fleet (a herd of failing pipelines must not all re-fire together).
+_RETRY_BACKOFF_BASE_SECONDS = 45.0
+_RETRY_BACKOFF_CAP_SECONDS = 300.0
+# Jitter range as a fraction of the current schedule value; uniform in
+# [0, fraction * delay] so the schedule keeps its exponential shape while
+# still decorrelating concurrent retries. Capped against ``_RETRY_BACKOFF_CAP_SECONDS``.
+_RETRY_BACKOFF_JITTER_FRACTION = 0.25
+
+
+def _retry_backoff_seconds(
+    attempt_n: int,
+    *,
+    base: float = _RETRY_BACKOFF_BASE_SECONDS,
+    cap: float = _RETRY_BACKOFF_CAP_SECONDS,
+    jitter_fraction: float = _RETRY_BACKOFF_JITTER_FRACTION,
+) -> float:
+    """Jittered, capped exponential backoff delay for a retry_policy retry.
+
+    ``attempt_n`` is the 1-based node execution attempt count (attempt 1 = the
+    first real execution). The deterministic schedule is
+    ``min(base * 2 ** (attempt_n - 1), cap)`` and a uniform jitter term in
+    ``[0, jitter_fraction * delay]`` is added (clamped so the total never
+    exceeds ``cap``). A 0/negative ``attempt_n`` is clamped to 1.
+
+    The schedule is bounded by the retry budget at the decision site: the
+    executor only re-dispatches while ``node_attempt_count <= max_retries``,
+    so the last scheduled attempt (attempt == budget) cannot extend beyond the
+    policy's ``max_retries``. This is a pure function of the attempt number —
+    unit-testable without touching the async retry path.
+    """
+    n = max(int(attempt_n), 1)
+    exponential: float = min(float(base) * float(2 ** (n - 1)), cap)
+    # Jitter is NOT crypto — it only decorrelates concurrent retries (S311).
+    jitter = float(random.uniform(0.0, exponential * max(jitter_fraction, 0.0)))  # noqa: S311
+    return min(exponential + jitter, cap)
 
 
 class RunRetryPolicyError(NodeCancelledError):
@@ -136,7 +187,12 @@ class RunRetryPolicyError(NodeCancelledError):
         self.max_retries = max_retries
 
 
-def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) -> int | None:
+def _retry_after_policy(
+    policy: Any,
+    final_status: str,
+    error_code: str | None,
+    error_detail: str | None = None,
+) -> int | None:
     """Return the retry budget (``max_retries``) for a terminal outcome, or None.
 
     Matching rules:
@@ -150,6 +206,13 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
     through the shared ``map_legacy_code`` alias table, so dotted registry codes
     (e.g. an ``agent.failed`` A1 elevation) and legacy codes behave identically
     (§3.2: one alias table shared by retry/alert/notifier consumers).
+
+    ``error_detail`` (optional) refines the ``"failure"`` match: a sandbox-agent
+    HANG death terminalizes as ``error_code="node_cancelled"`` with
+    ``error_detail`` containing ``"likely hung"`` (node_runner). Re-dispatching
+    a hang would burn a full node timeout with zero recovery probability, so it
+    is excluded from ``"failure"`` retries — while TRANSIENT ``node_cancelled``
+    (no hang marker) stays retryable via the existing NodeCancelledError path.
 
     Known limitation of the ``"stall"`` event: it covers the **node-idle stall**
     path only — a node returns a stalled output dict (``stall_reason``) in
@@ -191,6 +254,12 @@ def _retry_after_policy(policy: Any, final_status: str, error_code: str | None) 
         and code not in ("node_timeout", "TimeoutError", "executor_stalled")
         and mapped not in ("node.timeout", "node.runaway", "agent.stall")
     ):
+        # FAR-136 Gap 2: exclude sandbox-agent hang deaths. A hang terminalizes
+        # as node_cancelled + "likely hung" in error_detail — retrying it only
+        # re-burns a full node timeout with zero recovery probability.
+        is_cancel = code == "node_cancelled" or mapped == "node.cancelled"
+        if is_cancel and error_detail and "likely hung" in error_detail:
+            return None
         return max_retries
     return None
 
@@ -373,6 +442,39 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+async def _apply_work_intact(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    work_intact: bool,
+    *,
+    claim_token: str | None,
+) -> None:
+    """Fenced UPDATE of ``runs.work_intact`` — mirrors ``update_run_status``
+    fencing (F3a): a superseded executor's token no longer matches and the
+    write is a no-op, so it cannot stamp work_intact on a successor's run.
+    Runs INSIDE the caller's terminalization transaction (FAR-152 §15.3).
+
+    ``run_id`` is bound with the ``Uuid`` type so the raw SQL matches the
+    stored id on every backend (SQLite stores the 32-hex form, not the
+    dashed ``str(uuid)``)."""
+    if claim_token is None:
+        await session.execute(
+            text("UPDATE runs SET work_intact = :wi WHERE id = :rid").bindparams(
+                bindparam("rid", type_=Uuid()),
+                bindparam("wi", type_=Boolean()),
+            ),
+            {"wi": work_intact, "rid": run_id},
+        )
+        return
+    await session.execute(
+        text("UPDATE runs SET work_intact = :wi WHERE id = :rid AND claim_token = :tok").bindparams(
+            bindparam("rid", type_=Uuid()),
+            bindparam("wi", type_=Boolean()),
+        ),
+        {"wi": work_intact, "rid": run_id, "tok": claim_token},
+    )
+
+
 async def org_sandbox_capacity_free(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -424,11 +526,15 @@ class PipelineExecutor:
         db_engine: AsyncEngine,
         *,
         checkpointer_conn_string: str | None = None,
+        evidence_provider: EvidenceProvider | None = None,
     ) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._checkpointer_conn_string = checkpointer_conn_string
         self._otel_bridge = LangGraphOtelBridge()
+        # Evidence seam (FAR-152 §15.3): injected FakeEvidenceProvider in tests;
+        # None selects the production E2B+DB-backed provider per run.
+        self._evidence_provider = evidence_provider
         # Zombie-run protection hook (2026-08-05): wired by
         # ``pipeline_execution.run_executor_with_watchdog`` to an asyncio.Event.
         # Called when the FIRST node dispatches so the execute_run watchdog can
@@ -446,10 +552,6 @@ class PipelineExecutor:
         # from a genuine transient node cancellation and skip the pending-reset.
         self._stall_requested: asyncio.Event | None = None
         self._superseded: asyncio.Event | None = None
-
-    # Token pricing constants
-    _INPUT_TOKEN_RATE = Decimal("0.00001")
-    _OUTPUT_TOKEN_RATE = Decimal("0.00003")
 
     async def _check_capacity(
         self,
@@ -983,6 +1085,74 @@ class PipelineExecutor:
                 sandbox_cost += Decimal(str(est))
         return sandbox_cost
 
+    def _get_evidence_provider(self, org_id: uuid.UUID) -> EvidenceProvider:
+        """The injected evidence provider (tests) or the production
+        E2B+DB-backed provider wired for this run's org."""
+        if self._evidence_provider is not None:
+            return self._evidence_provider
+        return build_default_evidence_provider(self._session_factory, org_id)
+
+    def _compute_run_work_intact(
+        self,
+        final_status: str,
+        error_code: str | None,
+        completed_node_outputs: dict[str, Any],
+        node_ids: set[str],
+    ) -> bool | None:
+        """FAR-152 §15.3 — work_intact computed at terminalization from
+        completed-node artifacts + the full DAG ran. NOT from the async
+        evidence probe (restores the false-failure banner for #1/#3).
+
+        Returns None for non-terminal statuses (nothing to write). An
+        A1-elevated run (``failed`` + ``agent.failed``) is NOT complete — its
+        honest work verdict is False (§15.4), so the zero-work elevation banner
+        is what renders.
+        """
+        if final_status not in _TERMINAL_STATUSES:
+            return None
+        if final_status == "failed" and error_code == "agent.failed":
+            return False
+        return compute_work_intact(completed_node_outputs, node_ids)
+
+    async def _run_post_terminal_evidence_probes(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        completed_node_outputs: dict[str, Any],
+    ) -> None:
+        """FAR-152 §15.3 — post-commit async evidence probe for no-op-eligible
+        nodes (declared ``outcome:success``) on a complete run. Runs off the
+        critical path (after terminalization commits), bounded ≤3s per probe,
+        gated by the EvidenceProvider seam. Fail-open — a probe failure never
+        affects the run."""
+        if final_status != "complete" or not evidence_enabled():
+            return
+        evidence_nodes = [node_id for node_id, out in completed_node_outputs.items() if node_declared_success(out)]
+        if not evidence_nodes:
+            return
+        provider = self._get_evidence_provider(org_id)
+        results = await asyncio.gather(
+            *[
+                run_evidence_probe(
+                    provider=provider,
+                    session_factory=self._session_factory,
+                    run_id=run_id,
+                    node_id=node_id,
+                )
+                for node_id in evidence_nodes
+            ],
+            return_exceptions=True,
+        )
+        for node_id, res in zip(evidence_nodes, results, strict=False):
+            if isinstance(res, Exception):
+                _log.warning(
+                    "heuristic.probe_task_failed",
+                    extra={"run_id": str(run_id), "node_id": node_id},
+                    exc_info=res,
+                )
+
     async def resume(
         self,
         *,
@@ -1113,6 +1283,7 @@ class PipelineExecutor:
                 _log.warning("pipeline.resume_no_checkpointer", extra={"run_id": str(run_id)})
                 final_status = "failed"
                 error_code = "configuration_error"
+                error_detail = "Pipeline configuration is invalid (checkpointer unavailable)."
             else:
                 raise
         except asyncio.CancelledError:
@@ -1155,6 +1326,9 @@ class PipelineExecutor:
         # Resume recomputes from LIVE components over the cumulative merged set
         # (two-state rule, §4.4); finalize_cost reads the stored cumulative set,
         # merges the resumed segment (segment-wins), and recomputes.
+        # FAR-152 §15.3 — work_intact computed at terminalization (same rule as
+        # execute()).
+        work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await finalize_cost(
@@ -1171,6 +1345,13 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 claim_token=self._claim_token,
             )
+            if work_intact is not None:
+                try:
+                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
@@ -1181,6 +1362,15 @@ class PipelineExecutor:
 
         if final_run is None:
             raise RunNotFoundError(run_id)
+
+        # FAR-152 §15.3 — post-commit async evidence probe (same rule as
+        # execute()). Bounded ≤3s per node, gated by the EvidenceProvider seam.
+        await self._run_post_terminal_evidence_probes(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            completed_node_outputs=completed_node_outputs,
+        )
         return final_run
 
     async def execute(
@@ -1294,6 +1484,10 @@ class PipelineExecutor:
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         completed_node_outputs: dict[str, Any] = {}
+        # Initialised so the terminalization work_intact computation is safe even
+        # when the stream never started (compile/pre-stream failure) — a run with
+        # no executed nodes is never work-intact.
+        node_ids: set[str] = set()
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         set_audit_hook(self._dispatch_context_write_audit(org_id, run_id))
@@ -1492,7 +1686,7 @@ class PipelineExecutor:
         # NodeCancelledError path above. The E2B dispatch fence was retired in
         # favour of ``runs.claim_token`` fencing (settings.py F3a note), so the
         # fenced pending-reset below IS the fence release.
-        retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code)
+        retry_budget = _retry_after_policy(pipeline_retry_policy, final_status, error_code, error_detail)
         if retry_budget is not None:
             node_attempt_count = 0
             current_claim_token: str | None = None
@@ -1552,6 +1746,15 @@ class PipelineExecutor:
                 if connector_hub is not None:
                     await _teardown_hub(connector_hub)
                 get_registry().close(run_id)
+                # FAR-136 Gap 1: jittered, capped backoff before the re-dispatch.
+                # Without it a policy-triggered retry re-fires back-to-back,
+                # hammering the queue/gateway on a persistent failure. The delay
+                # grows with the attempt count and is bounded by the retry
+                # budget (the loop above only re-dispatches while
+                # node_attempt_count <= retry_budget), so the schedule can never
+                # extend beyond max_retries. `_retry_backoff_seconds` is a pure
+                # function of the attempt number — covered by unit tests.
+                await asyncio.sleep(_retry_backoff_seconds(node_attempt_count))
                 raise RunRetryPolicyError(final_status, retry_budget)
 
         try:
@@ -1663,6 +1866,11 @@ class PipelineExecutor:
         # segment sets into the stored cumulative sets (segment-wins), builds
         # the enriched union + breakdown (total == sum), and runs the
         # terminal-only ledger block.
+        # FAR-152 §15.3 — work_intact computed at terminalization from
+        # completed-node artifacts + the full DAG ran. NOT from the async
+        # evidence probe. Written atomically inside the same terminalization
+        # transaction (restores the false-failure banner for #1/#3).
+        work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await finalize_cost(
@@ -1679,6 +1887,15 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 claim_token=self._claim_token,
             )
+            if work_intact is not None:
+                # Atomic with terminalization: the same transaction, fenced so a
+                # superseded executor cannot stamp work_intact on a successor.
+                try:
+                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
@@ -1689,6 +1906,17 @@ class PipelineExecutor:
 
         if final_run is None:
             raise RunNotFoundError(run_id)
+
+        # FAR-152 §15.3 — post-commit async evidence probe for no-op-eligible
+        # nodes (declared outcome:success) on a complete run. Off the critical
+        # path (terminalization already committed), bounded ≤3s per probe,
+        # gated by the EvidenceProvider seam. Fail-open.
+        await self._run_post_terminal_evidence_probes(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            completed_node_outputs=completed_node_outputs,
+        )
         return final_run
 
     async def _check_eval_suites(

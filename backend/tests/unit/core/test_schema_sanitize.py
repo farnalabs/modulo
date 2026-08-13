@@ -142,6 +142,22 @@ class TestSanitiseSampleRecords:
         assert sanitise_sample_records([None]) == [None]
         assert sanitise_sample_records([42]) == [42]
 
+    def test_masks_tuple_values_under_sensitive_keys(self) -> None:
+        records = [{"tokens": ("tok-a", "tok-b")}]
+        result = sanitise_sample_records(records)
+        assert result[0]["tokens"] == (SENSITIVE_VALUE_MASK, SENSITIVE_VALUE_MASK)
+
+    def test_masks_secrets_nested_inside_tuples(self) -> None:
+        records = [{"assignee": ("alice", {"access_token": "ghp_secret"})}]
+        result = sanitise_sample_records(records)
+        assert result[0]["assignee"] == ("alice", {"access_token": SENSITIVE_VALUE_MASK})
+
+    def test_safe_json_dumps_wraps_serialisation_failure(self) -> None:
+        cyclic: dict[str, object] = {"name": "cyclic"}
+        cyclic["self"] = cyclic
+        with pytest.raises(ValueError, match="non-serializable"):
+            _safe_json_dumps(cyclic)
+
 
 class TestPromptHardening:
     def test_infer_prompt_uses_structural_separators(self) -> None:

@@ -182,7 +182,7 @@ async def _query_eval_summary(
     end_dt = _date_to_dt(end) + timedelta(days=1)
     q = select(
         func.count().label("total_evals"),
-        func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed_evals"),  # noqa: E712
+        func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed_evals"),
     ).where(
         EvalResult.organisation_id == org_id,
         EvalResult.evaluated_at >= start_dt,
@@ -212,7 +212,7 @@ async def _query_daily_eval_rates(
         select(
             eval_date.label("eval_date"),
             func.count().label("total"),
-            func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+            func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
         )
         .where(
             EvalResult.organisation_id == org_id,
@@ -241,9 +241,18 @@ _TREND_DOWN = "\u2193"
 _TREND_FLAT = "\u2192"
 
 
-def _trend_symbol(delta_pct: float | None) -> str:
+def _trend_symbol(delta_pct: float | None, *, invert: bool = False) -> str:
+    """Return the week-over-week trend arrow for a delta percentage.
+
+    Defaults to "higher is better" semantics: a positive delta renders an up
+    arrow, a negative delta a down arrow. When ``invert`` is True the arrow is
+    flipped, so a *negative* delta (an improvement for metrics where lower is
+    better, e.g. cost) renders an up arrow.
+    """
     if delta_pct is None or abs(delta_pct) <= _WEEK_OVER_WEEK_THRESHOLD:
         return _TREND_FLAT
+    if invert:
+        return _TREND_DOWN if delta_pct > 0 else _TREND_UP
     return _TREND_UP if delta_pct > 0 else _TREND_DOWN
 
 
@@ -274,7 +283,7 @@ def _format_trend_section(wow: dict[str, Any], summary: dict[str, Any]) -> dict[
         f"\u0394 {_fmt_delta(wow['eval_pass_rate_delta_pct'])})"
     )
     cost_line = (
-        f"{_trend_symbol(wow['cost_delta_pct'])} *Cost*: "
+        f"{_trend_symbol(wow['cost_delta_pct'], invert=True)} *Cost*: "
         f"${summary['total_cost_usd']:.2f} "
         f"(prev: ${wow['previous_week_cost_usd']:.2f}, "
         f"\u0394 {_fmt_delta(wow['cost_delta_pct'])})"
@@ -372,10 +381,17 @@ async def deliver_quality_report(
         recipient_config: Config dict with ``webhook_urls`` list.
 
     Returns a list of delivery results with keys: url, status, status_code, error.
+
+    Optional ``recipient_config`` keys:
+      - ``signing_secret``: when set, the payload is HMAC-SHA256 signed and the
+        signature sent as ``X-Modulo-Signature`` (PRD 8.11 webhook signing).
+      - ``timeout``: per-request timeout in seconds (default 30s).
     """
     slack_blocks_str = report_data if isinstance(report_data, str) else format_slack_message(report_data)
     payload = {"blocks": json.loads(slack_blocks_str)}
     return await _deliver_to_urls(
         recipient_config.get("webhook_urls", []),
         payload,
+        signing_secret=recipient_config.get("signing_secret"),
+        request_timeout=recipient_config.get("timeout"),
     )

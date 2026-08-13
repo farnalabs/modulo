@@ -235,7 +235,7 @@ async def _eval_rate_window(
         await session.execute(
             select(
                 func.count().label("total"),
-                func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+                func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
             ).where(
                 EvalResult.organisation_id == org_id,
                 EvalResult.evaluated_at >= window_start,
@@ -436,7 +436,7 @@ async def dashboard_summary(
             eval_totals_query = (
                 select(
                     func.count().label("total"),
-                    func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+                    func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
                 )
                 .select_from(EvalResult)
                 .where(EvalResult.organisation_id == org_id)
@@ -451,7 +451,7 @@ async def dashboard_summary(
                     Run.owner_team_id,
                     Run.pipeline_id,
                     func.count().label("total"),
-                    func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+                    func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
                 )
                 .select_from(EvalResult)
                 .join(Run, EvalResult.run_id == Run.id)
@@ -539,7 +539,7 @@ async def dashboard_summary(
                 select(
                     cast(EvalResult.evaluated_at, Date).label("eval_date"),
                     func.count().label("total"),
-                    func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+                    func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
                 )
                 .where(
                     EvalResult.organisation_id == org_id,
@@ -713,7 +713,7 @@ async def dashboard_trends(
                 select(
                     cast(EvalResult.evaluated_at, Date).label("eval_date"),
                     func.count().label("total"),
-                    func.sum(case((EvalResult.passed == True, 1), else_=0)).label("passed"),  # noqa: E712
+                    func.sum(case((EvalResult.passed.is_(True), 1), else_=0)).label("passed"),
                 )
                 .where(
                     EvalResult.organisation_id == org_id,

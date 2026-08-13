@@ -29,7 +29,6 @@ const routeConfigMap: Record<string, { icon: string; labelKey: string }> = {
   'pipeline-list': { icon: 'GitFork', labelKey: 'components.SidebarNav.item_my_pipelines' },
 
   'pipeline-copy': { icon: 'Copy', labelKey: 'components.SidebarNav.item_copy_pipeline' },
-  stages: { icon: 'Columns', labelKey: 'components.SidebarNav.item_stages_board' },
   'runs-list': { icon: 'CirclePlay', labelKey: 'components.SidebarNav.item_runs_list' },
   'runs-diff': { icon: 'GitCommit', labelKey: 'components.SidebarNav.item_output_diff' },
   'eval-editor': { icon: 'CheckSquare', labelKey: 'components.SidebarNav.item_evals' },

@@ -18,29 +18,49 @@ ModelBackendBase (ABC)      ← modulo/model_backends/base.py
 class ModelBackendBase(ABC):
     """Abstract base for all model backend implementations."""
 
+    supports_tools: bool = False
+
     @property
     @abstractmethod
     def backend_id(self) -> str:
-        """Unique identifier (e.g. 'anthropic', 'openai/gpt-4')."""
+        """Stable identifier for this backend (e.g.
+        'anthropic/claude-sonnet-4-6')."""
 
     @abstractmethod
-    async def invoke(self, messages: list[BaseMessage]) -> BaseMessage:
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        **kwargs: Any,
+    ) -> BaseMessage:
         """Send a messages list and return a single response."""
 
     @abstractmethod
-    async def stream(self, messages: list[BaseMessage]) -> AsyncIterator[str]:
-        """Stream response tokens."""
+    def stream(
+        self,
+        messages: list[BaseMessage],
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[BaseMessage]:
+        """Return an async iterator that yields token chunks."""
 ```
 
 ## Supported providers
 
-| Provider | Backend class | Package | Entry point |
-|----------|--------------|---------|-------------|
-| Anthropic | `AnthropicBackend` | Built-in | `modulo.model_backends.anthropic` |
-| OpenAI | `OpenAIBackend` | Built-in | `modulo.model_backends.openai` |
-| Azure OpenAI | `AzureOpenAIBackend` | Built-in | `modulo.model_backends.azure_openai` |
-| Ollama | `OllamaBackend` | Built-in | `modulo.model_backends.ollama` |
-| Custom | `YourBackend` | Plugin | `modulo.model_backends.your_backend` |
+The following backends ship built-in (each in `modulo.model_backends`):
+Ai21, Anthropic, Azure OpenAI, Bedrock, Cohere, DeepSeek, Fireworks, Gemini,
+Grok, Groq, Jan, LlamaCpp, LM Studio, LocalAI, Mistral, Ollama, OpenAI,
+OpenCode, OpenRouter, Perplexity, Qwen, Stub, TGI, TogetherAI, Vertex AI,
+vLLM, and WatsonX. Most share one OpenAI-compatible implementation
+(`module.py`); unique providers like Anthropic, Gemini, or Bedrock implement
+their own.
+
+| Provider | Backend class | Package / entry point |
+|----------|--------------|------------------------|
+| Anthropic | `AnthropicBackend` | `modulo.model_backends.anthropic` |
+| OpenAI | `OpenAIBackend` | `modulo.model_backends.openai` |
+| Azure OpenAI | `AzureOpenAIBackend` | `modulo.model_backends.azure_openai` |
+| Ollama | `OllamaBackend` | `modulo.model_backends.ollama` |
+| Custom | `YourBackend` | plugin `modulo.model_backends.your_backend` |
 
 ## Implementation example
 
@@ -54,29 +74,36 @@ class MyCustomBackend(ModelBackendBase):
         self._model_id = model_id
         # Initialise your client here
 
+    supports_tools: bool = True
+
     @property
     def backend_id(self) -> str:
         return f"custom/{self._model_id}"
 
-    async def invoke(self, messages):
+    async def invoke(self, messages, **kwargs):
         # Call your provider's API and return a response
         ...
         return AIMessage(content=response_text)
 
-    async def stream(self, messages):
-        async for token in self._provider.stream(messages):
-            yield token
+    def stream(self, messages, tools=None, **kwargs):
+        # Return an async iterator yielding BaseMessage chunks
+        ...
+        yield AIMessage(content=token)
 ```
 
 ## Health checks
 
-Every backend must implement `health_check()` which the `ModelBackendHub` calls:
+`ModelBackendBase.health_check()` has a default that verifies connectivity
+with a minimal ping `invoke(..., max_tokens=1)`. Override it when a cheaper
+or more accurate probe (such as `openai_compatible_health_check`, which GETs
+`{base_url}/models`) is available. The `ModelBackendHub` calls `health_check()`
+at load time.
 
 ```python
 async def health_check(self) -> HealthResult:
     try:
         await self._provider.simple_ping()
-        return HealthResult(ok=True)
+        return HealthResult(ok=True, detail="")
     except Exception as e:
         return HealthResult(ok=False, detail=str(e))
 ```
@@ -99,8 +126,20 @@ my_backend = "my_package.backend:MyCustomBackend"
 Or programmatically:
 
 ```python
-from modulo.core.plugin_registry import get_plugin_registry
+from modulo.core.plugin_registry import PluginManifest, get_plugin_registry
+from my_package.backend import MyCustomBackend
+
+manifest = PluginManifest(
+    PLUGIN_ID="my_backend",
+    display_name="My Backend",
+    description="Custom model backend",
+    version="0.1.0",
+)
 
 registry = get_plugin_registry()
-registry.register_model_backend("custom", MyCustomBackend)
+registry.register_model_backend("custom", MyCustomBackend, manifest)
 ```
+
+`register_model_backend(provider, builder, manifest)` always takes a
+`PluginManifest`; pass the plugin's manifest object so it can track plugin
+health and capabilities.

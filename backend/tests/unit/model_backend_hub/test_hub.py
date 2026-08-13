@@ -413,7 +413,7 @@ async def test_initialise_openai():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "sk-test"}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.openai.ChatOpenAI"):
+        with patch("modulo.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -443,7 +443,7 @@ async def test_initialise_ollama():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "", "base_url": "http://localhost:11434/v1"}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.ollama.ChatOpenAI"):
+        with patch("modulo.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -458,7 +458,7 @@ async def test_initialise_ollama_defaults_base_url():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": ""}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.ollama.ChatOpenAI"):
+        with patch("modulo.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -600,7 +600,7 @@ async def test_initialise_self_referencing_fallback_does_not_crash():
     secrets_backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(secrets_backend, "get_secret", return_value='{"api_key": ""}'),
-        patch("modulo.model_backends.ollama.ChatOpenAI"),
+        patch("modulo.model_backends.module.ChatOpenAI"),
     ):
         hub = ModelBackendHub()
         hub._fallbacks[primary_id] = [primary_id]
@@ -1249,6 +1249,39 @@ async def test_build_backend_custom_no_fixture_raises_unexpected_input():
     backend = _build_backend("custom", "demo-model", {"api_key": "demo"}, {})
     with pytest.raises(UnexpectedInputError):
         await backend.invoke([HumanMessage(content="hello")])
+
+
+def test_build_backend_custom_backend_id():
+    """The custom stub advertises the expected hub-scoped backend id."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    backend = _build_backend("custom", "demo-model", {"api_key": "demo", "fixture_map": {}}, {})
+    assert backend.backend_id == "custom/stub"
+
+
+async def test_build_backend_custom_health_check_ok():
+    """The custom stub reports healthy via the underlying StubModelBackend."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    backend = _build_backend("custom", "demo-model", {"api_key": "demo", "fixture_map": {}}, {})
+    result = await backend.health_check()
+    assert result.ok is True
+    assert result.detail == "Stub backend always healthy"
+
+
+async def test_build_backend_custom_stream_yields_fixture():
+    """The custom stub streams the canned fixture response chunk-wise."""
+    from modulo.core.model_backend_hub import _build_backend
+
+    backend = _build_backend(
+        "custom",
+        "demo-model",
+        {"api_key": "demo", "fixture_map": {"hello": "hi"}},
+        {},
+    )
+    chunks = [chunk async for chunk in backend.stream([HumanMessage(content="hello")])]
+    assert chunks
+    assert "".join(str(chunk.content) for chunk in chunks) == "hi"
 
 
 async def test_initialise_custom_provider_registers_and_invokes():

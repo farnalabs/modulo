@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from unittest.mock import patch
+
+import pytest
 
 from modulo.core.runtime_config.store import (
     DEFAULT_VALUES,
@@ -214,8 +217,104 @@ class TestRuntimeConfigStore:
             store.clear_override("UNKNOWN_CONFIG_KEY")
             assert store.get("UNKNOWN_CONFIG_KEY") is None
 
+    def test_set_override_unknown_key_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            caplog.set_level(logging.WARNING, logger="modulo.core.runtime_config.store")
+            store.set_override("UNKNOWN_CONFIG_KEY", "v1")
+        assert any(
+            r.levelno == logging.WARNING
+            and r.getMessage() == "Runtime config override set for unknown key: UNKNOWN_CONFIG_KEY"
+            for r in caplog.records
+        )
+
+    def test_set_override_rejects_invalid_key_and_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            caplog.set_level(logging.WARNING, logger="modulo.core.runtime_config.store")
+            store.set_override("", "DEBUG")
+            store.set_override(" MODULO_LOG_LEVEL", "DEBUG")
+        assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+        assert (
+            sum(
+                r.levelno == logging.WARNING and "override rejected: invalid key" in r.getMessage()
+                for r in caplog.records
+            )
+            == 2
+        )
+
+    def test_clear_override_invalid_key_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            store.set_override("MODULO_LOG_LEVEL", "DEBUG")
+            caplog.set_level(logging.WARNING, logger="modulo.core.runtime_config.store")
+            store.clear_override("MODULO_LOG_LEVEL ")
+        assert store.get("MODULO_LOG_LEVEL") == "DEBUG"
+        assert any(
+            r.levelno == logging.WARNING
+            and r.getMessage() == "Runtime config override clear rejected: invalid key 'MODULO_LOG_LEVEL '"
+            for r in caplog.records
+        )
+
+    def test_clear_override_missing_key_logs_debug_noop(self, caplog: pytest.LogCaptureFixture) -> None:
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            caplog.set_level(logging.DEBUG, logger="modulo.core.runtime_config.store")
+            store.clear_override("MODULO_LOG_LEVEL")
+        assert store.get("MODULO_LOG_LEVEL") == DEFAULT_VALUES["MODULO_LOG_LEVEL"]
+        assert any(
+            r.levelno == logging.DEBUG
+            and r.getMessage() == "Runtime config override not found (no-op): MODULO_LOG_LEVEL"
+            for r in caplog.records
+        )
+
     # ----------------------------------------------------------------
-    # clear_all_overrides
+    # Golden-value pins
+    # ----------------------------------------------------------------
+
+    def test_critical_defaults_pinned(self) -> None:
+        """Accidental changes to hardcoded defaults must fail loudly.
+
+        These defaults are relied on across the app (DB selection, Redis
+        connectivity, CORS, autonomy-safe logging); a silent shift would be a
+        subtle production regression.
+        """
+        assert DEFAULT_VALUES["REDIS_URL"] == "redis://localhost:6379/0"
+        assert DEFAULT_VALUES["MODULO_DB"] == "postgres"
+        assert DEFAULT_VALUES["CORS_ORIGINS"] == "http://localhost:5173"
+        assert DEFAULT_VALUES["MODULO_PUBLIC_URL"] == "http://localhost:8000"
+        assert DEFAULT_VALUES["MODULO_LOG_LEVEL"] == "INFO"
+        assert DEFAULT_VALUES["DEBUG"] == "false"
+        assert DEFAULT_VALUES["MODULO_RATELIMIT_BYPASS_TOKEN"] == ""
+        assert DEFAULT_VALUES["MODULO_LICENSE_KEY"] == ""
+        assert "DATABASE_URL" not in DEFAULT_VALUES
+        assert "SECRET_KEY" not in DEFAULT_VALUES
+        assert "FERNET_KEY" not in DEFAULT_VALUES
+
+    def test_golden_provenance_chain_for_pinned_key(self) -> None:
+        """Override > env > default precedence for a pinned key must never regress."""
+        self._purge_singleton()
+        with patch.dict(os.environ, {}, clear=True):
+            store = get_runtime_config_store()
+            assert store.get("MODULO_DB") == "postgres"
+            entry = next(item for item in store.get_all() if item.key == "MODULO_DB")
+            assert entry.provenance == "default"
+        with patch.dict(os.environ, {"MODULO_DB": "sqlite"}, clear=True):
+            store.reload()
+            assert store.get("MODULO_DB") == "sqlite"
+            entry = next(item for item in store.get_all() if item.key == "MODULO_DB")
+            assert entry.provenance == "environment"
+            store.set_override("MODULO_DB", "mariadb")
+            assert store.get("MODULO_DB") == "mariadb"
+            entry = next(item for item in store.get_all() if item.key == "MODULO_DB")
+            assert entry.provenance == "override"
+
+    # ----------------------------------------------------------------
+    # set_override / clear_override
     # ----------------------------------------------------------------
 
     def test_set_override(self) -> None:

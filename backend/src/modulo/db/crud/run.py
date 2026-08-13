@@ -60,6 +60,7 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
         "cancelled",
         "eval_failed",
         "stalled",
+        "budget_exceeded",
     }
 )
 
@@ -462,32 +463,6 @@ async def list_runs(
 _COST_ROLLUP_QUANTUM = Decimal("0.000001")
 
 
-async def get_child_runs_cost(
-    session: AsyncSession,
-    parent_run_ids: list[uuid.UUID],
-) -> dict[uuid.UUID, Decimal]:
-    """Sum child-run ``total_cost_usd`` per parent run (cost rollup).
-
-    Returns ``{parent_run_id: total}`` from a single ``GROUP BY`` query so
-    callers avoid N+1 aggregation over the runs list. Parents with no children
-    -- or only NULL-cost children -- are absent from the dict; callers treat a
-    missing key as zero. NULL ``total_cost_usd`` children contribute 0 to the
-    SUM. Values are quantized to 6 decimal places to match the
-    ``Numeric(14, 6)`` column scale (an all-NULL group sums to ``0.000000``).
-    """
-    if not parent_run_ids:
-        return {}
-    result = await session.execute(
-        select(Run.parent_run_id, func.coalesce(func.sum(Run.total_cost_usd), 0))
-        .where(Run.parent_run_id.in_(parent_run_ids))
-        .group_by(Run.parent_run_id)
-    )
-    rollup: dict[uuid.UUID, Decimal] = {}
-    for parent_id, cost in result.all():
-        rollup[uuid.UUID(str(parent_id))] = Decimal(str(cost)).quantize(_COST_ROLLUP_QUANTUM)
-    return rollup
-
-
 async def get_child_run_rollup(
     session: AsyncSession,
     parent_run_ids: list[uuid.UUID],
@@ -589,7 +564,7 @@ async def update_run_status(
         run.started_at = datetime.now(UTC)
     if claimed_by is not None:
         run.claimed_by = claimed_by
-    if status in ("complete", "failed", "cancelled", "eval_failed", "stalled"):
+    if status in ("complete", "failed", "cancelled", "eval_failed", "stalled", "budget_exceeded"):
         run.completed_at = datetime.now(UTC)
     if clear_error_code:
         # Explicitly clear a prior capacity marker (the error_code=... writes
@@ -632,7 +607,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "started_at = CASE WHEN :status = 'running' AND started_at IS NULL THEN now() ELSE started_at END, "
     "completed_at = CASE "
     "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
-    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') THEN now() "
+    "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded') THEN now() "
     "  ELSE completed_at END, "
     "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
     "error_code = CASE WHEN :clear_error_code THEN NULL "
@@ -720,7 +695,8 @@ async def _update_run_status_fenced(
 
 _TRANSITION_SQL = text(
     "UPDATE runs SET status=CAST(:target AS text), "
-    "completed_at = CASE WHEN CAST(:target AS text) IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled') "
+    "completed_at = CASE WHEN CAST(:target AS text) IN "
+    "('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded') "
     "THEN now() ELSE completed_at END, "
     "error_code = COALESCE(CAST(:error_code AS text), error_code), "
     "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "
@@ -744,7 +720,12 @@ async def transition_run(
     claim_token: str | None = None,
     allowed_from: frozenset[str] | None = None,
 ) -> bool:
-    """The single fenced run-transition authority (dist/runtime-core A1).
+    """The primary fenced run-transition authority (dist/runtime-core A1).
+
+    The single fenced run-transition authority for the REST/executor paths —
+    ``saq_hooks._mark_run_failed`` is a deliberate SECOND fenced authority for
+    the guarded SAQ task_failure path (PR #1003), so this is the primary, not
+    the only, fence.
 
     Performs ONE conditional ``UPDATE ... WHERE ... RETURNING id`` that is safe
     under concurrency:
@@ -844,7 +825,7 @@ async def _count_active_runs(
         .select_from(Run)
         .where(
             Run.status.in_(_active_run_statuses(include_pending)),
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     if pipeline_id is not None:
@@ -956,7 +937,7 @@ async def count_active_sandbox_runs_for_org(
         .where(
             Run.organisation_id == org_id,
             Run.status == "running",
-            Run.cancellation_requested == False,  # noqa: E712
+            Run.cancellation_requested.is_(False),
         )
     )
     if exclude_run_id is not None:

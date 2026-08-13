@@ -307,7 +307,7 @@ async def test_register_rls_reset_hook_clears_gucs_on_checkout(db_engine: AsyncE
 async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None:
     """Migration 0025 must have created rls_team_isolation on team-scoped tables.
 
-    Checks the five tables that should have the policy: pipelines, stages,
+    Checks the tables that should have the policy: pipelines,
     connector_instances, model_backends, library_primitives.
     """
     async with db_engine.connect() as conn:
@@ -318,7 +318,7 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
             ).fetchall()
         }
 
-    expected = {"pipelines", "stages", "connector_instances", "model_backends", "library_primitives"}
+    expected = {"pipelines", "connector_instances", "model_backends", "library_primitives"}
     missing = expected - tables_with_policy
     assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
 

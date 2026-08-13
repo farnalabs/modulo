@@ -10,12 +10,12 @@ Feature: HITL Overdue Warning
     Given a run is waiting at gate "pre-deploy" with timeout 300s
     When 270 seconds have elapsed without approval
     Then the gate shows an "overdue" warning
-    And the warning is visible in the stage board
+    And the warning is visible in the HITL review UI
 
-  Scenario: Stage board highlights overdue gates
+  Scenario: Overdue gates surface in the awaiting-human view
     Given 2 runs are waiting at gates
     And one gate is overdue
-    When I GET the stage board with filter "awaiting_human"
+    When I view the awaiting-human filter
     Then the overdue gate is highlighted
 
   Scenario: Notification is sent for overdue gates

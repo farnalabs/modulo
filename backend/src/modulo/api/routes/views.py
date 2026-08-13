@@ -26,9 +26,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/views", tags=["views"])
 
-_VALID_VIEW_TYPES = {"run_list", "pipeline_list", "audit_log"}
-_VALID_SORT_ORDERS = {"asc", "desc"}
-
 
 class ViewCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)

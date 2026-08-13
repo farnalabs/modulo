@@ -1087,6 +1087,26 @@ async def test_decision_payload_size_limited():
         )
 
 
+def test_decision_payload_none_is_accepted():
+    """A None decision payload is allowed (legacy/payload-less decisions)."""
+    HITLManager._validate_decision_payload(None)
+
+
+def test_decision_payload_valid_dict_is_accepted():
+    """A well-formed dict decision payload passes validation."""
+    HITLManager._validate_decision_payload(
+        {"action": "approved", "modified_output": {"blob": "ok"}, "nested": {"list": [1, 2, 3]}}
+    )
+
+
+def test_decision_payload_unserialisable_rejected():
+    """A dict that cannot be JSON-serialised is rejected with DecisionPayloadError."""
+    payload: dict[str, Any] = {"action": "approved"}
+    payload["self"] = payload
+    with pytest.raises(DecisionPayloadError, match="must be JSON-serialisable"):
+        HITLManager._validate_decision_payload(payload)
+
+
 async def test_reject_valid_token_records_decision():
     future = datetime.now(UTC) + timedelta(minutes=5)
     gate = _gate(account_id=_USER, claim_token="tok", expires_at=future)

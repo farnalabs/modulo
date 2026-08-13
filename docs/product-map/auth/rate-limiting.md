@@ -15,6 +15,7 @@ unit-tests:
   - backend/tests/bdd/steps/test_rate_limiting.py
   - backend/tests/unit/api/test_rate_limiter_middleware.py
   - backend/tests/unit/api/test_rate_limiter_keys.py
+  - backend/tests/unit/api/test_rate_limit_hitl_review.py
 depends-on: [feat-auth-jwt-auth]
 status: partial
 ---
@@ -42,8 +43,8 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - [x] Returns error response when exceeded (returns `{"error":"rate_limited",...}`)
 
 ### POST /runs/{id}/hitl/{gate_id}/review
-- [ ] 20 requests per minute per user (not yet enforced as separate rule — covered by runs catch-all at 60/min)
-- [ ] Returns 429 when exceeded
+- [x] 20 requests per minute per user (dedicated `HITL_RULE` — more restrictive than the `/api/v1/runs` 60/min rule)
+- [x] Returns 429 when exceeded
 
 ### Any MCP tool call
 - [x] 200 requests per minute per MCP client ID (middleware rule matches PRD §7.18)
@@ -124,9 +125,15 @@ Redis-backed sliding window and in-memory token bucket rate limiting for POST/PU
 - No unit-test-level step definitions for the BDD scenarios (unit tests exist via `test_rate_limiting_bdd.py` but are not wired as BDD step definitions)
 - No integration/E2E test that exercises Redis sliding window against a real Redis
 - ~~MCP-specific rate limit rules (`trigger_pipeline` vs general MCP calls) are not differentiated in middleware — all `/mcp` paths share 200 req/min rule (trigger_pipeline has a separate 60/min limit at the application level in `mcp_server.py`)~~ — RESOLVED 2026-08-11: `trigger_pipeline` now enforces its own 60/min app-level limit in `mcp_server.py` (per-client in-memory `TokenBucketRegistry`, keyed by org + key/user id). The middleware still applies the general 200/min `/mcp` rule on top — the app-level bucket is per-tool, not per-request, so it cannot be expressed as an HTTP-path rule.
-- HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min
+- ~~HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule — `/api/v1/runs` catch-all covers HITL paths at 60/min instead of the specified 20/min~~ — RESOLVED 2026-08-12: `RateLimitMiddleware.HITL_RULE` (`/hitl/`, 20/min) matches HITL review paths (`/api/v1/runs/{run_id}/hitl/{gate_id}/...`) by path-segment marker in `_rule_for`/`_should_rate_limit` and is preferred over the `/api/v1/runs` rule; exceeded review requests return 429 with `Retry-After`
 
 ## QA History
+### 2026-08-12 — HITL review rate limit 20/min (improve-architecture)
+- RESOLVED the "HITL review rate limit (20/min per PRD §7.18) is not enforced as a separate rule" known gap. Added `RateLimitMiddleware.HITL_RULE` (`"/hitl/"`, 20/min, 60s) — HITL review actions live under `/api/v1/runs/{run_id}/hitl/{gate_id}/` where the run/gate ids are variable so a static prefix cannot match them; `_rule_for`/`_should_rate_limit` now resolve the path-segment marker first so these paths are capped at 20/min (per user via the existing `_client_key`) instead of the `/api/v1/runs` 60/min catch-all, and return 429 with `Retry-After` when exceeded. `set_rules`/admin runtime reconfiguration is unaffected (RULES list unchanged; HITL stays PRD-fixed).
+- Updated `tests/unit/api/test_rate_limit_hitl_review.py`: docstring + `test_hitl_approve_matches_runs_rule` → `test_hitl_rule_is_20_per_min`, new `test_hitl_rule_is_more_restrictive_than_runs`, `test_hitl_check_uses_20_per_min_budget` (asserts `check(..., max_requests=20)`), `test_hitl_prd_20_per_min_is_enforced`, `test_rule_for_prefers_hitl_rule_over_runs`, `test_rule_for_keeps_runs_rule_for_non_hitl`; removed the "document the gap" placeholder test.
+- Marked behaviours `[ ]`→`[x]` (20/min per user + 429 when exceeded), resolved the HITL Known Gap, added `test_rate_limit_hitl_review.py` to `unit-tests:` frontmatter.
+- 35/35 `test_rate_limit_hitl_review.py` + 91/91 rate-limiter middleware/key/auth unit tests pass, ruff check + format clean, mypy --strict clean.
+
 ### 2026-08-11 — trigger_pipeline tool-level rate limit (improve-architecture)
 - Implemented the documented "MCP trigger_pipeline not implemented" gap (PRD §7.18 60/min per MCP client). Added async-safe in-memory `TokenBucket` (rate refill, burst ceiling, per-bucket `asyncio.Lock`) and `TokenBucketRegistry` (one bucket per client key, lazy creation, per-key isolation) to `core/rate_limiter.py`. Wired `trigger_pipeline` in `api/mcp_server.py` to consume from a per-client bucket (`rate=1.0`, `burst=60`) keyed by org + auth type + key/user id (mirrors middleware `_client_key`); exhausted calls return `{"error": "rate_limited", "detail": "Rate limit exceeded for trigger_pipeline (60/min)"}` before any DB work and log `ratelimit.trigger_pipeline_exceeded`.
 - Added 20 unit tests (`tests/unit/rate_limiter/test_token_bucket.py` ×13: burst allow/exact boundary, refill over time, burst ceiling, zero-token rejection, constructor validation, concurrency never overdraws, reset + registry lazy-creation/isolation/reset/concurrency; `tests/unit/mcp/test_mcp_trigger_rate_limit.py` ×7: per-client key derivation for api_key/oauth/distinct clients, allowed-within-burst / denied-when-exhausted, full tool path returns `rate_limited` before DB calls, full tool path still succeeds within limit).

@@ -233,19 +233,21 @@ async def create_snapshot_from_live_graph(
         schema_pins: list[dict[str, Any]] = []
         seen_schema_pins: set[tuple[uuid.UUID, str]] = set()
         for agent in agents:
-            for schema_id, version in (
+            for schema_pin_id, schema_pin_version in (
                 (agent.input_schema_id, agent.input_schema_version),
                 (agent.output_schema_id, agent.output_schema_version),
             ):
-                key = (schema_id, version)
+                if schema_pin_id is None or schema_pin_version is None:
+                    continue
+                key = (schema_pin_id, schema_pin_version)
                 if key in seen_schema_pins:
                     continue
                 seen_schema_pins.add(key)
-                schema_model = schema_models_by_id.get(schema_id)
+                schema_model = schema_models_by_id.get(schema_pin_id)
                 schema_pins.append(
                     {
-                        "schema_id": str(schema_id),
-                        "version": version,
+                        "schema_id": str(schema_pin_id),
+                        "version": schema_pin_version,
                         "abstract_name": schema_model.abstract_name if schema_model is not None else None,
                     }
                 )
@@ -265,7 +267,8 @@ async def create_snapshot_from_live_graph(
                 "model_id": backend.model_id,
             }
             for agent in agents
-            if (backend := backends_by_id.get(agent.model_backend_id)) is not None
+            if agent.model_backend_id is not None
+            and (backend := backends_by_id.get(agent.model_backend_id)) is not None
         ]
 
         graph_json = {

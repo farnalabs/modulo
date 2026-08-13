@@ -1,7 +1,5 @@
 from typing import Any
 
-from langchain_openai import ChatOpenAI  # noqa: F401
-
 from modulo.model_backends.module import OpenAICompatibleBackend
 
 DEFAULT_JAN_BASE_URL = "http://localhost:1337/v1"

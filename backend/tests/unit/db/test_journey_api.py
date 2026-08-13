@@ -23,11 +23,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Table, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.lifecycle_maps import router as lifecycle_maps_router
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.lifecycle_map.advancement import advance_journeys, confirm_reported_refs
 from modulo.core.lifecycle_map.journeys import (
     _is_unattributed,
     decode_cursor,
@@ -184,6 +186,7 @@ async def _seed_run(
     completed_at: datetime | None = None,
     status: str = "complete",
     work_item_id: uuid.UUID | None = None,
+    work_item_refs: list[Any] | None = None,
 ) -> Run:
     run = Run(
         organisation_id=_ORG,
@@ -194,7 +197,7 @@ async def _seed_run(
         run_number=len((await session.execute(select(Run))).all()) + 1,
         input_hash="hash",
         langgraph_thread_id=f"thread-{uuid.uuid4()}",
-        work_item_refs=[{"kind": kind, "ref": ref, "source": "derived"}],
+        work_item_refs=work_item_refs or [{"kind": kind, "ref": ref, "source": "derived"}],
         work_item_id=work_item_id,
         completed_at=completed_at,
     )
@@ -236,6 +239,36 @@ class TestListMapJourneys:
         assert other_journey.id not in ids
         assert next_cursor is None
 
+    async def test_list_map_without_stages_returns_only_attributed(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        attributed = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        # No stages on the map: _referenced_ref_pairs short-circuits to an empty
+        # set, so an un-attributed journey with no matching run must not appear.
+        await _seed_journey(session, kind="linear", ref="FAR-9", map_id=None)
+
+        items, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert [j.id for j, _ in items] == [attributed.id]
+
+    async def test_list_ignores_malformed_run_ref_entries(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        orphan = await _seed_journey(session, kind="linear", ref="FAR-1", map_id=None)
+        # Run on the stage pipeline whose refs mix a valid entry with malformed
+        # ones (non-dict, missing kind/ref) — the malformed entries are skipped.
+        await _seed_run(
+            session,
+            kind="linear",
+            ref="FAR-1",
+            work_item_refs=["not-a-dict", {"kind": None, "ref": "x"}, {"kind": "linear", "ref": "FAR-1"}],
+        )
+
+        items, _ = await list_map_journeys(session, map_id=_MAP)
+
+        assert [j.id for j, _ in items] == [orphan.id]
+
     async def test_list_orphan_only_matches_its_own_kind_ref(self, session: AsyncSession) -> None:
         await _seed_org(session)
         await _seed_map(session)
@@ -268,6 +301,19 @@ class TestListMapJourneys:
 
         items, _ = await list_map_journeys(session, map_id=_MAP, kind="github_issue")
         assert {j.id for j, _ in items} == {a.id, b.id}
+
+    async def test_list_ref_only_filter_strips_whitespace(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        target = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        await _seed_journey(session, kind="github_issue", ref="c/d#7", map_id=_MAP)
+
+        # ``ref`` given without ``kind``: the ref is stripped, not canonicalised,
+        # and the query narrows on the raw ref column.
+        items, _ = await list_map_journeys(session, map_id=_MAP, ref="  a/b#5  ")
+
+        assert [j.id for j, _ in items] == [target.id]
 
     async def test_list_owner_team_id_filter(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -477,6 +523,18 @@ class TestJourneyRunHistory:
 
         runs = await list_journey_runs(session, journey=journey)
         assert [r.id for r in runs] == [run.id]
+
+    async def test_detail_respects_limit_and_stops_scanning(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_map(session)
+        await _seed_stage(session)
+        journey = await _seed_journey(session, kind="github_issue", ref="a/b#5", map_id=_MAP)
+        newest = await _seed_run(session, completed_at=datetime(2026, 1, 3, tzinfo=UTC))
+        await _seed_run(session, completed_at=datetime(2026, 1, 2, tzinfo=UTC))
+
+        runs = await list_journey_runs(session, journey=journey, limit=1)
+
+        assert [r.id for r in runs] == [newest.id]
 
     async def test_empty_history_when_runs_purged(self, session: AsyncSession) -> None:
         await _seed_org(session)
@@ -867,3 +925,453 @@ class TestRoutes:
         app.dependency_overrides.clear()
 
         assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Self-report confirm + advance (service layer, real SQLite)
+#
+# FAR-143 spec v6: self-report is ADVISORY — a reported ref can only CONFIRM
+# an existing journey (never mint one). `confirm_reported_refs` implements the
+# confirm-only gate; `advance_journeys` accepts a `None` run_id / pipeline_id
+# so workflow evidence with no backing run updates latest evidence without
+# clobbering `latest_terminal_run_id`.
+# ---------------------------------------------------------------------------
+
+
+class TestSelfReportConfirmAdvance:
+    async def test_confirm_keeps_existing_journey_and_counts_unmatched(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_journey(session, kind="github_issue", ref="a/b#5")
+        reported = [
+            {"kind": "github_issue", "ref": "a/b#5", "source": "reported"},
+            {"kind": "github_issue", "ref": "never-seen", "source": "reported"},
+        ]
+
+        confirmed, unmatched = await confirm_reported_refs(session, _ORG, reported)
+
+        assert [e["ref"] for e in confirmed] == ["a/b#5"]
+        assert unmatched == 1
+
+    async def test_confirm_matches_none_when_no_journey_row(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        reported = [{"kind": "github_issue", "ref": "a/b#5", "source": "reported"}]
+
+        confirmed, unmatched = await confirm_reported_refs(session, _ORG, reported)
+
+        assert confirmed == []
+        assert unmatched == 1
+
+    async def test_advance_with_no_run_preserves_latest_terminal_run_id(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        prior_run = uuid.uuid4()
+        journey = await _seed_journey(
+            session,
+            kind="github_issue",
+            ref="a/b#5",
+            map_id=_MAP,
+            latest_terminal_run_id=prior_run,
+        )
+        await _seed_map(session)
+
+        now = datetime.now(UTC)
+        advanced = await advance_journeys(
+            session,
+            _ORG,
+            run_id=None,
+            pipeline_id=None,
+            refs=[{"kind": "github_issue", "ref": "a/b#5", "source": "reported"}],
+            status="complete",
+            completed_at=now,
+            run_created_at=now,
+        )
+
+        assert advanced == 1
+        await session.flush()
+        # The raw-SQL advance updates the DB directly; refresh the ORM object
+        # so the assertions below read the persisted row.
+        await session.refresh(journey)
+        assert journey.latest_status == "complete"
+        assert journey.latest_provenance == "reported"
+        assert journey.run_count == 1
+        # No backing run -> the prior run id is preserved, never cleared.
+        assert journey.latest_terminal_run_id == prior_run
+
+    async def test_advance_with_no_run_never_mints(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        now = datetime.now(UTC)
+        # Reported ref with no journey row — the confirm gate is the caller's
+        # job, but advance on a NON-existing row would upsert (mint). Prove the
+        # endpoint never reaches it by confirming first: here we only advance
+        # confirmed entries, so nothing is written.
+        confirmed, unmatched = await confirm_reported_refs(
+            session, _ORG, [{"kind": "github_issue", "ref": "ghost", "source": "reported"}]
+        )
+        assert confirmed == []
+        assert unmatched == 1
+
+        advanced = await advance_journeys(
+            session,
+            _ORG,
+            run_id=None,
+            pipeline_id=None,
+            refs=confirmed,
+            status="complete",
+            completed_at=now,
+            run_created_at=now,
+        )
+        assert advanced == 0
+
+        rows = (await session.execute(select(Journey))).scalars().all()
+        assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Self-report route — auth, 404, wire shape (mocked session)
+# ---------------------------------------------------------------------------
+
+
+def _make_self_report_app(*, org_role: str = "runner") -> FastAPI:
+    app = FastAPI()
+    app.include_router(lifecycle_maps_router)
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+        username="workflow",
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role=org_role,
+    )
+    return app
+
+
+class TestSelfReportRoute:
+    def test_self_report_requires_authentication(self, mock_session: AsyncMock) -> None:
+        from modulo.auth.dependencies import InvalidToken
+
+        app = FastAPI()
+        app.include_router(lifecycle_maps_router)
+
+        def deny_auth() -> TenantPrincipal:
+            raise InvalidToken()
+
+        app.dependency_overrides[get_current_tenant_user_or_api_key] = deny_auth
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with TestClient(app) as c:
+            resp = c.post(
+                f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                json={"work_item_refs": [{"kind": "github_issue", "ref": "a/b#5"}]},
+            )
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 401
+
+    def test_self_report_denies_viewer_role(self, mock_session: AsyncMock) -> None:
+        app = _make_self_report_app(org_role="viewer")  # viewer < runner -> denied
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with TestClient(app) as c:
+            resp = c.post(
+                f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                json={"work_item_refs": [{"kind": "github_issue", "ref": "a/b#5"}]},
+            )
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 403
+
+    def test_self_report_unknown_map_404(self, mock_session: AsyncMock) -> None:
+        app = _make_self_report_app()
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with (
+            patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock(return_value=None)),
+            TestClient(app) as c,
+        ):
+            resp = c.post(
+                f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                json={"work_item_refs": [{"kind": "github_issue", "ref": "a/b#5"}]},
+            )
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 404
+
+    def test_self_report_wire_shape(self, mock_session: AsyncMock) -> None:
+        app = _make_self_report_app()
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with (
+            patch(
+                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                new=AsyncMock(return_value=_make_map_mock()),
+            ),
+            patch(
+                "modulo.api.routes.lifecycle_maps.confirm_reported_refs",
+                new=AsyncMock(
+                    return_value=(
+                        [{"kind": "github_issue", "ref": "a/b#5", "source": "reported"}],
+                        1,
+                    )
+                ),
+            ),
+            patch("modulo.api.routes.lifecycle_maps.advance_journeys", new=AsyncMock(return_value=1)),
+            TestClient(app) as c,
+        ):
+            resp = c.post(
+                f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                json={
+                    "work_item_refs": [
+                        {"kind": "github_issue", "ref": "a/b#5"},
+                        {"kind": "github_issue", "ref": "x"},
+                        {"ref": "missing-kind"},  # malformed
+                    ]
+                },
+            )
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"accepted": 1, "rejected": 1, "unmatched": 1}
+
+    def test_self_report_db_failure_maps_to_503(self, mock_session: AsyncMock) -> None:
+        app = _make_self_report_app()
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        with (
+            patch(
+                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                new=AsyncMock(side_effect=SQLAlchemyError("boom")),
+            ),
+            TestClient(app) as c,
+        ):
+            resp = c.post(
+                f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                json={"work_item_refs": [{"kind": "github_issue", "ref": "a/b#5"}]},
+            )
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Self-report route — end-to-end through a real SQLite session
+# ---------------------------------------------------------------------------
+
+
+def _make_real_app(
+    engine: AsyncEngine,
+    *,
+    org_role: str = "runner",
+) -> FastAPI:
+    app = FastAPI()
+    app.include_router(lifecycle_maps_router)
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+        username="workflow",
+        organisation_id=_ORG,
+        account_id=_ACCOUNT,
+        org_role=org_role,
+    )
+
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as s:
+            yield s
+
+    app.dependency_overrides[get_db_session] = override_session
+    return app
+
+
+async def _seed_org_and_map(engine: AsyncEngine, *, map_id: uuid.UUID = _MAP) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with maker() as s, s.begin():
+        s.add(Organisation(id=_ORG, name="test org", slug="test-org"))
+        s.add(
+            LifecycleMap(
+                id=map_id,
+                organisation_id=_ORG,
+                name="SDLC",
+                account_id=_ACCOUNT,
+                visibility="org",
+                version=1,
+                content_json={"stages": []},
+            )
+        )
+
+
+async def _seed_org_map_and_journey(engine: AsyncEngine, *, kind: str, ref: str) -> None:
+    from modulo.db.lifecycle_refs import canonical_work_item_id as _canonical
+    from modulo.db.lifecycle_refs import canonicalise_kind, canonicalise_ref
+
+    k = canonicalise_kind(kind)
+    r = canonicalise_ref(k, ref)
+    maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    async with maker() as s, s.begin():
+        s.add(Organisation(id=_ORG, name="test org", slug="test-org"))
+        s.add(
+            LifecycleMap(
+                id=_MAP,
+                organisation_id=_ORG,
+                name="SDLC",
+                account_id=_ACCOUNT,
+                visibility="org",
+                version=1,
+                content_json={"stages": []},
+            )
+        )
+        s.add(
+            Journey(
+                organisation_id=_ORG,
+                kind=k,
+                ref=r,
+                canonical_work_item_id=_canonical(_ORG, k, r),
+            )
+        )
+
+
+class TestSelfReportRouteReal:
+    async def test_existing_journey_advanced_and_accepted(self) -> None:
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+            await _seed_org_map_and_journey(engine, kind="github_issue", ref="#5")
+
+            app = _make_real_app(engine)
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.post(
+                    f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                    json={"work_item_refs": [{"kind": "github_issue", "ref": "#5", "status": "done"}]},
+                )
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {"accepted": 1, "rejected": 0, "unmatched": 0}
+
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                journey = (await s.execute(select(Journey))).scalar_one()
+            assert journey.latest_status == "complete"
+            assert journey.latest_provenance == "reported"
+            assert journey.run_count == 1
+            assert journey.latest_terminal_run_id is None  # no backing run
+        finally:
+            await engine.dispose()
+
+    async def test_unmatched_ref_never_mints(self) -> None:
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+            await _seed_org_and_map(engine)
+
+            app = _make_real_app(engine)
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.post(
+                    f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                    json={"work_item_refs": [{"kind": "github_issue", "ref": "ghost"}]},
+                )
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            assert resp.json() == {"accepted": 0, "rejected": 0, "unmatched": 1}
+
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                rows = (await s.execute(select(Journey))).scalars().all()
+            assert rows == []  # never minted
+        finally:
+            await engine.dispose()
+
+    async def test_malformed_refs_counted_as_rejected_fail_open(self) -> None:
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+            await _seed_org_map_and_journey(engine, kind="github_issue", ref="#5")
+
+            app = _make_real_app(engine)
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.post(
+                    f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                    json={
+                        "work_item_refs": [
+                            {"kind": "github_issue", "ref": "#5"},  # good -> accepted
+                            {"ref": "missing-kind"},  # malformed
+                            {"kind": "github_issue"},  # malformed
+                            {"kind": "github_issue", "ref": "#6", "status": "bogus"},  # bad status dropped
+                            "not-a-dict",  # malformed
+                        ]
+                    },
+                )
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["accepted"] == 1  # fail-open: good refs still accepted
+            assert body["rejected"] == 3  # 2 malformed + 1 bad-status
+            assert body["unmatched"] == 1  # github_issue #6 valid but no journey
+        finally:
+            await engine.dispose()
+
+    async def test_cap_of_100_enforced(self) -> None:
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
+            await _seed_org_map_and_journey(engine, kind="github_issue", ref="a/b#0")
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                for i in range(1, 120):
+                    s.add(
+                        Journey(
+                            organisation_id=_ORG,
+                            kind="github_issue",
+                            ref=f"a/b#{i}",
+                            canonical_work_item_id=uuid.uuid4(),
+                        )
+                    )
+
+            app = _make_real_app(engine)
+            refs = [{"kind": "github_issue", "ref": f"a/b#{i}"} for i in range(120)]
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.post(
+                    f"/api/v1/lifecycle-maps/{_MAP}/journeys/self-report",
+                    json={"work_item_refs": refs},
+                )
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["accepted"] == 100
+            assert body["rejected"] == 20  # capped overflow
+            assert body["unmatched"] == 0
+        finally:
+            await engine.dispose()

@@ -17,13 +17,14 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
+from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
-from modulo.connectors.github import GitHubConnector
+from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
     delete_connector_instance,
@@ -37,6 +38,27 @@ from modulo.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
+
+
+def _github_missing_scope_detail(token: str, missing: set[str]) -> str:
+    """Human-readable required-scope rejection detail, token-type aware.
+
+    Classic PATs are checked against classic OAuth scopes (``repo``,
+    ``read:org``); fine-grained PATs (``github_pat_`` prefix) are checked against
+    the PRD §7.11 fine-grained permissions. Reporting the classic set for a
+    fine-grained token would be wrong — GitHub never issues those scopes to it.
+    """
+    if is_fine_grained_pat(token):
+        return (
+            f"GitHub token is missing required fine-grained permissions: "
+            f"{', '.join(sorted(missing))}. "
+            f"Required: {', '.join(sorted(GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS))}"
+        )
+    return (
+        f"GitHub token is missing required OAuth scopes: "
+        f"{', '.join(sorted(missing))}. "
+        f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
+    )
 
 
 def _encrypt(credentials: str, fernet_key: str) -> bytes:
@@ -130,14 +152,23 @@ async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(default=None),
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("connector.list"),
 ) -> ConnectorListResponse:
+    if include_in_dev:
+        require_in_dev_operator(principal, "connector.list.in_dev")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
+            result = await list_connector_instances(
+                session,
+                page=page,
+                page_size=page_size,
+                cursor=cursor,
+                excluded_tiers=[] if include_in_dev else None,
+            )
     except IntegrityError:
         logger.exception("connectors.list_connectors_endpoint")
         raise HTTPException(
@@ -199,11 +230,7 @@ async def create_connector_endpoint(
         if missing:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    f"GitHub token is missing required OAuth scopes: "
-                    f"{', '.join(sorted(missing))}. "
-                    f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
-                ),
+                detail=_github_missing_scope_detail(req.credentials, missing),
             )
 
     ciphertext = _encrypt(req.credentials, settings.fernet_key)
@@ -331,11 +358,7 @@ async def update_connector_endpoint(
                 if missing:
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail=(
-                            f"GitHub token is missing required OAuth scopes: "
-                            f"{', '.join(sorted(missing))}. "
-                            f"Required: {', '.join(sorted(GITHUB_REQUIRED_SCOPES))}"
-                        ),
+                        detail=_github_missing_scope_detail(new_credentials, missing),
                     )
             ci = await update_connector_instance(session, connector_id, updates)
     except IntegrityError:

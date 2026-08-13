@@ -37,7 +37,9 @@ if TYPE_CHECKING:
 # (rows backfilled to ``pending``); it MUST NOT appear in either set. Consumers
 # across the codebase (crud/run, cron_helpers, analytics) import these instead
 # of re-declaring their own tuples.
-TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "cancelled", "eval_failed", "stalled"})
+TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {"complete", "failed", "cancelled", "eval_failed", "stalled", "budget_exceeded"}
+)
 
 # Non-terminal (active) run statuses — a run that still holds a slot. A pending
 # run is active but does not hold capacity (see crud.run._active_run_statuses).
@@ -77,7 +79,7 @@ class Run(OrgScoped):
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', "
-            "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled')",
+            "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),

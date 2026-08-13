@@ -1,13 +1,20 @@
 """Tests for lifecycle-map content validation, versioning and junction projection."""
 
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException, status
+from fastapi import FastAPI, HTTPException, status
+from fastapi.testclient import TestClient
+from sqlalchemy import Table
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
+from modulo.api.dependencies import get_db_session
 from modulo.api.routes.lifecycle_maps import (
     GraduateStageRequest,
     LifecycleMapCreate,
@@ -18,7 +25,13 @@ from modulo.api.routes.lifecycle_maps import (
     save_lifecycle_map_version_endpoint,
     update_lifecycle_map_endpoint,
 )
+from modulo.api.routes.lifecycle_maps import (
+    router as lifecycle_maps_router,
+)
+from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.service import (
+    _check_pipeline_uniqueness,
     create_lifecycle_map,
     delete_lifecycle_map,
     derive_lifecycle_map_stages,
@@ -32,8 +45,10 @@ from modulo.core.lifecycle_map.validation import (
     LifecycleMapPipelineConflictError,
     normalize_content,
 )
+from modulo.db.models.base import Base
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
+from modulo.db.models.organisation import Organisation
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -203,6 +218,34 @@ def test_normalize_content_rejects_empty_stage_id() -> None:
         normalize_content({"stages": [{"id": "", "name": "Build", "type": "manual"}]})
 
 
+def test_normalize_content_rejects_non_object_edge() -> None:
+    with pytest.raises(LifecycleMapContentError, match="edge/transition #0 must be an object"):
+        normalize_content({"edges": ["e1"]})
+
+
+def test_normalize_content_rejects_edge_without_source() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'source' must be a non-empty string"):
+        normalize_content({"edges": [{"id": "e1", "target": "s2"}]})
+
+
+def test_normalize_content_rejects_edge_without_target() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'target' must be a non-empty string"):
+        normalize_content({"edges": [{"id": "e1", "source": "s1"}]})
+
+
+def test_normalize_content_accepts_transitions_alias() -> None:
+    result = normalize_content({"transitions": [{"id": "e1", "source": "s1", "target": "s2"}]})
+    assert result["edges"] == [{"id": "e1", "source": "s1", "target": "s2"}]
+    assert "transitions" not in result
+
+
+def test_normalize_content_drops_transitions_when_edges_absent() -> None:
+    result = normalize_content({"transitions": [], "notes": "plan"})
+    assert result["edges"] == []
+    assert "transitions" not in result
+    assert result["notes"] == "plan"
+
+
 # ---------------------------------------------------------------------------
 # save_map_version
 # ---------------------------------------------------------------------------
@@ -318,6 +361,36 @@ async def test_graduate_stage_raises_when_stage_unknown(session: AsyncMock) -> N
 
     with pytest.raises(LifecycleMapContentError, match="stage 'missing' not found"):
         await graduate_stage(session, _MAP_ID, stage_id="missing", pipeline_id=str(_PIPE_ID))
+
+
+async def test_graduate_stage_raises_when_map_has_no_stages(session: AsyncMock) -> None:
+    lm = _make_map(content_json={})
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="no stages; nothing to graduate"):
+        await graduate_stage(session, _MAP_ID, stage_id="s1", pipeline_id=str(_PIPE_ID))
+
+
+async def test_graduate_stage_raises_when_content_is_not_dict(session: AsyncMock) -> None:
+    lm = _make_map(content_json=None)
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="no stages; nothing to graduate"):
+        await graduate_stage(session, _MAP_ID, stage_id="s1", pipeline_id=str(_PIPE_ID))
+
+
+async def test_check_pipeline_uniqueness_skips_non_dict_stage(session: AsyncMock) -> None:
+    lm = _make_map(content_json={"stages": ["not-a-dict"]})
+    await _check_pipeline_uniqueness(session, lm)
+    session.execute.assert_not_awaited()
+
+
+async def test_check_pipeline_uniqueness_skips_invalid_pipeline_uuid(session: AsyncMock) -> None:
+    lm = _make_map(
+        content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": "not-a-uuid"}]}
+    )
+    await _check_pipeline_uniqueness(session, lm)
+    session.execute.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -589,3 +662,126 @@ async def test_save_version_route_maps_content_error_to_422() -> None:
             principal=_RoutePrincipal(),
         )
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+# ---------------------------------------------------------------------------
+# PUT route round-trip — prove-the-fix regression for the update 500
+#
+# The map PUT committed + version-bumped correctly but returned HTTP 500: the
+# ``updated_at`` column carries ``onupdate=func.current_timestamp()``, so the
+# flush leaves it as an expired postfetch attribute, and reading it via
+# ``LifecycleMapResponse.model_validate`` AFTER the ``session.begin()`` commit
+# triggered a lazy refresh on a session with ``autobegin=False``
+# (``InvalidRequestError``). The fix refreshes the map inside the transaction.
+# This test drives the REAL route against a REAL SQLite session and asserts a
+# 200 + the updated fields + the version bump — it FAILS (500) without the fix.
+# ---------------------------------------------------------------------------
+
+
+def _make_route_app(engine: AsyncEngine) -> FastAPI:
+    app = FastAPI()
+    app.include_router(lifecycle_maps_router)
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_ACCOUNT_ID,
+        org_role="admin",
+    )
+
+    async def override_session() -> AsyncGenerator[AsyncSession, None]:
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as s:
+            yield s
+
+    app.dependency_overrides[get_db_session] = override_session
+    return app
+
+
+class TestUpdateLifecycleMapRoute:
+    async def test_put_returns_200_with_updated_fields_and_version_bump(self) -> None:
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        tables: list[Table] = cast(
+            list[Table],
+            [Organisation.__table__, LifecycleMap.__table__, LifecycleMapStage.__table__],
+        )
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+            async with async_sessionmaker(engine, expire_on_commit=False, autobegin=False)() as s, s.begin():
+                s.add(Organisation(id=_ORG_ID, name="org", slug="org"))
+                s.add(
+                    LifecycleMap(
+                        id=_MAP_ID,
+                        organisation_id=_ORG_ID,
+                        name="SDLC",
+                        account_id=_ACCOUNT_ID,
+                        visibility="org",
+                        version=1,
+                        content_json={"stages": []},
+                    )
+                )
+
+            app = _make_route_app(engine)
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.put(
+                    f"/api/v1/lifecycle-maps/{_MAP_ID}",
+                    json={
+                        "name": "SDLC v2",
+                        "content_json": {
+                            "stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)}]
+                        },
+                    },
+                )
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["id"] == str(_MAP_ID)
+            assert body["name"] == "SDLC v2"
+            assert body["version"] == 2
+            assert body["content_json"]["stages"][0]["name"] == "Build"
+        finally:
+            await engine.dispose()
+
+    async def test_put_without_content_keeps_version(self) -> None:
+        engine = create_async_engine(
+            "sqlite+aiosqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        tables: list[Table] = cast(
+            list[Table],
+            [Organisation.__table__, LifecycleMap.__table__, LifecycleMapStage.__table__],
+        )
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+            async with async_sessionmaker(engine, expire_on_commit=False, autobegin=False)() as s, s.begin():
+                s.add(Organisation(id=_ORG_ID, name="org", slug="org"))
+                s.add(
+                    LifecycleMap(
+                        id=_MAP_ID,
+                        organisation_id=_ORG_ID,
+                        name="SDLC",
+                        account_id=_ACCOUNT_ID,
+                        visibility="org",
+                        version=3,
+                        content_json={"stages": []},
+                    )
+                )
+
+            app = _make_route_app(engine)
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.put(f"/api/v1/lifecycle-maps/{_MAP_ID}", json={"description": "renamed only"})
+            app.dependency_overrides.clear()
+
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["description"] == "renamed only"
+            assert body["version"] == 3  # no content_json -> no bump
+        finally:
+            await engine.dispose()

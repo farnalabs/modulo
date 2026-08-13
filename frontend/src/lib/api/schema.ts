@@ -1424,6 +1424,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Circuit Breaker
+         * @description Admin re-enable: clear a tripped pipeline circuit breaker.
+         *
+         *     Sets ``circuit_breaker_tripped = False`` on the pipeline and re-activates
+         *     all of its (non-deleted) triggers so new runs are allowed again (spec §8.10
+         *     ``circuit_breaker``: "Permanently pauses trigger until admin re-enables").
+         */
+        post: operations["reset_circuit_breaker_api_v1_admin_costs_circuit_breaker__pipeline_id__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/costs/export": {
         parameters: {
             query?: never;
@@ -4464,7 +4488,7 @@ export interface paths {
         /**
          * Update Lifecycle Map Version Endpoint
          * @description Update a version. v1 semantics: the active map state is the only version,
-         *     so this behaves identically to save — ``version_id`` is validated as a UUID
+         *     so this behaves identically to save â€” ``version_id`` is validated as a UUID
          *     for contract compatibility but the save targets the map itself.
          */
         put: operations["update_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__put"];
@@ -4546,6 +4570,51 @@ export interface paths {
         get: operations["get_journey_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys__kind___ref__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/journeys/self-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Self Report Journeys Endpoint
+         * @description Ingest workflow-reported work-item refs to advance existing journeys.
+         *
+         *     Called by external workflows (merge queue, deploy agent) that completed a
+         *     lifecycle-map stage and want the journeys they touched to reflect it.
+         *     Per the FAR-143 spec v6 rule, self-report is ADVISORY: a reported ref can
+         *     only CONFIRM / MATCH an existing journey keyed by the same canonical
+         *     ``(org, kind, ref)`` â€” a ref with no journey row is dropped (counted as
+         *     unmatched) and is NEVER minted, and no runs are created or touched. Each
+         *     confirmed journey is advanced via ``advance_journeys`` with ``status``
+         *     ``"complete"`` (the workflow reached this endpoint, so its stage
+         *     completed), ``completed_at`` = now and no backing run (the run's
+         *     ``latest_terminal_run_id`` is preserved, not overwritten).
+         *
+         *     The request body is already the self-report wire shape, so entries flow
+         *     straight through ``validate_and_normalise_reported_refs`` â€” the same
+         *     per-entry validation/canonicalisation the run-finalise path applies to
+         *     merged run outputs (``parse_self_report_refs`` is only needed for nested
+         *     run-output trees). A malformed entry is rejected and counted, never a
+         *     whole-request 422 (fail-open per ref).
+         *
+         *     Auth: the documented CI/CD credential path (PRD Â§5.2) â€” a user JWT or an
+         *     org API key (``mk_...``). A GitHub Actions workflow calls this with
+         *     ``Authorization: Bearer mk_<key>`` for a key whose owner holds the
+         *     ``runner`` role. There is no ``run.create`` permission in the registry;
+         *     ``run.trigger`` (runner) is the least-privilege gate that accepts org API
+         *     keys, matching how workflows already trigger runs.
+         */
+        post: operations["self_report_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_self_report_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6192,43 +6261,6 @@ export interface paths {
         patch: operations["patch_group_scim_v2_Groups__group_id__patch"];
         trace?: never;
     };
-    "/api/v1/stages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Stages Endpoint */
-        get: operations["list_stages_endpoint_api_v1_stages_get"];
-        put?: never;
-        /** Create Stage Endpoint */
-        post: operations["create_stage_endpoint_api_v1_stages_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/stages/{stage_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Stage Endpoint */
-        get: operations["get_stage_endpoint_api_v1_stages__stage_id__get"];
-        put?: never;
-        post?: never;
-        /** Delete Stage Endpoint */
-        delete: operations["delete_stage_endpoint_api_v1_stages__stage_id__delete"];
-        options?: never;
-        head?: never;
-        /** Update Stage Endpoint */
-        patch: operations["update_stage_endpoint_api_v1_stages__stage_id__patch"];
-        trace?: never;
-    };
     "/api/v1/templates": {
         parameters: {
             query?: never;
@@ -7222,31 +7254,22 @@ export interface components {
             description: string | null;
             /** Is Executable */
             is_executable: boolean;
-            /**
-             * Input Schema Id
-             * Format: uuid
-             */
-            input_schema_id: string;
+            /** Input Schema Id */
+            input_schema_id: string | null;
             /** Input Schema Version */
-            input_schema_version: string;
-            /**
-             * Output Schema Id
-             * Format: uuid
-             */
-            output_schema_id: string;
+            input_schema_version: string | null;
+            /** Output Schema Id */
+            output_schema_id: string | null;
             /** Output Schema Version */
-            output_schema_version: string;
+            output_schema_version: string | null;
             /** Prompt Template */
             prompt_template: string;
             /** Prompt Version History */
             prompt_version_history: {
                 [key: string]: unknown;
             }[];
-            /**
-             * Model Backend Id
-             * Format: uuid
-             */
-            model_backend_id: string;
+            /** Model Backend Id */
+            model_backend_id: string | null;
             /** Connector Type Refs */
             connector_type_refs: {
                 [key: string]: unknown;
@@ -7704,6 +7727,15 @@ export interface components {
             latency_ms?: number | null;
             /** Detail */
             detail?: string | null;
+        };
+        /** CircuitBreakerResetResponse */
+        CircuitBreakerResetResponse: {
+            /** Pipeline Id */
+            pipeline_id: string;
+            /** Circuit Breaker Tripped */
+            circuit_breaker_tripped: boolean;
+            /** Triggers Reactivated */
+            triggers_reactivated: number;
         };
         /** ClaimRequest */
         ClaimRequest: {
@@ -9624,6 +9656,39 @@ export interface components {
             completed_at?: string | null;
             /** Provenance */
             provenance?: string | null;
+        };
+        /**
+         * JourneySelfReportRequest
+         * @description Workflow-reported work-item refs (advisory self-report).
+         *
+         *     ``work_item_refs`` entries are arbitrary JSON (not strictly dicts) so a
+         *     malformed entry (non-dict, missing kind/ref, bad status) is REJECTED and
+         *     counted per-ref by ``validate_and_normalise_reported_refs`` instead of
+         *     failing the whole request with a 422 — fail-open per ref.
+         *     ``pipeline_id`` is the optional Modulo pipeline that completed the stage;
+         *     when it is a stage of this map, the matched journey advances into it.
+         */
+        JourneySelfReportRequest: {
+            /** Work Item Refs */
+            work_item_refs?: unknown[];
+            /** Pipeline Id */
+            pipeline_id?: string | null;
+        };
+        /**
+         * JourneySelfReportResponse
+         * @description Per-ref outcome summary for one self-report request.
+         *
+         *     ``accepted`` refs matched an existing journey and were advanced;
+         *     ``unmatched`` refs were valid but had no journey row (dropped â€” never
+         *     minted); ``rejected`` refs were malformed or dropped by the 100-entry cap.
+         */
+        JourneySelfReportResponse: {
+            /** Accepted */
+            accepted: number;
+            /** Rejected */
+            rejected: number;
+            /** Unmatched */
+            unmatched: number;
         };
         /**
          * JourneySummaryResponse
@@ -13174,87 +13239,6 @@ export interface components {
             oidc: components["schemas"]["OidcProviderInfo"][];
             /** Saml */
             saml: boolean;
-        };
-        /** StageCreate */
-        StageCreate: {
-            /** Name */
-            name: string;
-            /** Description */
-            description?: string | null;
-            /**
-             * Position
-             * @default 0
-             */
-            position: number;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /**
-             * Visibility
-             * @default org
-             */
-            visibility: string;
-        };
-        /** StageListResponse */
-        StageListResponse: {
-            /** Items */
-            items: components["schemas"]["StageResponse"][];
-            /** Total */
-            total: number;
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-        };
-        /** StageResponse */
-        StageResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Organisation Id
-             * Format: uuid
-             */
-            organisation_id: string;
-            /** Name */
-            name: string;
-            /** Description */
-            description: string | null;
-            /** Position */
-            position: number;
-            /** Owner Team Id */
-            owner_team_id: string | null;
-            /** Visibility */
-            visibility: string;
-            /**
-             * Created By
-             * Format: uuid
-             */
-            created_by: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** StageUpdate */
-        StageUpdate: {
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Position */
-            position?: number | null;
-            /** Owner Team Id */
-            owner_team_id?: string | null;
-            /** Visibility */
-            visibility?: string | null;
         };
         /** StarterPipelineResponse */
         StarterPipelineResponse: {
@@ -17925,6 +17909,39 @@ export interface operations {
             };
         };
     };
+    reset_circuit_breaker_api_v1_admin_costs_circuit_breaker__pipeline_id__reset_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CircuitBreakerResetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     export_costs_api_v1_admin_costs_export_get: {
         parameters: {
             query?: {
@@ -21556,6 +21573,8 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                /** @description Include in_dev tier items (default excludes them) */
+                include_in_dev?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
@@ -22299,6 +22318,8 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 cursor?: string | null;
+                /** @description Include in_dev tier items (default excludes them) */
+                include_in_dev?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
@@ -24494,6 +24515,8 @@ export interface operations {
                 primitive_types?: string | null;
                 search?: string | null;
                 source?: string | null;
+                /** @description Include in_dev tier items (default excludes them) */
+                include_in_dev?: boolean;
                 _fresh?: boolean;
             };
             header?: never;
@@ -25618,6 +25641,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JourneyDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    self_report_journeys_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__journeys_self_report_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JourneySelfReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JourneySelfReportResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29868,176 +29928,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_stages_endpoint_api_v1_stages_get: {
-        parameters: {
-            query?: {
-                page?: number;
-                page_size?: number;
-                owner_team_id?: string | null;
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StageListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_stage_endpoint_api_v1_stages_post: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StageCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_stage_endpoint_api_v1_stages__stage_id__get: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                stage_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_stage_endpoint_api_v1_stages__stage_id__delete: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                stage_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_stage_endpoint_api_v1_stages__stage_id__patch: {
-        parameters: {
-            query?: {
-                _fresh?: boolean;
-            };
-            header?: never;
-            path: {
-                stage_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StageUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StageResponse"];
                 };
             };
             /** @description Validation Error */

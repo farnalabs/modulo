@@ -1,4 +1,22 @@
-"""Unit tests for TriggerEngine and helpers using mocked AsyncSession."""
+"""Unit tests for TriggerEngine and helpers using mocked AsyncSession.
+
+QA lens pass (correctness, bugs, edge cases, error paths) on the
+trigger_engine test package:
+
+* ``_apply_payload_mapping`` rejects mapping targets that write to reserved
+  input-payload keys (``_work_item_id`` / ``_modulo.work_item`` /
+  ``_feedback_correction``) — a trigger can never forge system-injected data;
+* ``_extract_work_item_refs`` contract: ``None`` when ref_paths is not a list,
+  skips non-dict/missing-kind/missing-path/empty-value entries, returns
+  ``None`` when nothing survives, and stamps ``{kind, ref, source: "derived"}``
+  otherwise;
+* ``_is_unique_violation`` fails closed for a non-Exception ``orig``;
+* the webhook/replay rate-limit resolution chain: limit on the trigger's own
+  ``config_json`` (no pipeline lookup), missing pipeline row skips the check,
+  and an un-exceeded limit passes the run through with the computed key;
+* replay accepted-event gate passes when the payload carries an accepted
+  event dict.
+"""
 
 import asyncio
 import datetime
@@ -7,7 +25,7 @@ import hmac
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,6 +45,7 @@ from modulo.core.trigger_engine import (
     TriggerNotFoundError,
     _apply_payload_mapping,
     _extract_field,
+    _extract_work_item_refs,
     _is_unique_violation,
     sha256_hex,
     verify_hmac,
@@ -106,6 +125,7 @@ def _make_session(
     dedup_exists: bool = False,
     pipeline_rate_limit: dict[str, Any] | None = None,
     recent_run_count: int = 0,
+    pipeline_found: bool = True,
 ) -> AsyncMock:
     """Build a mocked session that returns the given trigger and run count."""
     session = AsyncMock()
@@ -132,8 +152,9 @@ def _make_session(
 
     # Pipeline lookup for rate-limit config (call 6+). No rate limit by default.
     pipeline_result = MagicMock()
-    pipeline_result.scalar_one_or_none.return_value = MagicMock()
-    pipeline_result.scalar_one_or_none.return_value.rate_limit_config = pipeline_rate_limit
+    pipeline_result.scalar_one_or_none.return_value = MagicMock() if pipeline_found else None
+    if pipeline_found:
+        pipeline_result.scalar_one_or_none.return_value.rate_limit_config = pipeline_rate_limit
 
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
@@ -392,6 +413,61 @@ def test_apply_payload_mapping_returns_new_dict() -> None:
     assert result is not raw
 
 
+@pytest.mark.parametrize("reserved_key", ["_work_item_id", "_modulo.work_item", "_feedback_correction"])
+def test_apply_payload_mapping_rejects_reserved_keys(reserved_key: str) -> None:
+    """A mapping target that writes to a reserved key must be rejected.
+
+    Otherwise a webhook payload (or manual POST body) could forge a
+    work-item id / feedback-correction context that is meant to be set only
+    through explicit ``create_run`` kwargs.
+    """
+    raw: dict[str, Any] = {"number": 7}
+    with pytest.raises(ValueError, match=reserved_key):
+        _apply_payload_mapping(raw, {reserved_key: "number"})
+
+
+def test_extract_work_item_refs_none_when_not_a_list() -> None:
+    assert _extract_work_item_refs({"a": 1}, "not-a-list") is None
+    assert _extract_work_item_refs({"a": 1}, None) is None
+
+
+def test_extract_work_item_refs_none_when_no_matching_paths() -> None:
+    assert _extract_work_item_refs({"a": 1}, []) is None
+
+
+def test_extract_work_item_refs_extracts_derived_refs() -> None:
+    payload = {"pull_request": {"number": 7, "title": "Fix bug"}}
+    ref_paths = [
+        {"kind": "github_pr", "path": "pull_request.number"},
+        {"kind": "github_pr_title", "path": "pull_request.title"},
+    ]
+    result = _extract_work_item_refs(payload, ref_paths)
+    assert result == [
+        {"kind": "github_pr", "ref": "7", "source": "derived"},
+        {"kind": "github_pr_title", "ref": "Fix bug", "source": "derived"},
+    ]
+
+
+def test_extract_work_item_refs_skips_invalid_and_empty_entries() -> None:
+    payload = {"pr": {"number": 7}, "empty": "   ", "present": "value"}
+    ref_paths: list[Any] = [
+        "not-a-dict",
+        None,
+        {"kind": "no_path"},
+        {"path": "pr.number"},
+        {"kind": "", "path": "present"},
+        {"kind": "missing_field", "path": "does.not.exist"},
+        {"kind": "empty_value", "path": "empty"},
+        {"kind": "github_pr", "path": "pr.number"},
+    ]
+    result = _extract_work_item_refs(payload, ref_paths)
+    assert result == [{"kind": "github_pr", "ref": "7", "source": "derived"}]
+
+
+def test_extract_work_item_refs_all_skipped_returns_none() -> None:
+    assert _extract_work_item_refs({"a": 1}, [{"kind": "k", "path": "missing"}]) is None
+
+
 class TestIsUniqueViolation:
     @staticmethod
     def _integrity(orig: Exception) -> IntegrityError:
@@ -425,6 +501,11 @@ class TestIsUniqueViolation:
 
     def test_orig_none(self) -> None:
         assert _is_unique_violation(IntegrityError("stmt", {}, None)) is False
+
+    def test_orig_not_an_exception(self) -> None:
+        # A DBAPI orig that is not an Exception (e.g. a bare driver object)
+        # must fail closed as "not unique" without raising.
+        assert _is_unique_violation(self._integrity(cast(Any, object()))) is False
 
 
 class TestComputeRateLimitKey:
@@ -687,6 +768,54 @@ async def test_handle_webhook_success_with_hmac() -> None:
             raw_body=body,
             raw_payload=_RAW_PAYLOAD,
             hmac_signature=sig,
+            modulo_timestamp=str(ts),
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+
+
+async def test_handle_webhook_verifies_hmac_after_secret_resync() -> None:
+    """After a webhook secret is re-synced, HMAC verification must use the
+    CURRENT secret: a signature bound to the previous secret is rejected while
+    one bound to the re-synced secret is accepted (same body + timestamp)."""
+    old_secret = "old-secret-A"
+    new_secret = "new-secret-B"
+    body = _RAW_BODY
+    ts = _VALID_TS
+    trigger = _make_trigger(hmac_secret=new_secret)
+
+    # A signature computed with the pre-resync secret must be rejected.
+    stale_session = _make_session(trigger=trigger, active_run_count=0)
+    stale_sig = _sha256_sig(body, old_secret, timestamp=ts)
+    with pytest.raises(HmacValidationError):
+        await TriggerEngine().handle_webhook(
+            stale_session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=body,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=stale_sig,
+            modulo_timestamp=str(ts),
+            snapshot_id=_SNAP,
+        )
+
+    # A signature computed with the post-resync secret must be accepted.
+    current_session = _make_session(trigger=trigger, active_run_count=0)
+    current_sig = _sha256_sig(body, new_secret, timestamp=ts)
+    run_mock = MagicMock()
+    run_mock.id = uuid.uuid4()
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch("modulo.core.trigger_engine.time.time", return_value=ts),
+    ):
+        run, _, _ = await TriggerEngine().handle_webhook(
+            current_session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=body,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=current_sig,
             modulo_timestamp=str(ts),
             snapshot_id=_SNAP,
         )
@@ -961,6 +1090,68 @@ async def test_handle_webhook_rate_limit_pass_through_sets_key() -> None:
     assert mock_create.call_args.kwargs["rate_limit_key"] == '{"repo": "acme/app"}'
 
 
+async def test_handle_webhook_rate_limit_from_trigger_config() -> None:
+    """Rate limit may live on the trigger's ``config_json`` itself (not the
+    pipeline) — that path must apply it without a pipeline lookup."""
+    trigger = _make_trigger(extra_config={"rate_limit": {"max_triggers": 1, "window_seconds": 300}})
+    session = _make_session(
+        trigger=trigger,
+        active_run_count=0,
+        pipeline_rate_limit=None,
+        recent_run_count=1,
+    )
+
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())),
+        pytest.raises(PipelineRateLimitError) as exc_info,
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    assert exc_info.value.pipeline_id == trigger.pipeline_id
+    assert exc_info.value.max_triggers == 1
+    assert exc_info.value.window_seconds == 300
+
+
+async def test_handle_webhook_pipeline_not_found_skips_rate_limit() -> None:
+    """A missing pipeline row (deleted while the trigger lived on) must not
+    blow up the webhook — the rate-limit check is simply skipped."""
+    trigger = _make_trigger()
+    session = _make_session(
+        trigger=trigger,
+        active_run_count=0,
+        pipeline_rate_limit=None,
+        recent_run_count=1,
+        pipeline_found=False,
+    )
+
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=MagicMock(id=uuid.uuid4())) as mock_create,
+        patch("modulo.core.trigger_engine.time.time", return_value=_VALID_TS),
+    ):
+        await TriggerEngine().handle_webhook(
+            session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=_RAW_BODY,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=None,
+            modulo_timestamp=str(_VALID_TS),
+            snapshot_id=_SNAP,
+        )
+
+    assert mock_create.await_count == 1
+    assert mock_create.call_args.kwargs["rate_limit_key"] is None
+
+
 async def test_handle_webhook_paused_org_raises_and_writes_no_dedup() -> None:
     """Org-wide pause: handle_webhook raises TriggersPausedError and does NOT
     attempt the dedup insert (no add, no run, no accepted event)."""
@@ -1005,6 +1196,7 @@ def _make_replay_session(
     lock_acquired: bool = True,
     pipeline_rate_limit: dict[str, Any] | None = None,
     recent_run_count: int = 0,
+    pipeline_found: bool = True,
 ) -> AsyncMock:
     """Build a mocked session for replay_event's query order.
 
@@ -1033,8 +1225,9 @@ def _make_replay_session(
     recent_count_result.scalar_one.return_value = recent_run_count
 
     pipeline_result = MagicMock()
-    pipeline_result.scalar_one_or_none.return_value = MagicMock()
-    pipeline_result.scalar_one_or_none.return_value.rate_limit_config = pipeline_rate_limit
+    pipeline_result.scalar_one_or_none.return_value = MagicMock() if pipeline_found else None
+    if pipeline_found:
+        pipeline_result.scalar_one_or_none.return_value.rate_limit_config = pipeline_rate_limit
 
     call_count = 0
 
@@ -1207,6 +1400,34 @@ async def test_replay_event_event_type_not_accepted() -> None:
         )
 
 
+async def test_replay_event_accepted_event_present_passes() -> None:
+    """When the replayed payload carries an accepted event dict, the event-type
+    gate falls through and the run is created."""
+    trigger = _make_trigger(accepted_events=["pull_request"])
+    event = MagicMock()
+    event.id = uuid.uuid4()
+    event.trigger_id = trigger.id
+    session = _make_replay_session(
+        event=event,
+        trigger=trigger,
+        stored_payload=_make_stored_payload(raw_payload={"pull_request": {"number": 42}}),
+        active_run_count=0,
+    )
+
+    run_mock = MagicMock(id=uuid.uuid4())
+    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock):
+        run, te, input_payload = await TriggerEngine().replay_event(
+            session,
+            event_id=event.id,
+            org_id=_ORG,
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+    assert te.validation_result == "accepted"
+    assert input_payload == {"pull_request": {"number": 42}}
+
+
 async def test_replay_event_rate_limit_exceeded() -> None:
     trigger = _make_trigger()
     event = MagicMock()
@@ -1227,6 +1448,98 @@ async def test_replay_event_rate_limit_exceeded() -> None:
             org_id=_ORG,
             snapshot_id=_SNAP,
         )
+
+
+async def test_replay_event_rate_limit_from_trigger_config() -> None:
+    """A rate limit carried on the trigger's ``config_json`` (rather than the
+    pipeline row) applies on replay too."""
+    trigger = _make_trigger(extra_config={"rate_limit": {"max_triggers": 1, "window_seconds": 300}})
+    event = MagicMock()
+    event.id = uuid.uuid4()
+    event.trigger_id = trigger.id
+    session = _make_replay_session(
+        event=event,
+        trigger=trigger,
+        stored_payload=_make_stored_payload(),
+        active_run_count=0,
+        pipeline_rate_limit=None,
+        recent_run_count=1,
+    )
+    with pytest.raises(PipelineRateLimitError):
+        await TriggerEngine().replay_event(
+            session,
+            event_id=event.id,
+            org_id=_ORG,
+            snapshot_id=_SNAP,
+        )
+
+
+async def test_replay_event_pipeline_not_found_skips_rate_limit() -> None:
+    """A missing pipeline row must not abort a replay — rate limiting is
+    skipped and the run is created with no rate_limit_key."""
+    trigger = _make_trigger()
+    event = MagicMock()
+    event.id = uuid.uuid4()
+    event.trigger_id = trigger.id
+    session = _make_replay_session(
+        event=event,
+        trigger=trigger,
+        stored_payload=_make_stored_payload(),
+        active_run_count=0,
+        pipeline_rate_limit=None,
+        recent_run_count=1,
+        pipeline_found=False,
+    )
+
+    run_mock = MagicMock(id=uuid.uuid4())
+    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create:
+        run, te, _ = await TriggerEngine().replay_event(
+            session,
+            event_id=event.id,
+            org_id=_ORG,
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+    assert te.validation_result == "accepted"
+    assert mock_create.call_args.kwargs["rate_limit_key"] is None
+
+
+async def test_replay_event_rate_limit_not_exceeded_passes() -> None:
+    """A configured rate limit that is NOT yet hit lets the replay through
+    with the computed key on the created run."""
+    trigger = _make_trigger()
+    event = MagicMock()
+    event.id = uuid.uuid4()
+    event.trigger_id = trigger.id
+
+    raw_payload = {"repo": "acme/app", "action": "opened"}
+    session = _make_replay_session(
+        event=event,
+        trigger=trigger,
+        stored_payload=_make_stored_payload(raw_payload=raw_payload),
+        active_run_count=0,
+        pipeline_rate_limit={
+            "max_triggers": 10,
+            "window_seconds": 3600,
+            "key_fields": ["repo"],
+            "match_mode": "exact",
+        },
+        recent_run_count=1,
+    )
+
+    run_mock = MagicMock(id=uuid.uuid4())
+    with patch("modulo.core.trigger_engine.create_run", return_value=run_mock) as mock_create:
+        run, te, _ = await TriggerEngine().replay_event(
+            session,
+            event_id=event.id,
+            org_id=_ORG,
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+    assert te.validation_result == "accepted"
+    assert mock_create.call_args.kwargs["rate_limit_key"] == '{"repo": "acme/app"}'
 
 
 async def test_replay_event_paused_org_raises() -> None:

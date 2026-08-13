@@ -47,3 +47,29 @@ class TestApplyFieldMapping:
     def test_empty_source(self) -> None:
         result = apply_field_mapping({}, {"key": "value"})
         assert result == {"key": None}
+
+    def test_invalid_jmespath_expression_returns_none(self) -> None:
+        source = {"a": 1}
+        field_map = {"bad": "a["}
+        result = apply_field_mapping(source, field_map)
+        assert result == {"bad": None}
+
+    def test_jmespath_expression_not_mutating_source(self) -> None:
+        source = {"user": {"name": "Alice"}}
+        result = apply_field_mapping(source, {"user_name": "user.name"})
+        assert result == {"user_name": "Alice"}
+        assert source == {"user": {"name": "Alice"}}
+
+    def test_source_object_raising_typeerror_returns_none(self) -> None:
+        class _ExplodingSource:
+            def __getattr__(self, name: str) -> object:
+                raise TypeError("programming bug in JMESPath usage")
+
+        result = apply_field_mapping(_ExplodingSource(), {"key": "value"})
+        assert result == {"key": None}
+
+    def test_field_map_is_copied_on_passthrough(self) -> None:
+        source = {"a": 1}
+        result = apply_field_mapping(source, None)
+        result["b"] = 2
+        assert source == {"a": 1}

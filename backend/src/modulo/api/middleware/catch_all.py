@@ -43,6 +43,10 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
             try:
                 await _ingest_unhandled_error(request)
             except Exception:
+                # Best-effort ingest must never abort the 500 response. The helper
+                # swallows most failures internally, but this guard guarantees the
+                # catch-all contract (a structured 500 for every unhandled
+                # exception) even if the ingest path itself raises.
                 logger.exception("middleware.error_ingest_dispatch_failed")
             return _make_500_response(rid)
 
@@ -87,12 +91,6 @@ async def _ingest_unhandled_error(request: Request) -> None:
                 await service.ingest(session, org_id, event_data)
     except Exception:
         logger.exception("middleware.error_ingest_failed")
-
-
-def get_unhandled_exception_count() -> int:
-    """Expose the counter for observability / monitoring."""
-    with _unhandled_count_lock:
-        return _unhandled_exception_count
 
 
 def _make_500_response(request_id: str | None) -> JSONResponse:

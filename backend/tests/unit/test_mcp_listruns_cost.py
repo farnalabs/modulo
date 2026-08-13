@@ -261,6 +261,50 @@ class TestListRunsErrorDetail(_AuthContext):
         assert item["error_code"] is None
         assert item["error_detail"] is None
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.list_runs")
+    async def test_error_detail_preview_truncated_to_200(
+        self,
+        mock_db_list_runs: AsyncMock,
+        mock_child_rollup: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_run(error_code="task_failure", error_detail="e" * 500)
+        mock_db_list_runs.return_value = _make_list_result([run], total=1, next_cursor=None, has_more=False)
+        mock_child_rollup.return_value = {}
+        mock_session.return_value = _make_session_context(AsyncMock())
+
+        result = await list_runs(limit=20)
+
+        item = result["items"][0]
+        assert item["error_detail"].endswith("…")
+        assert len(item["error_detail"]) == 201
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.run.get_child_run_rollup")
+    @patch("modulo.db.crud.run.list_runs")
+    async def test_error_detail_preview_redacts_secrets(
+        self,
+        mock_db_list_runs: AsyncMock,
+        mock_child_rollup: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        run = _make_run(error_code="task_failure", error_detail="openai call failed: sk-abcdefghijkl1234")
+        mock_db_list_runs.return_value = _make_list_result([run], total=1, next_cursor=None, has_more=False)
+        mock_child_rollup.return_value = {}
+        mock_session.return_value = _make_session_context(AsyncMock())
+
+        result = await list_runs(limit=20)
+
+        item = result["items"][0]
+        assert "sk-abcdefghijkl1234" not in item["error_detail"]
+        assert "<redacted>" in item["error_detail"]
+
 
 class TestListRunsCostErrors(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)

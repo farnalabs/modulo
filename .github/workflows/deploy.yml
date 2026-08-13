@@ -256,6 +256,54 @@ jobs:
           }
           Write-Host "staging.modulo.run SHA match: $deployedSha"
 
+      - name: Self-report deployed PRs to Modulo (fail-open, best-effort)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          MODULO_SELF_REPORT_URL: ${{ secrets.MODULO_SELF_REPORT_URL }}
+          MODULO_SELF_REPORT_TOKEN: ${{ secrets.MODULO_SELF_REPORT_TOKEN }}
+        run: |
+          # FAR-145 follow-up (workflow self-report): the Deploy Agent carries PRs
+          # to staging/prod but never emitted work_item_refs, so the deploy stage of
+          # a lifecycle-map journey never advanced autonomously. This step discovers
+          # the PRs this deploy carries from the squash-merge commit messages on
+          # main ("Title (#123)" / "Merge pull request #123") and emits a
+          # self-report payload matching the work-item-refs contract in self_report.py
+          # ({kind, ref, status?} — advisory operator claims, confirm/match only,
+          # never mint). The parser reads the payload's work_item_refs list directly.
+          #
+          # FAIL-OPEN BY DESIGN: discovery + the optional POST are guarded so a
+          # Modulo outage can NEVER fail the deploy. The payload is always recorded
+          # in the log; the POST only fires when MODULO_SELF_REPORT_URL is
+          # configured. No such ingestion endpoint exists yet — see the follow-up
+          # ticket for the required API.
+          COMMITS=$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.sha }}&per_page=30" --jq '.[].commit.message' 2>/dev/null || echo "")
+          NUMS=$(echo "$COMMITS" | grep -oE 'Merge pull request #[0-9]+|\(#[0-9]+\)' | grep -oE '[0-9]+' | sort -un || true)
+          [ -z "$NUMS" ] && { echo "No PR numbers found in the deployed commit range - nothing to self-report."; exit 0; }
+
+          REFS="[]"
+          for NUM in $NUMS; do
+            REFS=$(echo "$REFS" | jq -c --arg ref "#${NUM}" '. + [{"kind": "github_pr", "ref": $ref, "status": "done"}]' 2>/dev/null || echo "$REFS")
+          done
+          PAYLOAD=$(jq -n --argjson refs "$REFS" \
+            '{event: "workflow_self_report", source: "github_actions", workflow: "deploy", work_item_refs: $refs}' 2>/dev/null) \
+            || PAYLOAD='{"event":"workflow_self_report","source":"github_actions","workflow":"deploy","work_item_refs":[]}'
+
+          echo "=== Modulo self-report payload (deployed PRs) ==="
+          echo "$PAYLOAD"
+
+          if [ -z "$MODULO_SELF_REPORT_URL" ]; then
+            echo "::notice::MODULO_SELF_REPORT_URL not configured - deployed PRs recorded in log only, POST skipped (fail-open)."
+            exit 0
+          fi
+
+          curl -sS -f --max-time 15 -X POST "$MODULO_SELF_REPORT_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $MODULO_SELF_REPORT_TOKEN" \
+            -d "$PAYLOAD" 2>/dev/null \
+            && echo "Self-report delivered to Modulo." \
+            || echo "::warning::Modulo self-report POST failed - deployed PRs recorded in log only (fail-open)."
+
       - name: Ensure worker machine exists (staging)
         shell: bash
         env:
@@ -267,26 +315,46 @@ jobs:
           # fail the whole deploy job. Only machines in the 'started' state
           # count -- a stopped/crash-looping worker does not satisfy the check.
           fly machine list --app staging-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
-          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
-          # worker does not satisfy the check. WORKER_ID is the first worker
-          # machine in ANY state, used to clone the process group without the
-          # --process-group flag that flyctl v0.4.x removed from `machine run`.
-          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
+          # Snapshot the machine IDs that exist BEFORE this step creates/clones
+          # anything. The "Clean up stray machines" step uses this list so it
+          # never destroys a machine this deploy just created/cloned.
+          python3 -c '
           import json
           try:
               with open("/tmp/worker-machines.json") as f:
                   machines = json.load(f)
           except Exception:
               machines = []
-          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          with open("/tmp/predeploy-machine-ids.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
+          # worker does not satisfy the check. WORKER_ID is the first worker
+          # machine in ANY state, used to clone the process group without the
+          # --process-group flag that flyctl v0.4.x removed from `machine run`.
+          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
+          import json
+
+          def _pg(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if _pg(m) == "worker" and m.get("state") == "started"]
           worker_id = ""
           for m in machines:
-              if m.get("process_group") == "worker":
+              if _pg(m) == "worker":
                   worker_id = m.get("id") or ""
                   break
           image = ""
           for m in machines:
-              if m.get("process_group") == "app" and m.get("state") == "started":
+              if _pg(m) == "app" and m.get("state") == "started":
                   image = (m.get("config") or {}).get("image") or m.get("image") or ""
                   break
           print(len(started), worker_id, image)
@@ -369,6 +437,63 @@ jobs:
           done
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
           exit 1
+
+      - name: Clean up stray machines (no process group)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # flyctl v0.4.82 nests the process group under config.metadata.fly_process_group.
+          # Machines with NO process group are strays created by the old broken
+          # worker-ensure parse (fly machine run without a group) and must be
+          # destroyed or they accumulate and hit the Fly machine limit.
+          fly machine list --app staging-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
+          python3 - <<'PYEOF' || true
+          import json
+          app = "staging-modulo"
+          try:
+              with open("/tmp/cleanup-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          # Only destroy strays that existed BEFORE this deploy run. The ensure
+          # step above may have just created/cloned a group-less machine via
+          # `fly machine run` (flyctl v0.4.x creates group-less machines even
+          # with the config); destroying it would leave the app with zero
+          # workers. Skip any machine id not in the predeploy snapshot.
+          try:
+              with open("/tmp/predeploy-machine-ids.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pre = set()
+          if not pre:
+              print("WARN: predeploy machine id snapshot unavailable - skipping stray cleanup")
+          else:
+              removed = 0
+              for m in machines:
+                  cfg = m.get("config") or {}
+                  meta = cfg.get("metadata") or {}
+                  env = cfg.get("env") or {}
+                  pg = (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+                  mid = m.get("id")
+                  if not mid or pg != "" or mid not in pre:
+                      continue
+                  import subprocess
+                  try:
+                      r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                         capture_output=True, text=True, timeout=60)
+                  except subprocess.TimeoutExpired:
+                      print(f"  WARN destroy timed out for stray {mid}")
+                      continue
+                  if r.returncode == 0:
+                      removed += 1
+                      print(f"  destroyed stray {mid} ({m.get('name','')})")
+                  else:
+                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
+              print(f"stray machines destroyed: {removed}")
+          PYEOF
 
   staging-e2e:
     name: Staging E2E (smoke + WCAG + regression)
@@ -519,26 +644,46 @@ jobs:
           # fail the whole deploy job. Only machines in the 'started' state
           # count -- a stopped/crash-looping worker does not satisfy the check.
           fly machine list --app app-modulo --json > /tmp/worker-machines.json 2>/dev/null || true
-          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
-          # worker does not satisfy the check. WORKER_ID is the first worker
-          # machine in ANY state, used to clone the process group without the
-          # --process-group flag that flyctl v0.4.x removed from `machine run`.
-          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
+          # Snapshot the machine IDs that exist BEFORE this step creates/clones
+          # anything. The "Clean up stray machines" step uses this list so it
+          # never destroys a machine this deploy just created/cloned.
+          python3 -c '
           import json
           try:
               with open("/tmp/worker-machines.json") as f:
                   machines = json.load(f)
           except Exception:
               machines = []
-          started = [m for m in machines if m.get("process_group") == "worker" and m.get("state") == "started"]
+          with open("/tmp/predeploy-machine-ids.txt", "w") as f:
+              f.write("\n".join(m.get("id", "") for m in machines if m.get("id")))
+          ' || true
+          # WORKER_COUNT counts STARTED workers only -- a stopped/crash-looping
+          # worker does not satisfy the check. WORKER_ID is the first worker
+          # machine in ANY state, used to clone the process group without the
+          # --process-group flag that flyctl v0.4.x removed from `machine run`.
+          read -r WORKER_COUNT WORKER_ID IMAGE <<< "$(python3 -c '
+          import json
+
+          def _pg(m):
+              cfg = m.get("config") or {}
+              meta = cfg.get("metadata") or {}
+              env = cfg.get("env") or {}
+              return (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+
+          try:
+              with open("/tmp/worker-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          started = [m for m in machines if _pg(m) == "worker" and m.get("state") == "started"]
           worker_id = ""
           for m in machines:
-              if m.get("process_group") == "worker":
+              if _pg(m) == "worker":
                   worker_id = m.get("id") or ""
                   break
           image = ""
           for m in machines:
-              if m.get("process_group") == "app" and m.get("state") == "started":
+              if _pg(m) == "app" and m.get("state") == "started":
                   image = (m.get("config") or {}).get("image") or m.get("image") or ""
                   break
           print(len(started), worker_id, image)
@@ -621,6 +766,63 @@ jobs:
           done
           echo "::error::worker_health never passed within ${TIMEOUT_MIN} minutes - SAQ workers did not come up after deploy"
           exit 1
+
+      - name: Clean up stray machines (no process group)
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          export FLYCTL_INSTALL="/home/runner/.fly"
+          export PATH="$FLYCTL_INSTALL/bin:$PATH"
+          # flyctl v0.4.82 nests the process group under config.metadata.fly_process_group.
+          # Machines with NO process group are strays created by the old broken
+          # worker-ensure parse (fly machine run without a group) and must be
+          # destroyed or they accumulate and hit the Fly machine limit.
+          fly machine list --app app-modulo --json > /tmp/cleanup-machines.json 2>/dev/null || true
+          python3 - <<'PYEOF' || true
+          import json
+          app = "app-modulo"
+          try:
+              with open("/tmp/cleanup-machines.json") as f:
+                  machines = json.load(f)
+          except Exception:
+              machines = []
+          # Only destroy strays that existed BEFORE this deploy run. The ensure
+          # step above may have just created/cloned a group-less machine via
+          # `fly machine run` (flyctl v0.4.x creates group-less machines even
+          # with the config); destroying it would leave the app with zero
+          # workers. Skip any machine id not in the predeploy snapshot.
+          try:
+              with open("/tmp/predeploy-machine-ids.txt") as f:
+                  pre = {line.strip() for line in f if line.strip()}
+          except Exception:
+              pre = set()
+          if not pre:
+              print("WARN: predeploy machine id snapshot unavailable - skipping stray cleanup")
+          else:
+              removed = 0
+              for m in machines:
+                  cfg = m.get("config") or {}
+                  meta = cfg.get("metadata") or {}
+                  env = cfg.get("env") or {}
+                  pg = (meta.get("fly_process_group") or env.get("FLY_PROCESS_GROUP") or "").strip()
+                  mid = m.get("id")
+                  if not mid or pg != "" or mid not in pre:
+                      continue
+                  import subprocess
+                  try:
+                      r = subprocess.run(["fly", "machines", "destroy", mid, "--app", app, "--force"],
+                                         capture_output=True, text=True, timeout=60)
+                  except subprocess.TimeoutExpired:
+                      print(f"  WARN destroy timed out for stray {mid}")
+                      continue
+                  if r.returncode == 0:
+                      removed += 1
+                      print(f"  destroyed stray {mid} ({m.get('name','')})")
+                  else:
+                      print(f"  WARN could not destroy stray {mid}: {r.stderr.strip()[:120]}")
+              print(f"stray machines destroyed: {removed}")
+          PYEOF
 
   prod-smoke:
     name: Prod smoke tests

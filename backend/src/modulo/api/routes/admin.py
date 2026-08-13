@@ -61,7 +61,6 @@ from modulo.db.models.org_membership import OrgMembership
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import TERMINAL_STATUSES, Run
-from modulo.db.models.stage import Stage
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -1544,7 +1543,6 @@ async def admin_delete_team(
             resource_checks: list[tuple[str, int]] = []
             for model_cls, label in [
                 (Pipeline, "pipeline"),
-                (Stage, "stage"),
                 (ConnectorInstance, "connector"),
                 (ModelBackend, "model backend"),
                 (LibraryPrimitive, "library primitive"),
@@ -3041,11 +3039,6 @@ class StorageInfoResponse(BaseModel):
     total_runs: int
     status_breakdown: dict[str, int]
     estimated_saved_bytes: int
-
-
-class StatusCount(BaseModel):
-    status: str
-    count: int
 
 
 @router.get(

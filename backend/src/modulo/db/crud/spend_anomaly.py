@@ -5,8 +5,6 @@ All functions require RLS org context to be set by the caller.
 
 import uuid
 from collections.abc import Sequence
-from datetime import date
-from decimal import Decimal
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,26 +45,3 @@ async def dismiss_anomaly(
     result = await session.execute(q)
     await session.flush()
     return bool(result.rowcount > 0) if hasattr(result, "rowcount") else True
-
-
-async def create_anomaly(
-    session: AsyncSession,
-    *,
-    organisation_id: uuid.UUID,
-    anomaly_date: date,
-    pipeline_id: uuid.UUID | None = None,
-    amount: Decimal,
-    baseline: Decimal,
-    percent_above: Decimal,
-) -> SpendAnomaly:
-    anomaly = SpendAnomaly(
-        organisation_id=organisation_id,
-        anomaly_date=anomaly_date,
-        pipeline_id=pipeline_id,
-        amount=amount,
-        baseline=baseline,
-        percent_above=percent_above,
-    )
-    session.add(anomaly)
-    await session.flush()
-    return anomaly

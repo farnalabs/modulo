@@ -8,6 +8,7 @@ endpoints owned by a break-glass account (live OR denied) — fail-closed, with
 per-endpoint isolation.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -17,7 +18,7 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.exc import SQLAlchemyError
 
-from modulo.core.notifier import DispatchResult, Notifier
+from modulo.core.notifier import DispatchResult, Notifier, _record_owner_read_failure
 from modulo.db.models.account import Account
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 
@@ -76,6 +77,68 @@ async def _reject(n: Notifier, endpoints: list[NotificationEndpoint], owners: li
 
 
 # ---------------------------------------------------------------------------
+# _record_owner_read_failure
+# ---------------------------------------------------------------------------
+
+
+def test_record_owner_read_failure_noop_when_no_meter_provider() -> None:
+    """When OTel reports no meter provider the counter stays unset and nothing is recorded."""
+    from opentelemetry import metrics as otel_metrics
+
+    with (
+        patch.object(otel_metrics, "get_meter_provider", return_value=None),
+        patch("modulo.core.notifier._owner_read_failures_total", None),
+    ):
+        _record_owner_read_failure()
+
+    from modulo.core.notifier import _owner_read_failures_total
+
+    assert _owner_read_failures_total is None
+
+
+def test_record_owner_read_failure_initialises_and_increments_counter() -> None:
+    """First call builds the OTel counter, subsequent calls reuse it and increment."""
+    from opentelemetry import metrics as otel_metrics
+
+    counter = MagicMock()
+    meter = MagicMock()
+    meter.create_counter.return_value = counter
+    provider = MagicMock()
+    provider.get_meter.return_value = meter
+
+    with (
+        patch.object(otel_metrics, "get_meter_provider", return_value=provider),
+        patch("modulo.core.notifier._owner_read_failures_total", None),
+    ):
+        _record_owner_read_failure()
+        _record_owner_read_failure()
+
+    assert counter.add.call_count == 2
+    meter.create_counter.assert_called_once_with(
+        name="modulo_notifier_break_glass_owner_read_failures_total",
+        description="Fail-closed webhook dispatch suppressions from break-glass owner-read DB errors",
+        unit="1",
+    )
+
+
+def test_record_owner_read_failure_logs_warning_when_counter_creation_fails() -> None:
+    """If OTel counter creation raises, the metric setup is abandoned with a warning."""
+    from opentelemetry import metrics as otel_metrics
+
+    provider = MagicMock()
+    provider.get_meter = MagicMock(side_effect=RuntimeError("otel down"))
+
+    with (
+        patch.object(otel_metrics, "get_meter_provider", return_value=provider),
+        patch("modulo.core.notifier._owner_read_failures_total", None),
+        patch("modulo.core.notifier._log.warning") as mock_warning,
+    ):
+        _record_owner_read_failure()
+
+    mock_warning.assert_called_once_with("notifier.metrics_owner_read_counter_failed")
+
+
+# ---------------------------------------------------------------------------
 # _reject_break_glass_owned
 # ---------------------------------------------------------------------------
 
@@ -122,6 +185,39 @@ async def test_reject_keeps_non_uuid_owner_reference(notifier: Notifier) -> None
         kept = await notifier._reject_break_glass_owned([ep])
     assert kept == [ep]
     factory.assert_not_called()
+
+
+async def test_reject_keeps_non_uuid_reference_alongside_uuid_owners(notifier: Notifier) -> None:
+    """When other endpoints force an owner query, an endpoint carrying a non-UUID
+    account_id is still kept — it cannot reference an accounts row."""
+    uuid_ep = _endpoint(account_id=uuid.uuid4())
+    owner = _owner(is_break_glass=False)
+    owner.id = uuid_ep.account_id
+    non_uuid_ep = _endpoint()
+    non_uuid_ep.account_id = "not-a-uuid"
+
+    kept = await _reject(notifier, [uuid_ep, non_uuid_ep], [owner])
+
+    assert kept == [uuid_ep, non_uuid_ep]
+
+
+async def test_reject_re_raises_cancelled_error(notifier: Notifier) -> None:
+    """A cancelled owner read must propagate as CancelledError, not be swallowed."""
+    ep = _endpoint(account_id=uuid.uuid4())
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=asyncio.CancelledError)
+    factory = MagicMock(
+        side_effect=lambda: AsyncMock(
+            __aenter__=AsyncMock(return_value=session),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    with (
+        patch.object(notifier, "_session_factory", factory),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await notifier._reject_break_glass_owned([ep])
 
 
 async def test_reject_skips_orphaned_owner_id(notifier: Notifier) -> None:

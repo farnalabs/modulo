@@ -296,6 +296,7 @@ class TestConstants:
             "create_trigger",
             "delete_pipeline",
             "create_agent",
+            "create_schema",
             "infer_schema",
             "create_secret",
             "delete_secret",

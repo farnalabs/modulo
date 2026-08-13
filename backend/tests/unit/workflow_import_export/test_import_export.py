@@ -339,6 +339,13 @@ async def test_latest_published_version_propagates_db_error() -> None:
         await _get_latest_published_version(session, uuid.uuid4())
 
 
+async def test_latest_published_version_reraise_cancelled() -> None:
+    session = AsyncMock()
+    session.execute.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await _get_latest_published_version(session, uuid.uuid4())
+
+
 # ---------------------------------------------------------------------------
 # resolve_schema — local-equivalent resolution
 # ---------------------------------------------------------------------------
@@ -403,6 +410,44 @@ async def test_resolve_schema_propagates_db_error() -> None:
         await resolve_schema(session, _ORG_ID, {"name": "S", "abstract_name": "abs", "definition_json": {}})
 
 
+async def test_resolve_schema_reraise_cancelled() -> None:
+    session = AsyncMock()
+    session.execute.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_schema(session, _ORG_ID, {"name": "S", "abstract_name": "abs", "definition_json": {}})
+
+
+async def test_resolve_schema_by_definition_when_no_abstract_name() -> None:
+    session = AsyncMock()
+    name_result = MagicMock()
+    name_result.scalar_one_or_none.return_value = None
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(side_effect=[name_result, schemas_result])
+    resolved = await resolve_schema(session, _ORG_ID, {"name": "S", "abstract_name": "", "definition_json": {"a": 1}})
+    assert resolved["schema_id"] is None
+    assert "not found locally" in resolved["warning"]
+
+
+async def test_resolve_schema_definition_match_with_duplicate_versions() -> None:
+    s1 = SimpleNamespace(id=uuid.uuid4())
+    s2 = SimpleNamespace(id=uuid.uuid4())
+    sv1 = SimpleNamespace(schema_id=s1.id, version="1.0", definition_json={"type": "object"})
+    sv1b = SimpleNamespace(schema_id=s1.id, version="0.9", definition_json={"other": True})
+    sv2 = SimpleNamespace(schema_id=s2.id, version="1.0", definition_json={"kind": "different"})
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value.all.return_value = [s1, s2]
+    versions_result = MagicMock()
+    versions_result.scalars.return_value.all.return_value = [sv1, sv1b, sv2]
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[schemas_result, versions_result])
+    resolved = await resolve_schema(
+        session, _ORG_ID, {"name": "S", "abstract_name": "", "definition_json": {"missing": True}}
+    )
+    assert resolved["schema_id"] is None
+    assert "not found locally" in resolved["warning"]
+
+
 # ---------------------------------------------------------------------------
 # resolve_connector_type — active local instance lookup
 # ---------------------------------------------------------------------------
@@ -432,6 +477,13 @@ async def test_resolve_connector_type_propagates_db_error() -> None:
     session = AsyncMock()
     session.execute.side_effect = SQLAlchemyError("read failed")
     with pytest.raises(SQLAlchemyError):
+        await resolve_connector_type(session, _ORG_ID, "github")
+
+
+async def test_resolve_connector_type_reraise_cancelled() -> None:
+    session = AsyncMock()
+    session.execute.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
         await resolve_connector_type(session, _ORG_ID, "github")
 
 
@@ -478,6 +530,20 @@ async def test_resolve_model_backend_not_found_warns() -> None:
     resolved = await resolve_model_backend(session, _ORG_ID, {"name": "MB", "provider": "openai", "model_id": "gpt-4o"})
     assert resolved["model_backend_id"] is None
     assert "not found locally" in resolved["warning"]
+
+
+async def test_resolve_model_backend_reraise_cancelled() -> None:
+    session = AsyncMock()
+    session.execute.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await resolve_model_backend(session, _ORG_ID, {"name": "MB", "provider": "openai", "model_id": "gpt-4o"})
+
+
+async def test_resolve_model_backend_propagates_db_error() -> None:
+    session = AsyncMock()
+    session.execute.side_effect = SQLAlchemyError("read failed")
+    with pytest.raises(SQLAlchemyError):
+        await resolve_model_backend(session, _ORG_ID, {"name": "MB", "provider": "openai", "model_id": "gpt-4o"})
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +696,123 @@ async def test_export_pipeline_bundle_skips_invalid_agent_id(monkeypatch: pytest
     assert len(bundle["agents"]) == 1
 
 
+async def test_export_pipeline_bundle_skips_invalid_output_schema_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = [
+        {"agent_id": str(fakes["agent"].id), "output_schema_id": "not-a-uuid"},
+    ]
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    data = await export_pipeline_bundle(_export_session(fakes), fakes["pipeline"].id)
+    bundle = extract_bundle_json_from_zip(data)
+    assert len(bundle["agents"]) == 1
+    assert bundle["schemas"] == [
+        {
+            "id": str(fakes["schema"].id),
+            "name": "Schema A",
+            "description": "sd",
+            "abstract_name": "abs",
+            "latest_version": "3.0",
+            "definition_json": {"type": "object"},
+        }
+    ]
+
+
+async def test_export_pipeline_bundle_reraise_cancelled() -> None:
+    session = AsyncMock()
+    session.execute.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await export_pipeline_bundle(session, uuid.uuid4())
+
+
+async def test_export_pipeline_bundle_without_graph_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = None
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    session.execute = AsyncMock(side_effect=[pipeline_result, edges_result])
+    data = await export_pipeline_bundle(session, fakes["pipeline"].id)
+    bundle = extract_bundle_json_from_zip(data)
+    assert bundle["agents"] == []
+    assert bundle["schemas"] == []
+    assert bundle["model_backends"] == []
+    assert bundle["edges"] == [
+        {
+            "id": str(fakes["edge"].id),
+            "source_node_id": str(fakes["edge"].source_node_id),
+            "target_node_id": str(fakes["edge"].target_node_id),
+            "edge_type": "normal",
+            "hitl_gate_config": None,
+        }
+    ]
+
+
+async def test_export_pipeline_bundle_mixed_node_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = [
+        {"agent_id": str(fakes["agent"].id)},
+        {"output_schema_id": str(fakes["schema"].id)},
+    ]
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    data = await export_pipeline_bundle(_export_session(fakes), fakes["pipeline"].id)
+    bundle = extract_bundle_json_from_zip(data)
+    assert len(bundle["agents"]) == 1
+    assert len(bundle["schemas"]) == 1
+
+
+async def test_export_pipeline_bundle_agent_without_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    bare_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Bare",
+        description=None,
+        input_schema_id=None,
+        input_schema_version=None,
+        output_schema_id=None,
+        output_schema_version=None,
+        prompt_template="",
+        model_backend_id=None,
+        connector_type_refs=[],
+        evals=[],
+        retry_policy={},
+        token_budget=None,
+    )
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = [{"agent_id": str(bare_agent.id)}]
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [bare_agent]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    session.execute = AsyncMock(side_effect=[pipeline_result, agents_result, edges_result])
+    data = await export_pipeline_bundle(session, fakes["pipeline"].id)
+    bundle = extract_bundle_json_from_zip(data)
+    assert bundle["agents"] == [
+        {
+            "id": str(bare_agent.id),
+            "name": "Bare",
+            "description": None,
+            "input_schema_id": None,
+            "input_schema_version": "1.0",
+            "output_schema_id": None,
+            "output_schema_version": "1.0",
+            "prompt_template": "",
+            "model_backend_id": None,
+            "connector_type_refs": [],
+            "evals": [],
+            "retry_policy": {},
+            "token_budget": None,
+        }
+    ]
+    assert bundle["schemas"] == []
+    assert bundle["model_backends"] == []
+
+
 # ---------------------------------------------------------------------------
 # export_pipeline_bundle_v2 — YAML bundle with trigger/owner/author enrichment
 # ---------------------------------------------------------------------------
@@ -720,6 +903,258 @@ async def test_export_pipeline_bundle_v2_author_falls_back_to_account_id(monkeyp
     assert doc["modulo_workflow"]["author"] == str(_ACCOUNT_ID)
 
 
+def _v2_aux_session(fakes: dict[str, Any], *, team_error: bool = False, account_error: bool = False) -> AsyncMock:
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [fakes["agent"]]
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value = [fakes["schema"]]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    triggers_result = MagicMock()
+    triggers_result.scalars.return_value.all.return_value = []
+    team_result = MagicMock()
+    if team_error:
+        team_result.scalar_one_or_none.side_effect = Exception("team read failed")
+    else:
+        team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
+    account_result = MagicMock()
+    if account_error:
+        account_result.scalar_one_or_none.side_effect = Exception("account read failed")
+    else:
+        account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
+    session.execute = AsyncMock(
+        side_effect=[
+            pipeline_result,
+            agents_result,
+            schemas_result,
+            edges_result,
+            triggers_result,
+            team_result,
+            account_result,
+        ]
+    )
+    return session
+
+
+async def test_export_pipeline_bundle_v2_skips_invalid_node_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = [{"agent_id": "not-a-uuid", "output_schema_id": "not-a-uuid"}]
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    triggers_result = MagicMock()
+    triggers_result.scalars.return_value.all.return_value = []
+    team_result = MagicMock()
+    team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
+    account_result = MagicMock()
+    account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
+    session.execute = AsyncMock(
+        side_effect=[pipeline_result, edges_result, triggers_result, team_result, account_result]
+    )
+    text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["agents"] == []
+    assert doc["modulo_workflow"]["schemas"] == []
+
+
+async def test_export_pipeline_bundle_v2_skips_invalid_output_schema_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = [
+        {"agent_id": str(fakes["agent"].id), "output_schema_id": "not-a-uuid"},
+    ]
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    text = await export_pipeline_bundle_v2(_v2_aux_session(fakes), fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert len(doc["modulo_workflow"]["agents"]) == 1
+    assert doc["modulo_workflow"]["schemas"] == [
+        {
+            "id": str(fakes["schema"].id),
+            "name": "Schema A",
+            "description": "sd",
+            "abstract_name": "abs",
+            "latest_version": "3.0",
+            "definition_json": {"type": "object"},
+        }
+    ]
+
+
+async def test_export_pipeline_bundle_v2_owner_team_lookup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    text = await export_pipeline_bundle_v2(_v2_aux_session(fakes, team_error=True), fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["owner_team"] is None
+
+
+async def test_export_pipeline_bundle_v2_creator_lookup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    text = await export_pipeline_bundle_v2(_v2_aux_session(fakes, account_error=True), fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["author"] == str(_ACCOUNT_ID)
+
+
+async def test_export_pipeline_bundle_v2_reraise_cancelled() -> None:
+    session = AsyncMock()
+    session.execute.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await export_pipeline_bundle_v2(session, uuid.uuid4())
+
+
+async def test_export_pipeline_bundle_v2_without_graph_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = None
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    triggers_result = MagicMock()
+    triggers_result.scalars.return_value.all.return_value = []
+    team_result = MagicMock()
+    team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
+    account_result = MagicMock()
+    account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
+    session.execute = AsyncMock(
+        side_effect=[pipeline_result, edges_result, triggers_result, team_result, account_result]
+    )
+    text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["agents"] == []
+    assert doc["modulo_workflow"]["schemas"] == []
+
+
+async def test_export_pipeline_bundle_v2_mixed_node_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = [
+        {"agent_id": str(fakes["agent"].id)},
+        {"output_schema_id": str(fakes["schema"].id)},
+    ]
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    text = await export_pipeline_bundle_v2(_v2_aux_session(fakes), fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert len(doc["modulo_workflow"]["agents"]) == 1
+    assert len(doc["modulo_workflow"]["schemas"]) == 1
+
+
+async def test_export_pipeline_bundle_v2_agent_without_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    bare_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Bare",
+        description=None,
+        input_schema_id=None,
+        output_schema_id=None,
+        prompt_template="",
+        template_id=None,
+        agent_command=None,
+        model_backend_id=None,
+        connector_type_refs=[],
+        evals=[],
+        retry_policy={},
+        token_budget=None,
+    )
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].graph_nodes_json = [{"agent_id": str(bare_agent.id)}]
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [bare_agent]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    triggers_result = MagicMock()
+    triggers_result.scalars.return_value.all.return_value = []
+    team_result = MagicMock()
+    team_result.scalar_one_or_none.return_value = SimpleNamespace(name="Team X")
+    account_result = MagicMock()
+    account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
+    session.execute = AsyncMock(
+        side_effect=[pipeline_result, agents_result, edges_result, triggers_result, team_result, account_result]
+    )
+    text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["agents"][0]["name"] == "Bare"
+    assert doc["modulo_workflow"]["schemas"] == []
+
+
+async def test_export_pipeline_bundle_v2_without_owner_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["pipeline"].owner_team_id = None
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [fakes["agent"]]
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value = [fakes["schema"]]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    triggers_result = MagicMock()
+    triggers_result.scalars.return_value.all.return_value = []
+    account_result = MagicMock()
+    account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
+    session.execute = AsyncMock(
+        side_effect=[pipeline_result, agents_result, schemas_result, edges_result, triggers_result, account_result]
+    )
+    text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["owner_team"] is None
+
+
+async def test_export_pipeline_bundle_v2_unresolved_owner_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    session = AsyncMock()
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = fakes["pipeline"]
+    agents_result = MagicMock()
+    agents_result.scalars.return_value = [fakes["agent"]]
+    schemas_result = MagicMock()
+    schemas_result.scalars.return_value = [fakes["schema"]]
+    edges_result = MagicMock()
+    edges_result.scalars.return_value = [fakes["edge"]]
+    triggers_result = MagicMock()
+    triggers_result.scalars.return_value.all.return_value = []
+    team_result = MagicMock()
+    team_result.scalar_one_or_none.return_value = None
+    account_result = MagicMock()
+    account_result.scalar_one_or_none.return_value = SimpleNamespace(email="a@b.c")
+    session.execute = AsyncMock(
+        side_effect=[
+            pipeline_result,
+            agents_result,
+            schemas_result,
+            edges_result,
+            triggers_result,
+            team_result,
+            account_result,
+        ]
+    )
+    text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["owner_team"] is None
+
+
+async def test_export_pipeline_bundle_v2_empty_requires_collections(monkeypatch: pytest.MonkeyPatch) -> None:
+    fakes = _pipeline_fakes()
+    fakes["agent"].connector_type_refs = [{"connector_type_id": ""}]
+    fakes["schema"].abstract_name = None
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
+    text = await export_pipeline_bundle_v2(_v2_aux_session(fakes), fakes["pipeline"].id)
+    doc = yaml.safe_load(text)
+    assert doc["modulo_workflow"]["requires"]["connector_types"] == []
+    assert doc["modulo_workflow"]["requires"]["abstract_schemas"] == []
+
+
 # ---------------------------------------------------------------------------
 # materialize_import — schema/agent/pipeline/edge creation + warning paths
 # ---------------------------------------------------------------------------
@@ -775,6 +1210,7 @@ def _patch_crud(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 def _no_existing_schema_result() -> MagicMock:
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
+    result.scalars.return_value.all.return_value = []
     return result
 
 
@@ -1060,3 +1496,295 @@ async def test_materialize_uses_pipeline_name_override(monkeypatch: pytest.Monke
         pipeline_name_override="Overridden",
     )
     assert created["pipeline"].await_args.kwargs["name"] == "Overridden"
+
+
+async def test_materialize_uses_resolved_schema_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    export_schema_id = uuid.uuid4()
+    local_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[
+            {
+                "id": str(export_schema_id),
+                "name": "Schema A",
+                "definition_json": {"type": "object"},
+                "_resolved_id": str(local_schema_id),
+                "_resolved_version": "5.0",
+            }
+        ],
+    )
+    result = await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    created["schema"].assert_not_awaited()
+    assert result["schemas"] == {str(export_schema_id): str(local_schema_id)}
+
+
+async def test_materialize_reuses_schema_with_matching_definition(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    existing = SimpleNamespace(id=uuid.uuid4(), name="Schema A")
+    monkeypatch.setattr(
+        mod,
+        "_get_latest_published_version",
+        AsyncMock(return_value=SimpleNamespace(version="2.0", definition_json={"type": "object"})),
+    )
+    export_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[{"id": str(export_schema_id), "name": "Schema A", "definition_json": {"type": "object"}}],
+    )
+    existing_result = MagicMock()
+    existing_result.scalar_one_or_none.return_value = existing
+    result = await materialize_import(_FakeSession(existing_result), _ORG_ID, _ACCOUNT_ID, bundle)
+    created["schema"].assert_not_awaited()
+    assert result["schemas"] == {str(export_schema_id): str(existing.id)}
+
+
+async def test_materialize_raises_when_schema_retries_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    export_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[{"id": str(export_schema_id), "name": "Schema A", "definition_json": {"type": "object"}}],
+    )
+    schema_mock = AsyncMock(side_effect=IntegrityError("s", None, "dup"))
+    monkeypatch.setattr(mod, "create_schema", schema_mock)
+    with pytest.raises(IntegrityError):
+        await materialize_import(
+            _FakeSession(_no_existing_schema_result(), _no_existing_schema_result()),
+            _ORG_ID,
+            _ACCOUNT_ID,
+            bundle,
+        )
+    assert schema_mock.await_count == mod._MAX_NAME_RETRIES
+
+
+async def test_materialize_raises_on_schema_create_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    export_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[{"id": str(export_schema_id), "name": "Schema A", "definition_json": {"type": "object"}}],
+    )
+    monkeypatch.setattr(mod, "create_schema", AsyncMock(side_effect=RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+
+async def test_materialize_raises_on_schema_version_create_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    export_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[{"id": str(export_schema_id), "name": "Schema A", "definition_json": {"type": "object"}}],
+    )
+    monkeypatch.setattr(mod, "create_schema_version", AsyncMock(side_effect=RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+
+async def test_materialize_warns_on_unresolved_model_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    export_mb_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        agents=[{"id": str(export_agent_id), "name": "Agent A", "model_backend_id": str(export_mb_id)}],
+    )
+    result = await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert "model_backend_id" not in created["agent"].await_args.kwargs
+    assert any("unresolved model backend" in w for w in result["warnings"])
+
+
+async def test_materialize_retries_agent_create_on_integrity_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        agents=[{"id": str(export_agent_id), "name": "Agent A"}],
+    )
+    agent_mock = AsyncMock(side_effect=[IntegrityError("s", None, "dup"), created["agent"].return_value])
+    monkeypatch.setattr(mod, "create_agent", agent_mock)
+    result = await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert agent_mock.await_count == 2
+    assert agent_mock.await_args.kwargs["name"] == "Agent A (imported)"
+    assert any("collided" in w for w in result["warnings"])
+
+
+async def test_materialize_raises_when_agent_retries_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        agents=[{"id": str(export_agent_id), "name": "Agent A"}],
+    )
+    agent_mock = AsyncMock(side_effect=IntegrityError("s", None, "dup"))
+    monkeypatch.setattr(mod, "create_agent", agent_mock)
+    with pytest.raises(IntegrityError):
+        await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert agent_mock.await_count == mod._MAX_NAME_RETRIES
+
+
+async def test_materialize_raises_on_agent_create_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    export_agent_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        agents=[{"id": str(export_agent_id), "name": "Agent A"}],
+    )
+    monkeypatch.setattr(mod, "create_agent", AsyncMock(side_effect=SQLAlchemyError("boom")))
+    with pytest.raises(SQLAlchemyError):
+        await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+
+
+async def test_materialize_retries_pipeline_create_on_integrity_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    bundle = _make_bundle(pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}})
+    pipeline_mock = AsyncMock(side_effect=[IntegrityError("s", None, "dup"), created["pipeline"].return_value])
+    monkeypatch.setattr(mod, "create_pipeline", pipeline_mock)
+    result = await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert pipeline_mock.await_count == 2
+    assert pipeline_mock.await_args.kwargs["name"] == "Imported (imported)"
+    assert any("conflicted" in w for w in result["warnings"])
+
+
+async def test_materialize_raises_when_pipeline_retries_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    bundle = _make_bundle(pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}})
+    pipeline_mock = AsyncMock(side_effect=IntegrityError("s", None, "dup"))
+    monkeypatch.setattr(mod, "create_pipeline", pipeline_mock)
+    with pytest.raises(IntegrityError):
+        await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert pipeline_mock.await_count == mod._MAX_NAME_RETRIES
+
+
+async def test_materialize_raises_on_pipeline_create_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    bundle = _make_bundle(pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}})
+    monkeypatch.setattr(mod, "create_pipeline", AsyncMock(side_effect=RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+
+
+async def test_materialize_raises_on_library_primitive_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_crud(monkeypatch)
+    bundle = _make_bundle(pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}})
+    monkeypatch.setattr(mod, "create_library_primitive", AsyncMock(side_effect=RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+
+
+async def test_materialize_accepts_existing_owner_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    owner_team_id = uuid.uuid4()
+    bundle = _make_bundle(pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}})
+    team_result = MagicMock()
+    team_result.scalar_one_or_none.return_value = SimpleNamespace(id=owner_team_id)
+    await materialize_import(
+        _FakeSession(team_result),
+        _ORG_ID,
+        _ACCOUNT_ID,
+        bundle,
+        owner_team_id=owner_team_id,
+    )
+    assert created["pipeline"].await_args.kwargs["owner_team_id"] == owner_team_id
+
+
+async def test_materialize_applies_schema_id_override_without_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    export_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[{"id": str(export_schema_id), "name": "Schema A", "definition_json": {"type": "object"}}],
+    )
+    result = await materialize_import(
+        _FakeSession(),
+        _ORG_ID,
+        _ACCOUNT_ID,
+        bundle,
+        schema_id_overrides={str(export_schema_id): "local-id"},
+    )
+    created["schema"].assert_not_awaited()
+    assert result["schemas"] == {str(export_schema_id): "local-id"}
+
+
+async def test_materialize_uses_resolved_schema_id_without_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    export_schema_id = uuid.uuid4()
+    local_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[{"id": str(export_schema_id), "name": "Schema A", "_resolved_id": str(local_schema_id)}],
+    )
+    result = await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    created["schema"].assert_not_awaited()
+    assert result["schemas"] == {str(export_schema_id): str(local_schema_id)}
+
+
+async def test_materialize_renames_multiple_schema_collisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    existing_a = SimpleNamespace(id=uuid.uuid4(), name="Schema A")
+    existing_b = SimpleNamespace(id=uuid.uuid4(), name="Schema B")
+    monkeypatch.setattr(
+        mod,
+        "_get_latest_published_version",
+        AsyncMock(return_value=SimpleNamespace(version="1.0", definition_json={"different": True})),
+    )
+    e1, e2 = uuid.uuid4(), uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[
+            {"id": str(e1), "name": "Schema A", "definition_json": {"type": "object"}},
+            {"id": str(e2), "name": "Schema B", "definition_json": {"type": "object"}},
+        ],
+    )
+    a_result = MagicMock()
+    a_result.scalar_one_or_none.return_value = existing_a
+    b_result = MagicMock()
+    b_result.scalar_one_or_none.return_value = existing_b
+    all_result = MagicMock()
+    all_result.scalars.return_value.all.return_value = [existing_a, existing_b]
+    session = _FakeSession(a_result, all_result, b_result)
+    result = await materialize_import(session, _ORG_ID, _ACCOUNT_ID, bundle)
+    names = [call.kwargs["name"] for call in created["schema"].await_args_list]
+    assert names == ["Schema A (imported)", "Schema B (imported)"]
+    assert result["schema_count"] == 2
+
+
+async def test_materialize_creates_schema_when_existing_has_no_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    existing = SimpleNamespace(id=uuid.uuid4(), name="Schema A")
+    monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=None))
+    export_schema_id = uuid.uuid4()
+    bundle = _make_bundle(
+        pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {}},
+        schemas=[{"id": str(export_schema_id), "name": "Schema A", "definition_json": {"type": "object"}}],
+    )
+    existing_result = MagicMock()
+    existing_result.scalar_one_or_none.return_value = existing
+    await materialize_import(_FakeSession(existing_result), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert created["schema"].await_args.kwargs["name"] == "Schema A"
+
+
+async def test_materialize_leaves_unmapped_graph_node_refs_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    created = _patch_crud(monkeypatch)
+    bundle = _make_bundle(
+        pipeline={
+            "name": "Imported",
+            "retry_policy": {},
+            "graph_nodes_json": [
+                {
+                    "agent_id": "unknown-agent",
+                    "output_schema_id": "unknown-schema",
+                    "connector_binding": {"instance_id": "unmapped-conn"},
+                }
+            ],
+        }
+    )
+    await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert created["pipeline"].return_value.graph_nodes_json == [
+        {
+            "agent_id": "unknown-agent",
+            "output_schema_id": "unknown-schema",
+            "connector_binding": {"instance_id": "unmapped-conn"},
+        }
+    ]

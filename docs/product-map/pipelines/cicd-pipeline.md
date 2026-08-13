@@ -214,10 +214,6 @@ and checkpoint resume.
 
 - Viewport persistence per drill-down level via Vue Router state — no test coverage
 
-### Stage Board
-
-- Stage board kanban with search/filter/sort — not covered by pipeline feature tests
-
 ### Post-Stream Error Handling Gap (executor.py)
 
 - Post-stream operations (eval suite checks, agent_signal firing, broker cleanup) at `executor.py:609-676` are NOT wrapped in an outer try/finally. If any post-stream DB operation raises an unexpected exception, `RunEventBroker.close()` is never called, leaking the broker and its subscribers. Fixed in index 309 by wrapping post-stream code in try/finally.
@@ -256,5 +252,5 @@ and checkpoint resume.
 - Fixed MEDIUM silent exception swallowing in executor.py _stream_graph (added _log.exception)
 - Fixed MEDIUM missing Fernet key warning in modulo_saver.py (warn on plaintext storage)
 - Added unit-tests frontmatter with 2 unit test file refs
-- Status: partial (8 known gaps remain — 3 @awaiting-implementation BDD features, resume API unimplemented, agent theming, CopyToAdaptWizard, canvas state, stage board)
+- Status: partial (8 known gaps remain — 3 @awaiting-implementation BDD features, resume API unimplemented, agent theming, CopyToAdaptWizard, canvas state)
 - 424/424 unit tests pass

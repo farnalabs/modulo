@@ -1,7 +1,5 @@
 from typing import Any
 
-from langchain_openai import ChatOpenAI  # noqa: F401
-
 from modulo.model_backends.module import OpenAICompatibleBackend
 
 AI21_BASE_URL = "https://api.ai21.com/studio/v1"

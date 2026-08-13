@@ -77,6 +77,7 @@ const baseRun = {
   started_at: '2026-01-01T00:00:00Z',
   completed_at: '2026-01-01T00:02:14Z',
   error_code: null,
+  error_detail: null,
   total_cost_usd: 0.5,
   account_id: null,
 }
@@ -129,6 +130,29 @@ describe('RunsListView', () => {
     expect(text).toContain('Duration')
     expect(text).not.toContain('Last Run')
     expect(text).not.toContain('Created')
+  })
+
+  it('renders an error column with a badge and detail preview for failed runs', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'failed', error_code: 'task_failure', error_detail: 'worker crashed: sk-abc1234567890' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const badge = wrapper.find('[data-testid="runs-list-error-run1"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('task_failure')
+    expect(badge.attributes('title')).toBe('worker crashed: sk-abc1234567890')
+    wrapper.unmount()
+  })
+
+  it('does not render an error badge when error_code is null', async () => {
+    mockResponses['/api/v1/runs'] = listWith([baseRun])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="runs-list-error-run1"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('renders duration formatted from start and end timestamps', async () => {
@@ -232,7 +256,7 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
-  it.each(['complete', 'failed', 'cancelled', 'eval_failed', 'stalled'])('renders no stop button for %s runs', async (status) => {
+  it.each(['complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded'])('renders no stop button for %s runs', async (status) => {
     mockResponses['/api/v1/runs'] = listWith([{ ...baseRun, status }])
     const wrapper = mountView()
     await flushPromises()

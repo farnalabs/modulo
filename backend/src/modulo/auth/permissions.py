@@ -65,6 +65,12 @@ PERMISSIONS: dict[str, str] = {
     "connector.update": "operator",
     "connector.delete": "operator",
     "connector.list": "viewer",
+    # In-Dev (pre-release) disclosure controls (ADR 010): the list endpoints
+    # accept ?include_in_dev=true, but revealing In-Dev items is operator-only —
+    # the base "list" permission stays viewer so normal listing is unchanged.
+    "connector.list.in_dev": "operator",
+    "model_backend.list.in_dev": "operator",
+    "library.search.in_dev": "operator",
     # secrets
     "secret.manage": "operator",
     # triggers
@@ -163,11 +169,6 @@ PERMISSIONS: dict[str, str] = {
     "admin.rate_limit.manage": "admin",
     "view.manage": "operator",
     "view.list": "viewer",
-    # stages
-    "stage.create": "operator",
-    "stage.update": "operator",
-    "stage.delete": "operator",
-    "stage.list": "viewer",
     # variants
     "variant.create": "operator",
     "variant.update": "operator",
