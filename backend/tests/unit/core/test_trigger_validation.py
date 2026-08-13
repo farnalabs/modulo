@@ -11,7 +11,9 @@ validator is the single contract to lock:
 * the target must not exceed the owning pipeline's ``max_concurrent_runs``
   (the effective pool is ``min(trigger, pipeline)`` at top-up time);
 * ``config_json.scan_interval_seconds`` must be >= 60 (the scheduler tick is
-  60s) and falls back to 60 when absent.
+  60s) and falls back to 60 when absent;
+* non-numeric ``daily_spend_limit`` / ``scan_interval_seconds`` values raise
+  ``HTTPException(422)`` — never a leaked ``TypeError``/``ValueError`` (500).
 """
 
 from decimal import Decimal
@@ -59,6 +61,20 @@ class TestNonOngoingPassthrough:
 class TestDailySpendLimit:
     @pytest.mark.parametrize("spend", [None, 0, -1, Decimal("0.00"), Decimal("-12.50"), -0.001])
     def test_missing_or_non_positive_limit_rejected(self, spend: object) -> None:
+        with pytest.raises(HTTPException) as excinfo:
+            validate_ongoing_config(
+                "ongoing",
+                max_concurrent_runs=5,
+                daily_spend_limit=spend,  # type: ignore[arg-type]
+                config_json=None,
+                pipeline_max_concurrent_runs=10,
+            )
+        assert _raise_detail(excinfo.value) == "ongoing triggers require daily_spend_limit (must be greater than 0)"
+
+    @pytest.mark.parametrize("spend", ["every-minute", "not-a-number", ""])
+    def test_non_numeric_limit_string_raises_422(self, spend: str) -> None:
+        """A non-numeric daily_spend_limit must not leak a TypeError (500) —
+        it raises the same 422 every other rule uses."""
         with pytest.raises(HTTPException) as excinfo:
             validate_ongoing_config(
                 "ongoing",
@@ -206,10 +222,10 @@ class TestScanInterval:
             is None
         )
 
-    def test_scan_non_integer_string_raises_value_error(self) -> None:
-        """A non-numeric scan string currently surfaces as ValueError (the int()
-        coercion), not a 422 — locks current behaviour for the pure validator."""
-        with pytest.raises(ValueError):
+    def test_scan_non_integer_string_raises_422(self) -> None:
+        """A non-numeric scan string must not leak a ValueError (500) from the
+        int() coercion — it raises the same 422 every other rule uses."""
+        with pytest.raises(HTTPException) as excinfo:
             validate_ongoing_config(
                 "ongoing",
                 max_concurrent_runs=5,
@@ -217,6 +233,10 @@ class TestScanInterval:
                 config_json={"scan_interval_seconds": "every-minute"},
                 pipeline_max_concurrent_runs=10,
             )
+        assert (
+            _raise_detail(excinfo.value)
+            == "ongoing trigger scan_interval_seconds must be an integer (number of seconds)"
+        )
 
 
 class TestCombinations:
