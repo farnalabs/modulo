@@ -3,7 +3,7 @@
 import os
 import uuid
 from collections.abc import AsyncGenerator, Generator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -96,8 +96,8 @@ def make_mock_pipeline(**kwargs: Any) -> MagicMock:
     p.run_context_defaults = kwargs.get("run_context_defaults", {})
     p.rate_limit_config = kwargs.get("rate_limit_config")
     p.created_by = uuid.uuid4()
-    p.created_at = kwargs.get("created_at", datetime.now())
-    p.updated_at = kwargs.get("updated_at", datetime.now())
+    p.created_at = kwargs.get("created_at", datetime.now(UTC))
+    p.updated_at = kwargs.get("updated_at", datetime.now(UTC))
     return p
 
 
