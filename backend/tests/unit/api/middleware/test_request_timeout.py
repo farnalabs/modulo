@@ -98,7 +98,7 @@ class TestDispatch:
         extra = records[0].__dict__
         assert extra.get("method") == "GET"
         assert extra.get("path") == "/slow-override"
-        assert extra.get("timeout_s") == 0.05
+        assert extra.get("timeout_s") == pytest.approx(0.05)
 
     @pytest.mark.anyio
     async def test_zero_timeout_disables_deadline(self, app: FastAPI) -> None:

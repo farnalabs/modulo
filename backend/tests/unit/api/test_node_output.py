@@ -377,7 +377,7 @@ class TestSensitiveMasking:
         assert output["count"] == 42
         assert output["active"] is True
         assert output["tags"] == ["a", "b"]
-        assert output["score"] == 3.14
+        assert output["score"] == pytest.approx(3.14)
         assert output["nested"] is None
 
 

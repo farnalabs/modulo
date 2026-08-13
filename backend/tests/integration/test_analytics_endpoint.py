@@ -1075,7 +1075,7 @@ class TestExportEndpoint:
             f"(total={payload['total']}, items={payload['items']})"
         )
         assert payload["items"][0]["run_id"] == str(rid_b)
-        assert payload["items"][0]["total_cost_usd"] == 9.99
+        assert payload["items"][0]["total_cost_usd"] == pytest.approx(9.99)
 
     async def test_export_require_feature_off_returns_402(
         self,

@@ -280,7 +280,7 @@ class TestTrackOkrProgressDirect:
 
         assert isinstance(progress, OkrProgress)
         assert progress.suite_id == _SUITE_ID
-        assert progress.current_score == 0.9  # 18/20
+        assert progress.current_score == pytest.approx(0.9)  # 18/20
         assert progress.pass_threshold == _SUITE_THRESHOLD
         assert progress.breach is False
 
@@ -419,7 +419,7 @@ class TestOkrSuiteModel:
         )
         assert suite.id == "s1"
         assert suite.name == "test"
-        assert suite.pass_threshold == 0.8
+        assert suite.pass_threshold == pytest.approx(0.8)
         assert suite.eval_definition_ids == [_EVAL_ID_1]
         assert suite.target_date is None
         assert suite.owner is None
@@ -453,7 +453,7 @@ class TestOkrProgressModel:
             breach=False,
         )
         assert progress.suite_id == "s1"
-        assert progress.current_score == 0.85
+        assert progress.current_score == pytest.approx(0.85)
         assert progress.breach is False
 
 
@@ -545,7 +545,7 @@ class TestOkrProgressEndpoint:
         resp = client.get(self.URL)
         data = resp.json()
         assert data["suite_id"] == "quality-suite-1"
-        assert data["current_score"] == 0.9
+        assert data["current_score"] == pytest.approx(0.9)
         assert data["pass_threshold"] == 0.75
         assert data["breach"] is False
 
@@ -553,10 +553,10 @@ class TestOkrProgressEndpoint:
         resp = client.get(self.URL)
         data = resp.json()
         trends = {t["period"]: t for t in data["trend"]}
-        assert trends["7d"]["pass_rate"] == 0.9
+        assert trends["7d"]["pass_rate"] == pytest.approx(0.9)
         assert trends["7d"]["total_evals"] == 20
-        assert trends["14d"]["pass_rate"] == 0.8
-        assert trends["overall"]["pass_rate"] == 0.8
+        assert trends["14d"]["pass_rate"] == pytest.approx(0.8)
+        assert trends["overall"]["pass_rate"] == pytest.approx(0.8)
 
     def test_with_target_date_query(self) -> None:
         mock_session = _make_mock_session()

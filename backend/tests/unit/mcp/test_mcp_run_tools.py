@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import cancel_run, get_run_evals, get_run_status, list_eval_definitions
@@ -620,7 +621,7 @@ class TestGetRunEvals(_AuthContext):
         assert result["evals"][0]["eval_id"] == str(evals[0].eval_id)
         assert result["evals"][0]["node_id"] is None
         assert result["evals"][0]["passed"] is True
-        assert result["evals"][0]["score"] == 0.95
+        assert result["evals"][0]["score"] == pytest.approx(0.95)
         assert result["evals"][0]["evaluated_at"] == evals[0].evaluated_at.isoformat()
         assert result["evals"][1]["node_id"] == str(evals[1].node_id)
         assert result["evals"][1]["evaluated_at"] is None

@@ -168,8 +168,8 @@ def test_enrich_union_output_present_overwrites_with_reclamped_fold() -> None:
     union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=False)
     # The union stores the RE-CLAMPED value from the RAW input (0.0412 unchanged
     # under the band) — the producer's own 0.04 clamp is not the union authority.
-    assert union["node-a"]["model_cost_usd"] == 0.0412
-    assert union["node-a"]["model_cost_raw_usd"] == 0.0412
+    assert union["node-a"]["model_cost_usd"] == pytest.approx(0.0412)
+    assert union["node-a"]["model_cost_raw_usd"] == pytest.approx(0.0412)
 
 
 def test_enrich_union_output_present_but_lacking_pops_sibling_flags() -> None:
@@ -214,7 +214,7 @@ def test_enrich_union_reads_split_telemetry_column() -> None:
     union = _enrich_union(usage, outputs, {"node-a": "sandbox_agent"}, is_terminal=True, merged_telemetry=telemetry)
     entry = union["node-a"]
     assert entry["wall_clock_time_ms"] == 3_600_000
-    assert entry["model_cost_usd"] == 0.04
+    assert entry["model_cost_usd"] == pytest.approx(0.04)
     assert entry["is_sandbox_for_wallclock"] is True
 
 
@@ -237,7 +237,7 @@ def test_write_back_node_cost_single_authority() -> None:
     enriched = {"node-a": {}}
     per_node_cost = {"node-a": Decimal("0.1332")}
     result = _write_back_node_cost(enriched, per_node_cost)
-    assert result["node-a"]["cost_usd"] == 0.1332
+    assert result["node-a"]["cost_usd"] == pytest.approx(0.1332)
 
 
 def test_derive_total_tokens_server_measured_only() -> None:
