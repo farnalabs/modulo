@@ -413,7 +413,7 @@ async def test_initialise_openai():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "sk-test"}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.openai.ChatOpenAI"):
+        with patch("modulo.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -443,7 +443,7 @@ async def test_initialise_ollama():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": "", "base_url": "http://localhost:11434/v1"}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.ollama.ChatOpenAI"):
+        with patch("modulo.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -458,7 +458,7 @@ async def test_initialise_ollama_defaults_base_url():
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value='{"api_key": ""}'):
         hub = ModelBackendHub()
-        with patch("modulo.model_backends.ollama.ChatOpenAI"):
+        with patch("modulo.model_backends.module.ChatOpenAI"):
             await hub.initialise([mb], secrets_backend=backend)
     assert mb.id in hub.backend_ids
 
@@ -600,7 +600,7 @@ async def test_initialise_self_referencing_fallback_does_not_crash():
     secrets_backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
         patch.object(secrets_backend, "get_secret", return_value='{"api_key": ""}'),
-        patch("modulo.model_backends.ollama.ChatOpenAI"),
+        patch("modulo.model_backends.module.ChatOpenAI"),
     ):
         hub = ModelBackendHub()
         hub._fallbacks[primary_id] = [primary_id]
