@@ -180,6 +180,27 @@ async def test_filesystem_connector_skipped() -> None:
     assert len(samples) == 0  # filesystem is not sampled
 
 
+async def test_unsupported_connector_type_produces_no_samples() -> None:
+    """A connector whose type is not sampled must be health-checked but yield no samples."""
+    hub = ConnectorHub(secrets_backend=create_secrets_backend(fernet_key=_KEY))
+    cid = uuid.uuid4()
+
+    class _SlackConnector:
+        connector_type = ConnectorType.SLACK
+
+        async def health_check(self) -> None:
+            return None
+
+        async def query(self, query: ConnectorQuery) -> SimpleNamespace:  # pragma: no cover - never reached
+            raise AssertionError("query should not be reached for an unsampled connector type")
+
+    hub._connectors = {cid: _SlackConnector()}
+    hub._initialised = True
+
+    samples = await run_scan(hub)
+    assert samples == []
+
+
 @respx.mock
 async def test_health_check_failure_still_attempts_queries() -> None:
     ci = _fake_ci("github", creds={"token": "bad_token"})
