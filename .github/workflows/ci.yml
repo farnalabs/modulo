@@ -483,62 +483,17 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Trigger-side dedup for the PR Reviewer (2026-08-13):
-          # - skip when the head SHA was already reviewed (same-SHA guard)
-          # - skip when the head moved only via merge commits since the last review
-          #   (Branch Fixer "merge origin/main" churn) UNLESS the prior review was
-          #   a merge-conflict CHANGES_REQUESTED that the merge may have resolved
-          #   (fail-open so a resolved conflict still gets re-reviewed)
-          # - otherwise dispatch (first review, fix push, rebase)
-          REVIEWS=$(gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate 2>/dev/null || echo "[]")
-          LAST=$(echo "$REVIEWS" | jq -r '[.[] | select(.state != "PENDING")] | last | "\(.commit_id // empty)|\(.state // empty)|\(.body // empty)"' 2>/dev/null || true)
-          LAST_SHA=$(echo "$LAST" | cut -d'|' -f1)
-          LAST_STATE=$(echo "$LAST" | cut -d'|' -f2)
-          LAST_BODY=$(echo "$LAST" | cut -d'|' -f3-)
-
-          if [ -z "$LAST_SHA" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "No prior review on PR #${PR_NUMBER} - dispatching first review."
-            exit 0
-          fi
-
-          if [ "$LAST_SHA" = "$HEAD_SHA" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Head ${HEAD_SHA} already reviewed - skipping PR Reviewer webhook."
-            exit 0
-          fi
-
-          COMMITS=$(gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate 2>/dev/null || echo "[]")
-          RESULT=$(echo "$COMMITS" | jq -r --arg last "$LAST_SHA" '
-            (reverse | . as $cs | reduce $cs[] as $c ({n:0, found:false};
-              if .found then . elif $c.sha == $last then .found = true
-              elif (($c.parents | length) == 1) then .n += 1 else . end)) | "\(.found) \(.n)"' 2>/dev/null || echo "false 1")
-          FOUND=$(echo "$RESULT" | cut -d' ' -f1)
-          NON_MERGE_SINCE=$(echo "$RESULT" | cut -d' ' -f2)
-
-          if [ "$FOUND" != "true" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Last review SHA ${LAST_SHA} not found in current history (force-push?) - dispatching (fail open)."
-            exit 0
-          fi
-
-          if [ "${NON_MERGE_SINCE:-1}" -gt 0 ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "${NON_MERGE_SINCE} non-merge commit(s) since last review ${LAST_SHA} - dispatching."
-            exit 0
-          fi
-
-          # Zero non-merge commits since the last review: merge-only head move.
-          # Skip unless the prior review was a merge-conflict CHANGES_REQUESTED
-          # that this merge may have just resolved (fail-open to avoid deadlock).
-          if [ "$LAST_STATE" = "CHANGES_REQUESTED" ] && echo "$LAST_BODY" | grep -qi "merge conflict"; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Prior review was a merge-conflict CR - merge may resolve it - dispatching."
-            exit 0
-          fi
-
-          echo "skip=true" >> "$GITHUB_OUTPUT"
-          echo "Only merge commits since last review ${LAST_SHA} - skipping PR Reviewer webhook."
+          # Fetch the PR's reviews and commits JSON, then run the versioned
+          # dedup decision script (.github/scripts/pr-review-dedup.py).
+          # The script handles multi-line bodies and pipe chars correctly
+          # (naive cut -d'|' is line-oriented and corrupts the SHA), and
+          # fails open (dispatch) on any load error or ambiguous state.
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate > /tmp/pr-reviews.json 2>/dev/null || echo "[]" > /tmp/pr-reviews.json
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate > /tmp/pr-commits.json 2>/dev/null || echo "[]" > /tmp/pr-commits.json
+          SKIP_OUTPUT=$(python3 .github/scripts/pr-review-dedup.py /tmp/pr-reviews.json /tmp/pr-commits.json "${HEAD_SHA}" 2>/tmp/pr-dedup-err || echo "skip=false")
+          echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
+          echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
+          cat /tmp/pr-dedup-err
       - name: Send webhook to Modulo PR Review Agent
         if: success() && steps.review-check.outputs.skip != 'true'
         env:
