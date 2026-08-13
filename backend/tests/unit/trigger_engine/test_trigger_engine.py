@@ -775,6 +775,54 @@ async def test_handle_webhook_success_with_hmac() -> None:
     assert run is run_mock
 
 
+async def test_handle_webhook_verifies_hmac_after_secret_resync() -> None:
+    """After a webhook secret is re-synced, HMAC verification must use the
+    CURRENT secret: a signature bound to the previous secret is rejected while
+    one bound to the re-synced secret is accepted (same body + timestamp)."""
+    old_secret = "old-secret-A"
+    new_secret = "new-secret-B"
+    body = _RAW_BODY
+    ts = _VALID_TS
+    trigger = _make_trigger(hmac_secret=new_secret)
+
+    # A signature computed with the pre-resync secret must be rejected.
+    stale_session = _make_session(trigger=trigger, active_run_count=0)
+    stale_sig = _sha256_sig(body, old_secret, timestamp=ts)
+    with pytest.raises(HmacValidationError):
+        await TriggerEngine().handle_webhook(
+            stale_session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=body,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=stale_sig,
+            modulo_timestamp=str(ts),
+            snapshot_id=_SNAP,
+        )
+
+    # A signature computed with the post-resync secret must be accepted.
+    current_session = _make_session(trigger=trigger, active_run_count=0)
+    current_sig = _sha256_sig(body, new_secret, timestamp=ts)
+    run_mock = MagicMock()
+    run_mock.id = uuid.uuid4()
+    with (
+        patch("modulo.core.trigger_engine.create_run", return_value=run_mock),
+        patch("modulo.core.trigger_engine.time.time", return_value=ts),
+    ):
+        run, _, _ = await TriggerEngine().handle_webhook(
+            current_session,
+            trigger_id=trigger.id,
+            org_id=_ORG,
+            raw_body=body,
+            raw_payload=_RAW_PAYLOAD,
+            hmac_signature=current_sig,
+            modulo_timestamp=str(ts),
+            snapshot_id=_SNAP,
+        )
+
+    assert run is run_mock
+
+
 async def test_handle_webhook_applies_payload_mapping() -> None:
     mapping = {"action": "action", "pr_num": "number"}
     trigger = _make_trigger(payload_mapping=mapping)
