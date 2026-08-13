@@ -1381,3 +1381,69 @@ class TestRunExecutorWithWatchdog:
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_failed"
         assert fail.await_args.kwargs["claim_token"] is None
+
+
+class TestResumeRun:
+    """Core ``resume_run`` — claims with a fresh token and ignores the stale
+    ``claim_token`` kwarg SAQ passes back on a retry (PR #1003)."""
+
+    @pytest.mark.asyncio
+    async def test_accepts_stale_claim_token_and_claims_with_fresh_token(self) -> None:
+        job = MagicMock()
+        job.update = AsyncMock()
+        engine = MagicMock()
+
+        async def _pass_through(aeng: Any, **kwargs: Any) -> dict[str, str]:
+            await kwargs["execute_fn"]()
+            return {"status": "complete"}
+
+        with (
+            patch.object(pe, "claim_resume_run_async", new_callable=AsyncMock, return_value="tok-fresh") as claim,
+            patch.object(pe, "load_and_setup", new_callable=AsyncMock) as load,
+            patch.object(pe, "mark_complete", new_callable=AsyncMock) as complete,
+            patch.object(pe, "run_executor_with_watchdog", side_effect=_pass_through) as watchdog,
+        ):
+            run = MagicMock()
+            run.input_payload = {"a": 1}
+            executor = MagicMock()
+            executor.resume = AsyncMock()
+            load.return_value = (run, executor)
+            result = await pe.resume_run(
+                async_engine=engine,  # type: ignore[arg-type]
+                run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+                resume_data={"action": "approved"},
+                job=job,
+                claim_cap=20,
+                claim_token="stale-token-from-previous-attempt",
+            )
+
+        assert result == {"status": "complete"}
+        # The stale kwarg is NOT forwarded — the claim function generates its own
+        # fresh token, which is what threads through the resume and is stamped.
+        claim.assert_awaited_once()
+        assert "claim_token" not in claim.await_args.kwargs
+        executor.resume.assert_awaited_once()
+        assert executor.resume.await_args.kwargs["claim_token"] == "tok-fresh"
+        complete.assert_awaited_once()
+        assert complete.await_args.kwargs["claim_token"] == "tok-fresh"
+        watchdog.assert_awaited_once()
+        assert watchdog.await_args.kwargs["claim_token"] == "tok-fresh"
+        job.update.assert_awaited_once()
+        assert job.update.await_args.kwargs["kwargs"]["claim_token"] == "tok-fresh"
+
+    @pytest.mark.asyncio
+    async def test_stale_claim_token_not_claimed_returns_early(self) -> None:
+        with (
+            patch.object(pe, "claim_resume_run_async", new_callable=AsyncMock, return_value=None),
+            patch.object(pe, "mark_complete", new_callable=AsyncMock) as complete,
+        ):
+            result = await pe.resume_run(
+                async_engine=MagicMock(),  # type: ignore[arg-type]
+                run_id="7b2f2e7e-3a0a-4f5c-9a0e-1a2b3c4d5e6f",
+                org_id="8c3f3f8f-4b0b-4f6d-9b1f-2b3c4d5e6f70",
+                claim_cap=20,
+                claim_token="stale-token-from-previous-attempt",
+            )
+        assert result == {"status": "not_claimed"}
+        complete.assert_not_awaited()
