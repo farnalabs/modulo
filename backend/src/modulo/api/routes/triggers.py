@@ -349,7 +349,7 @@ class PollingConfigUpdate(BaseModel):
     connector_instance_id: str | None = None
     poll_query: str | None = None
     condition_expression: str | None = None
-    poll_interval_seconds: int | None = Field(None, ge=10)
+    poll_interval_seconds: int | None = Field(None, ge=60)
     snapshot_id: str | None = None
     daily_spend_limit: Decimal | None = Field(
         None, ge=0, description="Daily spend ceiling in USD; null clears, None unchanged"
