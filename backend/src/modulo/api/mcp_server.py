@@ -3195,7 +3195,7 @@ async def _require_admin_for_team_key(org_id: uuid.UUID) -> None:
         ctx = await resolve_plan_context(get_settings(), s)
         if not ctx.feature_enabled("team_rbac"):
             raise MCPAuthorizationError("Team-scoped API keys require an upgraded plan")
-    if ORG_ROLE_HIERARCHY.get(_ctx_role_val(), -1) < ORG_ROLE_HIERARCHY["admin"]:
+    if ORG_ROLE_HIERARCHY.get(_ctx_role_val() or "", -1) < ORG_ROLE_HIERARCHY["admin"]:
         raise MCPAuthorizationError("Only admin users can perform this action")
 
 
