@@ -126,6 +126,8 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 - [x] `pipeline.node.convert_to_agent` — pipeline_id, node_id, agent_id
 - [x] `pipeline.node.revert_to_manual` — pipeline_id, node_id, snapshot_id
 - [x] `schema_inference_completed` — connector_name, resource, sample_count, model_backend_id
+- [x] `schema_migration_completed` — from_schema_id, to_schema_id, dry_run, field/type/rename change counts
+- [x] `schema_migration_planned` — field_additions, field_removals, type_changes, renames (inline plan preview)
 - [x] `sso_provider.created` — provider_name
 - [x] `sso_provider.deleted` — provider_name
 - [x] `sso_provider.toggled` — provider_name

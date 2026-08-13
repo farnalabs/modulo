@@ -29,6 +29,19 @@ Feature: Schema Migration
     Then the response status is 200
     And the plan contains a rename from "full_name" to "display_name"
 
+  Scenario: Migration plan endpoint records an audit event
+    Given a source definition with field {"full_name": "string"}
+    And a target definition with field {"display_name": "string"}
+    When I POST /api/v1/schemas/migrate/plan
+    Then the response status is 200
+    And an audit event "schema_migration_planned" is recorded
+
+  Scenario: Migration plan endpoint requires authentication
+    Given a source definition with field {"full_name": "string"}
+    And a target definition with field {"display_name": "string"}
+    When I POST /api/v1/schemas/migrate/plan unauthenticated
+    Then the response status is 401
+
   Scenario: Migration plan pairs same-type renames deterministically
     Given a source definition with fields {"a": "string", "b": "string"}
     And a target definition with fields {"x": "string", "y": "string"}
