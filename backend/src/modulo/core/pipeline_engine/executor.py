@@ -36,7 +36,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langgraph.errors import GraphInterrupt, NodeCancelledError
-from sqlalchemy import select, text
+from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
@@ -66,6 +66,14 @@ from modulo.core.pipeline_engine.decorator import (
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code
 from modulo.core.pipeline_engine.event_broker import RunEventBroker, get_registry
+from modulo.core.pipeline_engine.evidence import (
+    EvidenceProvider,
+    build_default_evidence_provider,
+    compute_work_intact,
+    evidence_enabled,
+    node_declared_success,
+    run_evidence_probe,
+)
 from modulo.core.pipeline_engine.graph_cache import build_graph_from_json, get_or_compile
 from modulo.core.pipeline_engine.modulo_saver import ModuloPostgresSaver
 from modulo.core.pipeline_engine.node_runner import SandboxNodeFailedError, SupersededNodeError
@@ -434,6 +442,39 @@ def _node_output_agent_failure(node_output: Any) -> str | None:
     return reason
 
 
+async def _apply_work_intact(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    work_intact: bool,
+    *,
+    claim_token: str | None,
+) -> None:
+    """Fenced UPDATE of ``runs.work_intact`` — mirrors ``update_run_status``
+    fencing (F3a): a superseded executor's token no longer matches and the
+    write is a no-op, so it cannot stamp work_intact on a successor's run.
+    Runs INSIDE the caller's terminalization transaction (FAR-152 §15.3).
+
+    ``run_id`` is bound with the ``Uuid`` type so the raw SQL matches the
+    stored id on every backend (SQLite stores the 32-hex form, not the
+    dashed ``str(uuid)``)."""
+    if claim_token is None:
+        await session.execute(
+            text("UPDATE runs SET work_intact = :wi WHERE id = :rid").bindparams(
+                bindparam("rid", type_=Uuid()),
+                bindparam("wi", type_=Boolean()),
+            ),
+            {"wi": work_intact, "rid": run_id},
+        )
+        return
+    await session.execute(
+        text("UPDATE runs SET work_intact = :wi WHERE id = :rid AND claim_token = :tok").bindparams(
+            bindparam("rid", type_=Uuid()),
+            bindparam("wi", type_=Boolean()),
+        ),
+        {"wi": work_intact, "rid": run_id, "tok": claim_token},
+    )
+
+
 async def org_sandbox_capacity_free(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -485,11 +526,15 @@ class PipelineExecutor:
         db_engine: AsyncEngine,
         *,
         checkpointer_conn_string: str | None = None,
+        evidence_provider: EvidenceProvider | None = None,
     ) -> None:
         self._engine = db_engine
         self._session_factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
         self._checkpointer_conn_string = checkpointer_conn_string
         self._otel_bridge = LangGraphOtelBridge()
+        # Evidence seam (FAR-152 §15.3): injected FakeEvidenceProvider in tests;
+        # None selects the production E2B+DB-backed provider per run.
+        self._evidence_provider = evidence_provider
         # Zombie-run protection hook (2026-08-05): wired by
         # ``pipeline_execution.run_executor_with_watchdog`` to an asyncio.Event.
         # Called when the FIRST node dispatches so the execute_run watchdog can
@@ -1040,6 +1085,74 @@ class PipelineExecutor:
                 sandbox_cost += Decimal(str(est))
         return sandbox_cost
 
+    def _get_evidence_provider(self, org_id: uuid.UUID) -> EvidenceProvider:
+        """The injected evidence provider (tests) or the production
+        E2B+DB-backed provider wired for this run's org."""
+        if self._evidence_provider is not None:
+            return self._evidence_provider
+        return build_default_evidence_provider(self._session_factory, org_id)
+
+    def _compute_run_work_intact(
+        self,
+        final_status: str,
+        error_code: str | None,
+        completed_node_outputs: dict[str, Any],
+        node_ids: set[str],
+    ) -> bool | None:
+        """FAR-152 §15.3 — work_intact computed at terminalization from
+        completed-node artifacts + the full DAG ran. NOT from the async
+        evidence probe (restores the false-failure banner for #1/#3).
+
+        Returns None for non-terminal statuses (nothing to write). An
+        A1-elevated run (``failed`` + ``agent.failed``) is NOT complete — its
+        honest work verdict is False (§15.4), so the zero-work elevation banner
+        is what renders.
+        """
+        if final_status not in _TERMINAL_STATUSES:
+            return None
+        if final_status == "failed" and error_code == "agent.failed":
+            return False
+        return compute_work_intact(completed_node_outputs, node_ids)
+
+    async def _run_post_terminal_evidence_probes(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        completed_node_outputs: dict[str, Any],
+    ) -> None:
+        """FAR-152 §15.3 — post-commit async evidence probe for no-op-eligible
+        nodes (declared ``outcome:success``) on a complete run. Runs off the
+        critical path (after terminalization commits), bounded ≤3s per probe,
+        gated by the EvidenceProvider seam. Fail-open — a probe failure never
+        affects the run."""
+        if final_status != "complete" or not evidence_enabled():
+            return
+        evidence_nodes = [node_id for node_id, out in completed_node_outputs.items() if node_declared_success(out)]
+        if not evidence_nodes:
+            return
+        provider = self._get_evidence_provider(org_id)
+        results = await asyncio.gather(
+            *[
+                run_evidence_probe(
+                    provider=provider,
+                    session_factory=self._session_factory,
+                    run_id=run_id,
+                    node_id=node_id,
+                )
+                for node_id in evidence_nodes
+            ],
+            return_exceptions=True,
+        )
+        for node_id, res in zip(evidence_nodes, results, strict=False):
+            if isinstance(res, Exception):
+                _log.warning(
+                    "heuristic.probe_task_failed",
+                    extra={"run_id": str(run_id), "node_id": node_id},
+                    exc_info=res,
+                )
+
     async def resume(
         self,
         *,
@@ -1213,6 +1326,9 @@ class PipelineExecutor:
         # Resume recomputes from LIVE components over the cumulative merged set
         # (two-state rule, §4.4); finalize_cost reads the stored cumulative set,
         # merges the resumed segment (segment-wins), and recomputes.
+        # FAR-152 §15.3 — work_intact computed at terminalization (same rule as
+        # execute()).
+        work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await finalize_cost(
@@ -1229,6 +1345,13 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 claim_token=self._claim_token,
             )
+            if work_intact is not None:
+                try:
+                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
@@ -1239,6 +1362,15 @@ class PipelineExecutor:
 
         if final_run is None:
             raise RunNotFoundError(run_id)
+
+        # FAR-152 §15.3 — post-commit async evidence probe (same rule as
+        # execute()). Bounded ≤3s per node, gated by the EvidenceProvider seam.
+        await self._run_post_terminal_evidence_probes(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            completed_node_outputs=completed_node_outputs,
+        )
         return final_run
 
     async def execute(
@@ -1352,6 +1484,10 @@ class PipelineExecutor:
         error_detail: str | None = None
         node_token_usage: dict[str, Any] | None = None
         completed_node_outputs: dict[str, Any] = {}
+        # Initialised so the terminalization work_intact computation is safe even
+        # when the stream never started (compile/pre-stream failure) — a run with
+        # no executed nodes is never work-intact.
+        node_ids: set[str] = set()
         broker = get_registry().get_or_create(run_id)
         set_cancellation_check(self._check_db_cancellation(org_id, run_id))
         set_audit_hook(self._dispatch_context_write_audit(org_id, run_id))
@@ -1730,6 +1866,11 @@ class PipelineExecutor:
         # segment sets into the stored cumulative sets (segment-wins), builds
         # the enriched union + breakdown (total == sum), and runs the
         # terminal-only ledger block.
+        # FAR-152 §15.3 — work_intact computed at terminalization from
+        # completed-node artifacts + the full DAG ran. NOT from the async
+        # evidence probe. Written atomically inside the same terminalization
+        # transaction (restores the false-failure banner for #1/#3).
+        work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await finalize_cost(
@@ -1746,6 +1887,15 @@ class PipelineExecutor:
                 session_factory=self._session_factory,
                 claim_token=self._claim_token,
             )
+            if work_intact is not None:
+                # Atomic with terminalization: the same transaction, fenced so a
+                # superseded executor cannot stamp work_intact on a successor.
+                try:
+                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
 
         # Fetch the final run in a fresh session — finalize_cost's ledger block
         # may have aborted the transaction in the whole-tx-abort reduced-escape
@@ -1756,6 +1906,17 @@ class PipelineExecutor:
 
         if final_run is None:
             raise RunNotFoundError(run_id)
+
+        # FAR-152 §15.3 — post-commit async evidence probe for no-op-eligible
+        # nodes (declared outcome:success) on a complete run. Off the critical
+        # path (terminalization already committed), bounded ≤3s per probe,
+        # gated by the EvidenceProvider seam. Fail-open.
+        await self._run_post_terminal_evidence_probes(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            completed_node_outputs=completed_node_outputs,
+        )
         return final_run
 
     async def _check_eval_suites(
