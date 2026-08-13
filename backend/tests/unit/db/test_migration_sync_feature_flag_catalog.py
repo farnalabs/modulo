@@ -24,7 +24,7 @@ _MIGRATION_PATH = (
 )
 
 # The migration this branch introduces — the current head of the chain.
-_HEAD_MIGRATION_NAME = "0091_run_evidence"
+_HEAD_MIGRATION_NAME = "0093_run_number_sequence"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"

@@ -218,6 +218,46 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
         _log.exception("journey hydration failed for org %s", org_id)
 
 
+_ATOMIC_RUN_NUMBER_SQL = text(
+    "INSERT INTO run_number_counters (organisation_id, next_run_number) "
+    "VALUES (:org_id, 1) "
+    "ON CONFLICT (organisation_id) "
+    "DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1 "
+    "RETURNING next_run_number"
+)
+
+_MAX_RUN_NUMBER_SQL = text("SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id")
+
+
+async def _allocate_run_number(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Allocate the next ``run_number`` for *org_id* (FAR-168).
+
+    Postgres uses a per-org atomic counter (``run_number_counters``) via
+    ``INSERT ... ON CONFLICT DO UPDATE ... RETURNING``: concurrent creates in
+    the same org serialize on the counter row and can never collide on
+    ``uq_runs_org_run_number`` (the old ``MAX(run_number)+1`` raced under
+    concurrent trigger dispatches — one transaction rolled back, the trigger
+    missed a cycle and SAQ retried). Migration 0093 seeds the counter from the
+    current ``MAX(run_number)`` per org so existing sequences continue without
+    collision.
+
+    Generic backends (SQLite/MariaDB) fall back to ``MAX(run_number)+1`` — a
+    documented divergence: they are single-writer in practice and do not share
+    the same upsert semantics. The visible contract is unchanged: ``run_number``
+    is per-org, sequential, unique.
+    """
+    dialect = await _get_dialect_name(session)
+    if dialect == "postgresql":
+        result = await session.execute(
+            _ATOMIC_RUN_NUMBER_SQL,
+            # ``org_id.hex`` — portable UUID binding (see the org-guard comment).
+            {"org_id": org_id.hex},
+        )
+        return int(result.scalar_one() or 1)
+    result = await session.execute(_MAX_RUN_NUMBER_SQL, {"org_id": org_id.hex})
+    return int(result.scalar_one() or 1)
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -299,12 +339,9 @@ async def create_run(
 
     run_id = uuid.uuid4()
     thread_id = f"{org_id}:{run_id}"
-    result = await session.execute(
-        text("SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id"),
-        # ``org_id.hex`` — see the org-guard comment above (portable UUID binding).
-        {"org_id": org_id.hex},
-    )
-    run_number = int(result.scalar_one() or 1)
+    # Per-org atomic counter (FAR-168) — never MAX(run_number)+1 on Postgres,
+    # which races under concurrent trigger dispatches.
+    run_number = await _allocate_run_number(session, org_id)
 
     # Create-time journey stamping (FAR-142): resolve the chain anchor
     # (explicit > adopted-from-parent > deterministic floor), canonicalise the
