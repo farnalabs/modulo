@@ -31,7 +31,7 @@ Feature: Lifecycle Map Versioning
     Then the response status is 200
     And the lifecycle map has version 5
 
-  Scenario: Two agents saving concurrently produce strictly increasing unique versions
+  Scenario: Sequential saves produce strictly increasing unique versions
     Given a lifecycle map named "Release Workflow" exists with version 1
     When I save a version of the lifecycle map with 1 stage
     And I save a version of the lifecycle map with 2 stages

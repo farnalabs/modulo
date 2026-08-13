@@ -83,6 +83,11 @@ async def get_lifecycle_map_for_update(session: AsyncSession, lifecycle_map_id: 
             LifecycleMap.deleted_at.is_(None),
         )
         .with_for_update()
+        # populate_existing: if the row is already in the session identity map
+        # (e.g. a caller pre-fetched it), the re-executed FOR UPDATE must still
+        # refresh its attributes from the freshly committed row — otherwise the
+        # version bump below would compute from a stale pre-commit value.
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
 

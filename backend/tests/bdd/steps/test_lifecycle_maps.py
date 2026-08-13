@@ -200,10 +200,11 @@ def delete_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any) -> None
 def save_version_of_lifecycle_map(count: int, ctx: dict[str, Any], request: Any, client: Any) -> None:
     """POST /versions — a save publishes a new active version and bumps the counter.
 
-    The step models one agent's save against the same map; sequential saves in a
-    scenario represent two agents saving concurrently. Each save must observe the
-    previous save's committed version (the row lock guarantees this on Postgres),
-    so the counter is strictly increasing with no duplicates.
+    This step mocks ``save_map_version`` and simply steps the returned version
+    forward, so it pins the route contract (each save returns the next version)
+    rather than true concurrency. The concurrent-save guarantee — strictly
+    increasing unique version numbers under the row lock — is proven by the unit
+    SQL-assertion tests and the Postgres integration tests instead.
     """
     current = ctx.get("lifecycle_map", _make_lifecycle_map())
     stages = [{"id": f"stage-{i}", "name": f"Stage {i}", "type": "modulo"} for i in range(count)]
