@@ -105,7 +105,6 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/composite-templates/detect-params"): "composite creation-only (ADR 3.6)",
     ("POST", "/api/v1/composite-templates/{template_id}/publish"): "composite creation-only (ADR 3.6)",
     # Schemas: stateless POSTs with no principal (validation/inference helpers).
-    ("POST", "/api/v1/schemas/migrate/plan"): "stateless schema helper",
     ("POST", "/api/v1/schemas/validate"): "stateless schema helper",
     ("POST", "/api/v1/schemas/import"): "stateless schema helper",
     # Runs: node observe/recover carry inline admin/operator checks in the handler.
