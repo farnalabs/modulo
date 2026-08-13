@@ -296,6 +296,54 @@ class TestRecordRunFacts:
             await analytics_mod.record_run_facts(session, run)
 
 
+class TestRecordFactForTerminalFailedRun:
+    """P6' shared helper — the fail-open wrapper every raw terminal writer
+    (SAQ task_failure hook, stale-run sweep, dispatcher_reconcile,
+    fail_run_terminal) uses to record the compensating daily fact."""
+
+    async def test_delegates_to_record_run_facts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = _make_run()
+        session = _session(execute_side_effect=[])
+        record = AsyncMock()
+        monkeypatch.setattr(analytics_mod, "record_run_facts", record)
+        await analytics_mod.record_fact_for_terminal_failed_run(session, run)
+        record.assert_awaited_once_with(session, run)
+
+    async def test_none_run_is_skipped(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        session = _session(execute_side_effect=[])
+        record = AsyncMock()
+        monkeypatch.setattr(analytics_mod, "record_run_facts", record)
+        with caplog.at_level("WARNING", logger="modulo.core.analytics"):
+            await analytics_mod.record_fact_for_terminal_failed_run(session, None)
+        record.assert_not_awaited()
+        assert any("run_missing" in m for m in caplog.messages)
+
+    async def test_write_failure_is_fail_open(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        run = _make_run()
+        session = _session(execute_side_effect=[])
+
+        async def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("facts boom")
+
+        monkeypatch.setattr(analytics_mod, "record_run_facts", _boom)
+        with caplog.at_level("ERROR", logger="modulo.core.analytics"):
+            await analytics_mod.record_fact_for_terminal_failed_run(session, run)  # must not raise
+        assert any("terminal_failed_facts_failed" in m for m in caplog.messages)
+
+    async def test_cancellation_is_not_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = _make_run()
+        session = _session(execute_side_effect=[])
+
+        async def _cancel(*args: object, **kwargs: object) -> None:
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(analytics_mod, "record_run_facts", _cancel)
+        with pytest.raises(asyncio.CancelledError):
+            await analytics_mod.record_fact_for_terminal_failed_run(session, run)
+
+
 # ---------------------------------------------------------------------------
 # Metrics (modulo.core.analytics.metrics)
 # ---------------------------------------------------------------------------

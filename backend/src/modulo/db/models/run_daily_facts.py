@@ -2,9 +2,15 @@
 
 One row per terminal run, written by ``record_run_facts`` on every finalize
 path and backfilled/maintained by the ``analytics_facts_maintenance`` cron.
-The SAQ task_failure hook also writes a compensating fact row (in its own
-separate session) for runs it marks failed outside the finalize path, so a
-task_failure run is never invisible to analytics.
+Every raw terminal writer that bypasses ``finalize_cost`` writes a compensating
+fact row (in its own separate session) through the shared
+``record_fact_for_terminal_failed_run`` wrapper: the SAQ task_failure hook, the
+stale-run sweep terminalizers (``never_dispatched`` / ``capacity_timeout`` /
+``worker_lost``), the ``dispatcher_reconcile`` terminalizers
+(``executor_superseded`` / ``claim_cap_exhausted`` / ``dispatch_failed``) and
+``fail_run_terminal`` (``executor_stalled`` / ``executor_heartbeat_lost`` /
+``executor_failed`` / ``executor_setup_failed``) — so no terminal run is ever
+invisible to analytics.
 The facts survive the 90-day run purge (``run_id`` is deliberately NOT a
 foreign key), so dimensioned run history outlives the ``runs`` rows it was
 derived from.

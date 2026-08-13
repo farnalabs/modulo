@@ -182,11 +182,13 @@ async def _record_task_failure_facts(run_id: str, org_id: str) -> None:
     """Record the compensating analytics fact for a task_failure run (P6').
 
     Runs in a SEPARATE session from the mark (which is already committed), so
-    a failure inside ``record_run_facts`` — including ``CancelledError`` — can
+    a failure inside the facts write — including ``CancelledError`` — can
     NEVER roll back the committed ``failed`` transition. Re-selects the Run
     ORM entity AFTER the mark (a pre-update entity would record
     ``status='running'`` with a NULL ``completed_at``). None-guarded and
-    fail-open: any failure logs and is swallowed.
+    fail-open via the shared :func:`record_fact_for_terminal_failed_run`
+    helper (the same one the sweep / dispatcher terminalizers use — the
+    split that reviewers flagged as the weakest design point of #1166 is gone).
     """
     try:
         async with _open_factory()() as session, session.begin():
@@ -194,14 +196,11 @@ async def _record_task_failure_facts(run_id: str, org_id: str) -> None:
 
             await set_rls_org(session, uuid.UUID(org_id))
 
-            from modulo.core.analytics import record_run_facts
+            from modulo.core.analytics import record_fact_for_terminal_failed_run
             from modulo.db.crud.run import get_run
 
             run = await get_run(session, uuid.UUID(run_id))
-            if run is None:
-                _log.warning("saq_hooks.task_failure_facts_run_missing run=%s", run_id)
-                return
-            await record_run_facts(session, run)
+            await record_fact_for_terminal_failed_run(session, run)
     except asyncio.CancelledError:
         raise
     except Exception:

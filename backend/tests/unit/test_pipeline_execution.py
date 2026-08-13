@@ -312,6 +312,57 @@ class TestFailRunTerminal:
         )
         assert ok is False
 
+    @pytest.mark.asyncio
+    async def test_fails_run_records_terminal_facts(self) -> None:
+        """FAR-162 (P6'): a run terminal-failed via the raw writer also gets a
+        compensating daily fact — it must be visible in analytics, never only
+        in the ``runs`` row. The facts write is a fail-open best-effort."""
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        conn = _AsyncConnRow(("id",))
+        engine = MagicMock()
+        engine.connect.return_value = conn
+
+        with (
+            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock) as advance,
+            patch.object(pe, "_record_fact_for_terminal_failed_run", new_callable=AsyncMock) as record_facts,
+        ):
+            ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
+                engine,
+                run_id,
+                org_id,
+                error_code="executor_heartbeat_lost",
+                error_detail="boom",
+                claim_token="tok-a",
+            )
+
+        assert ok is True
+        advance.assert_awaited_once_with(engine, run_id, org_id, "failed")
+        record_facts.assert_awaited_once_with(engine, run_id, org_id)
+
+    @pytest.mark.asyncio
+    async def test_facts_write_failure_is_fail_open(self) -> None:
+        """A facts-write failure after the terminal UPDATE commits must NOT
+        surface as a failed terminal-fail — the run is already failed."""
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        conn = _AsyncConnRow(("id",))
+        engine = MagicMock()
+        engine.connect.return_value = conn
+
+        async def _boom(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("facts boom")
+
+        with (
+            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch.object(pe, "_record_fact_for_terminal_failed_run", new=_boom),
+            patch.object(pe._log, "warning"),
+        ):
+            ok = await pe.fail_run_terminal(  # type: ignore[arg-type]
+                engine, run_id, org_id, error_code="executor_stalled", error_detail="boom"
+            )
+        assert ok is True, "the terminal failure itself must still report success (facts are best-effort)"
+
 
 # ---------------------------------------------------------------------------
 # Heartbeat
@@ -833,6 +884,171 @@ class TestStaleRunRecoverySweep:
         # capacity_timeout branch so the two never overlap.
         assert params_seen[3]["fail_ttl"] == pe.CAPACITY_TIMEOUT_TTL_MINUTES
         redispatch_mock.assert_not_awaited()
+
+    async def test_terminalised_runs_record_facts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-162 (P6'): every run terminalised by the sweep gets a
+        compensating daily fact — never_dispatched / capacity_timeout /
+        worker_lost runs must be visible in the analytics failure/stall
+        dimensions (the raw UPDATEs never run finalize_cost)."""
+        never_run = uuid.uuid4()
+        cap_run = uuid.uuid4()
+        lost_run = uuid.uuid4()
+        org_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+        records: list[tuple[Any, str, str]] = []
+
+        class _AsyncResult:
+            def __init__(self, rowcount: int = 0, rows: list[Any] | None = None) -> None:
+                self.rowcount = rowcount
+                self._rows = rows or []
+
+            def all(self) -> list[Any]:
+                return self._rows
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                s = str(stmt)
+                if "SELECT id FROM organisations" in s:
+                    return _AsyncResult(rows=[(org_id,)])
+                if "RETURNING id, organisation_id" in s:
+                    return _AsyncResult()
+                if "never_dispatched" in s:
+                    return _AsyncResult(rowcount=1, rows=[(never_run,)])
+                if "capacity_timeout" in s:
+                    return _AsyncResult(rowcount=1, rows=[(cap_run,)])
+                if "worker_lost" in s:
+                    return _AsyncResult(rowcount=1, rows=[(lost_run,)])
+                return _AsyncResult()
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        async def _record(engine: Any, run_id: str, org: str) -> None:
+            records.append((engine, run_id, org))
+
+        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
+        with (
+            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch.object(pe, "_record_fact_for_terminal_failed_run", new=_record),
+        ):
+            result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
+
+        assert result["never_dispatched_swept"] == 1
+        assert result["capacity_timeout_swept"] == 1
+        assert result["worker_lost_swept"] == 1
+        assert sorted(r[1] for r in records) == sorted(str(r) for r in (never_run, cap_run, lost_run))
+        assert all(r[2] == str(org_id) for r in records)
+
+    async def test_sweep_facts_write_failure_is_fail_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The sweep's compensating facts writes are best-effort: a failure must
+        not fail the sweep or lose the terminalisation counts."""
+        never_run = uuid.uuid4()
+        org_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+
+        async def _boom(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("facts boom")
+
+        class _AsyncResult:
+            def __init__(self, rowcount: int = 0, rows: list[Any] | None = None) -> None:
+                self.rowcount = rowcount
+                self._rows = rows or []
+
+            def all(self) -> list[Any]:
+                return self._rows
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                s = str(stmt)
+                if "SELECT id FROM organisations" in s:
+                    return _AsyncResult(rows=[(org_id,)])
+                if "RETURNING id, organisation_id" in s:
+                    return _AsyncResult()
+                if "never_dispatched" in s:
+                    return _AsyncResult(rowcount=1, rows=[(never_run,)])
+                return _AsyncResult()
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
+        with (
+            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch.object(pe, "_record_fact_for_terminal_failed_run", new=_boom),
+            patch.object(pe._log, "warning"),
+        ):
+            result = await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
+
+        assert result["never_dispatched_swept"] == 1
+        assert "error" not in result, "a facts-write failure must not fail the sweep"
+
+    async def test_never_dispatched_and_worker_lost_write_synthetic_detail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-164 (option a): the genuinely detail-less sweep writers stamp a
+        synthetic error_detail so the runs list always has something to show.
+        Safe for the daily-watcher hang-death detector, which keys on
+        ``error_code == 'node_cancelled'`` ONLY (never worker_lost /
+        never_dispatched)."""
+        params_seen: list[dict[str, object]] = []
+        org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
+
+        class _AsyncResult:
+            rowcount = 0
+
+            def all(self) -> list[Any]:
+                return [org_row] if self._is_org else []
+
+        class _AsyncConn:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+                params_seen.append(params or {})
+                r = _AsyncResult()
+                r._is_org = "SELECT id FROM organisations" in str(stmt)
+                return r
+
+        class _AsyncEngine:
+            def connect(self) -> _AsyncConn:
+                return _AsyncConn()
+
+        monkeypatch.setattr(pe, "get_settings", lambda: _make_settings())
+        with (
+            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
+            patch.object(pe, "_record_fact_for_terminal_failed_run", new_callable=AsyncMock),
+        ):
+            await pe.stale_run_recovery_sweep(_AsyncEngine())  # type: ignore[arg-type]
+
+        # params: [0]=enumeration, [1]=set_config, [2]=never_dispatched,
+        # [3]=stranded, [4]=capacity_timeout, [5]=worker_lost.
+        assert params_seen[2]["detail"] == "Run was not dispatched within the stale threshold."
+        assert params_seen[4]["detail"] == "Waited in capacity queue past the TTL."
+        assert params_seen[5]["detail"] == "Worker lost heartbeat for this run."
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
@@ -1382,6 +1598,84 @@ class TestRunExecutorWithWatchdog:
         fail.assert_awaited_once()
         assert fail.await_args.kwargs["error_code"] == "executor_failed"
         assert fail.await_args.kwargs["claim_token"] is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-162 (P6') — pipeline_execution facts helper
+# ---------------------------------------------------------------------------
+
+
+class TestRecordFactForTerminalFailedRunHelper:
+    """The pipeline_execution wrapper opens its own RLS-scoped session AFTER a
+    raw terminal write commits, re-selects the Run ORM, and records the daily
+    fact via the shared analytics helper — None-guarded and fail-open."""
+
+    def _factory_and_session(self) -> tuple[MagicMock, AsyncMock]:
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        factory = MagicMock(return_value=session)
+        return factory, session
+
+    @pytest.mark.asyncio
+    async def test_records_fact_for_reselected_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        fake_run = MagicMock()
+        factory, session = self._factory_and_session()
+        record_facts = AsyncMock()
+        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        with (
+            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
+            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=fake_run),
+        ):
+            await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
+
+        record_facts.assert_awaited_once_with(session, fake_run)
+
+    @pytest.mark.asyncio
+    async def test_missing_run_is_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        factory, _session = self._factory_and_session()
+        record_facts = AsyncMock()
+        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+        with (
+            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", record_facts),
+            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=None),
+        ):
+            await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
+
+        record_facts.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failure_is_fail_open(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        run_id = str(uuid.uuid4())
+        org_id = str(uuid.uuid4())
+        fake_run = MagicMock()
+        factory, _session = self._factory_and_session()
+        monkeypatch.setattr(pe, "async_sessionmaker", lambda *a, **k: factory)
+        monkeypatch.setattr(pe, "set_rls_org", AsyncMock())
+
+        async def _boom(_s: object, _r: object) -> None:
+            raise RuntimeError("facts boom")
+
+        with (
+            patch("modulo.core.analytics.record_fact_for_terminal_failed_run", new=_boom),
+            patch.object(pe, "get_run", new_callable=AsyncMock, return_value=fake_run),
+            caplog.at_level("WARNING", logger="modulo.core.pipeline_execution"),
+        ):
+            await pe._record_fact_for_terminal_failed_run(MagicMock(), run_id, org_id)  # type: ignore[arg-type]
+
+        assert any("terminal_failed_facts_failed" in m for m in caplog.messages)
 
 
 class TestResumeRun:
