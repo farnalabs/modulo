@@ -39,7 +39,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -244,11 +244,15 @@ def extract_output_json(node_output: Any) -> dict[str, Any] | None:
     artifacts = node_output.get("artifacts")
     if isinstance(artifacts, list) and artifacts and isinstance(artifacts[0], dict):
         inner = artifacts[0].get("output")
-        if isinstance(inner, dict) and isinstance(inner.get("output_json"), dict):
-            return inner["output_json"]
+        if isinstance(inner, dict):
+            output_json = inner.get("output_json")
+            if isinstance(output_json, dict):
+                return cast("dict[str, Any]", output_json)
     out = node_output.get("output")
-    if isinstance(out, dict) and isinstance(out.get("output_json"), dict):
-        return out["output_json"]
+    if isinstance(out, dict):
+        output_json = out.get("output_json")
+        if isinstance(output_json, dict):
+            return cast("dict[str, Any]", output_json)
     return None
 
 
@@ -268,8 +272,10 @@ def extract_stored_output_json(
     artifacts = value.get("artifacts")
     if isinstance(artifacts, list) and artifacts and isinstance(artifacts[0], dict):
         inner = artifacts[0].get("output")
-        if isinstance(inner, dict) and isinstance(inner.get("output_json"), dict):
-            return inner["output_json"]
+        if isinstance(inner, dict):
+            output_json = inner.get("output_json")
+            if isinstance(output_json, dict):
+                return cast("dict[str, Any]", output_json)
     if "artifacts" not in value and "output" not in value:
         return value
     return None
@@ -389,7 +395,7 @@ async def _e2b_run_command(sandbox_id: str, command: str) -> CommandResult:
     individually bounded (repo rule: every E2B SDK call under asyncio.wait_for);
     connect/run are fresh coroutines safe to cancel. Raises on failure — the
     caller maps any raised error to unverifiable."""
-    from e2b import AsyncSandbox
+    from e2b import AsyncSandbox  # type: ignore[import-untyped]
 
     sandbox = await asyncio.wait_for(AsyncSandbox.connect(sandbox_id), timeout=_SANDBOX_IO_TIMEOUT_SECONDS)
     try:
