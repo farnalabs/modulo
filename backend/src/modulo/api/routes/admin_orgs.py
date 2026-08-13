@@ -59,8 +59,8 @@ class CreateOrgResponse(BaseModel):
     created_at: str
 
 
-@handle_db_errors("admin.orgs.admin_create_org")
 @router.post("", response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.orgs.admin_create_org")
 async def admin_create_org(
     req: CreateOrgRequest,
     current_user: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
@@ -132,8 +132,8 @@ class ListOrgItem(BaseModel):
     created_at: str
 
 
-@handle_db_errors("admin.orgs.admin_list_orgs")
 @router.get("", response_model=list[ListOrgItem])
+@handle_db_errors("admin.orgs.admin_list_orgs")
 async def admin_list_orgs(
     _: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
     session: AsyncSession = Depends(get_db_session),
@@ -193,8 +193,8 @@ class CreateOrgUserResponse(BaseModel):
     created_at: str
 
 
-@handle_db_errors("admin.orgs.admin_create_org_user")
 @router.post("/{org_id}/users", response_model=CreateOrgUserResponse, status_code=status.HTTP_201_CREATED)
+@handle_db_errors("admin.orgs.admin_create_org_user")
 async def admin_create_org_user(
     org_id: uuid.UUID,
     req: CreateOrgUserRequest,
@@ -288,8 +288,8 @@ async def admin_create_org_user(
 # ── Delete Org ─────────────────────────────────────────────────────────
 
 
-@handle_db_errors("admin.orgs.admin_delete_org")
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
+@handle_db_errors("admin.orgs.admin_delete_org")
 async def admin_delete_org(
     org_id: uuid.UUID,
     _: AuthenticatedPrincipal = require_system_permission("system.org.manage"),  # type: ignore[assignment]
@@ -341,8 +341,8 @@ class SetOrgLicenseRequest(BaseModel):
     license_key: str = Field(min_length=1)
 
 
-@handle_db_errors("admin.orgs.admin_get_org_license")
 @router.get("/{org_id}/license", response_model=OrgLicenseResponse)
+@handle_db_errors("admin.orgs.admin_get_org_license")
 async def admin_get_org_license(
     org_id: uuid.UUID,
     _: AuthenticatedPrincipal = require_target_org_role("org.license.view", "operator"),  # type: ignore[assignment]
@@ -402,8 +402,8 @@ async def admin_get_org_license(
     return OrgLicenseResponse(has_license=False)
 
 
-@handle_db_errors("admin.orgs.admin_set_org_license")
 @router.put("/{org_id}/license", response_model=OrgLicenseResponse)
+@handle_db_errors("admin.orgs.admin_set_org_license")
 async def admin_set_org_license(
     org_id: uuid.UUID,
     req: SetOrgLicenseRequest,
@@ -487,8 +487,8 @@ async def admin_set_org_license(
     )
 
 
-@handle_db_errors("admin.orgs.admin_remove_org_license")
 @router.delete("/{org_id}/license", response_model=OrgLicenseResponse)
+@handle_db_errors("admin.orgs.admin_remove_org_license")
 async def admin_remove_org_license(
     org_id: uuid.UUID,
     _: AuthenticatedPrincipal = require_target_org_role("org.license.manage", "admin"),  # type: ignore[assignment]
@@ -560,8 +560,8 @@ class SetOrgAuthzEnforceResponse(BaseModel):
     enforce: bool
 
 
-@handle_db_errors("admin.orgs.admin_set_org_authz_enforce")
 @router.patch("/{org_id}/authz-enforce", response_model=SetOrgAuthzEnforceResponse)
+@handle_db_errors("admin.orgs.admin_set_org_authz_enforce")
 async def admin_set_org_authz_enforce(
     org_id: uuid.UUID,
     req: SetOrgAuthzEnforceRequest,
@@ -620,8 +620,8 @@ class SetOrgTriggersPausedResponse(BaseModel):
     paused_at: str | None
 
 
-@handle_db_errors("admin.orgs.admin_set_org_triggers_paused")
 @router.put("/{org_id}/triggers/pause", response_model=SetOrgTriggersPausedResponse)
+@handle_db_errors("admin.orgs.admin_set_org_triggers_paused")
 async def admin_set_org_triggers_paused(
     org_id: uuid.UUID,
     req: SetOrgTriggersPausedRequest,

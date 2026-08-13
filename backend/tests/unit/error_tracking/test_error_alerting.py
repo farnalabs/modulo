@@ -17,11 +17,12 @@ from modulo.api.models.error_notification_rule import ErrorNotificationRuleCreat
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.email_service import EmailSendingError
 from modulo.core.error_tracking.alert_dispatcher import _format_slack_payload
-from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert
+from modulo.core.error_tracking.alerting import AlertEngine, TriggeredAlert, _CooldownKey
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
+_RULE_ID = uuid.UUID("00000000-0000-0000-0000-000000000011")
 
 
 def _make_session() -> AsyncMock:
@@ -1124,6 +1125,165 @@ class TestDispatchResolved:
             )
 
         assert any("alert.resolved_webhook_request_failed" in rec.message for rec in caplog.records)
+
+
+# =========================================================================
+# Cooldown persistence / error paths
+# =========================================================================
+
+
+class TestAlertEngineCooldownErrorPaths:
+    async def test_cooldown_read_failure_triggers_alert(self, caplog: pytest.LogCaptureFixture) -> None:
+        rule = _make_rule()
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session_with_rules([rule])
+
+        async def _boom(_key: object) -> float:
+            raise RuntimeError("redis down")
+
+        engine._get_last_fired = _boom  # type: ignore[assignment]
+
+        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+            alerts = await engine.evaluate(
+                org_id=_ORG_ID,
+                session=session,
+                error_group_id=_GROUP_ID,
+                fingerprint="abc123",
+                level="error",
+                count=1,
+            )
+
+        assert len(alerts) == 1
+        assert any("alert.cooldown_read_failed" in rec.message for rec in caplog.records)
+
+    async def test_cooldown_write_failure_still_triggers(self, caplog: pytest.LogCaptureFixture) -> None:
+        rule = _make_rule()
+        engine = AlertEngine(redis_client=MagicMock())
+        session = _make_session_with_rules([rule])
+
+        async def _boom(_key: object, _value: float) -> None:
+            raise RuntimeError("redis down")
+
+        engine._set_last_fired = _boom  # type: ignore[assignment]
+
+        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+            alerts = await engine.evaluate(
+                org_id=_ORG_ID,
+                session=session,
+                error_group_id=_GROUP_ID,
+                fingerprint="abc123",
+                level="error",
+                count=1,
+            )
+
+        assert len(alerts) == 1
+        assert any("alert.cooldown_write_failed" in rec.message for rec in caplog.records)
+
+    async def test_redis_cooldown_persists_and_reads_back(self) -> None:
+        redis = MagicMock()
+        redis.get = AsyncMock(return_value=b"1000.0")
+        redis.setex = AsyncMock()
+
+        engine = AlertEngine(redis_client=redis)
+        session = _make_session_with_rules([_make_rule()])
+
+        alerts = await engine.evaluate(
+            org_id=_ORG_ID,
+            session=session,
+            error_group_id=_GROUP_ID,
+            fingerprint="abc123",
+            level="error",
+            count=1,
+        )
+
+        assert len(alerts) == 1
+        redis.get.assert_awaited_once()
+        redis.setex.assert_awaited_once()
+
+    async def test_redis_cooldown_corrupt_json_falls_back_to_none(self) -> None:
+        redis = MagicMock()
+        redis.get = AsyncMock(return_value=b"not-a-number")
+
+        engine = AlertEngine(redis_client=redis)
+
+        last_fired = await engine._get_last_fired(_CooldownKey(org_id=_ORG_ID, rule_id=_RULE_ID, fingerprint="abc"))
+
+        assert last_fired is None
+
+    async def test_redis_cooldown_get_failure_logs_and_falls_back(self, caplog: pytest.LogCaptureFixture) -> None:
+        redis = MagicMock()
+        redis.get = AsyncMock(side_effect=RuntimeError("redis down"))
+
+        engine = AlertEngine(redis_client=redis)
+
+        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+            last_fired = await engine._get_last_fired(_CooldownKey(org_id=_ORG_ID, rule_id=_RULE_ID, fingerprint="abc"))
+
+        assert last_fired is None
+        assert any("alert.cooldown_redis_get_failed" in rec.message for rec in caplog.records)
+
+    async def test_redis_cooldown_set_failure_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        redis = MagicMock()
+        redis.setex = AsyncMock(side_effect=RuntimeError("redis down"))
+
+        engine = AlertEngine(redis_client=redis)
+
+        with caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"):
+            await engine._set_last_fired(_CooldownKey(org_id=_ORG_ID, rule_id=_RULE_ID, fingerprint="abc"), 100.0)
+
+        assert any("alert.cooldown_redis_set_failed" in rec.message for rec in caplog.records)
+
+
+class TestDispatchAll:
+    async def test_dispatches_each_alert(self) -> None:
+        engine = AlertEngine(redis_client=MagicMock())
+        alert = TriggeredAlert(
+            rule_id=_RULE_ID,
+            rule_name="Test Rule",
+            action_type="in_app",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+        session = _make_session()
+
+        with (
+            patch("modulo.core.error_tracking.alerting.record_error_alert") as mock_record,
+            patch("modulo.core.error_tracking.alerting.dispatch_alert", new=AsyncMock()) as mock_dispatch,
+        ):
+            await engine.dispatch_all(_ORG_ID, [alert], session)
+
+        mock_record.assert_called_once_with("error", "in_app")
+        mock_dispatch.assert_awaited_once()
+
+    async def test_swallows_dispatch_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        engine = AlertEngine(redis_client=MagicMock())
+        alert = TriggeredAlert(
+            rule_id=_RULE_ID,
+            rule_name="Test Rule",
+            action_type="in_app",
+            webhook_url=None,
+            error_group_id=_GROUP_ID,
+            fingerprint="fp",
+            level="error",
+            count=1,
+        )
+        session = _make_session()
+
+        with (
+            patch("modulo.core.error_tracking.alerting.record_error_alert") as mock_record,
+            patch(
+                "modulo.core.error_tracking.alerting.dispatch_alert",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+            caplog.at_level("ERROR", logger="modulo.core.error_tracking.alerting"),
+        ):
+            await engine.dispatch_all(_ORG_ID, [alert], session)
+
+        mock_record.assert_called_once_with("error", "in_app")
+        assert any("alert.dispatch_failed" in rec.message for rec in caplog.records)
 
 
 # =========================================================================

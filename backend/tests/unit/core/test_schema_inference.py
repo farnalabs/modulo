@@ -1,6 +1,7 @@
 """Unit tests for SchemaInferenceService."""
 
 import json
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -29,6 +30,35 @@ class _FakeBackend:
         from langchain_core.messages import AIMessage
 
         return AIMessage(content=self._response or "{}")
+
+    def stream(self, messages: list, **kwargs: object) -> object:
+        raise NotImplementedError
+
+
+class _FlakyBackend:
+    """Backend that fails the first N invocations, then succeeds.
+
+    Drives the retry-with-backoff path in ``invoke_and_parse`` so a transient
+    LLM failure on attempts 1 and 2 does not fail the request.
+    """
+
+    def __init__(self, response: str, failures_before_success: int) -> None:
+        self._response = response
+        self._failures_left = failures_before_success
+        self.invoke_count = 0
+
+    @property
+    def backend_id(self) -> str:
+        return "test/flaky"
+
+    async def invoke(self, messages: list, **kwargs: object) -> object:
+        self.invoke_count += 1
+        if self._failures_left > 0:
+            self._failures_left -= 1
+            raise RuntimeError("transient LLM unavailable")
+        from langchain_core.messages import AIMessage
+
+        return AIMessage(content=self._response)
 
     def stream(self, messages: list, **kwargs: object) -> object:
         raise NotImplementedError
@@ -229,3 +259,55 @@ class TestSchemaInferenceService:
         service = SchemaInferenceService(backend)
         with pytest.raises(SchemaInferenceError, match="Expected string response"):
             await service.infer([{"a": 1}])
+
+    async def test_infer_raises_on_non_list_samples(self) -> None:
+        """Non-list samples must be rejected before any LLM call."""
+        service = SchemaInferenceService(_FakeBackend(fail=True))
+        with pytest.raises(SchemaInferenceError, match="samples must be a list of dicts"):
+            await service.infer("not-a-list")
+
+    async def test_infer_raises_on_non_dict_record(self) -> None:
+        """A sample set containing a non-dict record must be rejected before any LLM call."""
+        service = SchemaInferenceService(_FakeBackend(fail=True))
+        with pytest.raises(SchemaInferenceError, match="samples must be a list of dicts"):
+            await service.infer([{"id": 1}, "not-a-dict"])
+
+    async def test_infer_uses_custom_system_prompt(self) -> None:
+        """A service-level custom system prompt must replace the default inference prompt."""
+
+        class _CapturingBackend:
+            def __init__(self):
+                self.messages = None
+
+            @property
+            def backend_id(self) -> str:
+                return "test/capture"
+
+            async def invoke(self, messages, **kwargs):
+                self.messages = messages
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content='{"type": "object", "properties": {}}')
+
+            def stream(self, messages, **kwargs):
+                raise NotImplementedError
+
+        backend = _CapturingBackend()
+        service = SchemaInferenceService(backend, system_prompt="Custom inference guidance")
+        result = await service.infer([{"a": 1}])
+        assert result == {"type": "object", "properties": {}}
+        assert backend.messages[0].content == "Custom inference guidance"
+
+    async def test_infer_retries_transient_failures_then_succeeds(self) -> None:
+        """A transient LLM failure on attempts 1 and 2 must not fail the request
+        when a later attempt succeeds (retry-with-backoff recovery)."""
+        expected = {"type": "object", "properties": {"name": {"type": "string"}}}
+        backend = _FlakyBackend(response=json.dumps(expected), failures_before_success=2)
+        service = SchemaInferenceService(backend)
+
+        with patch("modulo.core.schema_registry._common.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await service.infer([{"name": "test"}])
+
+        assert result == expected
+        assert backend.invoke_count == 3
+        assert mock_sleep.await_count == 2

@@ -193,8 +193,8 @@ async def _consume_break_glass_credential(
         )
 
 
-@handle_db_errors("auth.login")
 @router.post("/login")
+@handle_db_errors("auth.login")
 async def login(
     req: LoginRequest,
     request: Request,
@@ -310,8 +310,8 @@ async def login(
     return response
 
 
-@handle_db_errors("auth.refresh")
 @router.post("/refresh")
+@handle_db_errors("auth.refresh")
 async def refresh(
     req: RefreshRequest,
     settings: Settings = Depends(get_settings),
@@ -452,8 +452,8 @@ async def refresh(
     return response
 
 
-@handle_db_errors("auth.logout")
 @router.post("/logout")
+@handle_db_errors("auth.logout")
 async def logout(
     req: RefreshRequest,
     settings: Settings = Depends(get_settings),
@@ -519,8 +519,8 @@ async def logout(
     return response
 
 
-@handle_db_errors("auth.ws_token")
 @router.post("/ws-token", response_model=WsTokenResponse)
+@handle_db_errors("auth.ws_token")
 async def ws_token(
     current_user: TenantPrincipal = require_permission("run.status"),
     settings: Settings = Depends(get_settings),
@@ -593,8 +593,8 @@ async def ws_token(
         ) from None
 
 
-@handle_db_errors("auth.me")
 @router.get("/me", response_model=MeResponse)
+@handle_db_errors("auth.me")
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -675,8 +675,8 @@ class CsrfTokenResponse(BaseModel):
     csrf_token: str
 
 
-@handle_db_errors("auth.csrf_token")
 @router.get("/csrf-token", response_model=CsrfTokenResponse)
+@handle_db_errors("auth.csrf_token")
 async def csrf_token(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     settings: Settings = Depends(get_settings),

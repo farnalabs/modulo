@@ -183,6 +183,7 @@ def _make_trigger(**overrides: object) -> MagicMock:
         "organisation_id": ORG,
         "pipeline_id": uuid.uuid4(),
         "active": True,
+        "deleted_at": None,
         "max_concurrent_runs": 5,
         "daily_spend_limit": None,
         "config_json": {},
@@ -262,6 +263,46 @@ class TestFireDueTriggers:
         cron_key = enqueue.await_args_list[0].args[2]
         assert cron_key.startswith(f"fire:{TRIGGER_A}:")
         redis_client.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_soft_deleted_triggers_excluded_from_scans(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-166: the cron/polling/catch-up scan SELECTs must filter
+        ``Trigger.deleted_at IS NULL`` — a soft-deleted trigger (deleted_at set,
+        active still True) must never be selected for firing."""
+        _patch_env(monkeypatch)
+        session = _MockSession(
+            [
+                _org_result([ORG]),
+                _pause_result(ORG),
+                _rows_result([_cron_row(TRIGGER_A)]),
+                _rows_result([_polling_row(TRIGGER_POLL)]),
+                _rows_result([_report_row(REPORT)]),
+            ]
+        )
+        factory = MagicMock(return_value=session)
+        redis_client = AsyncMock()
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "get_settings", return_value=_settings()),
+            patch.object(ch, "AsyncRedis") as redis_cls,
+            patch.object(ch, "RedisQueue", MagicMock()),
+            patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True),
+            patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id"),
+            patch.object(ch, "_claim_catchup_marker", new_callable=AsyncMock, return_value=False),
+            patch.object(ch, "_mark_catchup_fired", new_callable=AsyncMock),
+        ):
+            redis_cls.from_url.return_value = redis_client
+            await ch.fire_due_triggers()
+
+        # Every scan over the triggers table — cron, polling, and the missed-fire
+        # catch-up scan — must carry the deleted_at filter.
+        trigger_scans = [(s, p) for s, p in session.executed if "FROM triggers" in str(s)]
+        assert trigger_scans, "expected cron/polling/catch-up scan statements"
+        for stmt, _params in trigger_scans:
+            assert "deleted_at IS NULL" in str(stmt), f"scan missing deleted_at filter: {stmt}"
 
     @pytest.mark.asyncio
     async def test_second_machine_epoch_skipped_when_already_advanced(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1268,6 +1309,38 @@ class TestFireCronTriggerSkips:
         assert result["reason"] == "trigger_inactive_or_missing"
 
     @pytest.mark.asyncio
+    async def test_skips_when_trigger_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-166: a soft-deleted cron trigger (deleted_at set, active still
+        True) is not loaded by the fire job — the load SELECT filters
+        ``deleted_at``, so the trigger resolves to None and the job skips as
+        inactive/missing."""
+        _patch_env(monkeypatch)
+
+        trigger = _make_trigger(id=TRIGGER_A, deleted_at=datetime.now(UTC))
+
+        session = _MockSession([_lock_result(True), _trigger_result(None)])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=TRIGGER_A,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=uuid.uuid4(),
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "trigger_inactive_or_missing"
+        # The load SELECT must carry the deleted_at filter — the guard that
+        # turns a soft-deleted trigger into "not found" (skip).
+        load = [(s, p) for s, p in session.executed if "FROM triggers" in str(s)]
+        assert load, "expected the fire-job load SELECT"
+        assert "deleted_at IS NULL" in str(load[0][0])
+
+    @pytest.mark.asyncio
     async def test_skips_when_spend_limit_exceeded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         from decimal import Decimal
@@ -1307,6 +1380,7 @@ class TestFireCronTriggerSkips:
         trigger.organisation_id = ORG
         trigger.pipeline_id = uuid.uuid4()
         trigger.active = True
+        trigger.deleted_at = None
         trigger.max_concurrent_runs = 5
         trigger.daily_spend_limit = None
         trigger.config_json = {}
@@ -1352,6 +1426,7 @@ class TestFireCronTriggerSkips:
         trigger.organisation_id = ORG
         trigger.pipeline_id = uuid.uuid4()
         trigger.active = True
+        trigger.deleted_at = None
         trigger.max_concurrent_runs = 5
         trigger.daily_spend_limit = None
         trigger.config_json = {}
@@ -1404,6 +1479,7 @@ class TestFireCronTriggerSkips:
         trigger.organisation_id = ORG
         trigger.pipeline_id = uuid.uuid4()
         trigger.active = True
+        trigger.deleted_at = None
         trigger.max_concurrent_runs = 5
         trigger.daily_spend_limit = None
         trigger.config_json = {}
@@ -1442,6 +1518,7 @@ class TestFireCronTriggerSkips:
         trigger.organisation_id = ORG
         trigger.pipeline_id = uuid.uuid4()
         trigger.active = True
+        trigger.deleted_at = None
         trigger.max_concurrent_runs = 5
         trigger.daily_spend_limit = None
         trigger.config_json = {}
@@ -1607,6 +1684,40 @@ class TestLogEvent:
         assert event.trigger_type == "polling"
         assert event.validation_result == "poll_error"
         assert event.error_detail == "boom"
+
+    @pytest.mark.asyncio
+    async def test_logs_poll_event_sanitizes_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        trigger = SimpleNamespace(id=uuid.uuid4())
+
+        event = await ch._log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=uuid.uuid4(),
+            result="poll_error",
+            error_detail="poll query failed postgresql://user:supersecret@db.example/modulo",
+        )
+
+        assert "supersecret" not in event.error_detail
+        assert "<redacted>" in event.error_detail
+
+    @pytest.mark.asyncio
+    async def test_logs_cron_event_sanitizes_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        trigger = SimpleNamespace(id=uuid.uuid4())
+
+        event = await ch._log_event(
+            session,
+            trigger=trigger,
+            org_id=uuid.uuid4(),
+            result="poll_error",
+            error_detail="cron fire failed with Bearer tok1234567890",
+        )
+
+        assert "tok1234567890" not in event.error_detail
+        assert "<redacted>" in event.error_detail
 
 
 class TestIngestSaqError:
@@ -1877,6 +1988,37 @@ class TestFirePollingTrigger:
         conn_result = MagicMock()
         conn_result.scalar_one_or_none.return_value = connector_instance
         return _MockSession([_lock_result(True), _trigger_result(trigger), conn_result, MagicMock()])
+
+    @pytest.mark.asyncio
+    async def test_skips_when_trigger_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-166: a soft-deleted polling trigger (deleted_at set, active still
+        True) is not loaded by the fire job — the load SELECT filters
+        ``deleted_at``, so the trigger resolves to None and the job skips; the
+        poll query never runs."""
+        _patch_env(monkeypatch)
+        trigger = _make_trigger(id=TRIGGER_POLL, deleted_at=datetime.now(UTC))
+        session = _MockSession([_lock_result(True), _trigger_result(None)])
+        factory = MagicMock(return_value=session)
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+        ):
+            result = await ch.fire_polling_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                connector_instance_id=uuid.uuid4(),
+                poll_query="issues",
+                condition_expression=None,
+            )
+
+        assert result["status"] == "skipped"
+        assert result["reason"] == "trigger_inactive_or_missing"
+        # The load SELECT must carry the deleted_at filter — the guard that
+        # turns a soft-deleted trigger into "not found" (skip).
+        load = [(s, p) for s, p in session.executed if "FROM triggers" in str(s)]
+        assert load, "expected the fire-job load SELECT"
+        assert "deleted_at IS NULL" in str(load[0][0])
 
     @pytest.mark.asyncio
     async def test_fires_run_when_condition_met(self, monkeypatch: pytest.MonkeyPatch) -> None:

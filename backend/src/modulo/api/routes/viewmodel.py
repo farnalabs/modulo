@@ -167,8 +167,8 @@ class ViewModelCurrent(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@handle_db_errors("viewmodel.license_info")
 @router.get("/api/v1/license", response_model=LicenseInfo)
+@handle_db_errors("viewmodel.license_info")
 async def license_info(
     settings: Settings = Depends(get_settings),
 ) -> LicenseInfo:
@@ -190,8 +190,8 @@ async def license_info(
         ) from None
 
 
-@handle_db_errors("viewmodel.me")
 @router.get("/api/v1/me", response_model=MeResponse)
+@handle_db_errors("viewmodel.me")
 async def me(
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -236,8 +236,8 @@ async def me(
     )
 
 
-@handle_db_errors("viewmodel.viewmodel_current")
 @router.get("/api/v1/viewmodel/current", response_model=ViewModelCurrent)
+@handle_db_errors("viewmodel.viewmodel_current")
 async def viewmodel_current(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),
@@ -396,8 +396,8 @@ async def viewmodel_current(
     )
 
 
-@handle_db_errors("viewmodel.viewmodel_list_views")
 @router.get("/api/v1/viewmodel/views", response_model=ViewModelViewsResponse)
+@handle_db_errors("viewmodel.viewmodel_list_views")
 async def viewmodel_list_views(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedPrincipal = Depends(get_current_user),

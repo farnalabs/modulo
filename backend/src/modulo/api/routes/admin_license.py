@@ -95,8 +95,8 @@ def _resolve_effective_license(settings: Settings, org: Organisation | None = No
     return LicenseStatusResponse(has_license=False, tier="community")
 
 
-@handle_db_errors("admin.license.get_license_status")
 @router.get("", response_model=LicenseStatusResponse)
+@handle_db_errors("admin.license.get_license_status")
 async def get_license_status(
     settings: Settings = Depends(get_settings),
     current_user: TenantPrincipal = require_permission("org.license.manage"),
@@ -163,8 +163,8 @@ async def get_license_status(
         ) from None
 
 
-@handle_db_errors("admin.license.upload_license")
 @router.post("", response_model=LicenseUploadResponse, status_code=status.HTTP_200_OK)
+@handle_db_errors("admin.license.upload_license")
 async def upload_license(
     req: LicenseUploadRequest,
     _: TenantPrincipal = require_permission("org.license.manage"),
