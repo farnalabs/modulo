@@ -873,10 +873,13 @@ export default {
       "dimension_pipeline": "Pipeline",
       "dimension_folder": "Folder",
       "dimension_team": "Team",
+      "dimension_error_code": "Error code",
       "filter_folder": "Folder",
       "filter_pipeline": "Pipeline",
       "filter_trigger_type": "Trigger type",
       "filter_status": "Status",
+      "filter_error_code": "Error code",
+      "filter_error_code_placeholder": "e.g. executor_stalled",
       "all": "All",
       "measure": "Measure",
       "measure_count": "Run count",
@@ -2406,7 +2409,10 @@ export default {
         "no_slash_commands": "No matching commands",
         "delete_confirm": "Delete this session?",
         "intro_text": "Hi! I'm Remy, your Modulo AI assistant. I can help you build pipelines, run evaluations, manage your workspace, and answer questions about your data. What would you like help with?",
-        "permission_request": "Remy wants to perform actions on your behalf"
+        "permission_request": "Remy wants to perform actions on your behalf",
+        "analytics_chart_title": "Run analytics",
+        "analytics_measure_label": "Chart measure",
+        "view_full_analytics": "View full analytics"
       },
       "RemySkillManager": {
         "triggers_commaseparated": "Triggers (comma-separated)",
