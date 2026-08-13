@@ -5,12 +5,17 @@ The tests in this file apply the same AST-scanning discipline the rest of
 packages themselves. Each lens guards against a class of test-quality
 regression that silently weakens the suite:
 
-- always-pass/always-fail assertions (dead or inverted tests)
+- always-pass/always-fail assertions (dead or inverted tests, including
+  ``assert not <falsy constant>``)
 - ``pytest.skip``/skip markers without a reason (undocumented silencing)
 - bare ``except:`` handlers (swallow BaseException, hide KeyboardInterrupt)
 - debugger remnants (``breakpoint``/``pdb``) committed by accident
 - deprecated ``datetime.utcnow()`` / ``datetime.utcfromtimestamp()``
 - ``== True`` / ``== False`` equality on booleans (type confusion + E712)
+- ``== None`` / ``!= None`` equality (identity vs. equality on singletons, E711)
+- same-scope ``test_*`` redefinition (silently drops the earlier test)
+- ``asyncio.run()`` nested inside ``async def`` tests (conflicts with the loop)
+- ``assert`` in a ``try:`` body guarded by a swallowing ``except Exception:``
 - stray ``print()`` calls polluting CI output
 - ``==`` against a float literal that is not exactly representable in binary
   (``0.1``, ``0.04``, ``0.95``, ...) — precision-fragile equality that
@@ -47,7 +52,9 @@ def _parse(path: Path):
 
 def test_no_always_pass_or_fail_assertions():
     """Assertions against a literal that can never fail (or can never pass)
-    are dead code — they report a test as green regardless of behavior."""
+    are dead code — they report a test as green regardless of behavior. This
+    covers plain constants (`assert 1`) and negated constants (`assert not []`),
+    which have the same guaranteed outcome but a different AST shape."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
@@ -57,16 +64,174 @@ def test_no_always_pass_or_fail_assertions():
             if not isinstance(node, ast.Assert):
                 continue
             test = node.test
-            if not isinstance(test, ast.Constant):
-                continue
-            if isinstance(test.value, complex):
-                continue
-            value = test.value
-            verdict = "always FAILS" if not value else "always PASSES"
-            violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  assert {value!r} — {verdict}")
+            if isinstance(test, ast.Constant):
+                if isinstance(test.value, complex):
+                    continue
+                value = test.value
+                verdict = "always FAILS" if not value else "always PASSES"
+                violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  assert {value!r} — {verdict}")
+            elif (
+                isinstance(test, ast.UnaryOp)
+                and isinstance(test.op, ast.Not)
+                and isinstance(test.operand, ast.Constant)
+                and not isinstance(test.operand.value, complex)
+            ):
+                value = test.operand.value
+                verdict = "always PASSES" if not value else "always FAILS"
+                violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  assert not {value!r} — {verdict}")
     assert not violations, (
         f"Found {len(violations)} assertion(s) against literal constants.\n"
         "Assert against the actual behavior under test instead of a constant.\n" + "\n".join(violations)
+    )
+
+
+def test_no_none_equality_comparison():
+    """``x == None`` / ``x != None`` rely on ``__eq__`` (E711) and break for
+    objects whose equality is overloaded; compare identity with ``is None``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+                continue
+            op = node.ops[0]
+            if not isinstance(op, (ast.Eq, ast.NotEq)):
+                continue
+            for side in [node.left, *node.comparators]:
+                if isinstance(side, ast.Constant) and side.value is None:
+                    op_name = "==" if isinstance(op, ast.Eq) else "!="
+                    violations.append(f"  {path.relative_to(TESTS)}:{node.lineno}  compares {op_name} None")
+                    break
+    assert not violations, (
+        f"Found {len(violations)} equality comparison(s) against None.\n"
+        "Use 'is None'/'is not None' to compare identity, not equality.\n" + "\n".join(violations)
+    )
+
+
+def test_no_test_redefinition_in_same_scope():
+    """Two ``test_*`` functions (or methods in the same class) with the same
+    name silently shadow each other — pytest only collects the last one and the
+    earlier test is never run. Duplicates in *different* classes are fine."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+
+        def _is_test(node):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return False
+            if node.name.startswith("test_"):
+                return True
+            return any(isinstance(d, ast.Name) and d.id == "test" for d in node.decorator_list)
+
+        module_seen = {}
+        for item in tree.body:
+            if _is_test(item):
+                module_seen.setdefault(item.name, []).append(item.lineno)
+        for name, lines in module_seen.items():
+            if len(lines) > 1:
+                violations.append(f"  {rel}  <module> {name} redefined: {lines}")
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            class_seen = {}
+            for item in cls.body:
+                if _is_test(item):
+                    class_seen.setdefault(item.name, []).append(item.lineno)
+            for name, lines in class_seen.items():
+                if len(lines) > 1:
+                    violations.append(f"  {rel}  {cls.name}.{name} redefined: {lines}")
+    assert not violations, (
+        f"Found {len(violations)} test redefinition(s) in the same scope.\n"
+        "A later definition silently shadows the earlier test; rename it.\n" + "\n".join(violations)
+    )
+
+
+def test_no_asyncio_run_inside_async_test():
+    """``asyncio.run()`` inside an ``async def`` test conflicts with the running
+    event loop (pytest-asyncio already provides one) and will raise — the test
+    is simply wrong as written."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                f = node.func
+                if (
+                    isinstance(f, ast.Attribute)
+                    and f.attr == "run"
+                    and isinstance(f.value, ast.Name)
+                    and f.value.id == "asyncio"
+                ):
+                    violations.append(f"  {rel}:{node.lineno}  asyncio.run() inside async def {fn.name}")
+    assert not violations, (
+        f"Found {len(violations)} asyncio.run() call(s) inside async tests.\n"
+        "pytest-asyncio provides the loop; drop the nested asyncio.run().\n" + "\n".join(violations)
+    )
+
+
+def test_no_assert_under_swallowing_except():
+    """An ``assert`` in a ``try:`` body whose ``except Exception:``/``except:``
+    handler swallows the exception (no re-raise, no pytest.fail) can fail
+    silently and still report the test as green."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+        def _reports_failure(handler):
+            def _scan(nodes):
+                for stmt in nodes:
+                    if isinstance(stmt, ast.Raise):
+                        return True
+                    if isinstance(stmt, ast.Call):
+                        f = stmt.func
+                        name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+                        if name in ("fail", "skip", "xfail"):
+                            return True
+                    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        continue
+                    if _scan(ast.iter_child_nodes(stmt)):
+                        return True
+                return False
+
+            return _scan(handler.body)
+
+        def _catches_assertion(handler):
+            if handler.type is None:
+                return True
+            return isinstance(handler.type, ast.Name) and handler.type.id in ("Exception", "BaseException")
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assert):
+                continue
+            current = node
+            parent = parents.get(current)
+            while parent is not None:
+                if isinstance(parent, ast.Try) and current in parent.body:
+                    swallowing = [h for h in parent.handlers if _catches_assertion(h) and not _reports_failure(h)]
+                    if swallowing:
+                        violations.append(f"  {rel}:{node.lineno}  assert inside try guarded by swallowing except")
+                        break
+                current = parent
+                parent = parents.get(current)
+    assert not violations, (
+        f"Found {len(violations)} assert(s) inside a try/except that swallows failures.\n"
+        "Move the assert outside the try or re-raise/pytest.fail in the handler.\n" + "\n".join(violations)
     )
 
 
