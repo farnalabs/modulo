@@ -195,6 +195,48 @@ def delete_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any) -> None
     ctx["lifecycle_map"] = None
 
 
+@when(parsers.parse("I save a version of the lifecycle map with {count:d} stage"))
+@when(parsers.parse("I save a version of the lifecycle map with {count:d} stages"))
+def save_version_of_lifecycle_map(count: int, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """POST /versions — a save publishes a new active version and bumps the counter.
+
+    This step mocks ``save_map_version`` and simply steps the returned version
+    forward, so it pins the route contract (each save returns the next version)
+    rather than true concurrency. The concurrent-save guarantee — strictly
+    increasing unique version numbers under the row lock — is proven by the unit
+    SQL-assertion tests and the Postgres integration tests instead.
+    """
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    stages = [{"id": f"stage-{i}", "name": f"Stage {i}", "type": "modulo"} for i in range(count)]
+    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+        updated = _make_lifecycle_map(name=current.name, version=current.version + 1, content_json={"stages": stages})
+        mock_save.return_value = updated
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{current.id}/versions",
+            json={"stages": stages, "edges": [], "notes": ""},
+        )
+    _store_response(request, ctx, resp)
+    ctx["lifecycle_map"] = updated
+
+
+@when("I get the lifecycle map versions")
+def get_lifecycle_map_versions(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    lm = ctx.get("lifecycle_map", _make_lifecycle_map())
+    with patch("modulo.api.routes.lifecycle_maps.get_lifecycle_map", new=AsyncMock()) as mock_get:
+        mock_get.return_value = lm
+        resp = client.get(f"/api/v1/lifecycle-maps/{lm.id}/versions")
+    _store_response(request, ctx, resp)
+
+
+@then(parsers.parse("the version list contains exactly {count:d} version at version {version:d}"))
+def version_list_exactly(count: int, version: int, request: Any) -> None:
+    resp = request.node._resp
+    data = resp.json()
+    assert isinstance(data, list), f"Expected a list of versions, got {type(data).__name__}"
+    assert len(data) == count, f"Expected {count} version(s), got {len(data)}"
+    assert data[0]["version"] == version, f"Expected version {version}, got {data[0]['version']}"
+
+
 @then(parsers.parse('the response contains a lifecycle map named "{name}"'))
 def response_contains_lifecycle_map(name: str, request: Any) -> None:
     resp = request.node._resp
