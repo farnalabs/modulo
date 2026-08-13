@@ -3,6 +3,7 @@
 Uses OTel's InMemorySpanExporter — no network, no DB, no LangGraph process.
 """
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -621,3 +622,77 @@ def test_span_finalization_errors_are_swallowed(bridge: LangGraphOtelBridge, exp
 
     bridge.on_chain_end({}, run_id=run_id)  # must not raise
     assert str(run_id) not in bridge._spans
+
+
+def test_stale_span_set_status_cancellation_propagates(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+) -> None:
+    """A CancelledError finalizing a stale span must propagate, not be swallowed."""
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("First"), {}, run_id=run_id)
+    stale = bridge._spans[str(run_id)]
+    stale.set_status = lambda _status: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        bridge.on_chain_start(_serialized("Second"), {}, run_id=run_id)
+
+
+def test_stale_span_end_cancellation_propagates(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    """A CancelledError ending a stale span must propagate."""
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("First"), {}, run_id=run_id)
+    stale = bridge._spans[str(run_id)]
+    stale.end = lambda: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        bridge.on_chain_start(_serialized("Second"), {}, run_id=run_id)
+
+
+def test_span_finalization_set_status_cancellation_propagates(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+) -> None:
+    """A CancelledError while setting the final span status must propagate."""
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("Broken"), {}, run_id=run_id)
+    bad_span = bridge._spans[str(run_id)]
+    bad_span.set_status = lambda _status: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        bridge.on_chain_end({}, run_id=run_id)
+
+
+def test_span_finalization_end_cancellation_propagates(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+) -> None:
+    """A CancelledError while ending a span must propagate."""
+    run_id = uuid.uuid4()
+    bridge.on_chain_start(_serialized("Broken"), {}, run_id=run_id)
+    bad_span = bridge._spans[str(run_id)]
+    bad_span.end = lambda: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        bridge.on_chain_end({}, run_id=run_id)
+
+
+def test_llm_finalize_set_status_cancellation_propagates(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+) -> None:
+    """A CancelledError setting the LLM span status must propagate."""
+    run_id = uuid.uuid4()
+    bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
+    bad_span = bridge._spans[str(run_id)]
+    bad_span.set_status = lambda _status: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
+
+
+def test_llm_finalize_end_cancellation_propagates(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+    """A CancelledError ending the LLM span must propagate."""
+    run_id = uuid.uuid4()
+    bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
+    bad_span = bridge._spans[str(run_id)]
+    bad_span.end = lambda: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+
+    with pytest.raises(asyncio.CancelledError):
+        bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
