@@ -833,7 +833,7 @@ class TestGetFeedbackRecordsInbox:
 
         result = await mgr.get_feedback_records_inbox()
 
-        assert result["pipeline_map"] == {}
+        assert not result["pipeline_map"]
         assert not result["items"]
 
 

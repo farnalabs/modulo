@@ -87,7 +87,7 @@ def test_collect_backups_skips_non_matching_files(tmp_path):
     (tmp_path / "other.txt").write_text("x")
     (tmp_path / "modulo-backup-abc123-20260701T010101").write_text("x")
 
-    assert prune.collect_backups(str(tmp_path)) == []
+    assert not prune.collect_backups(str(tmp_path))
 
 
 def test_collect_backups_skips_invalid_dates(tmp_path):
@@ -100,7 +100,7 @@ def test_collect_backups_skips_invalid_dates(tmp_path):
 
 
 def test_collect_backups_returns_empty_for_empty_dir(tmp_path):
-    assert prune.collect_backups(str(tmp_path)) == []
+    assert not prune.collect_backups(str(tmp_path))
 
 
 def test_collect_backups_sorts_by_date_descending(tmp_path):

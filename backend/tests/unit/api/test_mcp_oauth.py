@@ -242,7 +242,7 @@ class TestListOAuthClients:
             resp = admin_client.get(self.ENDPOINT)
 
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
 
 # ---------------------------------------------------------------------------

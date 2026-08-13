@@ -388,4 +388,4 @@ class TestComputeNodeChanges:
 
     def test_no_changes_returns_empty(self):
         node = {"id": "a", "agent_id": "ag1", "label": "A", "node_type": "agent"}
-        assert _compute_node_changes(node, node) == {}
+        assert not _compute_node_changes(node, node)

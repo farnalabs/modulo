@@ -181,7 +181,7 @@ class TestListRunsCost(_AuthContext):
 
         result = await list_runs(limit=20)
 
-        assert result["items"] == []
+        assert not result["items"]
         assert result["total"] == 0
         mock_child_rollup.assert_not_awaited()
 

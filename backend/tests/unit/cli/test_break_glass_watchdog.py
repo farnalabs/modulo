@@ -108,7 +108,7 @@ class TestBootFindings:
             modulo_break_glass_standby_secret=_STANDBY,
             modulo_break_glass_database_url=_BG_URL,
         )
-        assert break_glass_boot_findings(settings) == []
+        assert not break_glass_boot_findings(settings)
 
     def test_enabled_with_both_secrets_empty_is_finding(self) -> None:
         settings = _make_settings(

@@ -31,7 +31,7 @@ class TestRemyConfigDefaults:
         assert config.default_model == "claude-sonnet-4-20250514"
         assert config.default_context_window == 200000
         assert config.allowed_providers == ["anthropic", "openai", "gemini", "deepseek", "groq"]
-        assert config.allowed_models == []
+        assert not config.allowed_models
 
     def test_schema_version_default(self) -> None:
         config = RemyConfig()

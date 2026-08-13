@@ -43,9 +43,9 @@ class TestCreateMigration:
         assert "age" in plan.field_additions
         assert plan.field_additions["email"] == "string"
         assert plan.field_additions["age"] == "integer"
-        assert plan.field_removals == []
-        assert plan.type_changes == {}
-        assert plan.renames == {}
+        assert not plan.field_removals
+        assert not plan.type_changes
+        assert not plan.renames
 
     def test_detect_removed_fields(self) -> None:
         old = {
@@ -115,17 +115,17 @@ class TestCreateMigration:
             },
         }
         plan = create_migration(old, new)
-        assert plan.renames == {}
+        assert not plan.renames
         assert "count_str" in plan.field_additions
         assert "count" in plan.field_removals
 
     def test_no_changes(self) -> None:
         schema = {"type": "object", "properties": {"name": {"type": "string"}}}
         plan = create_migration(schema, schema)
-        assert plan.field_additions == {}
-        assert plan.field_removals == []
-        assert plan.type_changes == {}
-        assert plan.renames == {}
+        assert not plan.field_additions
+        assert not plan.field_removals
+        assert not plan.type_changes
+        assert not plan.renames
 
     def test_rename_matching_is_deterministic(self) -> None:
         old = {
@@ -167,10 +167,10 @@ class TestCreateMigration:
 
     def test_handles_missing_properties(self) -> None:
         plan = create_migration({"type": "object"}, {"type": "object"})
-        assert plan.field_additions == {}
-        assert plan.field_removals == []
-        assert plan.type_changes == {}
-        assert plan.renames == {}
+        assert not plan.field_additions
+        assert not plan.field_removals
+        assert not plan.type_changes
+        assert not plan.renames
 
     def test_detects_union_type(self) -> None:
         old = {
@@ -230,9 +230,9 @@ class TestLargeSchema:
         assert "field_1000" in plan.field_additions
         assert plan.field_additions["field_1000"] == "integer"
         assert "field_1001" in plan.field_additions
-        assert plan.field_removals == []
-        assert plan.type_changes == {}
-        assert plan.renames == {}
+        assert not plan.field_removals
+        assert not plan.type_changes
+        assert not plan.renames
 
     def test_create_migration_large_schema_with_rename_and_removal(self) -> None:
         old_props = {f"field_{i}": {"type": "string"} for i in range(1500)}
@@ -346,10 +346,10 @@ class TestTransformField:
 
 class TestDetectRenameCycles:
     def test_empty_renames_no_cycles(self) -> None:
-        assert _detect_rename_cycles({}) == []
+        assert not _detect_rename_cycles({})
 
     def test_plain_rename_no_cycle(self) -> None:
-        assert _detect_rename_cycles({"a": "b"}) == []
+        assert not _detect_rename_cycles({"a": "b"})
 
     def test_two_node_cycle(self) -> None:
         assert _detect_rename_cycles({"a": "b", "b": "a"}) == [["a", "b"]]
@@ -559,11 +559,11 @@ class TestValidateChain:
         registry = MigrationRegistry()
         await registry.register("1.0.0", "2.0.0", lambda d: d)
         await registry.register("2.0.0", "3.0.0", lambda d: d)
-        assert await registry.validate_chain("1.0.0", "3.0.0") == []
+        assert not await registry.validate_chain("1.0.0", "3.0.0")
 
     async def test_same_version_returns_empty(self) -> None:
         registry = MigrationRegistry()
-        assert await registry.validate_chain("1.0.0", "1.0.0") == []
+        assert not await registry.validate_chain("1.0.0", "1.0.0")
 
     async def test_gap_detected(self) -> None:
         registry = MigrationRegistry()
@@ -591,7 +591,7 @@ class TestValidateChain:
     async def test_single_migration_completes_chain(self) -> None:
         registry = MigrationRegistry()
         await registry.register("1.0.0", "3.0.0", lambda d: d)
-        assert await registry.validate_chain("1.0.0", "3.0.0") == []
+        assert not await registry.validate_chain("1.0.0", "3.0.0")
 
 
 class TestPartialChain:
@@ -884,7 +884,7 @@ class TestSetDefault:
         assert result == {"name": "Alice", "tags": []}
         result["tags"].append("admin")
         result2 = fn({"name": "Bob"})
-        assert result2["tags"] == []
+        assert not result2["tags"]
 
 
 class TestAddField:
@@ -994,7 +994,7 @@ class TestDryRun:
 
     async def test_describe_chain_same_version_empty(self) -> None:
         registry = MigrationRegistry()
-        assert await registry.describe_chain("1.0.0", "1.0.0") == []
+        assert not await registry.describe_chain("1.0.0", "1.0.0")
 
     async def test_describe_chain_missing_raises(self) -> None:
         registry = MigrationRegistry()
@@ -1018,7 +1018,7 @@ class TestDryRun:
         assert "display_name" in steps[0]["added_fields"]
         assert "full_name" in steps[0]["removed_fields"]
         assert "count" not in steps[0]["added_fields"]
-        assert steps[0]["changed_fields"] == {}
+        assert not steps[0]["changed_fields"]
 
         # Step 2: convert count to int
         assert steps[1]["source_version"] == "2.0.0"
@@ -1026,8 +1026,8 @@ class TestDryRun:
         assert "count" in steps[1]["changed_fields"]
         assert steps[1]["changed_fields"]["count"]["old"] == "42"
         assert steps[1]["changed_fields"]["count"]["new"] == 42
-        assert steps[1]["added_fields"] == []
-        assert steps[1]["removed_fields"] == []
+        assert not steps[1]["added_fields"]
+        assert not steps[1]["removed_fields"]
 
     async def test_dry_run_does_not_mutate_original(self) -> None:
         registry = MigrationRegistry()
@@ -1060,7 +1060,7 @@ class TestDryRun:
         assert len(steps) == 1
         assert "middle_name" in steps[0]["added_fields"]
         assert "first_name" not in steps[0]["added_fields"]
-        assert steps[0]["removed_fields"] == []
+        assert not steps[0]["removed_fields"]
 
     async def test_dry_run_remove_field_appears_as_removal(self) -> None:
         registry = MigrationRegistry()

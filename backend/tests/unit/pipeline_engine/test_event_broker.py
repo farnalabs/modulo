@@ -140,13 +140,13 @@ def test_replay_since_zero_returns_all():
 def test_replay_since_returns_empty_when_up_to_date():
     broker = RunEventBroker(uuid.uuid4())
     broker.publish("node_started", {})
-    assert broker.replay_since(1) == []
+    assert not broker.replay_since(1)
 
 
 def test_replay_since_empty_buffer_returns_empty():
     broker = RunEventBroker(uuid.uuid4())
-    assert broker.replay_since(0) == []
-    assert broker.replay_since(5) == []
+    assert not broker.replay_since(0)
+    assert not broker.replay_since(5)
 
 
 def test_replay_since_older_than_oldest_buffered_returns_empty():
@@ -157,7 +157,7 @@ def test_replay_since_older_than_oldest_buffered_returns_empty():
     for _ in range(_RING_BUFFER_SIZE + 2):
         broker.publish("x", {})
     assert broker._buffer[0].seq > 1
-    assert broker.replay_since(1) == []
+    assert not broker.replay_since(1)
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ def test_publish_with_redis_broker_without_running_loop_skips_broadcast(
     with caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.event_broker"):
         event = broker.publish("node_started", {"node_id": "a"})
     assert event.seq == 1
-    assert redis.published == []
+    assert not redis.published
     assert any("redis_broadcast_skipped" in record.message for record in caplog.records)
 
 

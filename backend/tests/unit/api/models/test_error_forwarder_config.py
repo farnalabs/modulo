@@ -27,10 +27,10 @@ from modulo.api.models.error_forwarder_config import TestConnectionRequest as Co
 
 class TestMaskSensitive:
     def test_none_config_returns_empty_dict(self) -> None:
-        assert _mask_sensitive(None) == {}
+        assert not _mask_sensitive(None)
 
     def test_empty_config_returns_empty_dict(self) -> None:
-        assert _mask_sensitive({}) == {}
+        assert not _mask_sensitive({})
 
     @pytest.mark.parametrize("key", ["dsn", "api_key", "access_token", "routing_key", "secret"])
     def test_sensitive_keys_are_masked(self, key: str) -> None:
@@ -77,7 +77,7 @@ class TestForwarderConfigResponse:
             last_test_ok=None,
         )
         resp = ForwarderConfigResponse.from_orm_model(orm)
-        assert resp.config_summary == {}
+        assert not resp.config_summary
         assert resp.last_test_at is None
         assert resp.last_test_ok is None
 
@@ -149,13 +149,13 @@ class TestForwarderListResponse:
 
     def test_empty_list(self) -> None:
         resp = ForwarderListResponse(forwarders=[])
-        assert resp.forwarders == []
+        assert not resp.forwarders
 
 
 class TestTestConnectionRequest:
     def test_config_json_defaults_to_empty_dict(self) -> None:
         req = ConnectionRequestModel()
-        assert req.config_json == {}
+        assert not req.config_json
 
     def test_config_json_round_trip(self) -> None:
         req = ConnectionRequestModel(config_json={"dsn": "https://secret"})

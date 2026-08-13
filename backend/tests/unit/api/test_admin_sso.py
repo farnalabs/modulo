@@ -159,7 +159,7 @@ class TestListProviders:
         with patch("modulo.api.routes.admin_sso.list_providers", new=AsyncMock(return_value=[])):
             resp = client.get(self.URL)
             assert resp.status_code == 200
-            assert resp.json() == []
+            assert not resp.json()
 
     def test_requires_auth(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.URL)

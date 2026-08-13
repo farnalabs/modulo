@@ -155,7 +155,7 @@ def test_extract_rate_limit_metadata_only_present_headers() -> None:
 
 
 def test_extract_rate_limit_metadata_no_headers() -> None:
-    assert extract_rate_limit_metadata(httpx.Response(429), RATE_LIMIT_HEADERS) == {}
+    assert not extract_rate_limit_metadata(httpx.Response(429), RATE_LIMIT_HEADERS)
 
 
 def test_extract_rate_limit_metadata_keeps_empty_values() -> None:

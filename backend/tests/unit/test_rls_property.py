@@ -321,7 +321,7 @@ async def test_set_rls_org_none_skips_scoping() -> None:
 
     await set_rls_org(session, None)
 
-    assert session.info == {}
+    assert not session.info
     session.execute.assert_not_awaited()
 
 

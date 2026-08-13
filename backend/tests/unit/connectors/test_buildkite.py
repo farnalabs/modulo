@@ -442,7 +442,7 @@ async def test_double_health_check(bk_double):
 
 async def test_double_query(bk_double):
     result = await bk_double.query(ConnectorQuery(resource="organizations"))
-    assert result.records == []
+    assert not result.records
 
 
 async def test_double_write(bk_double):

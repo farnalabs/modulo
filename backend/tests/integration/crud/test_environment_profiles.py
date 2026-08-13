@@ -134,7 +134,7 @@ async def test_create_with_minimal_fields(
     loaded = await rls_session.get(EnvironmentProfile, profile_id)
     assert loaded is not None
     assert loaded.description is None
-    assert loaded.capabilities_json == []
+    assert not loaded.capabilities_json
     assert loaded.network_policy == "outbound"
     assert loaded.persistence_policy == "ephemeral"
     assert loaded.deleted_at is None

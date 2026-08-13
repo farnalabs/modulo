@@ -341,10 +341,10 @@ class TestEvalDashboardEmptyState:
         data = resp.json()
         assert data["summary"]["total_results"] == 0
         assert data["summary"]["pass_rate"] == 0.0
-        assert data["trend"] == []
-        assert data["by_type"] == []
-        assert data["coverage_gaps"] == []
-        assert data["recent_results"] == []
+        assert not data["trend"]
+        assert not data["by_type"]
+        assert not data["coverage_gaps"]
+        assert not data["recent_results"]
 
 
 class TestEvalDashboardMultiType:

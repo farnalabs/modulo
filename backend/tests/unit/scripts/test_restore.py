@@ -198,7 +198,7 @@ def test_read_checksums(tmp_dir, sample_archive):
 
 
 def test_read_checksums_missing(tmp_dir):
-    assert read_checksums(tmp_dir) == {}
+    assert not read_checksums(tmp_dir)
 
 
 def test_read_checksums_skips_malformed_and_blank_lines(tmp_dir):

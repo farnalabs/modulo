@@ -45,7 +45,7 @@ def test_build_telemetry_empty_inputs() -> None:
     assert tele.node_count == 0
     assert tele.nodes_estimated == 0
     assert tele.wall_clock_elapsed_s == Decimal(0)
-    assert tele.reported == {}
+    assert not tele.reported
     assert tele.missing_report_keys == set()
     assert per_node_cost == {}
 
@@ -137,7 +137,7 @@ def test_self_report_custom_report_key_without_node_key() -> None:
     comps = [_comp(report_key="custom_key")]
     entries = {"n1": {"sandbox_by_map": True, "model_cost_usd": 0.04}}
     tele, per_node_cost = build_telemetry(entries, comps)
-    assert tele.reported == {}
+    assert not tele.reported
     assert tele.nodes_estimated == 1
     assert per_node_cost["n1"] == Decimal(0)
 
@@ -163,7 +163,7 @@ def test_below_floor_routes_to_estimate_not_self_report() -> None:
     comps = [_comp(report_key="model_cost_usd")]
     entries = {"n1": {"sandbox_by_map": True, "model_cost_usd": 0.0000000001, "input_tokens": 5}}
     tele, per_node_cost = build_telemetry(entries, comps)
-    assert tele.reported == {}
+    assert not tele.reported
     assert tele.nodes_estimated == 1
     assert tele.tokens_input == 5
     assert tele.missing_report_keys == {"model_cost_usd"}
@@ -174,7 +174,7 @@ def test_sandbox_with_report_but_no_consuming_component_is_orphan() -> None:
     comps = [_comp(report_key="custom_key")]
     entries = {"n1": {"sandbox_by_map": True, "model_cost_usd": 0.05, "model_cost_raw_usd": 0.05}}
     tele, per_node_cost = build_telemetry(entries, comps)
-    assert tele.reported == {}
+    assert not tele.reported
     assert tele.orphan_report_nodes == ["n1"]
     assert tele.nodes_estimated == 1
     assert tele.missing_report_keys == {"custom_key"}
@@ -185,7 +185,7 @@ def test_disabled_self_reported_component_is_not_consuming() -> None:
     comps = [_comp(report_key="model_cost_usd", enabled=False)]
     entries = {"n1": {"sandbox_by_map": True, "model_cost_usd": 0.05}}
     tele, _per_node_cost = build_telemetry(entries, comps)
-    assert tele.reported == {}
+    assert not tele.reported
     assert tele.orphan_report_nodes == ["n1"]
     assert tele.missing_report_keys == set()
 
@@ -207,7 +207,7 @@ def test_non_numeric_report_routes_to_estimate() -> None:
     comps = [_comp(report_key="model_cost_usd")]
     entries = {"n1": {"sandbox_by_map": True, "model_cost_usd": "garbage"}}
     tele, per_node_cost = build_telemetry(entries, comps)
-    assert tele.reported == {}
+    assert not tele.reported
     assert tele.nodes_estimated == 1
     assert tele.missing_report_keys == {"model_cost_usd"}
     assert per_node_cost["n1"] == Decimal(0)
@@ -217,7 +217,7 @@ def test_non_finite_report_routes_to_estimate() -> None:
     comps = [_comp(report_key="model_cost_usd")]
     entries = {"n1": {"sandbox_by_map": True, "model_cost_usd": Decimal("Infinity")}}
     tele, per_node_cost = build_telemetry(entries, comps)
-    assert tele.reported == {}
+    assert not tele.reported
     assert tele.nodes_estimated == 1
     assert tele.missing_report_keys == {"model_cost_usd"}
     assert per_node_cost["n1"] == Decimal(0)

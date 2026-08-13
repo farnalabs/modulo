@@ -905,7 +905,7 @@ class TestRoutes:
         app.dependency_overrides.clear()
 
         assert resp.status_code == 200
-        assert resp.json()["runs"] == []
+        assert not resp.json()["runs"]
 
     def test_detail_db_failure_maps_to_503(self, mock_session: AsyncMock) -> None:
         app = _make_app()

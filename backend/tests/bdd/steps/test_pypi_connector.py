@@ -238,7 +238,7 @@ def step_health_result_not_ok(ctx):
 def step_result_has_records(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert len(result.records) > 0, "Query result has no records"
+    assert result.records, "Query result has no records"
 
 
 @then("the write is an error")

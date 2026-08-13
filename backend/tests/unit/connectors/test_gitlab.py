@@ -287,7 +287,7 @@ async def test_query_projects_rate_limit_metadata(connector):
 async def test_query_no_rate_limit_headers_returns_empty(connector):
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
     result = await connector.query(ConnectorQuery(resource="projects"))
-    assert result.metadata["rate_limit"] == {}
+    assert not result.metadata["rate_limit"]
 
 
 @respx.mock

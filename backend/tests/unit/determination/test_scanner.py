@@ -238,7 +238,7 @@ async def test_connector_query_error_returns_error_in_sample() -> None:
     errored = [s for s in samples if s.error]
     assert len(errored) == 1
     assert errored[0].resource == "repos"
-    assert errored[0].records == []
+    assert not errored[0].records
     assert errored[0].sample_count == 0
     assert "500" in errored[0].error
 
@@ -275,7 +275,7 @@ async def test_pull_query_failure_produces_error_sample() -> None:
     assert by_resource["repos"].error is None
     assert "pulls" in by_resource
     assert by_resource["pulls"].error is not None
-    assert by_resource["pulls"].records == []
+    assert not by_resource["pulls"].records
     assert by_resource["pulls"].sample_count == 0
     assert "500" in by_resource["pulls"].error
 
@@ -512,7 +512,7 @@ async def test_connector_query_timeout_produces_error_sample() -> None:
     assert len(samples) == 1
     assert samples[0].connector_id == cid
     assert samples[0].resource == "repos"
-    assert samples[0].records == []
+    assert not samples[0].records
     assert samples[0].error is not None
     assert "timed out" in samples[0].error
 

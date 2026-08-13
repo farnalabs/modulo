@@ -291,8 +291,8 @@ class TestPostTerminalEvidenceProbes:
             completed_node_outputs={"node-a": _declared_success_output()},
         )
 
-        assert provider.probes == []
-        assert await _evidence_rows(factory) == []
+        assert not provider.probes
+        assert not await _evidence_rows(factory)
 
     async def test_non_declared_success_node_skips_probe(self, sqlite_factory) -> None:
         factory, engine = sqlite_factory
@@ -306,5 +306,5 @@ class TestPostTerminalEvidenceProbes:
             completed_node_outputs={"node-a": {"output": {"agent_status": "completed"}}},
         )
 
-        assert provider.probes == []
-        assert await _evidence_rows(factory) == []
+        assert not provider.probes
+        assert not await _evidence_rows(factory)

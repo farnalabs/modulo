@@ -154,7 +154,7 @@ class TestListProfiles:
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 0
-        assert data["items"] == []
+        assert not data["items"]
 
 
 class TestCreateProfile:

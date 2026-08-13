@@ -41,7 +41,7 @@ class TestMakeLoopCounterNode:
         result = await node(state)
         assert result == {"_iteration_counts": {"source->target": 1}}
         # The node must not mutate the input state in place.
-        assert state["_iteration_counts"] == {}
+        assert not state["_iteration_counts"]
 
     async def test_increments_existing_count(self):
         node = make_loop_counter_fn("source->target")
@@ -257,7 +257,7 @@ class TestBuildGraphWithLoop:
         snapshot.run_context_defaults = {}
         snapshot.default_autonomy_level = None
         initial_state = _seed_state(snapshot, {})
-        assert initial_state["_iteration_counts"] == {}
+        assert not initial_state["_iteration_counts"]
 
         graph: dict[str, Any] = {
             "nodes": [

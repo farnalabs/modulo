@@ -358,11 +358,11 @@ class TestGrantFunctionExecute:
 
 class TestFindAllowListViolations:
     async def test_skips_when_accounts_missing(self, conn: _FakeConn) -> None:
-        assert await _find_allow_list_violations(conn, "modulo_app") == []
+        assert not await _find_allow_list_violations(conn, "modulo_app")
         assert conn.executed == ["SELECT to_regclass(?) IS NOT NULL"]
 
     async def test_clean_posture_returns_no_violations(self, conn: _FakeConn) -> None:
-        assert await _find_allow_list_violations(_clean_posture_conn(), "modulo_app") == []
+        assert not await _find_allow_list_violations(_clean_posture_conn(), "modulo_app")
 
     async def test_detects_table_level_update_grant(self, conn: _FakeConn) -> None:
         conn.tables = {"accounts"}
@@ -417,7 +417,7 @@ class TestFindAllowListViolations:
 class TestAssertRolePosture:
     async def test_clean_posture_is_noop(self, conn: _FakeConn) -> None:
         clean = _clean_posture_conn()
-        assert await _find_allow_list_violations(clean, "modulo_app") == []
+        assert not await _find_allow_list_violations(clean, "modulo_app")
         await _assert_role_posture(clean, "modulo_app")
 
     async def test_violation_raises_runtime_error(self, conn: _FakeConn) -> None:

@@ -155,7 +155,7 @@ class TestGetRunOutputSuccess:
 
         assert result["node_id"] == "node1"
         assert result["output"]["result"] == "hello"
-        assert result["masked_fields"] == []
+        assert not result["masked_fields"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_run")
@@ -244,7 +244,7 @@ class TestGetRunOutputSuccess:
             "sandbox_log_tail",
         ):
             assert key not in result["output"]
-        assert result["masked_fields"] == []
+        assert not result["masked_fields"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_run")
@@ -270,7 +270,7 @@ class TestGetRunOutputSuccess:
 
         assert result["node_id"] == "node1"
         assert result["output"] == {"status": "failed", "summary": "command failed"}
-        assert result["masked_fields"] == []
+        assert not result["masked_fields"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_run")

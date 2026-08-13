@@ -176,7 +176,7 @@ class TestMaskConfigJson:
         assert result == config
 
     def test_empty_dict(self) -> None:
-        assert mask_config_json({}) == {}
+        assert not mask_config_json({})
 
 
 # ---------------------------------------------------------------------------

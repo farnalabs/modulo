@@ -138,7 +138,7 @@ def test_get_run_stats_postgres_empty_percentile_group_returns_none() -> None:
     assert result["p95_duration_ms"] is None
     assert result["p99_duration_ms"] is None
     assert result["avg_duration_ms"] == 0
-    assert result["avg_duration_by_day"] == []
+    assert not result["avg_duration_by_day"]
 
 
 def test_get_run_stats_postgres_single_row_returns_that_value() -> None:
@@ -243,7 +243,7 @@ def test_get_run_stats_generic_empty_window_returns_zero_shape() -> None:
 
     assert result["total_runs"] == 0
     assert result["p50_duration_ms"] == 0
-    assert result["runs_by_day"] == []
+    assert not result["runs_by_day"]
 
 
 def test_get_run_stats_generic_counts_cancelled_expired_eval_failed_as_failed() -> None:

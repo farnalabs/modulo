@@ -186,7 +186,7 @@ async def test_elevation_disabled_run_completes_as_today(elevation_disabled):
     assert final_status == "complete"
     assert error_code is None
     assert error_detail is None
-    assert _run_failed_publishes(broker) == []
+    assert not _run_failed_publishes(broker)
     assert ("run_completed", {}) in [c.args for c in broker.publish.call_args_list]
 
 
@@ -196,7 +196,7 @@ async def test_no_agent_failure_signal_no_elevation(elevation_enabled):
 
     assert result[0] == "complete"
     assert result[1] is None
-    assert _run_failed_publishes(broker) == []
+    assert not _run_failed_publishes(broker)
 
 
 async def test_stall_wins_over_agent_failure(elevation_enabled):
@@ -226,7 +226,7 @@ async def test_elevation_fail_open_on_settings_error(monkeypatch):
 
     assert result[0] == "complete"
     assert result[1] is None
-    assert _run_failed_publishes(broker) == []
+    assert not _run_failed_publishes(broker)
 
 
 # ---------------------------------------------------------------------------

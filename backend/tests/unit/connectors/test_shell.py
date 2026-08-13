@@ -542,7 +542,7 @@ async def test_empty_directory_listing(provider: _FakeRuntimeProvider, provider_
             filters={"path": "/empty", "provider_ref": provider_ref},
         )
     )
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 

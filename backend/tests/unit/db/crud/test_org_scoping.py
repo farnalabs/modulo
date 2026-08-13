@@ -126,7 +126,7 @@ class TestNodeCategoryOrgScoping:
         await _seed_category(session)
         result = await list_node_categories(session, org_id=_ORG_B)
         assert result.total == 0
-        assert result.items == []
+        assert not result.items
 
     async def test_update_other_org_returns_none(self, session: AsyncSession) -> None:
         category = await _seed_category(session)

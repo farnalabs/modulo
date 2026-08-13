@@ -215,4 +215,4 @@ class TestErrorNotificationRuleListResponse:
 
     def test_empty_items(self) -> None:
         resp = ErrorNotificationRuleListResponse(items=[], total=0, limit=50, offset=0)
-        assert resp.items == []
+        assert not resp.items

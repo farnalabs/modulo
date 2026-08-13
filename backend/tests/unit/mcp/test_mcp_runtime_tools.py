@@ -516,7 +516,7 @@ class TestListPendingHitl(_AuthContext):
 
         result = await list_pending_hitl()
 
-        assert result["gates"] == []
+        assert not result["gates"]
         assert result["total"] == 0
         assert result["has_more"] is False
 

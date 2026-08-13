@@ -540,7 +540,7 @@ def test_discover_plugins_no_plugins():
     with patch("modulo.core.plugin_registry.importlib.metadata.entry_points", return_value=[]):
         discovered = registry.discover_plugins()
     assert discovered == []
-    assert registry.list_plugins() == {}
+    assert not registry.list_plugins()
 
 
 def test_load_entry_point_uses_metadata_defaults():
@@ -617,7 +617,7 @@ def test_entry_point_error_cleared_on_successful_reload():
 
         registry.discover_plugins()
 
-        assert registry.entry_point_errors == {}
+        assert not registry.entry_point_errors
         assert registry.health_check("pkg-retry")["pkg-retry"].ok is True
 
     assert registry.has_connector_type("c1")

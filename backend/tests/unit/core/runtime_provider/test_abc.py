@@ -12,12 +12,12 @@ def test_workspace_spec_defaults() -> None:
     )
     assert spec.run_id is None
     assert spec.image_ref == ""
-    assert spec.capabilities == []
+    assert not spec.capabilities
     assert spec.timeout_seconds == 3600
-    assert spec.resource_limits == {}
+    assert not spec.resource_limits
     assert spec.egress_policy is None
-    assert spec.persistence_policy == {}
-    assert spec.labels == {}
+    assert not spec.persistence_policy
+    assert not spec.labels
 
 
 def test_exec_result_fields() -> None:

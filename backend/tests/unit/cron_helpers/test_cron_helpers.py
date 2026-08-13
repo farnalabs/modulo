@@ -1409,7 +1409,7 @@ class TestFireCronTriggerSkips:
 
         assert result["status"] == "skipped"
         assert result["reason"] == "triggers_paused"
-        assert session.added == []
+        assert not session.added
 
     @pytest.mark.asyncio
     async def test_cron_fire_degrades_on_pause_read_programming_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1548,7 +1548,7 @@ class TestFireCronTriggerSkips:
 
         assert result["status"] == "skipped"
         assert result["reason"] == "triggers_paused"
-        assert session.added == []
+        assert not session.added
 
 
 # ---------------------------------------------------------------------------
