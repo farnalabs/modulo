@@ -4,6 +4,7 @@ Uses OTel's InMemorySpanExporter to verify the global TracerProvider is
 configured correctly without needing real OTLP or stdout I/O.
 """
 
+import asyncio
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
 from modulo.otel_bridge.export import _sanitise_url, setup_otel, shutdown_otel
+from tests.unit.otel_bridge.conftest import reset_global_provider
 
 
 def test_setup_otel_sets_global_provider() -> None:
@@ -139,6 +141,27 @@ def test_shutdown_otel_handles_provider_shutdown_failure(caplog) -> None:
         shutdown_otel()  # should log and swallow the error
     # The failure path must be exercised and surfaced, not silently skipped.
     assert any("Failed to shut down OTel provider" in r.message for r in caplog.records)
+
+
+def test_setup_otel_otlp_constructor_cancellation_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cancelled OTLP exporter constructor must not be swallowed."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otlp.invalid:4318/v1/traces")
+    with (
+        patch("modulo.otel_bridge.export.OTLPSpanExporter", side_effect=asyncio.CancelledError),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        setup_otel(service_name="otlp-cancelled", telemetry_enabled=True)
+
+
+def test_shutdown_otel_provider_cancellation_propagates() -> None:
+    """A cancelled provider shutdown() must propagate CancelledError."""
+    cancelled_provider = MagicMock()
+    cancelled_provider.shutdown.side_effect = asyncio.CancelledError
+    trace.set_tracer_provider(cancelled_provider)
+    with pytest.raises(asyncio.CancelledError):
+        shutdown_otel()
+    # Restore a clean provider so the autouse teardown's shutdown_otel() no-ops.
+    reset_global_provider()
 
 
 def test_shutdown_otel_with_plain_proxy_provider() -> None:

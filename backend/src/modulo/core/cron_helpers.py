@@ -2073,15 +2073,6 @@ def _reconcile_job_type(status: str) -> str:
     return "resume_run" if status in ("awaiting_human", "claimed") else "execute_run"
 
 
-# HITL decisions whose faithful resume REQUIRES a payload beyond the action name.
-# ``approved``/``rejected``/``deliver_manual`` only need the action;
-# ``approved_with_modification`` and ``manual_output`` carry modification/output
-# data that must be persisted. These actions are carried by the persisted
-# ``decision_payload``'s ``action`` member — the ``hitl_claims.decision`` column
-# only ever holds ``approved``/``rejected``/``deliver_manual``.
-_PAYLOAD_REQUIRING_ACTIONS = frozenset({"approved_with_modification", "manual_output"})
-
-
 async def _awaiting_human_has_committed_decision(
     session: AsyncSession,
     org_id: uuid.UUID,

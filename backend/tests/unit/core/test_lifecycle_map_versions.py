@@ -31,6 +31,7 @@ from modulo.api.routes.lifecycle_maps import (
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.lifecycle_map.service import (
+    _check_pipeline_uniqueness,
     create_lifecycle_map,
     delete_lifecycle_map,
     derive_lifecycle_map_stages,
@@ -217,6 +218,34 @@ def test_normalize_content_rejects_empty_stage_id() -> None:
         normalize_content({"stages": [{"id": "", "name": "Build", "type": "manual"}]})
 
 
+def test_normalize_content_rejects_non_object_edge() -> None:
+    with pytest.raises(LifecycleMapContentError, match="edge/transition #0 must be an object"):
+        normalize_content({"edges": ["e1"]})
+
+
+def test_normalize_content_rejects_edge_without_source() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'source' must be a non-empty string"):
+        normalize_content({"edges": [{"id": "e1", "target": "s2"}]})
+
+
+def test_normalize_content_rejects_edge_without_target() -> None:
+    with pytest.raises(LifecycleMapContentError, match="'target' must be a non-empty string"):
+        normalize_content({"edges": [{"id": "e1", "source": "s1"}]})
+
+
+def test_normalize_content_accepts_transitions_alias() -> None:
+    result = normalize_content({"transitions": [{"id": "e1", "source": "s1", "target": "s2"}]})
+    assert result["edges"] == [{"id": "e1", "source": "s1", "target": "s2"}]
+    assert "transitions" not in result
+
+
+def test_normalize_content_drops_transitions_when_edges_absent() -> None:
+    result = normalize_content({"transitions": [], "notes": "plan"})
+    assert result["edges"] == []
+    assert "transitions" not in result
+    assert result["notes"] == "plan"
+
+
 # ---------------------------------------------------------------------------
 # save_map_version
 # ---------------------------------------------------------------------------
@@ -332,6 +361,36 @@ async def test_graduate_stage_raises_when_stage_unknown(session: AsyncMock) -> N
 
     with pytest.raises(LifecycleMapContentError, match="stage 'missing' not found"):
         await graduate_stage(session, _MAP_ID, stage_id="missing", pipeline_id=str(_PIPE_ID))
+
+
+async def test_graduate_stage_raises_when_map_has_no_stages(session: AsyncMock) -> None:
+    lm = _make_map(content_json={})
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="no stages; nothing to graduate"):
+        await graduate_stage(session, _MAP_ID, stage_id="s1", pipeline_id=str(_PIPE_ID))
+
+
+async def test_graduate_stage_raises_when_content_is_not_dict(session: AsyncMock) -> None:
+    lm = _make_map(content_json=None)
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="no stages; nothing to graduate"):
+        await graduate_stage(session, _MAP_ID, stage_id="s1", pipeline_id=str(_PIPE_ID))
+
+
+async def test_check_pipeline_uniqueness_skips_non_dict_stage(session: AsyncMock) -> None:
+    lm = _make_map(content_json={"stages": ["not-a-dict"]})
+    await _check_pipeline_uniqueness(session, lm)
+    session.execute.assert_not_awaited()
+
+
+async def test_check_pipeline_uniqueness_skips_invalid_pipeline_uuid(session: AsyncMock) -> None:
+    lm = _make_map(
+        content_json={"stages": [{"id": "s1", "name": "Build", "type": "modulo", "pipeline_id": "not-a-uuid"}]}
+    )
+    await _check_pipeline_uniqueness(session, lm)
+    session.execute.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
