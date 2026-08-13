@@ -40,10 +40,9 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
                     "total_unhandled": _unhandled_exception_count,
                 },
             )
-            try:
-                await _ingest_unhandled_error(request)
-            except Exception:
-                logger.exception("middleware.error_ingest_dispatch_failed")
+            # _ingest_unhandled_error is contractually exception-safe: it swallows
+            # every Exception internally, so no dispatch-failure guard is needed.
+            await _ingest_unhandled_error(request)
             return _make_500_response(rid)
 
 
