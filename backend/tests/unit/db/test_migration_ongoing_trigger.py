@@ -1,4 +1,5 @@
-"""Migration tests for the ``ongoing`` trigger type (FAR-158, 0094/0095).
+"""Migration tests for the ``ongoing`` trigger type (FAR-158, 0094/0095/0096/0097)
+and the ``slack_app_mention`` trigger type (FAR-57, 0098).
 
 No live Postgres here (integration territory) — instead:
 
@@ -7,8 +8,11 @@ No live Postgres here (integration territory) — instead:
   partial CHECK strings, and the downgrade restoring the pre-feature strings.
 * The ORM models' CHECK constraints are compared against the migration strings
   (drift guard): a CHECK edited on one side and not the other fails loudly.
-* ``0097_slack_app_mention_trigger_type`` is confirmed as the single head of
-  the chain, sitting on top of ``0096_hitl_claims_overdue_notified``.
+* ``0095_ongoing_trigger_flag`` registers the flag inactive (default OFF);
+  main's ``0096_hitl_claims_overdue_notified`` sits on top of it;
+  ``0097_ongoing_trigger_enabled_by_default`` flips it active (default ON).
+* ``0098_slack_app_mention_trigger_type`` is confirmed as the single head of
+  the chain, sitting on top of ``0097_ongoing_trigger_enabled_by_default``.
 """
 
 from __future__ import annotations
@@ -16,14 +20,17 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import MagicMock, patch
 
 import pytest
 from alembic.script import ScriptDirectory
+from sqlalchemy.sql.elements import TextClause
 
 _MIGRATION_0094 = "0094_ongoing_trigger_type"
 _MIGRATION_0095 = "0095_ongoing_trigger_flag"
 _MIGRATION_0096 = "0096_hitl_claims_overdue_notified"
-_MIGRATION_0097 = "0097_slack_app_mention_trigger_type"
+_MIGRATION_0097 = "0097_ongoing_trigger_enabled_by_default"
+_MIGRATION_0098 = "0098_slack_app_mention_trigger_type"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -61,6 +68,16 @@ def migration_0095() -> ModuleType:
 @pytest.fixture(scope="module")
 def migration_0096() -> ModuleType:
     return _load_migration(_MIGRATION_0096)
+
+
+@pytest.fixture(scope="module")
+def migration_0097() -> ModuleType:
+    return _load_migration(_MIGRATION_0097)
+
+
+@pytest.fixture(scope="module")
+def migration_0098() -> ModuleType:
+    return _load_migration(_MIGRATION_0098)
 
 
 def _script() -> ScriptDirectory:
@@ -112,12 +129,17 @@ class TestMigration0095OngoingFlag:
         assert migration_0095.revision == "0095_ongoing_trigger_flag"
         assert migration_0095.down_revision == "0094_ongoing_trigger_type"
 
-    def test_single_head_chain(self, migration_0096: ModuleType) -> None:
+    def test_single_head_chain(self, migration_0095: ModuleType, migration_0096: ModuleType) -> None:
         script = _script()
+        chain = {rev.revision for rev in script.walk_revisions()}
+        assert migration_0095.revision in chain
+        # 0095 is superseded as the head by 0097_ongoing_trigger_enabled_by_default,
+        # which is itself superseded by 0098_slack_app_mention_trigger_type.
         heads = script.get_heads()
-        assert heads == ["0097_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
+        assert migration_0095.revision not in heads
         assert migration_0096.revision not in heads
-        assert _MIGRATION_0097 in heads
+        assert heads == ["0098_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
+        assert _MIGRATION_0098 in heads
 
     def test_0096_revises_0095(self, migration_0096: ModuleType) -> None:
         assert migration_0096.down_revision == "0095_ongoing_trigger_flag"
@@ -125,6 +147,88 @@ class TestMigration0095OngoingFlag:
     def test_flag_upserts_ongoing_trigger_inactive(self, migration_0095: ModuleType) -> None:
         assert "ongoing_trigger" in migration_0095._FLAGS
         assert migration_0095._FLAGS["ongoing_trigger"][0] == "community"
+
+
+class TestMigration0097OngoingFlagEnabled:
+    def test_revision_chain(self, migration_0097: ModuleType) -> None:
+        assert migration_0097.revision == "0097_ongoing_trigger_enabled_by_default"
+        assert migration_0097.down_revision == "0096_hitl_claims_overdue_notified"
+
+    def test_single_head_chain(self, migration_0097: ModuleType) -> None:
+        script = _script()
+        heads = script.get_heads()
+        # 0097 is superseded as the head by 0098_slack_app_mention_trigger_type.
+        assert migration_0097.revision not in heads
+        assert heads == ["0098_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
+
+    def test_flag_flips_ongoing_trigger_active(self, migration_0097: ModuleType) -> None:
+        assert "ongoing_trigger" in migration_0097._FLAGS
+        assert migration_0097._FLAGS["ongoing_trigger"][0] == "community"
+        assert migration_0097._ACTIVE is True
+
+    def test_upgrade_flips_row_to_active(self, migration_0097: ModuleType) -> None:
+        is_active_values = _collect_is_active(migration_0097, "upgrade")
+        assert is_active_values == [True]
+
+    def test_downgrade_flips_row_back_to_inactive(self, migration_0097: ModuleType) -> None:
+        is_active_values = _collect_is_active(migration_0097, "downgrade")
+        assert is_active_values == [False]
+
+
+class TestMigration0098SlackAppMention:
+    def test_revision_chain(self, migration_0098: ModuleType) -> None:
+        assert migration_0098.revision == "0098_slack_app_mention_trigger_type"
+        assert migration_0098.down_revision == "0097_ongoing_trigger_enabled_by_default"
+        assert migration_0098.branch_labels is None
+
+    def test_single_head_chain(self, migration_0098: ModuleType) -> None:
+        script = _script()
+        heads = script.get_heads()
+        assert heads == ["0098_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
+        assert migration_0098.revision in heads
+
+    def test_upgrade_widens_both_checks_with_slack_app_mention(self, migration_0098: ModuleType) -> None:
+        source = _source(migration_0098)
+        assert "'manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'slack_app_mention'" in source
+        assert (
+            "'manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'correction', 'slack_app_mention'"
+            in source
+        )
+
+    def test_upgrade_uses_not_valid_then_validate(self, migration_0098: ModuleType) -> None:
+        source = _source(migration_0098)
+        assert "NOT VALID" in source
+        assert "VALIDATE CONSTRAINT" in source
+        assert "ADD CONSTRAINT" in source
+
+    def test_downgrade_restores_pre_strings(self, migration_0098: ModuleType) -> None:
+        source = _source(migration_0098)
+        assert "'manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing'" in source
+        assert "'manual', 'webhook', 'cron', 'polling', 'agent_signal', 'ongoing', 'correction'" in source
+
+
+def _collect_is_active(migration: ModuleType, func_name: str) -> list[bool]:
+    """Run ``upgrade()``/``downgrade()`` against a mocked Postgres op and return
+    the ``is_active`` bind values sent to the feature_flag_catalog upsert."""
+    mock_bind = MagicMock()
+    mock_bind.dialect.name = "postgresql"
+    mock_op = MagicMock()
+    mock_op.get_bind.return_value = mock_bind
+
+    with patch.object(migration, "op", mock_op):
+        getattr(migration, func_name)()
+
+    values: list[bool] = []
+    for call in mock_op.execute.call_args_list:
+        stmt = call.args[0]
+        if not isinstance(stmt, TextClause):
+            continue
+        if "feature_flag_catalog" not in stmt.text:
+            continue
+        params = stmt._bindparams
+        if "is_active" in params:
+            values.append(params["is_active"].value)
+    return values
 
 
 class TestOrmCheckDriftGuard:

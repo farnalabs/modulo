@@ -221,9 +221,14 @@ async def _hydrate_journeys(session: AsyncSession, org_id: uuid.UUID, refs: list
 
 _ATOMIC_RUN_NUMBER_SQL = text(
     "INSERT INTO run_number_counters (organisation_id, next_run_number) "
-    "VALUES (:org_id, 1) "
+    "VALUES (:org_id, (SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id)) "
     "ON CONFLICT (organisation_id) "
-    "DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1 "
+    "DO UPDATE SET next_run_number = CASE "
+    "WHEN run_number_counters.next_run_number + 1 > "
+    "(SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id) "
+    "THEN run_number_counters.next_run_number + 1 "
+    "ELSE (SELECT COALESCE(MAX(run_number), 0) + 1 FROM runs WHERE organisation_id = :org_id) "
+    "END "
     "RETURNING next_run_number"
 )
 
@@ -241,6 +246,21 @@ async def _allocate_run_number(session: AsyncSession, org_id: uuid.UUID) -> int:
     missed a cycle and SAQ retried). Migration 0093 seeds the counter from the
     current ``MAX(run_number)`` per org so existing sequences continue without
     collision.
+
+    The counter is self-healing on BOTH paths:
+
+    * **No counter row yet** — the INSERT seed is
+      ``COALESCE(MAX(run_number), 0) + 1`` from the ``runs`` table rather than a
+      hardcoded ``1``, so orgs whose runs predate the counter (raw inserts that
+      bypass ``create_run``, or an org created before migration 0093 without a
+      seeded counter row) continue their existing sequence instead of colliding
+      on ``run_number = 1``.
+    * **Stale counter row** — a raw insert that bypasses the counter can leave
+      the existing row behind ``MAX(run_number)``. The ``DO UPDATE`` takes the
+      greater of ``counter + 1`` and ``MAX(run_number) + 1`` (via a portable
+      ``CASE`` — ``GREATEST`` is not available on SQLite) so a counter that
+      drifted below the actual max catches up instead of re-allocating an
+      already-used number.
 
     Generic backends (SQLite/MariaDB) fall back to ``MAX(run_number)+1`` — a
     documented divergence: they are single-writer in practice and do not share

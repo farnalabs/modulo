@@ -13,7 +13,7 @@ Checks:
 import logging
 import re
 import uuid
-from collections import deque
+from collections import defaultdict, deque
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any
@@ -124,6 +124,7 @@ class GraphValidator:
 
         self._check_edges(graph_json, result)
         self._check_sandbox_agent_config(graph_json, result)
+        self._check_parallel_run_context_writes(graph_json, result)
         self._check_schema_compatibility(graph_json, result)
         await self._check_connector_bindings(connector_bindings or [], session, result)
         await self._check_model_backends(model_backend_pins or [], session, result)
@@ -207,6 +208,10 @@ class GraphValidator:
 
         # Edge validation.
         self._check_edges(snapshot.graph_json, result)
+
+        # Parallel fan-out / run_context writes (warnings are stripped by
+        # _strip_warnings below, but the check runs for consistency).
+        self._check_parallel_run_context_writes(snapshot.graph_json, result)
 
         # Connector and backend checks.
         await self._check_connector_bindings(snapshot.connector_bindings_json, session, result)
@@ -1744,3 +1749,116 @@ class GraphValidator:
                     f"Node ID '{nid_str}' does not look like a standard UUID format",
                     node_id=nid_str,
                 )
+
+    # ------------------------------------------------------------------
+    # Parallel fan-out / run_context writes (FAR-171)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_parallel_run_context_writes(
+        graph_json: dict[str, Any],
+        result: ValidationResult,
+    ) -> None:
+        """Flag same-key parallel context-setter writes to ``run_context`` (§8.18).
+
+        When a source node has MULTIPLE normal outgoing edges (a parallel
+        fan-out, compiled to native LangGraph parallel edges) and two or more of
+        its direct downstream branches are context-setter nodes (``role ==
+        "context_setter"``), their writes to ``run_context`` are last-write-wins
+        and order-dependent: whichever branch's reducer application lands last
+        (superstep completion order) wins. The outcome is deterministic for a
+        given run but not author-controllable, so it is flagged as a pipeline
+        validation WARNING at save time.
+
+        When a branch declares the keys it writes (``run_context_writes`` on the
+        node def), only overlapping keys trigger the warning — parallel writes
+        to DISJOINT keys are safe (per-key merge). When the written keys are
+        unknown (the common case — the field is not persisted on node defs),
+        any two parallel context-setter branches are warned conservatively.
+
+        Not a fan-out (skipped): sources with conditional edges, llm routing,
+        or loop edges — those compile to single-target routers, so no parallel
+        context-setter writes exist.
+        """
+        nodes = graph_json.get("nodes", [])
+        edges = graph_json.get("edges", [])
+        if not nodes or not edges:
+            return
+
+        nodes_by_id: dict[str, dict[str, Any]] = {}
+        for n in nodes:
+            nid = n.get("id")
+            if nid is not None:
+                nodes_by_id[str(nid)] = n
+
+        def _edge_type(edge: dict[str, Any]) -> str:
+            raw = edge.get("type") if edge.get("type") is not None else edge.get("edge_type")
+            return str(raw or "")
+
+        loop_sources: set[str] = set()
+        by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for e in edges:
+            etype = _edge_type(e)
+            if etype == "loop":
+                src = e.get("source", e.get("source_node_id"))
+                if src is not None:
+                    loop_sources.add(str(src))
+                continue
+            if etype in ("reject", "kickback"):
+                continue
+            src = e.get("source", e.get("source_node_id"))
+            if src is None:
+                continue
+            by_source[str(src)].append(e)
+
+        for source, src_edges in by_source.items():
+            src_node = nodes_by_id.get(source, {})
+            if src_node.get("routing_mode") == "llm":
+                continue
+            # A source with ANY loop edge routes ALL its outgoing edges through
+            # the loop counter (single target, graph_cache.build_graph_from_json),
+            # so it is never a parallel fan-out.
+            if source in loop_sources:
+                continue
+            # Any conditional edge => ALL outgoing edges go through the router
+            # (single target chosen), so this source is NOT a parallel fan-out.
+            if any(_edge_type(e) == "conditional" for e in src_edges):
+                continue
+            normal = [e for e in src_edges if _edge_type(e) != "conditional"]
+            if len(normal) <= 1:
+                continue
+
+            target_nodes: list[dict[str, Any]] = []
+            for e in normal:
+                tgt = e.get("target", e.get("target_node_id"))
+                if tgt is not None:
+                    tnode = nodes_by_id.get(str(tgt))
+                    if tnode is not None:
+                        target_nodes.append(tnode)
+
+            setters = [t for t in target_nodes if t.get("role") == "context_setter"]
+            if len(setters) < 2:
+                continue
+
+            def _written_keys(node: dict[str, Any]) -> set[str] | None:
+                raw = node.get("run_context_writes")
+                if isinstance(raw, list) and raw:
+                    return {str(k) for k in raw}
+                return None
+
+            key_sets = [_written_keys(n) for n in setters]
+            if any(ks is None for ks in key_sets):
+                detail = "parallel branches are both context-setters (written keys unknown)"
+            else:
+                common = set.intersection(*(ks or set() for ks in key_sets))
+                if not common:
+                    continue
+                detail = f"parallel branches write the same run_context keys: {sorted(common)}"
+
+            result.warning(
+                "PARALLEL_RUN_CONTEXT_WRITE",
+                f"Source '{source}' fans out to multiple context-setter branches; "
+                f"{detail}. run_context writes are last-write-wins and order-dependent "
+                "(the branch that completes last wins).",
+                node_id=source,
+            )

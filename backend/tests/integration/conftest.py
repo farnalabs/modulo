@@ -312,6 +312,18 @@ async def non_superuser_role(db_engine: AsyncEngine) -> str:
         await conn.execute(text(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO "{role}"'))
         await conn.execute(text(f'GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO "{role}"'))
+        # Grant DML on future tables. Migration round-trip tests (e.g.
+        # test_0074_migration_round_trip) downgrade the shared session-scoped DB
+        # below migration 0093 — which DROPS run_number_counters — then upgrade
+        # back to heads, RECREATING the table. ``GRANT ... ON ALL TABLES`` above
+        # only covers tables that exist at fixture setup, so the recreated table
+        # loses the app role's privileges and trigger fire paths fail with
+        # "permission denied for table run_number_counters". Default privileges
+        # keep every future/recreated table granted to the role, mirroring the
+        # ``ALTER DEFAULT PRIVILEGES`` bootstrap_role.py applies for modulo_app.
+        await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "{role}"'))
+        await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "{role}"'))
+        await conn.execute(text(f'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO "{role}"'))
         await conn.execute(text("COMMIT"))
     yield role
     async with db_engine.connect() as conn:
