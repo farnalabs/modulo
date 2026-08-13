@@ -139,7 +139,7 @@ async def test_get_subscribed_endpoints_returns_matching() -> None:
 async def test_get_subscribed_endpoints_skips_unsubscribed() -> None:
     ep = _fake_endpoint(events=["run_failed"])
     found = await _get_endpoints_for_event([ep])
-    assert len(found) == 0
+    assert not found
 
 
 async def test_get_subscribed_endpoints_filters_auto_disabled_in_query() -> None:

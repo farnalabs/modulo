@@ -542,7 +542,7 @@ async def test_write_http_403(connector: OpsgenieConnector) -> None:
 async def test_query_alerts_empty(connector: OpsgenieConnector) -> None:
     respx.get(f"{_BASE}/alerts").mock(return_value=httpx.Response(200, json={"data": [], "totalCount": 0}))
     result = await connector.query(ConnectorQuery(resource="alerts"))
-    assert len(result.records) == 0
+    assert not result.records
     assert result.total == 0
 
 
@@ -552,7 +552,7 @@ async def test_query_alert_not_found(connector: OpsgenieConnector) -> None:
         return_value=httpx.Response(200, json={"data": {}})
     )
     result = await connector.query(ConnectorQuery(resource="alert", filters={"id": "unknown"}))
-    assert len(result.records) == 0
+    assert not result.records
 
 
 # ── Auth header check ────────────────────────────────────────────────

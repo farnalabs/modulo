@@ -181,7 +181,7 @@ async def test_query_search_empty(connector):
         return_value=httpx.Response(200, json={"objects": [], "total": 0}),
     )
     result = await connector.query(ConnectorQuery(resource="search", filters={"text": "nonexistent-package-xyz"}))
-    assert len(result.records) == 0
+    assert not result.records
     assert result.total == 0
 
 

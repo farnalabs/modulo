@@ -310,7 +310,7 @@ class TestGetFeedbackRecords:
 
         result = await mgr.get_feedback_records()
         assert result["total"] == 0
-        assert len(result["items"]) == 0
+        assert not result["items"]
 
     async def test_filters_by_pipeline_id(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
@@ -782,7 +782,7 @@ class TestGetFeedbackRecordsInbox:
 
         result = await mgr.get_feedback_records_inbox()
         assert result["total"] == 0
-        assert len(result["items"]) == 0
+        assert not result["items"]
 
     async def test_filters_by_status_and_pipeline(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
@@ -834,7 +834,7 @@ class TestGetFeedbackRecordsInbox:
         result = await mgr.get_feedback_records_inbox()
 
         assert result["pipeline_map"] == {}
-        assert len(result["items"]) == 0
+        assert not result["items"]
 
 
 class TestGetEvalProposals:
@@ -859,7 +859,7 @@ class TestGetEvalProposals:
 
         result = await mgr.get_eval_proposals()
         assert result["total"] == 0
-        assert len(result["items"]) == 0
+        assert not result["items"]
 
     async def test_proposal_query_is_scoped_to_eval_gap_and_open_status(
         self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord

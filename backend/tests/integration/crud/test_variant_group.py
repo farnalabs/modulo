@@ -303,4 +303,4 @@ async def test_no_coverage_gaps_when_all_evals_present(
     )
 
     gaps = await get_coverage_gaps(rls_session, group)
-    assert len(gaps) == 0
+    assert not gaps

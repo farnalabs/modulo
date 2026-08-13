@@ -180,7 +180,7 @@ async def test_query_messages_with_filters(connector):
             filters={"channel": "C12345", "oldest": "1234567890.000000", "latest": "1234567899.000000"},
         )
     )
-    assert len(result.records) == 0
+    assert not result.records
 
 
 @respx.mock
@@ -1533,7 +1533,7 @@ async def test_query_messages_types_filter(connector):
     result = await connector.query(
         ConnectorQuery(resource="messages", filters={"channel": "C001", "types": "messages,joins"}),
     )
-    assert len(result.records) == 0
+    assert not result.records
     assert respx.calls.last.request.url.params.get("types") == "messages,joins"
 
 

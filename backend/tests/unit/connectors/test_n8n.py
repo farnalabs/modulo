@@ -471,7 +471,7 @@ async def test_write_http_403(connector: N8NConnector) -> None:
 async def test_query_workflows_empty_response(connector: N8NConnector) -> None:
     respx.get(f"{BASE_URL}/rest/workflows").mock(return_value=httpx.Response(200, json={"data": []}))
     result = await connector.query(ConnectorQuery(resource="workflows"))
-    assert len(result.records) == 0
+    assert not result.records
     assert result.total == 0
 
 

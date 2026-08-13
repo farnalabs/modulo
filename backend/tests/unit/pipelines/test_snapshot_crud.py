@@ -876,7 +876,7 @@ class TestListSnapshots:
         session.execute = AsyncMock(side_effect=execute_side)
 
         snapshots, total = await list_snapshots(session, pid)
-        assert len(snapshots) == 0
+        assert not snapshots
         assert total == 0
 
     async def test_list_snapshots_applies_pagination(self):

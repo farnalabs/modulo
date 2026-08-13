@@ -367,5 +367,5 @@ class TestAuditWarning:
             result = await setter(_LIVE_STATE)
 
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(warnings) == 0
+        assert not warnings
         assert result["run_context"]["setting"] == "value"

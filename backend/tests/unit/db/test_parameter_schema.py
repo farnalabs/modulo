@@ -447,8 +447,8 @@ async def test_parameter_references_valid() -> None:
             if parsed is not None:
                 set_ids.add(parsed)
 
-    assert len(schema_ids) == 0
-    assert len(set_ids) == 0
+    assert not schema_ids
+    assert not set_ids
 
 
 @pytest.mark.asyncio

@@ -703,7 +703,7 @@ class TestGetAuditEventsBatch:
         session.execute = _execute
 
         result = await get_audit_events_batch(session, org_id, ["not-a-uuid", "also-bad"])
-        assert len(result) == 0
+        assert not result
 
     async def test_batch_empty_list(self, session):
         org_id = uuid.uuid4()

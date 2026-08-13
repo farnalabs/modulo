@@ -282,7 +282,7 @@ class TestExportPagination:
             resp = client.get(f"{EXPORT_URL}?page=10&page_size=50")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data["items"]) == 0
+        assert not data["items"]
         assert data["total"] == 10
 
 

@@ -182,7 +182,7 @@ async def test_query_projects_empty(connector):
             limit=100,
         )
     )
-    assert len(result.records) == 0
+    assert not result.records
     assert result.total == 0
 
 
@@ -242,7 +242,7 @@ async def test_query_project_not_found(connector):
             filters={"org_id": "my-org", "project_id": "nonexistent"},
         )
     )
-    assert len(result.records) == 0
+    assert not result.records
 
 
 # --- query: issues ---

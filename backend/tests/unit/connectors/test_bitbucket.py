@@ -85,7 +85,7 @@ async def test_query_issues_with_state(connector):
             filters={"workspace": "myteam", "repo": "myrepo", "state": "resolved"},
         )
     )
-    assert len(result.records) == 0
+    assert not result.records
 
 
 @respx.mock

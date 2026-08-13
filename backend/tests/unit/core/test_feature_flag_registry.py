@@ -73,17 +73,17 @@ class TestTierGapFlags:
     def test_no_gaps_when_team(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team", has_license_key=True)
         gaps = registry.tier_gap_flags()
-        assert len(gaps) == 0
+        assert not gaps
 
     def test_no_gaps_when_v1(self) -> None:
         registry = FeatureFlagRegistry(current_tier="v1", has_license_key=True)
         gaps = registry.tier_gap_flags()
-        assert len(gaps) == 0
+        assert not gaps
 
     def test_no_gaps_when_v2(self) -> None:
         registry = FeatureFlagRegistry(current_tier="v2", has_license_key=True)
         gaps = registry.tier_gap_flags()
-        assert len(gaps) == 0
+        assert not gaps
 
 
 class TestRefresh:

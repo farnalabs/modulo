@@ -302,7 +302,7 @@ async def test_query_plugins_empty(connector):
         return_value=httpx.Response(200, json=[]),
     )
     result = await connector.query(ConnectorQuery(resource="plugins"))
-    assert len(result.records) == 0
+    assert not result.records
     assert result.total == 0
 
 
