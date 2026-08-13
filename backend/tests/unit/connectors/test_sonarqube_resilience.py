@@ -40,6 +40,13 @@ def test_next_page_cursor_missing_paging_returns_none():
     assert _next_page_cursor({"paging": {}}, 100) is None
 
 
+def test_next_page_cursor_non_dict_paging_returns_none():
+    """A non-dict paging value (list/string) must not raise AttributeError."""
+    assert _next_page_cursor({"paging": []}, 100) is None
+    assert _next_page_cursor({"paging": "garbage"}, 100) is None
+    assert _next_page_cursor({"paging": 42}, 100) is None
+
+
 def test_next_page_cursor_more_pages_returns_cursor():
     """When total exceeds the pages seen so far, the next page number is returned."""
     assert _next_page_cursor({"paging": {"pageIndex": 1, "total": 250}}, 100) == "2"
@@ -71,6 +78,13 @@ def test_paging_total_missing_returns_none():
     """A missing total keeps the historical None behaviour."""
     assert _paging_total({}) is None
     assert _paging_total({"paging": {}}) is None
+
+
+def test_paging_total_non_dict_paging_returns_none():
+    """A non-dict paging value (list/string) must not raise AttributeError."""
+    assert _paging_total({"paging": []}) is None
+    assert _paging_total({"paging": "garbage"}) is None
+    assert _paging_total({"paging": 42}) is None
 
 
 def test_paging_total_valid_values_coerce():

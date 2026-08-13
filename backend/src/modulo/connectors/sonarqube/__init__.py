@@ -20,6 +20,8 @@ _RATE_LIMITED_STATUS = 429
 
 def _next_page_cursor(body: dict[str, Any], limit: int) -> str | None:
     paging = body.get("paging", {})
+    if not isinstance(paging, dict):
+        paging = {}
     page_index = _safe_int(paging.get("pageIndex"), 1)
     total = _safe_int(paging.get("total"), 0)
     if total > limit * page_index:
@@ -34,9 +36,13 @@ def _paging_total(body: dict[str, Any]) -> int | None:
     downstream ``int()`` coercion — Python's json parser produces ``inf`` for
     overflowing literals such as ``1e999``, so a corrupt or hostile SonarQube
     response must not poison the reported total. A missing ``total`` keeps the
-    historical ``None`` behaviour.
+    historical ``None`` behaviour. A non-dict ``paging`` value is treated as
+    absent.
     """
-    raw = body.get("paging", {}).get("total")
+    paging = body.get("paging", {})
+    if not isinstance(paging, dict):
+        paging = {}
+    raw = paging.get("total")
     if raw is None:
         return None
     return _safe_int(raw)
