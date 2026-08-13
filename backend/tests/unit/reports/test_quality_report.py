@@ -399,16 +399,29 @@ class TestSlackBlockKitSchema:
                 for field in fields:
                     assert len(field.get("text", "")) <= self._MAX_FIELD_TEXT, "section field too long"
 
+    def _assert_context_block_within_limits(self, block: dict) -> None:
+        elements = block.get("elements", [])
+        assert len(elements) <= self._MAX_CONTEXT_ELEMENTS, "too many context elements"
+        for element in elements:
+            assert element["type"] in {"mrkdwn", "plain_text"}
+            assert len(element.get("text", "")) <= self._MAX_ELEMENT_TEXT, "context element too long"
+
     def test_context_elements_within_limits(self) -> None:
         for report in (_REPORT_WITH_DATA, _REPORT_EMPTY):
-            for block in self._blocks(report):
-                if block["type"] != "context":
-                    continue
-                elements = block.get("elements", [])
-                assert len(elements) <= self._MAX_CONTEXT_ELEMENTS, "too many context elements"
-                for element in elements:
-                    assert element["type"] in {"mrkdwn", "plain_text"}
-                    assert len(element.get("text", "")) <= self._MAX_ELEMENT_TEXT, "context element too long"
+            context_blocks = [b for b in self._blocks(report) if b["type"] == "context"]
+            assert context_blocks, "report must contain at least one context block"
+            for block in context_blocks:
+                self._assert_context_block_within_limits(block)
+
+    def test_context_block_with_too_many_elements_fails(self) -> None:
+        block = {"type": "context", "elements": [{"type": "mrkdwn", "text": "x"}] * (self._MAX_CONTEXT_ELEMENTS + 1)}
+        with pytest.raises(AssertionError, match="too many context elements"):
+            self._assert_context_block_within_limits(block)
+
+    def test_context_block_with_overlength_element_fails(self) -> None:
+        block = {"type": "context", "elements": [{"type": "mrkdwn", "text": "x" * (self._MAX_ELEMENT_TEXT + 1)}]}
+        with pytest.raises(AssertionError, match="context element too long"):
+            self._assert_context_block_within_limits(block)
 
     def test_expected_structure_for_populated_report(self) -> None:
         blocks = self._blocks(_REPORT_WITH_DATA)
@@ -458,6 +471,16 @@ class TestWebhookSigning:
         body = b'{"a":1}'
         expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
         assert _sign_payload(secret, body) == f"sha256={expected}"
+
+    def test_sign_payload_accepts_non_string_secret(self) -> None:
+        import hashlib
+        import hmac
+
+        from modulo.core.reports.scheduler import _sign_payload
+
+        body = b'{"a":1}'
+        expected = hmac.new(str(b"secret-key").encode("utf-8"), body, hashlib.sha256).hexdigest()
+        assert _sign_payload(b"secret-key", body) == f"sha256={expected}"
 
 
 class TestDeliverQualityReport:
