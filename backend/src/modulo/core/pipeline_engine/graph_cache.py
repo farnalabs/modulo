@@ -261,17 +261,41 @@ def _make_loop_counter_router(
 # ---------------------------------------------------------------------------
 
 
-# Keys whose values should be concatenated (not replaced) when multiple nodes
-# write to the same channel in the same step (e.g. parallel branches).
+# Keys whose values should be CONCATENATED (not replaced) when multiple nodes
+# write to the same channel in the same superstep (e.g. parallel branches).
+# Ordering: LangGraph applies a reducer once per task completion in the
+# superstep's completion order, so the concatenation order == completion order.
 _CONCAT_KEYS: frozenset[str] = frozenset({"artifacts", "_hitl_gates", "_run_context_write_log", "_iteration_counts"})
 
 
 def _pipeline_state_reducer(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
-    """Merge a single state update, concatenating list-valued keys for parallel writes."""
+    """Merge a single state update, concatenating list-valued keys for parallel writes.
+
+    Two distinct parallel-write semantics (§8.18 run-context last-write-wins):
+
+    - ``_CONCAT_KEYS`` (lists): every writer's list is appended, in superstep
+      completion order. Each parallel branch contributes its own entries, so
+      ``artifacts`` / ``_run_context_write_log`` / ``_iteration_counts`` /
+      ``_hitl_gates`` never clobber each other.
+    - ``run_context`` (dict): merged per-key with LAST-WRITE-WINS — each write
+      applies only the keys it carries onto the current ``run_context``; when
+      two parallel context-setters write the SAME key, the write whose reducer
+      application lands last (superstep completion order) wins. This preserves
+      seeded keys (``cancelled``, ``input``, ``_pipeline_default_autonomy``)
+      and parallel writes to DISJOINT keys both land. The outcome is
+      deterministic for a given run but order-dependent, which is why
+      same-key parallel writes are flagged as a pipeline validation warning at
+      save time (see ``GraphValidator._check_parallel_run_context_writes``).
+
+    A non-dict ``run_context`` update falls back to whole-key replacement
+    (legacy behaviour).
+    """
     result = dict(current)
     for k, v in update.items():
         if k in _CONCAT_KEYS and k in result and isinstance(result[k], list) and isinstance(v, list):
             result[k] = result[k] + v
+        elif k == "run_context" and isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = {**result[k], **v}
         else:
             result[k] = v
     return result
@@ -307,7 +331,18 @@ def build_graph_from_json(
     Conditional edges (``type: "conditional"``) are compiled via
     ``add_conditional_edges`` with a JMESPath-based router.  If a source has
     any conditional edges, *all* of its outgoing edges are handled by the
-    router — normal edges from that source serve as fallback targets.
+    router — normal edges from that source serve as fallback targets (the
+    router picks ONE target; this is NOT a fan-out).
+
+    Parallel fan-out (FAR-171 / ``parallel_branches``): when a source has
+    MULTIPLE normal (non-conditional, non-loop) outgoing edges and no
+    conditional/llm-routing/loop edges, each edge is added directly via
+    ``graph.add_edge(source, target)`` — LangGraph's native parallel fan-out.
+    All downstream branches run in the same superstep (wall-clock ≈ max, not
+    sum) and their state updates are merged by ``_pipeline_state_reducer``
+    (list keys concatenate in completion order; ``run_context`` merges
+    per-key last-write-wins). Single-outgoing-edge sources compile identically
+    to before, so the semantics for graphs without fan-out are unchanged.
 
     Returns a compiled LangGraph that accepts dict[str, Any] state.
     """
