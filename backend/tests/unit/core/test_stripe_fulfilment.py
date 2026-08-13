@@ -114,6 +114,42 @@ class TestFulfilEnterprisePurchase:
         assert second is None
         assert mock_send.call_count == 1
 
+    async def test_email_failure_leaves_event_unclaimed_for_retry(self) -> None:
+        """Transient SMTP failure must NOT claim the event (FAR-180): the key is
+        only emailed, never persisted, so a claimed-but-unemailed event would be
+        permanently lost. A failed send returns None with the event unclaimed,
+        and a later Stripe retry re-attempts the email successfully."""
+        settings = _make_settings()
+        with patch(
+            "modulo.core.stripe_fulfilment.send_email",
+            new=MagicMock(side_effect=EmailSendingError("smtp down")),
+        ) as mock_fail:
+            first = await fulfil_enterprise_purchase(
+                settings,
+                event_id="evt_retry",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+            )
+        assert first is None
+        assert mock_fail.call_count == 1
+        # Event NOT claimed — a Stripe retry must be able to re-attempt.
+        assert "evt_retry" not in _processed_event_ids
+
+        with patch(
+            "modulo.core.stripe_fulfilment.send_email",
+            new=MagicMock(return_value=True),
+        ) as mock_ok:
+            second = await fulfil_enterprise_purchase(
+                settings,
+                event_id="evt_retry",
+                customer_email="bob@acme.com",
+                org_name="Acme",
+            )
+        assert second is not None
+        assert mock_ok.call_count == 1
+        validation = parse_and_verify(second)
+        assert validation.valid is True
+
     async def test_license_generation_failure_returns_none_and_does_not_claim(self) -> None:
         settings = _make_settings()
         with (

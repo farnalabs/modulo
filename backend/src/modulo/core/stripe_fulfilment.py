@@ -1,12 +1,20 @@
 """Stripe purchase fulfilment — idempotent license generation + email delivery.
 
 Flow (FAR-178/180): Stripe webhook -> verify signature (in the route) ->
-idempotency check keyed on the Stripe event id -> generate an Ed25519-signed
-enterprise license -> email it to the customer. Runs as a FastAPI
-BackgroundTask so the webhook responds 200 immediately.
+generate an Ed25519-signed enterprise license -> email it to the customer ->
+claim the event id. Runs as a FastAPI BackgroundTask so the webhook responds
+200 immediately.
+
+Only ``invoice.paid`` triggers fulfilment — the authoritative "money received"
+signal. ``checkout.session.completed`` is deliberately a no-op in the route:
+Stripe sends both events for a card-paid subscription, and fulfilling on both
+would generate two licence keys for one purchase.
 
 Idempotency: event ids are claimed in Redis (SETNX, 90-day TTL) so Stripe's
-automatic retries and any manual replay never double-fulfil. When Redis is
+automatic retries and any manual replay never double-fulfil. The claim happens
+ONLY AFTER a successful email send: a transient SMTP failure leaves the event
+unclaimed, so Stripe's automatic retries re-attempt and the customer
+eventually gets a key instead of permanently losing it. When Redis is
 unavailable a process-local set is used — single-instance only. Production
 runs Redis, so the limitation does not apply there.
 """
@@ -103,8 +111,43 @@ async def _claim_event_id(settings: Settings, event_id: str) -> bool:
     return True
 
 
-async def email_enterprise_license(settings: Settings, to: str, license_key: str, expires_at: str) -> None:
-    """Send the enterprise license key to *to*. Best-effort — never raises."""
+async def _is_event_claimed(settings: Settings, event_id: str) -> bool:
+    """Read-only check for whether *event_id* has already been fulfilled.
+
+    Unlike :func:`_claim_event_id` this does NOT claim — it is the pre-email
+    duplicate guard. The claim itself happens only AFTER the email send, so a
+    transient SMTP failure leaves the event unclaimed and Stripe's retries can
+    re-attempt. A duplicate delivery is skipped BEFORE emailing.
+    """
+    if settings.redis_url:
+        redis = None
+        try:
+            redis = Redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=2.0,
+                socket_timeout=2.0,
+            )
+            return bool(await redis.exists(f"stripe:fulfilled:{event_id}"))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("stripe.fulfilment.redis_check_failed event_id=%s", event_id, exc_info=True)
+        finally:
+            if redis is not None:
+                with contextlib.suppress(Exception):
+                    await redis.aclose()
+    return event_id in _processed_event_ids
+
+
+async def email_enterprise_license(settings: Settings, to: str, license_key: str, expires_at: str) -> bool:
+    """Send the enterprise license key to *to*.
+
+    Returns True on success, False on failure — never raises. The caller
+    (``fulfil_enterprise_purchase``) relies on the bool to decide whether the
+    event may be claimed: a False result leaves the event unclaimed so Stripe's
+    retries re-attempt the email.
+    """
     try:
         await asyncio.to_thread(
             send_email,
@@ -114,12 +157,15 @@ async def email_enterprise_license(settings: Settings, to: str, license_key: str
             _licence_email_html(license_key, expires_at),
             _licence_email_text(license_key, expires_at),
         )
+        return True
     except EmailSendingError:
         _log.exception("stripe.fulfilment.email_failed to=%s", to)
+        return False
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception("stripe.fulfilment.email_unexpected_error to=%s", to)
+        return False
 
 
 async def fulfil_enterprise_purchase(
@@ -133,11 +179,14 @@ async def fulfil_enterprise_purchase(
 ) -> str | None:
     """Idempotently fulfil a Stripe purchase: generate + email an enterprise license.
 
-    The license is generated BEFORE the event id is claimed, so a transient
-    generation failure leaves the event unclaimed and Stripe's retry
-    re-attempts it. Email delivery is best-effort and never raises out of the
-    background task. Returns the generated license key, or ``None`` when the
-    event was already fulfilled or generation failed.
+    Ordering (FAR-180): generate -> duplicate-check -> email -> claim. The event
+    id is claimed ONLY AFTER a successful email send, so a transient SMTP
+    failure (``email_enterprise_license`` returns False) leaves the event
+    unclaimed and Stripe's automatic retries re-attempt the fulfilment — the
+    customer never permanently loses their key to an SMTP outage. A duplicate
+    delivery (already claimed) is detected BEFORE emailing and returns ``None``
+    without re-sending. Returns the generated license key, or ``None`` when the
+    event was already fulfilled or generation/email failed.
     """
     try:
         license_key = generate_enterprise_license(
@@ -149,7 +198,7 @@ async def fulfil_enterprise_purchase(
         _log.exception("stripe.fulfilment.license_generation_failed event_id=%s", event_id)
         return None
 
-    if not await _claim_event_id(settings, event_id):
+    if await _is_event_claimed(settings, event_id):
         _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
         return None
 
@@ -164,7 +213,17 @@ async def fulfil_enterprise_purchase(
             validation.error,
         )
 
+    if send_key_email and not await email_enterprise_license(settings, customer_email, license_key, expires_at):
+        _log.error(
+            "stripe.fulfilment.email_failed_event_not_claimed event_id=%s — "
+            "event left unclaimed so Stripe's retries will re-attempt",
+            event_id,
+        )
+        return None
+
+    if not await _claim_event_id(settings, event_id):
+        _log.info("stripe.fulfilment.duplicate_event event_id=%s", event_id)
+        return None
+
     _log.info("stripe.fulfilment.license_generated event_id=%s org_name=%s", event_id, org_name)
-    if send_key_email:
-        await email_enterprise_license(settings, customer_email, license_key, expires_at)
     return license_key

@@ -141,22 +141,38 @@ class TestSignatureVerification:
 
 
 class TestFulfilmentDispatch:
-    def test_checkout_session_completed_paid_dispatches(self, client: TestClient) -> None:
+    def test_checkout_session_completed_is_noop(self, client: TestClient) -> None:
+        """checkout.session.completed is accepted (200) but NEVER fulfils — even
+        when payment_status=paid. invoice.paid is the single fulfilment event
+        (FAR-180)."""
         body = json.dumps(_checkout_event("evt_checkout_paid")).encode()
         with patch(_FULFIL_MODULE, new=AsyncMock()) as mock_fulfil:
             resp = _post(client, body, _sign(body))
         assert resp.status_code == 200
-        mock_fulfil.assert_awaited_once()
-        assert mock_fulfil.await_args.kwargs["event_id"] == "evt_checkout_paid"
-        assert mock_fulfil.await_args.kwargs["customer_email"] == "bob@acme.com"
-        assert mock_fulfil.await_args.kwargs["org_name"] == "Acme Inc"
+        mock_fulfil.assert_not_awaited()
 
-    def test_checkout_session_pending_payment_does_not_dispatch(self, client: TestClient) -> None:
+    def test_checkout_session_noop_regardless_of_payment_status(self, client: TestClient) -> None:
         body = json.dumps(_checkout_event("evt_unpaid", payment_status="unpaid")).encode()
         with patch(_FULFIL_MODULE, new=AsyncMock()) as mock_fulfil:
             resp = _post(client, body, _sign(body))
         assert resp.status_code == 200
         mock_fulfil.assert_not_awaited()
+
+    def test_checkout_then_invoice_fulfils_exactly_once(self, client: TestClient) -> None:
+        """A card-paid subscription sends checkout.session.completed AND
+        invoice.paid for the same purchase. Only invoice.paid may fulfil — the
+        checkout no-op must not add a second fulfilment (FAR-180)."""
+        body_checkout = json.dumps(_checkout_event("evt_checkout_paid")).encode()
+        body_invoice = json.dumps(_invoice_event("evt_inv_paid")).encode()
+        with patch(_FULFIL_MODULE, new=AsyncMock()) as mock_fulfil:
+            resp_checkout = _post(client, body_checkout, _sign(body_checkout))
+            resp_invoice = _post(client, body_invoice, _sign(body_invoice))
+        assert resp_checkout.status_code == 200
+        assert resp_invoice.status_code == 200
+        mock_fulfil.assert_awaited_once()
+        assert mock_fulfil.await_args.kwargs["event_id"] == "evt_inv_paid"
+        assert mock_fulfil.await_args.kwargs["customer_email"] == "bob@acme.com"
+        assert mock_fulfil.await_args.kwargs["org_name"] == "Acme Inc"
 
     def test_invoice_paid_dispatches_with_customer_email(self, client: TestClient) -> None:
         body = json.dumps(_invoice_event("evt_inv_1")).encode()

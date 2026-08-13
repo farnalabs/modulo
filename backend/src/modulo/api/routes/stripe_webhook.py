@@ -8,10 +8,14 @@ webhook secret, with a ±300s replay window. Verification is against the RAW
 request body bytes and FAILS CLOSED: any missing/invalid signature returns 400
 and never reaches fulfilment.
 
-Events handled (both idempotent, keyed on the Stripe event id):
-  * ``checkout.session.completed`` — subscription checkout that finished with
-    ``payment_status=paid`` (the first payment has been taken).
-  * ``invoice.paid`` — the first subscription invoice was paid.
+Events:
+  * ``invoice.paid`` — the SINGLE fulfilment event (idempotent, keyed on the
+    Stripe event id). It is the authoritative "money received" signal: Stripe
+    sends both ``checkout.session.completed`` and ``invoice.paid`` for a
+    card-paid subscription, so fulfilling on both would generate two licence
+    keys for one purchase.
+  * ``checkout.session.completed`` — accepted (200) but a deliberate no-op;
+    kept only for observability.
 
 The heavy work (license generation + email) runs as a FastAPI BackgroundTask so
 the response returns 200 immediately; Stripe treats a 2xx as delivered.
@@ -39,8 +43,11 @@ router = APIRouter(prefix="/api/v1/webhooks", tags=["stripe-webhook"])
 # Stripe signs webhook payloads with a tolerance window of 5 minutes.
 _SIGNATURE_TOLERANCE_SECONDS = 300
 
-# Events that trigger fulfilment (first successful payment for a subscription).
-_FULFILMENT_EVENTS = frozenset({"checkout.session.completed", "invoice.paid"})
+# The single fulfilment event: Stripe sends both checkout.session.completed and
+# invoice.paid for a card-paid subscription — fulfilling on both would generate
+# two licence keys for one purchase. invoice.paid is the authoritative "money
+# received" signal.
+_FULFILMENT_EVENTS = frozenset({"invoice.paid"})
 
 
 class StripeWebhookResponse(BaseModel):
@@ -139,12 +146,13 @@ async def stripe_webhook(
 
     event_type = event["type"]
     if event_type == "checkout.session.completed":
-        session = _event_object(event)
-        if session.get("mode") == "subscription" and session.get("payment_status") != "paid":
-            # Async subscriptions can complete before the first payment settles;
-            # the invoice.paid event is the authoritative "money received" signal.
-            _log.info("stripe.webhook.checkout_completed_pending_payment event_id=%s", event["id"])
-            return StripeWebhookResponse(received=True, event_id=event["id"])
+        # Deliberate no-op (FAR-180): checkout completion is NOT a fulfilment
+        # event — invoice.paid is the authoritative "money received" signal.
+        # Stripe sends both for a card-paid subscription; fulfilling on both
+        # would generate two licence keys for one purchase. Log for
+        # observability and return without dispatching.
+        _log.info("stripe.webhook.checkout_completed_noop event_id=%s", event["id"])
+        return StripeWebhookResponse(received=True, event_id=event["id"])
 
     if event_type in _FULFILMENT_EVENTS:
         customer_email, org_name = _extract_customer(event)
@@ -163,5 +171,7 @@ async def stripe_webhook(
                 event_type,
                 event["id"],
             )
+    else:
+        _log.info("stripe.webhook.unhandled_event event=%s event_id=%s", event_type, event["id"])
 
     return StripeWebhookResponse(received=True, event_id=event["id"])
