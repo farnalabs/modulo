@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.core.hitl_manager.overdue_warning import get_overdue_claims
+from modulo.core.hitl_manager.overdue_warning import (
+    DEFAULT_ESCALATION_HOURS,
+    DEFAULT_WARNING_HOURS,
+    get_overdue_claims,
+)
 from modulo.db.models.hitl_claim import HitlClaim
 
 _ORG = uuid.uuid4()
@@ -136,3 +140,50 @@ async def test_returns_empty_when_query_fails() -> None:
     result = await get_overdue_claims(session, _ORG, warning_hours=4)
 
     assert result == []
+
+
+async def test_age_hours_floor_at_zero_for_future_claimed_at() -> None:
+    """A future claimed_at (clock skew) must report age_hours 0, not negative."""
+    now = datetime.now(UTC)
+    future_claim = _claim(claimed_at=now + timedelta(hours=1), account_id=uuid.uuid4())
+
+    session = _mock_session([future_claim])
+    result = await get_overdue_claims(session, _ORG, warning_hours=4)
+
+    assert len(result) == 1
+    assert result[0]["age_hours"] == 0.0
+    assert result[0]["status"] == "warning"
+
+
+async def test_filters_claims_with_null_claimed_at() -> None:
+    """Claims whose claimed_at is NULL are skipped by the query and never reported."""
+    null_claim = _claim(claimed_at=datetime.now(UTC) - timedelta(hours=100), account_id=uuid.uuid4())
+    null_claim.claimed_at = None
+
+    session = _mock_session([null_claim])
+    result = await get_overdue_claims(session, _ORG, warning_hours=4)
+
+    assert result == []
+
+
+async def test_query_filters_undecided_claimed_claims_for_org() -> None:
+    """The SQL predicate scopes to org and only undecided, claimed, non-null claimed_at rows."""
+    org_id = uuid.uuid4()
+    session = _mock_session([])
+    now = datetime.now(UTC)
+
+    await get_overdue_claims(session, org_id, warning_hours=5, escalation_hours=10)
+
+    stmt = session.execute.await_args.args[0]
+    params = stmt.compile().params
+    assert params["organisation_id_1"] == org_id
+    cutoff = params["claimed_at_1"]
+    assert abs((cutoff - (now - timedelta(hours=5))).total_seconds()) < 5
+    assert "account_id" in str(stmt)
+    assert "decision" in str(stmt)
+
+
+async def test_default_thresholds_documented() -> None:
+    """The shipped warning/escalation thresholds are the documented defaults."""
+    assert DEFAULT_WARNING_HOURS == 4
+    assert DEFAULT_ESCALATION_HOURS == 24

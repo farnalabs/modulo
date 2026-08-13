@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -479,3 +480,118 @@ async def test_org_list_query_runs_inside_begin() -> None:
         expired = await expire_stale_claims(factory, notifier=None)
 
     assert expired == []
+
+
+# ---------------------------------------------------------------------------
+# expire_stale_claims — direct compiled-SQL coverage
+# ---------------------------------------------------------------------------
+
+
+def _expire_sql_session(*execute_results: Any) -> AsyncMock:
+    """Mock async session pre-wired for one direct ``expire_stale_claims`` pass.
+
+    ``get_bind``/``in_transaction`` are set so ``set_rls_org`` takes the
+    SQLite path (``session.info``), keeping the number and order of
+    ``execute`` calls asserted implicitly.
+    """
+    session = AsyncMock()
+    session.in_transaction = MagicMock(return_value=True)
+    session.get_bind = MagicMock(return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    if len(execute_results) == 1:
+        session.execute = AsyncMock(return_value=execute_results[0])
+    else:
+        session.execute = AsyncMock(side_effect=list(execute_results))
+    return session
+
+
+def _expire_sql_factory(session: AsyncMock) -> MagicMock:
+    factory = MagicMock()
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=session)
+    context.__aexit__ = AsyncMock(return_value=False)
+    factory.return_value = context
+    return factory
+
+
+def _expire_sql_org_result(*org_ids: uuid.UUID) -> MagicMock:
+    result = MagicMock()
+    result.scalars.return_value = list(org_ids)
+    return result
+
+
+def _expire_sql_lock_result(granted: bool) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one.return_value = granted
+    return result
+
+
+def _expire_sql_stale_result(*rows: Any) -> MagicMock:
+    result = MagicMock()
+    result.all.return_value = list(rows)
+    return result
+
+
+def _expire_sql_claim_row(
+    *,
+    claim_id: uuid.UUID | None = None,
+    run_id: uuid.UUID | None = None,
+    gate_id: str = "review",
+    account_id: uuid.UUID | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=claim_id or uuid.uuid4(),
+        run_id=run_id or uuid.uuid4(),
+        gate_id=gate_id,
+        account_id=account_id or uuid.uuid4(),
+    )
+
+
+async def test_expire_stale_claims_resets_claim_and_run_sql() -> None:
+    """The expiry sweep issues the claim reset and run ``claimed -> awaiting_human``
+    reversion as SQL updates against ``hitl_claims`` and ``runs``."""
+    org_id = uuid.uuid4()
+    claim = _expire_sql_claim_row()
+    session = _expire_sql_session(
+        _expire_sql_org_result(org_id),
+        _expire_sql_lock_result(True),
+        _expire_sql_stale_result(claim),
+        MagicMock(),
+        MagicMock(),
+    )
+
+    await expire_stale_claims(_expire_sql_factory(session))
+
+    claim_update = session.execute.await_args_list[-2][0][0]
+    run_update = session.execute.await_args_list[-1][0][0]
+    assert claim_update.table.name == "hitl_claims"
+    assert run_update.table.name == "runs"
+    params = run_update.compile().params
+    assert params["status"] == "awaiting_human"
+    assert params["status_1"] == "claimed"
+
+
+async def test_expire_stale_claims_processes_multiple_orgs_independently() -> None:
+    """Each org's stale claims are swept in its own transaction; results are merged."""
+    org_a, org_b = uuid.uuid4(), uuid.uuid4()
+    claim_a = _expire_sql_claim_row(gate_id="gate-a")
+    claim_b = _expire_sql_claim_row(gate_id="gate-b")
+    session = _expire_sql_session(
+        _expire_sql_org_result(org_a, org_b),
+        _expire_sql_lock_result(True),
+        _expire_sql_stale_result(claim_a),
+        MagicMock(),
+        MagicMock(),
+        _expire_sql_lock_result(True),
+        _expire_sql_stale_result(claim_b),
+        MagicMock(),
+        MagicMock(),
+    )
+
+    expired = await expire_stale_claims(_expire_sql_factory(session))
+
+    assert {entry["organisation_id"] for entry in expired} == {org_a, org_b}
+    assert {entry["gate_id"] for entry in expired} == {"gate-a", "gate-b"}
