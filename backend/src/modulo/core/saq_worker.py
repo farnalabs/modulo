@@ -492,6 +492,23 @@ async def claim_expiry(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"expired": len(expired)}
 
 
+async def hitl_overdue(ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — dispatch ``hitl_overdue`` notifications for HITL gates that
+    have been waiting past the overdue threshold (idempotent per claim)."""
+    from modulo.core.hitl_manager.overdue_warning import dispatch_overdue_notifications
+    from modulo.core.notifier import Notifier
+
+    settings = get_settings()
+    factory = _make_session_factory()
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(_get_async_engine(), settings.fernet_key)
+    except Exception:
+        _log.exception("hitl_overdue: notifier init failed — overdue dispatch still runs")
+    dispatched = await dispatch_overdue_notifications(factory, notifier=notifier)
+    return {"dispatched": len(dispatched)}
+
+
 async def retention_cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     """System cron — batch-delete terminal runs and old LangGraph checkpoint rows.
 
@@ -773,6 +790,7 @@ def _system_functions() -> list[Any]:
         fire_due_triggers,
         dispatcher_reconcile,
         claim_expiry,
+        hitl_overdue,
         retention_cleanup,
         webhook_dedup_cleanup,
         trigger_events_cleanup,
@@ -813,6 +831,18 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         CronJob(
             claim_expiry,
             cron="* * * * *",
+            unique=True,
+            timeout=120,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # hitl-overdue: every 5 minutes — overdue thresholds are hour-scale, so
+        # a 5-min tick keeps latency low while avoiding contention with the
+        # claim-expiry sweep; unique so overlapping ticks cannot double-dispatch.
+        CronJob(
+            hitl_overdue,
+            cron="*/5 * * * *",
             unique=True,
             timeout=120,
             heartbeat=30,
