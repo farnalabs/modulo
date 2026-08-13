@@ -449,9 +449,7 @@ def test_decode_claim_token_accepts_matching_client_id() -> None:
         gate_id=_GATE,
         client_id=str(_ACCOUNT),
     )
-    payload = decode_claim_token(
-        token, _KEY, run_id=_RUN, gate_id=_GATE, expected_client_id=str(_ACCOUNT)
-    )
+    payload = decode_claim_token(token, _KEY, run_id=_RUN, gate_id=_GATE, expected_client_id=str(_ACCOUNT))
     assert payload["client_id"] == _ACCOUNT
 
 
