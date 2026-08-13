@@ -58,6 +58,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "remy_context_sources",
         "remy_skills",
         "run_daily_facts",
+        "run_evidence",
         "runs",
         "saved_views",
         "scheduled_reports",
@@ -94,6 +95,7 @@ def test_all_resource_tables_are_organisation_scoped() -> None:
             "system_config",
             "tier_catalog",
             "feature_flag_catalog",
+            "run_evidence",
         ):
             assert "organisation_id" in table.c, f"{name} is missing organisation_id"
 
