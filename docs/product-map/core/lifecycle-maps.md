@@ -39,7 +39,9 @@ work without acting as a pipeline execution engine.
 - [x] Stage content can represent manual, external, placeholder, and Modulo-managed stages
 - [x] Persisted version history can be listed and inspected (version list/GET endpoints; only the active version is served)
 - [x] Graduation changes a stage to a linked Modulo pipeline through a dedicated API operation (PATCH .../versions/{version_id}/stages/{stage_id}/graduate)
-- [ ] Lifecycle maps can be exported, imported, and shared as library primitives
+- [x] Lifecycle maps can be exported as a portable JSON envelope (GET .../export)
+- [x] Lifecycle maps can be imported from that envelope to create a new map, validated with editor-save rules (POST /import)
+- [x] Imported/exported lifecycle maps are registered as `lifecycle_map` library primitives and can be copied-to-adapt into a new map (POST /libraries/{id}/create-lifecycle-map)
 
 ## Journeys
 
@@ -59,7 +61,7 @@ work without acting as a pipeline execution engine.
 - [x] Map CRUD routes catch `IntegrityError` → 409
 - [x] Map CRUD routes catch `Exception` → 500 with logging
 - [x] Missing map ID returns 404
-- [ ] No error handling for invalid graph structure in map content
+- [x] Invalid graph structure in map content is rejected with 422 on import (and editor save)
 
 ## Edge Cases
 
@@ -79,8 +81,10 @@ work without acting as a pipeline execution engine.
 ## Known Gaps
 
 - Immutable per-version snapshot history with browse-back is not retained — only the active version is served (GET of a non-current version returns 404); the version counter and version API surface exist. Concurrency semantics (FAR-176): concurrent saves are last-write-wins on the active version, serialised by a row lock (`SELECT ... FOR UPDATE`) so the version counter is atomic and never produces duplicates; version-list reads always see one consistent committed snapshot.
-- Lifecycle maps cannot yet be exported / imported / shared as library primitives.
+- Export is active-version-only: the envelope carries the current stages/edges/notes graph, not full version history. Importing an envelope creates a NEW map; there is no in-place version restore or version-history import.
+- The library browser exposes lifecycle maps via the `lifecycle_map` primitive type and copy-to-adapt, but there is no community contribution path for maps yet (the community-contribute primitive_type regex does not include `lifecycle_map`).
 
 ## QA History
 
+- 2026-08-13 — FAR-174: marked export/import + `lifecycle_map` library primitive behaviour as implemented (active-version envelope export, import with editor-save validation, copy-to-adapt via /libraries/{id}/create-lifecycle-map).
 - 2026-08-12 — Product-state sync: added Journeys section (FAR-141–145), marked version persistence + graduation implemented, updated code paths.

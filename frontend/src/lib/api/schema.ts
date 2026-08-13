@@ -4407,6 +4407,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/libraries/{primitive_id}/create-lifecycle-map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Lifecycle Map From Primitive Endpoint
+         * @description Copy-to-adapt a ``lifecycle_map`` library primitive into a real map.
+         *
+         *     Creates a NEW lifecycle map in the org from the primitive's exported
+         *     content (name collisions are suffixed with "(imported)"), so a shared map
+         *     can be copied and adapted without touching the source.
+         */
+        post: operations["create_lifecycle_map_from_primitive_endpoint_api_v1_libraries__primitive_id__create_lifecycle_map_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries/community/contribute": {
         parameters: {
             query?: never;
@@ -4479,6 +4503,50 @@ export interface paths {
         put?: never;
         /** Create Lifecycle Map Endpoint */
         post: operations["create_lifecycle_map_endpoint_api_v1_lifecycle_maps_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Lifecycle Map Endpoint
+         * @description Import an exported lifecycle-map envelope, creating a new map in the org.
+         *
+         *     Content is validated with the same rules as an editor save (normalize_content),
+         *     so a malformed graph returns 422. Imported maps are also registered as
+         *     ``lifecycle_map`` library primitives so they can be listed and copied-to-adapt.
+         */
+        post: operations["import_lifecycle_map_endpoint_api_v1_lifecycle_maps_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lifecycle-maps/{lifecycle_map_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Lifecycle Map Endpoint
+         * @description Export a lifecycle map's active-version content as a portable envelope.
+         */
+        get: operations["export_lifecycle_map_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__export_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -10177,6 +10245,35 @@ export interface components {
             pipeline_id?: string | null;
             /** External Url */
             external_url?: string | null;
+        };
+        /**
+         * LifecycleMapTransfer
+         * @description Portable export/import envelope for a lifecycle map (PRD §8.31.9).
+         *
+         *     This is the primitive shape ``GET .../export`` returns and ``POST
+         *     /import`` accepts: ``content_json`` holds the canonical stages/edges/notes
+         *     graph and is validated with the same rules as an editor save.
+         */
+        LifecycleMapTransfer: {
+            /**
+             * Primitive Type
+             * @default lifecycle_map
+             * @constant
+             */
+            primitive_type: "lifecycle_map";
+            /**
+             * Format Version
+             * @default 1
+             */
+            format_version: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Content Json */
+            content_json?: {
+                [key: string]: unknown;
+            };
         };
         /** LifecycleMapTransitionItem */
         LifecycleMapTransitionItem: {
@@ -25254,6 +25351,39 @@ export interface operations {
             };
         };
     };
+    create_lifecycle_map_from_primitive_endpoint_api_v1_libraries__primitive_id__create_lifecycle_map_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     community_contribute_endpoint_api_v1_libraries_community_contribute_post: {
         parameters: {
             query?: {
@@ -25413,6 +25543,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LifecycleMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_lifecycle_map_endpoint_api_v1_lifecycle_maps_import_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LifecycleMapTransfer"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_lifecycle_map_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__export_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                lifecycle_map_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleMapTransfer"];
                 };
             };
             /** @description Validation Error */

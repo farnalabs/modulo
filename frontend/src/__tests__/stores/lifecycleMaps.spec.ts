@@ -11,7 +11,7 @@ vi.mock('../../lib/api/auth', () => ({
 
 import { useLifecycleMapsStore } from '../../stores/lifecycleMaps'
 import type { LifecycleMap, LifecycleMapStage, LifecycleMapVersion, LifecycleStage } from '../../stores/lifecycleMaps'
-import type { JourneySummary } from '../../types/lifecycleMap'
+import type { JourneySummary, LifecycleMapTransfer } from '../../types/lifecycleMap'
 
 function okJsonResponse(data: unknown) {
   return {
@@ -484,5 +484,62 @@ describe('useLifecycleMapsStore', () => {
     expect(store.journeyDetail).toBeNull()
     expect(store.journeyDetailError).toBeNull()
     expect(store.selectedJourneyKey).toBeNull()
+  })
+
+  it('exportMap fetches the export envelope for the map', async () => {
+    const envelope = {
+      primitive_type: 'lifecycle_map',
+      format_version: '1',
+      name: 'Launch Flow',
+      description: null,
+      content_json: { stages: [{ id: 'stage-1', name: 'Build', type: 'manual' }], edges: [] },
+    }
+    fetchMock.mockResolvedValue(okJsonResponse(envelope))
+    const store = useLifecycleMapsStore()
+
+    const result = await store.exportMap('map-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/lifecycle-maps/map-1/export',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(result).toEqual(envelope)
+  })
+
+  it('exportMap rethrows the error', async () => {
+    fetchMock.mockResolvedValue(errorResponse(404, 'map gone'))
+    const store = useLifecycleMapsStore()
+
+    await expect(store.exportMap('map-missing')).rejects.toThrow('map gone')
+  })
+
+  it('importMap posts the envelope and returns the created map', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse({ id: 'map-9', name: 'Imported SDLC' }))
+    const store = useLifecycleMapsStore()
+    const envelope: LifecycleMapTransfer = {
+      primitive_type: 'lifecycle_map',
+      format_version: '1',
+      name: 'Imported SDLC',
+      description: null,
+      content_json: { stages: [], edges: [] },
+    }
+
+    const result = await store.importMap(envelope)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/lifecycle-maps/import',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(envelope) }),
+    )
+    expect(result.id).toBe('map-9')
+    expect(store.error).toBeNull()
+  })
+
+  it('importMap throws when the API returns no map', async () => {
+    fetchMock.mockResolvedValue(okJsonResponse(null))
+    const store = useLifecycleMapsStore()
+
+    await expect(
+      store.importMap({ primitive_type: 'lifecycle_map', format_version: '1', name: 'X', description: null, content_json: {} } as never),
+    ).rejects.toThrow('Import returned no map')
   })
 })
