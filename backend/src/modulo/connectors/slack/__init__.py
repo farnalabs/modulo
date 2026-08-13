@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import random
 from typing import Any, cast
 
@@ -59,6 +60,25 @@ def _check_slack_ok(body: Any, context: str) -> None:
         raise SlackAPIError(f"Slack API returned non-JSON-object response in {context}: {type(body).__name__}")
     if not body.get("ok"):
         raise SlackAPIError(f"Slack API error in {context}: {body.get('error', 'unknown')}")
+
+
+def _safe_int(value: object, default: int = 1) -> int:
+    """Coerce *value* to int, returning *default* for None, non-finite, or unparseable values.
+
+    Guards against non-finite floats (``inf``/``nan``) which otherwise raise
+    ``OverflowError``/``ValueError`` on ``int()`` — Python's json parser
+    produces ``inf`` for overflowing literals such as ``1e999``, so a corrupt
+    or hostile Slack ``paging`` payload must not be able to crash
+    ``message_search`` pagination.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    if isinstance(value, float) and not math.isfinite(value):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 class SlackConnector(ConnectorBase):
@@ -435,8 +455,8 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "search.messages")
         search = body.get("messages") or {}
         paging = search.get("paging") or {}
-        page = int(paging.get("page") or 1)
-        pages = int(paging.get("pages") or 1)
+        page = _safe_int(paging.get("page"), 1)
+        pages = _safe_int(paging.get("pages"), 1)
         next_cursor = str(page + 1) if page < pages else None
         return ConnectorResult(
             records=search.get("matches", []),
