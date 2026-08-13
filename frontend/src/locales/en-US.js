@@ -2132,10 +2132,12 @@ export default {
     "LifecycleMapList": {
       "create_lifecycle_map": "Create Lifecycle Map",
       "name": "Name",
-      "description": "Description"
+      "description": "Description",
+      "edit": "Edit"
     },
     "LifecycleMapView": {
       "version_label": "Version:",
+      "edit": "Edit",
       "journey": {
         "detail_title": "Journey: {journey}",
         "close": "Close",
