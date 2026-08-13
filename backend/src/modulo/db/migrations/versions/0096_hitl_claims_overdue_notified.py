@@ -1,7 +1,7 @@
 """hitl_claims.overdue_notified_at — idempotent hitl_overdue notification dispatch
 
-Revision ID: 0094_hitl_claims_overdue_notified
-Revises: 0093_run_number_sequence
+Revision ID: 0096_hitl_claims_overdue_notified
+Revises: 0095_ongoing_trigger_flag
 Create Date: 2026-08-13
 
 Adds ``hitl_claims.overdue_notified_at`` (timestamptz, nullable). The
@@ -12,6 +12,10 @@ every cron tick. ``NULL`` means "not yet alerted"; the job selects only rows
 with ``overdue_notified_at IS NULL`` and sets the stamp after a successful
 dispatch. Existing undecided claims keep ``NULL`` and will be picked up by the
 next job tick — no backfill needed.
+
+Migration tree: ``0093_run_number_sequence`` -> ``0094_ongoing_trigger_type``
+-> ``0095_ongoing_trigger_flag`` -> ``0096_hitl_claims_overdue_notified``
+(sole head).
 """
 
 from __future__ import annotations
@@ -21,8 +25,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0094_hitl_claims_overdue_notified"
-down_revision: str | None = "0093_run_number_sequence"
+revision: str = "0096_hitl_claims_overdue_notified"
+down_revision: str | None = "0095_ongoing_trigger_flag"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
