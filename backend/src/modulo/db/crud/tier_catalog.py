@@ -8,20 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.models.tier_catalog import FeatureFlagCatalog, TierCatalog
 
 
-async def get_tier(tier_id: str, session: AsyncSession) -> dict[str, Any] | None:
-    result = await session.execute(select(TierCatalog).where(TierCatalog.tier_id == tier_id))
-    tier = result.scalar_one_or_none()
-    if tier is None:
-        return None
-    return {
-        "tier_id": tier.tier_id,
-        "label": tier.label,
-        "rank": tier.rank,
-        "requires_license": tier.requires_license,
-        "description": tier.description,
-    }
-
-
 async def list_tiers(session: AsyncSession) -> list[dict[str, Any]]:
     result = await session.execute(select(TierCatalog).order_by(TierCatalog.rank))
     return [
@@ -52,22 +38,6 @@ async def get_feature_flag(name: str, session: AsyncSession) -> dict[str, Any] |
 
 async def list_feature_flags(session: AsyncSession) -> list[dict[str, Any]]:
     result = await session.execute(select(FeatureFlagCatalog).order_by(FeatureFlagCatalog.name))
-    return [
-        {
-            "name": f.name,
-            "description": f.description,
-            "tier_id": f.tier_id,
-            "depends_on": f.depends_on,
-            "is_active": f.is_active,
-        }
-        for f in result.scalars().all()
-    ]
-
-
-async def list_feature_flags_by_tier(tier_id: str, session: AsyncSession) -> list[dict[str, Any]]:
-    result = await session.execute(
-        select(FeatureFlagCatalog).where(FeatureFlagCatalog.tier_id == tier_id).order_by(FeatureFlagCatalog.name)
-    )
     return [
         {
             "name": f.name,
