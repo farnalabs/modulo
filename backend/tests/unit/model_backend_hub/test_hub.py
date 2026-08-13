@@ -15,9 +15,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from modulo.core.model_backend_hub import (
     _ERROR_DETAIL_MAX_LENGTH,
+    BackendDecryptError,
     BackendNotFoundError,
     BackendUnavailableError,
     ModelBackendHub,
+    _backend_class,
+    _extract_fixture_map,
 )
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.model_backends.base import HealthResult, ModelBackendBase
@@ -1325,3 +1328,48 @@ async def test_initialise_custom_provider_with_invalid_ciphertext_skips_backend(
         hub = ModelBackendHub()
         await hub.initialise([mb], secrets_backend=secrets_backend)
     assert mb.id not in hub.backend_ids
+
+
+# ---------------------------------------------------------------------------
+# Error classes, register state, and helper functions (direct coverage)
+# ---------------------------------------------------------------------------
+
+
+async def test_error_classes_expose_backend_id():
+    bid = uuid.uuid4()
+    assert BackendNotFoundError(bid).backend_id == bid
+    assert BackendUnavailableError(bid).backend_id == bid
+    assert BackendDecryptError(bid).backend_id == bid
+    assert str(bid) in str(BackendNotFoundError(bid))
+    assert str(bid) in str(BackendUnavailableError(bid))
+    assert str(bid) in str(BackendDecryptError(bid))
+
+
+async def test_register_marks_backend_healthy():
+    hub = ModelBackendHub()
+    bid = uuid.uuid4()
+    hub.register(bid, _FakeBackend())
+    assert hub._healthy[bid] is True
+
+
+async def test_extract_fixture_map_prefers_default_params():
+    result = _extract_fixture_map({"fixture_map": {"a": "1"}}, {"fixture_map": {"b": "2"}})
+    assert result == {"b": "2"}
+
+
+async def test_extract_fixture_map_falls_back_to_creds():
+    result = _extract_fixture_map({"fixture_map": {"a": "1"}}, {})
+    assert result == {"a": "1"}
+
+
+async def test_extract_fixture_map_empty_when_absent():
+    assert _extract_fixture_map({}, {}) == {}
+
+
+async def test_extract_fixture_map_ignores_non_dict():
+    assert _extract_fixture_map({"fixture_map": "nope"}, {}) == {}
+
+
+async def test_backend_class_lazy_import():
+    cls = _backend_class("stub", "StubModelBackend")
+    assert cls.__name__ == "StubModelBackend"
