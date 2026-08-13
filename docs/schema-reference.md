@@ -23,20 +23,27 @@ and run-time.
 | `name` | String(255) | Unique within org |
 | `description` | String(2000) | Optional |
 | `abstract_name` | String(255) | Optional namespaced reference |
-| `created_by` | UUID FK → users | Creator |
+| `account_id` | UUID FK → accounts | Owning account |
+| `folder_id` | UUID FK → schema_folders | Optional parent folder |
+| `deprecated` | Boolean | Default false |
+| `deprecated_at` | Timestamp | Set when deprecated |
+| `system` | Boolean | System-managed schema |
+| `created_at` / `updated_at` | Timestamp | Auditing |
 
 ## SchemaVersion entity
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | UUID | Primary key |
+| `organisation_id` | UUID | Org scoping (RLS enforced) |
 | `schema_id` | UUID FK → schemas | Parent schema |
 | `version` | String(50) | Version label (e.g. "1.0.0") |
 | `version_number` | Integer | Monotonic version counter |
 | `definition_json` | JSON | JSON Schema definition |
 | `published` | Boolean | Published flag |
 | `deprecated` | Boolean | Deprecation flag |
-| `created_by` | UUID FK → users | Creator |
+| `account_id` | UUID FK → accounts | Owning account |
+| `created_at` / `updated_at` | Timestamp | Auditing |
 
 ## JSON Schema usage
 
@@ -103,7 +110,7 @@ be satisfied when a pipeline is published.
 
 ## Deprecation lifecycle
 
-1. Mark version as `deprecated` — graph validator emits warnings but does not
-   block existing pipeline runs
+1. Mark version as `deprecated`. The graph validator emits warnings but does
+   not block existing pipeline runs
 2. Pipelines using deprecated schemas can still run (backward-compatible)
 3. New pipeline versions must pin a non-deprecated schema version
