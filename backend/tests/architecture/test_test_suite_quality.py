@@ -13,6 +13,9 @@ regression that silently weakens the suite:
 - ``== True`` / ``== False`` equality on booleans (type confusion + E712)
 - stray ``print()`` calls polluting CI output
 - fixtures that nothing requests (dead setup code that never runs)
+- ``==`` against a float literal that is not exactly representable in binary
+  (``0.1``, ``0.04``, ``0.95``, ...) — precision-fragile equality that
+  ``pytest.approx`` is designed to replace
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -20,6 +23,7 @@ of a bare "assert not violations", mirroring the sibling architecture tests.
 
 import ast
 import re
+from fractions import Fraction
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent.parent
@@ -255,10 +259,7 @@ def test_no_dead_fixtures():
         if not isinstance(dec, ast.Call):
             return False
         return any(
-            kw.arg == "autouse"
-            and isinstance(kw.value, ast.Constant)
-            and kw.value.value is True
-            for kw in dec.keywords
+            kw.arg == "autouse" and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in dec.keywords
         )
 
     violations: list[str] = []
@@ -283,4 +284,46 @@ def test_no_dead_fixtures():
         f"Found {len(violations)} fixture(s) that no test requests.\n"
         "pytest never instantiates an unrequested fixture, so its body is dead code.\n"
         "Remove it, or wire it up (request it / autouse=True) so it does real work.\n" + "\n".join(violations)
+    )
+
+
+def test_no_precision_fragile_float_equality():
+    """``x == 0.1`` style assertions are precision-fragile: most decimal
+    fractions have no exact binary representation, so the value under test
+    can differ from the literal in the last ulp (e.g. ``0.04 == 0.04`` is not
+    guaranteed once the left side is the result of arithmetic or a DB round
+    trip). Prefer ``pytest.approx(literal)`` which compares within tolerance.
+
+    The lens only flags literals that are *not* exactly representable as a
+    binary float (``0.5``, ``0.25``, ``150.0`` are safe; ``0.1``, ``0.04``,
+    ``0.95`` are not), so it targets genuinely fragile comparisons without
+    forcing ``approx`` on trivial cases.
+    """
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            for left, op, right in zip([node.left, *node.comparators[:-1]], node.ops, node.comparators, strict=True):
+                if not isinstance(op, ast.Eq):
+                    continue
+                for side in (left, right):
+                    if not isinstance(side, ast.Constant) or not isinstance(side.value, float):
+                        continue
+                    other = right if side is left else left
+                    if isinstance(other, ast.Constant) and isinstance(other.value, float):
+                        continue
+                    if Fraction(side.value) == Fraction(str(side.value)):
+                        continue
+                    violations.append(
+                        f"  {path.relative_to(TESTS)}:{node.lineno}  compares "
+                        f"value == {side.value!r} (no exact binary representation)"
+                    )
+    assert not violations, (
+        f"Found {len(violations)} precision-fragile float comparison(s).\n"
+        "Use pytest.approx(<literal>) instead of == against a non-representable float literal.\n"
+        + "\n".join(violations)
     )

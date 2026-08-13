@@ -2,6 +2,8 @@
 
 from uuid import uuid4
 
+import pytest
+
 from modulo.core.eval_engine import (
     EvalResult,
     EvalSuiteBlockedError,
@@ -99,7 +101,7 @@ class TestEvaluateSuite:
         assert result.suite_id == "my-suite"
         assert result.total_evals == 10
         assert result.passed_evals == 7
-        assert result.aggregate_score == 0.7
+        assert result.aggregate_score == pytest.approx(0.7)
         assert result.passed is True
         assert result.blocking_failures == ["e1: failed"]
 
@@ -109,8 +111,8 @@ class TestEvalSuiteBlockedError:
         """EvalSuiteBlockedError stores suite_id, score, and threshold."""
         err = EvalSuiteBlockedError("suite-1", 0.3, 0.8)
         assert err.suite_id == "suite-1"
-        assert err.score == 0.3
-        assert err.threshold == 0.8
+        assert err.score == pytest.approx(0.3)
+        assert err.threshold == pytest.approx(0.8)
         assert "0.30" in str(err)
         assert "0.80" in str(err)
         assert "suite-1" in str(err)
@@ -130,5 +132,5 @@ class TestEvalSuiteBlockedError:
     def test_constructor_high_threshold(self) -> None:
         """Boundary case: threshold of 1.0 models perfection requirement."""
         err = EvalSuiteBlockedError("suite-1", 0.99, 1.0)
-        assert err.score == 0.99
+        assert err.score == pytest.approx(0.99)
         assert err.threshold == 1.0

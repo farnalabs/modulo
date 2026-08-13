@@ -7,6 +7,8 @@ length limits applied in ``_build_safe_judge_input``.
 from collections.abc import Callable
 from uuid import uuid4
 
+import pytest
+
 from modulo.core.eval_engine import (
     _CONTENT_BEGIN,
     _CONTENT_END,
@@ -154,7 +156,7 @@ class TestNormalContent:
         result = engine.evaluate({"output": content}, eval_def, llm_judge_callable=_capturing_callable(captured))
 
         assert result.passed is True
-        assert result.score == 0.95
+        assert result.score == pytest.approx(0.95)
         safe_output, _ = captured[0]
         assert content in safe_output["output"]
 

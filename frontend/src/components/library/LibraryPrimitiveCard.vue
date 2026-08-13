@@ -76,6 +76,20 @@
         {{ $t('views.LibraryView.create_pipeline') }}
       </button>
       <button
+        v-else-if="prim.primitive_type === 'lifecycle_map'"
+        class="flex-1 px-3 py-2 border border-primary/30 hover:border-primary/60 disabled:opacity-50 disabled:cursor-not-allowed"
+        :disabled="adapting[prim.id]"
+        :aria-busy="adapting[prim.id]"
+        @click="$emit('create-lifecycle-map', prim)"
+        data-testid="library-create-lifecycle-map"
+      >
+        {{
+          adapting[prim.id]
+            ? $t('views.LibraryView.copy_to_adapt_creating')
+            : $t('views.LibraryView.copy_to_adapt')
+        }}
+      </button>
+      <button
         class="flex-1 px-3 py-2 border border-border bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
         @click="$emit('view-details', prim)"
         data-testid="library-view-details"
@@ -105,14 +119,17 @@ withDefaults(defineProps<{
   showTags?: boolean
   showAutoUpdate?: boolean
   toggleLoading?: Record<string, boolean>
+  adapting?: Record<string, boolean>
 }>(), {
   showTags: true,
   showAutoUpdate: false,
   toggleLoading: () => ({}),
+  adapting: () => ({}),
 })
 
 defineEmits<{
   'create-pipeline': [prim: LibraryPrimitive]
+  'create-lifecycle-map': [prim: LibraryPrimitive]
   'view-details': [prim: LibraryPrimitive]
   'toggle-auto-update': [prim: LibraryPrimitive]
 }>()
@@ -126,6 +143,7 @@ function typeBadgeClass(type: string): string {
     integration: 'badge badge-context-cyan',
     test_fixture: 'badge badge-context-pink',
     composite: 'badge badge-context-green',
+    lifecycle_map: 'badge badge-context-blue',
   }
   return map[type] ?? 'badge badge-context-slate'
 }

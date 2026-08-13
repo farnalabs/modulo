@@ -2,7 +2,12 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
-import type { JourneySummary, JourneyDetail, JourneyListResponse } from '../types/lifecycleMap'
+import type {
+  JourneySummary,
+  JourneyDetail,
+  JourneyListResponse,
+  LifecycleMapTransfer,
+} from '../types/lifecycleMap'
 
 export const UNATTRIBUTED_STAGE_KEY = '__unattributed__'
 
@@ -290,6 +295,20 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     }
   }
 
+  async function exportMap(id: string): Promise<LifecycleMapTransfer | undefined> {
+    try {
+      return await get<LifecycleMapTransfer>(`/api/v1/lifecycle-maps/${id}/export`)
+    } catch (e: unknown) {
+      throw new Error(formatApiError(e))
+    }
+  }
+
+  async function importMap(payload: LifecycleMapTransfer): Promise<LifecycleMapSummary> {
+    const data = await post<LifecycleMapSummary>('/api/v1/lifecycle-maps/import', payload)
+    if (!data) throw new Error('Import returned no map')
+    return data
+  }
+
   return {
     maps,
     currentMap,
@@ -321,5 +340,7 @@ export const useLifecycleMapsStore = defineStore('lifecycleMaps', () => {
     fetchJourneys,
     fetchJourneyDetail,
     clearJourneyDetail,
+    exportMap,
+    importMap,
   }
 })

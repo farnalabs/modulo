@@ -109,7 +109,12 @@
 
       <div v-if="loading" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
 
-      <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
+      <div
+        v-else-if="error"
+        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        role="alert"
+        data-testid="library-error"
+      >
         {{ error }}
       </div>
 
@@ -130,7 +135,9 @@
           badge="modulo"
           show-auto-update
           :toggle-loading="toggleLoading"
+          :adapting="adapting"
           @create-pipeline="createPipeline"
+          @create-lifecycle-map="createLifecycleMap"
           @view-details="viewPrimitive"
           @toggle-auto-update="toggleAutoUpdate"
         />
@@ -147,7 +154,9 @@
             :prim="prim"
             badge="preview"
             :show-tags="false"
+            :adapting="adapting"
             @create-pipeline="createPipeline"
+            @create-lifecycle-map="createLifecycleMap"
             @view-details="viewPrimitive"
             @toggle-auto-update="toggleAutoUpdate"
           />
@@ -160,7 +169,9 @@
           :key="prim.id"
           :prim="prim"
           badge="community"
+          :adapting="adapting"
           @create-pipeline="createPipeline"
+          @create-lifecycle-map="createLifecycleMap"
           @view-details="viewPrimitive"
           @toggle-auto-update="toggleAutoUpdate"
         />
@@ -232,6 +243,7 @@ const typeOptions = [
   { value: 'schema', labelKey: 'views.LibraryView.type_schemas' },
   { value: 'integration', labelKey: 'views.LibraryView.type_integrations' },
   { value: 'composite', labelKey: 'views.LibraryView.type_composites' },
+  { value: 'lifecycle_map', labelKey: 'views.LibraryView.type_lifecycle_maps' },
 ]
 
 function typeLabel(type: string): string {
@@ -339,6 +351,29 @@ function nextPage() {
 
 function createPipeline(prim: LibraryPrimitive) {
   router.push({ name: 'library-pipeline-wizard', params: { id: prim.id } })
+}
+
+const adapting = ref<Record<string, boolean>>({})
+
+async function createLifecycleMap(prim: LibraryPrimitive): Promise<void> {
+  if (adapting.value[prim.id]) return
+  adapting.value[prim.id] = true
+  error.value = null
+  try {
+    const { data, error: err } = await api.POST('/api/v1/libraries/{primitive_id}/create-lifecycle-map', {
+      params: { path: { primitive_id: prim.id } },
+    })
+    if (err) {
+      error.value = formatApiError(err)
+      return
+    }
+    const created = data as unknown as { id: string }
+    router.push({ name: 'lifecycle-map-detail', params: { id: created.id } })
+  } catch (e) {
+    error.value = formatApiError(e)
+  } finally {
+    adapting.value[prim.id] = false
+  }
 }
 
 function viewPrimitive(prim: LibraryPrimitive) {

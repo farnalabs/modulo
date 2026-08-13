@@ -241,7 +241,7 @@ class TestEvalDashboardSections:
         assert s["total_results"] == 10
         assert s["passed"] == 7
         assert s["failed"] == 3
-        assert s["pass_rate"] == 0.7
+        assert s["pass_rate"] == pytest.approx(0.7)
         assert s["total_definitions"] == 5
 
     def test_trend_section(self, client: TestClient) -> None:
@@ -299,7 +299,7 @@ class TestEvalDashboardSections:
         assert rr["eval_name"] == "Test Eval"
         assert rr["eval_type"] == "llm_judge"
         assert rr["passed"] is True
-        assert rr["score"] == 0.95
+        assert rr["score"] == pytest.approx(0.95)
 
     def test_all_five_keys_present(self, client: TestClient) -> None:
         resp = client.get(self.URL)

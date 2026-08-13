@@ -110,7 +110,7 @@ class TestSerialiseForJson:
         assert _serialise_for_json(42) == 42
 
     def test_float_passthrough(self) -> None:
-        assert _serialise_for_json(3.14) == 3.14
+        assert _serialise_for_json(3.14) == pytest.approx(3.14)
 
     def test_str_passthrough(self) -> None:
         assert _serialise_for_json("hello") == "hello"

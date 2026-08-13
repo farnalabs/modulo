@@ -428,7 +428,7 @@ class TestSerializeFactRow:
         assert out["run_id"] == str(rid)
         assert out["run_date"] == "2026-08-06"
         assert out["created_at"] == "2026-08-06T12:00:00+00:00"
-        assert out["total_cost_usd"] == 12.34
+        assert out["total_cost_usd"] == pytest.approx(12.34)
         assert out["total_tokens"] == 100
         assert out["trigger_type"] == "manual"
         assert out["team_id"] == str(row.team_id)
