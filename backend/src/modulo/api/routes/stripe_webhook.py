@@ -41,8 +41,6 @@ _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["stripe-webhook"])
 
-router = APIRouter(prefix="/api/v1/webhooks", tags=["stripe-webhook"])
-
 # The ONLY event that triggers fulfilment. Stripe sends BOTH
 # ``checkout.session.completed`` and ``invoice.paid`` for a single card-paid
 # subscription checkout (distinct event ids), so fulfilling on both would
