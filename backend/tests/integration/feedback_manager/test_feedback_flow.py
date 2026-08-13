@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.feedback_manager import FeedbackManager
+from modulo.db.crud.run import _allocate_run_number
 
 pytestmark = [
     pytest.mark.integration,
@@ -290,17 +291,7 @@ async def _create_seed_run(
     # create_run path uses (FAR-168). The old MAX(run_number)+1 here could hand
     # out a number already consumed by a counter-allocated run in the same org,
     # tripping uq_runs_org_run_number.
-    run_number_row = await session.execute(
-        text(
-            "INSERT INTO run_number_counters (organisation_id, next_run_number) "
-            "VALUES (:org_id, 1) "
-            "ON CONFLICT (organisation_id) "
-            "DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1 "
-            "RETURNING next_run_number"
-        ),
-        {"org_id": str(org_id)},
-    )
-    run_number = int(run_number_row.scalar_one())
+    run_number = await _allocate_run_number(session, org_id)
     await session.execute(
         text(
             "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "

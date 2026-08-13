@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.auth.jwt import create_access_token
+from modulo.db.crud.run import _ATOMIC_RUN_NUMBER_SQL
 
 pytestmark = pytest.mark.integration
 
@@ -601,14 +602,8 @@ async def test_pause_does_not_mutate_running_run(
         # production create_run. MAX(run_number)+1 here desyncs the counter, so
         # the later API-created run collides with this seed (uq_runs_org_run_number).
         run_number_row = await conn.execute(
-            text(
-                "INSERT INTO run_number_counters (organisation_id, next_run_number) "
-                "VALUES (:oid, 1) "
-                "ON CONFLICT (organisation_id) "
-                "DO UPDATE SET next_run_number = run_number_counters.next_run_number + 1 "
-                "RETURNING next_run_number"
-            ),
-            {"oid": str(org_a)},
+            _ATOMIC_RUN_NUMBER_SQL,
+            {"org_id": str(org_a)},
         )
         run_number = int(run_number_row.scalar_one())
         await conn.execute(
