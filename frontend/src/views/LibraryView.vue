@@ -16,7 +16,7 @@
           <FilterBar
             :search="{ placeholder: $t('views.LibraryView.search_primitives') }"
             :search-value="search"
-            @update:search="search = $event; onSearchInput()"
+            @update:search="search = $event"
           />
           <div class="relative" ref="typeFilterRef">
             <button
@@ -193,6 +193,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { watchDebounced } from '@vueuse/core'
 import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -204,8 +205,6 @@ import { formatApiError } from '../lib/api/formatError'
 import { api } from '../lib/api/client'
 import { useI18n } from 'vue-i18n'
 import type { LibraryPrimitive } from '../components/library/LibraryPrimitiveCard.vue'
-
-let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 interface ListResponse {
   items: LibraryPrimitive[]
@@ -291,6 +290,11 @@ watch([loadResp, section], ([d]) => {
   }
 }, { immediate: true })
 
+watchDebounced(search, () => {
+  page.value = 1
+  loadPrimitives()
+}, { debounce: 300 })
+
 function switchSection(next: LibrarySection) {
   if (section.value === next) return
   section.value = next
@@ -306,12 +310,6 @@ function applyTypeFilter(items: LibraryPrimitive[]): LibraryPrimitive[] {
 const nativePrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => (p.tier ?? 'native') !== 'preview' && (p.tier ?? 'native') !== 'in_dev')))
 const previewPrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => p.tier === 'preview')))
 const communityPrimitives = computed(() => applyTypeFilter(primitives.value.filter(p => p.source === 'community')))
-
-function onSearchInput() {
-  page.value = 1
-  if (searchTimer) clearTimeout(searchTimer)
-  searchTimer = setTimeout(loadPrimitives, 300)
-}
 
 function onFilterChange() {
   page.value = 1
@@ -367,7 +365,6 @@ async function toggleAutoUpdate(prim: LibraryPrimitive) {
 }
 
 onBeforeUnmount(() => {
-  if (searchTimer) clearTimeout(searchTimer)
   document.removeEventListener('mousedown', onClickOutside)
 })
 onMounted(() => {

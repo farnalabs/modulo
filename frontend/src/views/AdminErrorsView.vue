@@ -122,6 +122,7 @@ import PageHeader from '../components/shared/PageHeader.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed } from 'vue'
+import { watchDebounced } from '@vueuse/core'
 import { useRouter } from 'vue-router'
 import { fetchErrorGroups, type ErrorGroupSummary, type FetchErrorGroupsParams } from '../lib/api/errors'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -140,6 +141,18 @@ const limit = ref(20)
 const offset = ref(0)
 const currentPage = ref(1)
 
+const filterLevel = ref('')
+const filterStatus = ref('')
+const filterSource = ref('')
+const filterEnvironment = ref('')
+const filterSearch = ref('')
+
+watchDebounced(filterSearch, () => {
+  currentPage.value = 1
+  offset.value = 0
+  loadGroups()
+}, { debounce: 300 })
+
 const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(
   () => fetchErrorGroups(buildParams()).then(
     d => ({ data: d }),
@@ -150,12 +163,6 @@ const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ it
 
 const groups = computed(() => groupsData.value?.items ?? [])
 const total = computed(() => groupsData.value?.total ?? 0)
-
-const filterLevel = ref('')
-const filterStatus = ref('')
-const filterSource = ref('')
-const filterEnvironment = ref('')
-const filterSearch = ref('')
 
 function handleFilterUpdate(key: string, value: string) {
   if (key === 'level') filterLevel.value = value
