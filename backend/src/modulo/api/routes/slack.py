@@ -24,13 +24,14 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import (
     _get_engine,
     get_current_tenant_user_optional,
     get_db_session,
+    get_or_create_engine,
 )
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
@@ -81,10 +82,6 @@ async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
 async def _ingest_slack_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
     """Best-effort error ingestion for a failed background dispatch. Never raises."""
     try:
-        from sqlalchemy.ext.asyncio import async_sessionmaker
-
-        from modulo.api.dependencies import get_or_create_engine
-
         oid = uuid.UUID(str(org_id))
         factory = async_sessionmaker(
             get_or_create_engine(get_settings()),
