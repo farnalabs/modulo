@@ -567,7 +567,7 @@ def _complete_run(run_id: uuid.UUID, org_id: uuid.UUID, outputs_json: dict[str, 
         run_number=1,
         input_hash="a" * 64,
         langgraph_thread_id=f"thread-{run_id}",
-        completed_at=datetime.datetime.now(),
+        completed_at=datetime.datetime.now(datetime.UTC),
         outputs_json=outputs_json,
         node_telemetry_json=telemetry,
     )

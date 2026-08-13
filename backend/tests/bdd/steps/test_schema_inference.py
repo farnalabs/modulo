@@ -2,7 +2,7 @@
 
 import contextlib
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, PropertyMock, patch
 
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -296,8 +296,8 @@ def step_create_schema_from_draft(name: str, request, client):
     mock_schema.description = "Inferred schema"
     mock_schema.abstract_name = None
     mock_schema.created_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
-    mock_schema.created_at = datetime.now()
-    mock_schema.updated_at = datetime.now()
+    mock_schema.created_at = datetime.now(UTC)
+    mock_schema.updated_at = datetime.now(UTC)
     _MOCK_SCHEMAS[name] = mock_schema
 
     with (
@@ -324,8 +324,8 @@ def step_publish_schema_version(version: str, request, client):
     mock_sv.definition_json = request.node._inferred_definition
     mock_sv.published = True
     mock_sv.created_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
-    mock_sv.created_at = datetime.now()
-    mock_sv.updated_at = datetime.now()
+    mock_sv.created_at = datetime.now(UTC)
+    mock_sv.updated_at = datetime.now(UTC)
     _MOCK_VERSIONS.append(mock_sv)
 
     with (
