@@ -309,6 +309,7 @@ describe('runStatusBadgeClass', () => {
     expect(runStatusBadgeClass('complete')).toBe('bg-success/10 text-success')
     expect(runStatusBadgeClass('failed')).toBe('bg-destructive/10 text-destructive')
     expect(runStatusBadgeClass('stalled')).toBe('bg-destructive/10 text-destructive')
+    expect(runStatusBadgeClass('budget_exceeded')).toBe('bg-destructive/10 text-destructive')
     expect(runStatusBadgeClass('running')).toBe('bg-primary/10 text-primary')
     expect(runStatusBadgeClass('awaiting_human')).toBe('bg-warning/10 text-warning')
     expect(runStatusBadgeClass('cancelled')).toBe('bg-muted text-muted-foreground')
