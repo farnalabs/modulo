@@ -87,12 +87,6 @@ SELF_REPORTED_ALLOWED_IDENTS = frozenset({"reported"})
 _MISSING_MAP_IS_SANDBOX_WALLCLOCK = True
 _MISSING_MAP_SELF_REPORT_ELIGIBLE = False
 
-# Effective reporting floor for the classification: reports below the band
-# floor are omitted by the dogfood reader; the extraction floor
-# (MAX_REPORTABLE_USD_MIN) is the backend lower bound for reports that DO
-# arrive. The band-floor asymmetry is a stated asymmetry, not a mismatch.
-_BAND_FLOOR = Decimal("0.0001")
-
 
 @dataclass(frozen=True)
 class CostComponentConfig:

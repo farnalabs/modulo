@@ -54,7 +54,6 @@ __all__ = [
 _COMPLETE_STATUS = "complete"
 _FAILED_STATUS = "failed"
 _STALLED_STATUS = "stalled"
-_SANDBOX_AGENT_NODE_TYPE = "sandbox_agent"
 
 # Error codes that mark a failed run as a STALL — the run made no progress
 # (no node dispatched, a node exceeded its wall-clock timeout, or a sandbox

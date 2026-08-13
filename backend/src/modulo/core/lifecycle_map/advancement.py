@@ -85,9 +85,6 @@ _log = logging.getLogger(__name__)
 # and stalled are deliberately excluded — they mean "the work did not happen".
 _ADVANCING_TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "eval_failed"})
 
-# Statuses that NEVER advance a journey (mint-only).
-_NON_ADVANCING_STATUSES: frozenset[str] = frozenset({"cancelled", "stalled"})
-
 _AWAITING_HUMAN = "awaiting_human"
 
 # Mint-only: ensure the journey row exists without touching latest_*/run_count.
