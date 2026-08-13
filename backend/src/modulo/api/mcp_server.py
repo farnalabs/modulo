@@ -112,6 +112,7 @@ from modulo.db.crud.hitl_gate_guard import HitlGateWeakeningDenied
 from modulo.db.crud.model_backend import create_model_backend as db_create_model_backend
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.run import get_run
+from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
 from modulo.db.models.hitl_claim import HitlClaim
@@ -3103,9 +3104,9 @@ async def create_agent(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else uuid.UUID(int=0)
-        parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else uuid.UUID(int=0)
-        parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else uuid.UUID(int=0)
+        parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else None
+        parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else None
+        parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else None
 
         async with _session(org_id) as s:
             agent = await db_create_agent(
@@ -3393,6 +3394,71 @@ async def get_available_features() -> dict[str, Any]:
     except Exception:
         _log.exception("get_available_features failed")
         return _tool_error("Failed to get available features")
+
+
+@mcp.tool(
+    description="Create a new schema. Creates the schema record plus a "
+    "'latest' version placeholder so agents can reference the schema "
+    "immediately. Returns the created schema details.",
+)
+@_RETRY_DB
+async def create_schema(
+    name: str,
+    description: str | None = None,
+    abstract_name: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error("Token revoked or expired - re-authenticate")
+        check_tool_scope(_ctx_role_val(), "create_schema")
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+
+        async with _session(org_id) as s:
+            schema = await db_create_schema(
+                s,
+                org_id=org_id,
+                name=name,
+                account_id=account_id,
+                description=description,
+                abstract_name=abstract_name,
+            )
+
+            from modulo.db.models.schema import SchemaVersion
+
+            s.add(
+                SchemaVersion(
+                    organisation_id=org_id,
+                    schema_id=schema.id,
+                    version="latest",
+                    version_number=0,
+                    definition_json={"type": "object", "properties": {}, "additionalProperties": True},
+                    account_id=account_id,
+                )
+            )
+
+        return {
+            "id": str(schema.id),
+            "name": schema.name,
+            "description": schema.description,
+            "abstract_name": schema.abstract_name,
+            "created_at": schema.created_at.isoformat() if schema.created_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except IntegrityError as exc:
+        _log.exception("create_schema failed")
+        return {"error": "conflict", "detail": f"A schema with this name already exists: {exc.orig}"}
+    except ProgrammingError:
+        _log.exception("create_schema failed")
+        return {"error": "migration_required", "detail": "Database migration required. Run `alembic upgrade head`."}
+    except SQLAlchemyError:
+        _log.exception("create_schema failed")
+        return {"error": "database_unavailable", "detail": "Database operation failed. Please try again."}
+    except Exception:
+        _log.exception("create_schema failed")
+        return _tool_error("Failed to create schema")
 
 
 @mcp.tool(

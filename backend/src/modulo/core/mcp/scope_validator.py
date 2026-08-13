@@ -72,6 +72,7 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_trigger": "trigger.create",
     "delete_pipeline": "pipeline.delete",
     "create_agent": "agent.create",
+    "create_schema": "schema.create",
     "infer_schema": "schema.infer",
     "create_secret": "secret.manage",
     "delete_secret": "secret.manage",
