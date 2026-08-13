@@ -13,7 +13,7 @@
         ]},
       ]"
       :filter-values="{ status: statusFilter }"
-      @update:search="searchQuery = $event; loadGates()"
+      @update:search="searchQuery = $event"
       @update:filter="(key, value) => { if (key === 'status') { statusFilter = value; loadGates() } }"
     >
       <template #after>
