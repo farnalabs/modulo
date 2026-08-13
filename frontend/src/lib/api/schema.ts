@@ -3873,6 +3873,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/triggers/{trigger_id}/slack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive Slack Event
+         * @description Receive a Slack Events API delivery (app_mention) and enqueue a run.
+         *
+         *     Requires ``X-Slack-Request-Timestamp`` (Unix seconds, ±300s window) and
+         *     ``X-Slack-Signature`` (constant-time HMAC over ``v0:<ts>:<body>``).
+         *
+         *     URL verification: Slack sends ``{"type":"url_verification","challenge":"..."}``
+         *     during setup. The signature is verified first, then the challenge is echoed
+         *     back as ``{"challenge": ...}`` with HTTP 200.
+         *
+         *     Returns 202 on event acceptance, 200 for a verification challenge, 401 on
+         *     signature failure, 400 on duplicate/parse failure.
+         */
+        post: operations["receive_slack_event_api_v1_triggers__trigger_id__slack_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/views": {
         parameters: {
             query?: never;
@@ -23921,6 +23951,41 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: number;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_slack_event_api_v1_triggers__trigger_id__slack_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
                     };
                 };
             };

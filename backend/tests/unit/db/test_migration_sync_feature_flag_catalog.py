@@ -24,7 +24,7 @@ _MIGRATION_PATH = (
 )
 
 # The migration this branch introduces — the current head of the chain.
-_HEAD_MIGRATION_NAME = "0096_hitl_claims_overdue_notified"
+_HEAD_MIGRATION_NAME = "0097_slack_app_mention_trigger_type"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"

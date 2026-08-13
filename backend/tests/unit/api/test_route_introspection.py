@@ -116,6 +116,9 @@ EXEMPT: dict[tuple[str, str], str] = {
         "POST",
         "/api/v1/triggers/{trigger_id}/webhook/replay/{event_id}",
     ): "HMAC/shared-secret channel (runner-or-HMAC in handler)",
+    # Slack: X-Slack-Signature (HMAC-SHA256 with the trigger signing secret)
+    # is the authorization (exempt channel, mirrors the webhook route).
+    ("POST", "/api/v1/triggers/{trigger_id}/slack"): "X-Slack-Signature HMAC channel",
     # admin.py user/team/publisher/purge/retention routes: inline org_role==admin
     # checks in the handler (gated but not tagged). Tracked for conversion to
     # require_permission dependencies in a follow-up sweep.

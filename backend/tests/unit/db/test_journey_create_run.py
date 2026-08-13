@@ -406,6 +406,7 @@ class TestVariantAndReplayWiring:
             config_json={},
             organisation_id=_ORG,
             max_concurrent_runs=5,
+            trigger_type="webhook",
         )
         payload = SimpleNamespace(raw_payload={"a": 1}, raw_body=b"body", organisation_id=_ORG)
         pipeline = SimpleNamespace(rate_limit_config=None)

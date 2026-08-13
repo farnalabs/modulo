@@ -7,8 +7,8 @@ No live Postgres here (integration territory) — instead:
   partial CHECK strings, and the downgrade restoring the pre-feature strings.
 * The ORM models' CHECK constraints are compared against the migration strings
   (drift guard): a CHECK edited on one side and not the other fails loudly.
-* ``0096_hitl_claims_overdue_notified`` is confirmed as the single head of the
-  chain, sitting directly on top of ``0095_ongoing_trigger_flag``.
+* ``0097_slack_app_mention_trigger_type`` is confirmed as the single head of
+  the chain, sitting on top of ``0096_hitl_claims_overdue_notified``.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from alembic.script import ScriptDirectory
 _MIGRATION_0094 = "0094_ongoing_trigger_type"
 _MIGRATION_0095 = "0095_ongoing_trigger_flag"
 _MIGRATION_0096 = "0096_hitl_claims_overdue_notified"
+_MIGRATION_0097 = "0097_slack_app_mention_trigger_type"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -114,8 +115,9 @@ class TestMigration0095OngoingFlag:
     def test_single_head_chain(self, migration_0096: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == ["0096_hitl_claims_overdue_notified"], f"expected a single head, got {heads}"
-        assert migration_0096.revision in heads
+        assert heads == ["0097_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
+        assert migration_0096.revision not in heads
+        assert _MIGRATION_0097 in heads
 
     def test_0096_revises_0095(self, migration_0096: ModuleType) -> None:
         assert migration_0096.down_revision == "0095_ongoing_trigger_flag"
