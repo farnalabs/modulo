@@ -472,6 +472,7 @@ jobs:
     needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
+      contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
