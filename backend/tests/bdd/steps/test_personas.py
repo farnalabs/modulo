@@ -1393,13 +1393,10 @@ def no_mcp_can_approve(ctx):
     mock_mgr = MagicMock()
     mock_mgr.approve = AsyncMock(side_effect=PermissionError("human_only"))
     with patch("modulo.core.hitl_manager.HITLManager", return_value=mock_mgr):
-        try:
-            import asyncio
+        import asyncio
 
+        with pytest.raises(PermissionError):
             asyncio.run(mock_mgr.approve(uuid.uuid4(), "token"))
-            raise AssertionError("MCP approve should have raised PermissionError for human_only gate")
-        except PermissionError:
-            pass
 
 
 # ===========================================================================

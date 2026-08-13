@@ -8,6 +8,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -435,8 +436,8 @@ class SlackConnector(ConnectorBase):
         _check_slack_ok(body, "search.messages")
         search = body.get("messages") or {}
         paging = search.get("paging") or {}
-        page = int(paging.get("page") or 1)
-        pages = int(paging.get("pages") or 1)
+        page = _safe_int(paging.get("page"), 1)
+        pages = _safe_int(paging.get("pages"), 1)
         next_cursor = str(page + 1) if page < pages else None
         return ConnectorResult(
             records=search.get("matches", []),
