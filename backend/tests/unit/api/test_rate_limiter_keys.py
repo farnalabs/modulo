@@ -99,15 +99,17 @@ class TestRateLimitKeyDerivation:
         self._spy_registry = spy_registry
         app = _make_app(registry=spy_registry)
         with TestClient(app) as client:
-            client.post(
+            resp1 = client.post(
                 "/api/v1/runs",
                 headers={"Authorization": f"Bearer {API_KEY_HEADER}"},
             )
+            assert resp1.status_code == 200
             key1 = spy_registry.check.call_args[0][0]
-            client.post(
+            resp2 = client.post(
                 "/api/v1/runs",
                 headers={"Authorization": f"Bearer {API_KEY_ALT_HEADER}"},
             )
+            assert resp2.status_code == 200
             key2 = spy_registry.check.call_args[0][0]
         assert key1 != key2
 
@@ -142,15 +144,17 @@ class TestRateLimitKeyDerivation:
         jwt1 = _valid_jwt(org_id=str(uuid.uuid4()), user_id=str(uuid.uuid4()))
         jwt2 = _valid_jwt(org_id=str(uuid.uuid4()), user_id=str(uuid.uuid4()))
         with TestClient(app) as client:
-            client.post(
+            resp1 = client.post(
                 "/api/v1/runs",
                 headers={"Authorization": f"Bearer {jwt1}"},
             )
+            assert resp1.status_code == 200
             key1 = spy_registry.check.call_args[0][0]
-            client.post(
+            resp2 = client.post(
                 "/api/v1/runs",
                 headers={"Authorization": f"Bearer {jwt2}"},
             )
+            assert resp2.status_code == 200
             key2 = spy_registry.check.call_args[0][0]
         assert key1 != key2
 
