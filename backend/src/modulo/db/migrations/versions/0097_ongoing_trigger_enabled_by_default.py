@@ -1,7 +1,7 @@
 """Enable the ongoing_trigger feature flag by default (ON)
 
-Revision ID: 0096_ongoing_trigger_enabled_by_default
-Revises: 0095_ongoing_trigger_flag
+Revision ID: 0097_ongoing_trigger_enabled_by_default
+Revises: 0096_hitl_claims_overdue_notified
 Create Date: 2026-08-13
 
 ``0095_ongoing_trigger_flag`` shipped the ``ongoing`` trigger type (FAR-158)
@@ -9,6 +9,10 @@ as a feature-flagged experiment, upserting ``ongoing_trigger`` into
 ``feature_flag_catalog`` with ``is_active=false`` (default OFF on every tier).
 The product decision is now that the flag ships ON by default (community
 tier), so this migration flips the catalog row to ``is_active=true``.
+
+Migration tree: ``0093_run_number_sequence`` -> ``0094_ongoing_trigger_type``
+-> ``0095_ongoing_trigger_flag`` -> ``0096_hitl_claims_overdue_notified``
+-> ``0097_ongoing_trigger_enabled_by_default`` (sole head).
 
 It mirrors ``0095_ongoing_trigger_flag``'s upsert structure: on Postgres the
 ``ON CONFLICT (name) DO UPDATE`` flips existing rows in place (the seed paths
@@ -26,8 +30,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0096_ongoing_trigger_enabled_by_default"
-down_revision: str | None = "0095_ongoing_trigger_flag"
+revision: str = "0097_ongoing_trigger_enabled_by_default"
+down_revision: str | None = "0096_hitl_claims_overdue_notified"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

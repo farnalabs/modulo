@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult
 from modulo.db.crud.pagination import CursorPaginator
+from modulo.db.crud.team_scope import team_scope_clause
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.trigger import Trigger
 
@@ -17,6 +18,7 @@ async def list_triggers(
     pipeline_id: uuid.UUID | None = None,
     cursor: str | None = None,
     limit: int = 20,
+    team_id: uuid.UUID | None = None,
 ) -> PageResult[Trigger]:
     q = (
         select(Trigger)
@@ -29,6 +31,11 @@ async def list_triggers(
     )
     if pipeline_id is not None:
         q = q.where(Trigger.pipeline_id == pipeline_id)
+    if team_id is not None:
+        # A team-scoped caller sees triggers for its own team's pipelines plus
+        # org-level pipelines (no owner team) — the same boundary the MCP
+        # guard applies.
+        q = q.where(team_scope_clause(Pipeline.owner_team_id, team_id))
     q = q.order_by(Trigger.created_at.desc())
 
     if cursor is not None:

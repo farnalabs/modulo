@@ -131,6 +131,7 @@ class AnalyticsParams:
     trigger_type: AnalyticsTriggerType | None = None
     status: AnalyticsStatus | None = None
     pipeline_ids: tuple[uuid.UUID, ...] = ()
+    team_id: uuid.UUID | None = None
     error_code: str | None = None
     folder_id: uuid.UUID | None = None
     date_from: datetime | None = None
@@ -311,6 +312,7 @@ async def run_analytics_query(
         trigger_type=params.trigger_type,
         status=params.status,
         pipeline_ids=params.pipeline_ids,
+        team_id=params.team_id,
         error_code=params.error_code,
         folder_id=params.folder_id,
         date_from=effective_from,
@@ -429,6 +431,7 @@ async def run_concurrency_query(
         trigger_type=params.trigger_type,
         status=params.status,
         pipeline_ids=params.pipeline_ids,
+        team_id=params.team_id,
         error_code=params.error_code,
         folder_id=params.folder_id,
         date_from=effective_from,

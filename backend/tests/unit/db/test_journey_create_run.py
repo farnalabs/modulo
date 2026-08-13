@@ -37,18 +37,28 @@ from modulo.db.lifecycle_refs import canonical_work_item_id
 from modulo.db.models.base import Base
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import Run
+from modulo.db.models.team import Team
 from modulo.db.models.variant_group import VariantGroup
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
 _SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000b1")
+_TEAM = uuid.UUID("00000000-0000-0000-0000-0000000000c1")
 
 _REF_ENTRIES = [{"kind": "GitHub Issue", "ref": "https://github.com/a/b/pull/5", "source": "derived"}]
 
 _TABLES: list[Table] = cast(
     list[Table],
-    [Organisation.__table__, Run.__table__, Journey.__table__, VariantGroup.__table__],
+    [
+        Organisation.__table__,
+        Pipeline.__table__,
+        Team.__table__,
+        Run.__table__,
+        Journey.__table__,
+        VariantGroup.__table__,
+    ],
 )
 
 
@@ -71,6 +81,27 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
 
 async def _seed_org(session: AsyncSession, org_id: uuid.UUID = _ORG) -> None:
     session.add(Organisation(id=org_id, name="test org", slug=f"test-{org_id}"))
+    await session.flush()
+
+
+async def _seed_team(session: AsyncSession, team_id: uuid.UUID = _TEAM) -> None:
+    session.add(Team(id=team_id, organisation_id=_ORG, name="team-a", account_id=_ORG))
+    await session.flush()
+
+
+async def _seed_pipeline(
+    session: AsyncSession, *, owner_team_id: uuid.UUID | None, pipeline_id: uuid.UUID = _PIPELINE
+) -> None:
+    session.add(
+        Pipeline(
+            id=pipeline_id,
+            organisation_id=_ORG,
+            name="pipeline",
+            account_id=_ORG,
+            visibility="team" if owner_team_id is not None else "org",
+            owner_team_id=owner_team_id,
+        )
+    )
     await session.flush()
 
 
@@ -439,3 +470,36 @@ class TestVariantAndReplayWiring:
         assert calls.get("is_replay") is True
         assert calls.get("trigger_type") == "webhook"
         assert calls.get("trigger_id") == trigger_id
+
+
+class TestOwnerTeamStamp:
+    """``Run.owner_team_id`` is stamped at creation from the pipeline it
+    belongs to when no explicit team is passed — the source of truth for the
+    MCP team-boundary guards and the analytics facts."""
+
+    async def test_create_run_inherits_pipeline_owner_team(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_team(session)
+        await _seed_pipeline(session, owner_team_id=_TEAM)
+
+        run = await _create(session)
+
+        assert run.owner_team_id == _TEAM
+
+    async def test_create_run_org_level_pipeline_stays_org_level(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_pipeline(session, owner_team_id=None)
+
+        run = await _create(session)
+
+        assert run.owner_team_id is None
+
+    async def test_explicit_owner_team_wins_over_pipeline_inheritance(self, session: AsyncSession) -> None:
+        await _seed_org(session)
+        await _seed_team(session)
+        await _seed_pipeline(session, owner_team_id=_TEAM)
+        explicit_team = uuid.UUID("00000000-0000-0000-0000-0000000000d2")
+
+        run = await _create(session, owner_team_id=explicit_team)
+
+        assert run.owner_team_id == explicit_team

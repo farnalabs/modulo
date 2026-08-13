@@ -471,9 +471,40 @@ jobs:
     if: github.event_name == 'pull_request' && always()
     needs: [backend-lint, backend-test, frontend, schema-freshness, product-map-validate, manifest-validate, tools-tests, gitleaks, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: Send webhook to Modulo PR Review Agent
+      - uses: actions/checkout@v4
+      - name: Skip PR Reviewer when head already reviewed or only merged since last review
+        id: review-check
         if: success()
+        env:
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Guard the wiring: the dedup script is a no-op if the repo was not
+          # checked out (GitHub Actions runners start with an empty workspace),
+          # so the notify-pr-review job checks out the repo first. The
+          # deterministic path must fail LOUDLY, not fall through to the
+          # fail-open `|| echo "skip=false"` below, or a wiring bug silently
+          # dispatches every webhook and defeats the dedup feature.
+          test -f .github/scripts/pr-review-dedup.py || { echo "::error::pr-review-dedup.py not found - dedup disabled"; exit 1; }
+          # Fetch the PR's reviews and commits JSON, then run the versioned
+          # dedup decision script (.github/scripts/pr-review-dedup.py).
+          # The script handles multi-line bodies and pipe chars correctly
+          # (naive cut -d'|' is line-oriented and corrupts the SHA), and
+          # fails open (dispatch) on any load error or ambiguous state.
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" --paginate > /tmp/pr-reviews.json 2>/dev/null || echo "[]" > /tmp/pr-reviews.json
+          gh api "/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" --paginate > /tmp/pr-commits.json 2>/dev/null || echo "[]" > /tmp/pr-commits.json
+          SKIP_OUTPUT=$(python3 .github/scripts/pr-review-dedup.py /tmp/pr-reviews.json /tmp/pr-commits.json "${HEAD_SHA}" 2>/tmp/pr-dedup-err || echo "skip=false")
+          echo "${SKIP_OUTPUT}" >> "$GITHUB_OUTPUT"
+          echo "PR Reviewer dedup: ${SKIP_OUTPUT}"
+          cat /tmp/pr-dedup-err
+      - name: Send webhook to Modulo PR Review Agent
+        if: success() && steps.review-check.outputs.skip != 'true'
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}

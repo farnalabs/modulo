@@ -2699,6 +2699,11 @@ export interface paths {
         /**
          * Migration Plan Endpoint
          * @description Preview a migration plan between two schemas without applying it.
+         *
+         *     Computes a structural diff between two inline definitions. Requires an
+         *     authenticated principal (``schema.list``) and records a
+         *     ``schema_migration_planned`` audit event so plan previews are traceable;
+         *     audit failures are logged and never break the response.
          */
         post: operations["migration_plan_endpoint_api_v1_schemas_migrate_plan_post"];
         delete?: never;
@@ -21346,7 +21351,9 @@ export interface operations {
     };
     migration_plan_endpoint_api_v1_schemas_migrate_plan_post: {
         parameters: {
-            query?: never;
+            query?: {
+                _fresh?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
