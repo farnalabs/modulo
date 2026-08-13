@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -19,11 +20,26 @@ _RATE_LIMITED_STATUS = 429
 
 def _next_page_cursor(body: dict[str, Any], limit: int) -> str | None:
     paging = body.get("paging", {})
-    page_index = paging.get("pageIndex", 1)
-    total = paging.get("total", 0)
+    page_index = _safe_int(paging.get("pageIndex"), 1)
+    total = _safe_int(paging.get("total"), 0)
     if total > limit * page_index:
         return str(page_index + 1)
     return None
+
+
+def _paging_total(body: dict[str, Any]) -> int | None:
+    """Extract SonarQube's ``paging.total`` as a safe int.
+
+    Guards against non-finite floats (``inf``/``nan``) which otherwise crash
+    downstream ``int()`` coercion — Python's json parser produces ``inf`` for
+    overflowing literals such as ``1e999``, so a corrupt or hostile SonarQube
+    response must not poison the reported total. A missing ``total`` keeps the
+    historical ``None`` behaviour.
+    """
+    raw = body.get("paging", {}).get("total")
+    if raw is None:
+        return None
+    return _safe_int(raw)
 
 
 class SonarQubeConnector(ConnectorBase):
@@ -118,7 +134,7 @@ class SonarQubeConnector(ConnectorBase):
         body = resp.json()
         return ConnectorResult(
             records=body.get("components", []),
-            total=body.get("paging", {}).get("total"),
+            total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
 
@@ -143,7 +159,7 @@ class SonarQubeConnector(ConnectorBase):
         body = resp.json()
         return ConnectorResult(
             records=body.get("analyses", []),
-            total=body.get("paging", {}).get("total"),
+            total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
 
@@ -202,7 +218,7 @@ class SonarQubeConnector(ConnectorBase):
         body = resp.json()
         return ConnectorResult(
             records=body.get("issues", []),
-            total=body.get("paging", {}).get("total"),
+            total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
 
@@ -237,7 +253,7 @@ class SonarQubeConnector(ConnectorBase):
         body = resp.json()
         return ConnectorResult(
             records=body.get("metrics", []),
-            total=body.get("paging", {}).get("total"),
+            total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
 
@@ -271,7 +287,7 @@ class SonarQubeConnector(ConnectorBase):
         body = resp.json()
         return ConnectorResult(
             records=body.get("hotspots", []),
-            total=body.get("paging", {}).get("total"),
+            total=_paging_total(body),
             next_cursor=_next_page_cursor(body, q.limit),
         )
 
