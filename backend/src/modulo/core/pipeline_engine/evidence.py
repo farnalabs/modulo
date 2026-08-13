@@ -51,6 +51,13 @@ _log = logging.getLogger(__name__)
 #: Bounded async probe budget — code-constant, ≤3s per probe (§15.13).
 EVIDENCE_PROBE_TIMEOUT_SECONDS: float = 3.0
 
+#: Run statuses eligible for the reconciliation sweep. Only genuinely
+#: terminalized ``complete`` runs (not all terminal statuses) are no-op
+#: eligible — a failed/cancelled run is already a declared failure (§13.3).
+#: Kept as a set so the sweep filter reads through the shared status-enum
+#: convention instead of a raw ``status == "complete"`` comparison.
+RECONCILE_COMPLETE_STATUSES: tuple[str, ...] = ("complete",)
+
 #: Keys inside a node's ``output_json`` that the harness itself may stamp and
 #: which therefore do NOT count as agent-produced content. The agent contract
 #: keeps its base fields OUTSIDE ``output_json`` (free-form extension), so an
@@ -693,7 +700,10 @@ async def reconcile_noop_evidence(
 
     async with session_factory() as session, session.begin():
         result = await session.execute(
-            select(Run).where(Run.status == "complete").order_by(Run.completed_at.desc()).limit(max_runs)
+            select(Run)
+            .where(Run.status.in_(RECONCILE_COMPLETE_STATUSES))
+            .order_by(Run.completed_at.desc())
+            .limit(max_runs)
         )
         runs = list(result.scalars().all())
         existing: set[tuple[UUID, str]] = set()
