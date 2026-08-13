@@ -13,6 +13,7 @@ by a different team with a ``team_boundary_violation`` error.
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,12 +23,23 @@ from modulo.api.mcp_server import (
     _ctx_team_id_val,
     _team_scope_error,
     _team_scoped_key_mismatch,
+    bind_connector_to_node,
     cancel_run,
+    create_trigger,
+    delete_pipeline,
+    delete_trigger,
     get_pipeline_graph_tool,
     get_run_evals,
     get_run_output,
     get_run_status,
+    list_pending_hitl,
+    list_pipelines_tool,
+    list_runs,
+    list_triggers,
+    query_analytics,
     trigger_pipeline,
+    update_pipeline_graph,
+    update_trigger,
 )
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -45,11 +57,24 @@ def _make_session_context(session: AsyncMock) -> AsyncMock:
     return cm
 
 
-def _make_run(*, pipeline_id: uuid.UUID, status: str = "pending") -> MagicMock:
+def _make_execute_result(value: Any) -> AsyncMock:
+    """A session.execute() result whose sync scalar_one_or_none() returns *value*."""
+    result = AsyncMock()
+    result.scalar_one_or_none = MagicMock(return_value=value)
+    return result
+
+
+def _make_run(
+    *,
+    pipeline_id: uuid.UUID,
+    status: str = "pending",
+    owner_team_id: uuid.UUID | None = None,
+) -> MagicMock:
     run = MagicMock()
     run.id = uuid.uuid4()
     run.pipeline_id = pipeline_id
     run.status = status
+    run.owner_team_id = owner_team_id
     run.trigger_type = "manual"
     run.created_at = datetime.now(UTC)
     run.started_at = None
@@ -273,25 +298,22 @@ class TestRunToolsTeamScope(_AuthContext):
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)) as mock_owner,
         ):
-            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4())
+            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
             mock_session.return_value = _make_session_context(session)
             result = await get_run_status(run_id=str(run_id))
 
         assert result["error"] == "team_boundary_violation"
-        mock_owner.assert_awaited_once()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_get_run_status_allowed_for_own_team_run(self, mock_validate_auth: AsyncMock) -> None:
         _ctx_team_id.set(_TEAM_A)
         run_id = uuid.uuid4()
-        run = _make_run(pipeline_id=uuid.uuid4(), status="complete")
+        run = _make_run(pipeline_id=uuid.uuid4(), status="complete", owner_team_id=_TEAM_A)
         session = AsyncMock()
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_A)),
         ):
             mock_get_run.return_value = run
             mock_session.return_value = _make_session_context(session)
@@ -308,9 +330,8 @@ class TestRunToolsTeamScope(_AuthContext):
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
         ):
-            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4())
+            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
             mock_session.return_value = _make_session_context(session)
             result = await get_run_output(run_id=str(run_id), node_id="n1")
 
@@ -324,15 +345,13 @@ class TestRunToolsTeamScope(_AuthContext):
         with (
             patch("modulo.api.mcp_server.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)) as mock_owner,
             patch("modulo.db.crud.eval_run.get_run_evals", AsyncMock()) as mock_evals,
         ):
-            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4())
+            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
             mock_session.return_value = _make_session_context(session)
             result = await get_run_evals(run_id=str(run_id))
 
         assert result["error"] == "team_boundary_violation"
-        mock_owner.assert_awaited_once()
         mock_evals.assert_not_awaited()
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -343,13 +362,370 @@ class TestRunToolsTeamScope(_AuthContext):
         with (
             patch("modulo.db.crud.run.get_run") as mock_get_run,
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)) as mock_owner,
             patch("modulo.db.crud.run.request_cancellation", AsyncMock()) as mock_cancel,
         ):
-            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4())
+            mock_get_run.return_value = _make_run(pipeline_id=uuid.uuid4(), owner_team_id=_TEAM_B)
             mock_session.return_value = _make_session_context(session)
             result = await cancel_run(run_id=str(run_id))
 
         assert result["error"] == "team_boundary_violation"
-        mock_owner.assert_awaited_once()
         mock_cancel.assert_not_awaited()
+
+
+class _OperatorAuthContext(_AuthContext):
+    """Auth context with an operator-role key (mutating tools need operator)."""
+
+    def setup_method(self) -> None:
+        from modulo.api.mcp_server import _ctx_role
+
+        super().setup_method()
+        _ctx_role.set("operator")
+
+
+class TestUpdatePipelineGraphTeamScope(_OperatorAuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_team_scoped_key_cannot_update_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        mock_pipeline = MagicMock()
+        mock_pipeline.owner_team_id = _TEAM_B
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.routes.pipelines._is_privileged", return_value=False),
+            patch("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=mock_pipeline)) as mock_get_pipeline,
+            patch("modulo.core.team_visibility.find_connector_team_mismatches", AsyncMock(return_value=[])),
+            patch("modulo.db.crud.pipeline.replace_pipeline_graph", AsyncMock()) as mock_replace,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[], edges=[])
+
+        assert result["error"] == "team_boundary_violation"
+        mock_get_pipeline.assert_awaited_once()
+        mock_replace.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_team_scoped_key_can_update_own_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        mock_pipeline = MagicMock()
+        mock_pipeline.owner_team_id = _TEAM_A
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.routes.pipelines._is_privileged", return_value=False),
+            patch("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=mock_pipeline)) as mock_get_pipeline,
+            patch("modulo.core.team_visibility.find_connector_team_mismatches", AsyncMock(return_value=[])),
+            patch(
+                "modulo.db.crud.pipeline.replace_pipeline_graph",
+                AsyncMock(return_value=([], [])),
+            ) as mock_replace,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[], edges=[])
+
+        assert result["node_count"] == 0
+        mock_get_pipeline.assert_awaited_once()
+        mock_replace.assert_awaited_once()
+
+
+class TestBindConnectorToNodeTeamScope(_OperatorAuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_team_scoped_key_cannot_bind_to_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        mock_pipeline = MagicMock()
+        mock_pipeline.owner_team_id = _TEAM_B
+        session = AsyncMock()
+        connector = MagicMock()
+        connector.organisation_id = _PLACEHOLDER_ORG_ID
+        session.execute.return_value = _make_execute_result(mock_pipeline)
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch(
+                "modulo.db.crud.connector_instance.get_connector_instance",
+                AsyncMock(return_value=connector),
+            ) as mock_connector,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await bind_connector_to_node(
+                pipeline_id=str(pipeline_id),
+                node_id=str(uuid.uuid4()),
+                connector_type="github",
+                connector_instance_id=str(uuid.uuid4()),
+            )
+
+        assert result["error"] == "team_boundary_violation"
+        mock_connector.assert_awaited_once()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_team_scoped_key_can_bind_to_own_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        mock_pipeline = MagicMock()
+        mock_pipeline.owner_team_id = _TEAM_A
+        mock_pipeline.graph_nodes_json = []
+        session = AsyncMock()
+        connector = MagicMock()
+        connector.organisation_id = _PLACEHOLDER_ORG_ID
+        connector.visibility = "org"
+        connector.owner_team_id = None
+        connector.name = "github-conn"
+        session.execute.return_value = _make_execute_result(mock_pipeline)
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch(
+                "modulo.db.crud.connector_instance.get_connector_instance",
+                AsyncMock(return_value=connector),
+            ),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await bind_connector_to_node(
+                pipeline_id=str(pipeline_id),
+                node_id=str(node_id),
+                connector_type="github",
+                connector_instance_id=str(uuid.uuid4()),
+            )
+
+        assert result["error"] == "node_not_found"
+
+
+class TestListDeletePipelineTeamScope(_OperatorAuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_delete_pipeline_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+            patch("modulo.db.crud.pipeline.soft_delete_pipeline", AsyncMock()) as mock_delete,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await delete_pipeline(pipeline_id=str(pipeline_id))
+
+        assert result["error"] == "team_boundary_violation"
+        mock_delete.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_pipelines_passes_team_id_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        session = AsyncMock()
+        mock_page = MagicMock()
+        mock_page.items = []
+        mock_page.total = 0
+        mock_page.next_cursor = None
+        mock_page.has_more = False
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.pipeline.list_pipelines", AsyncMock(return_value=mock_page)) as mock_list,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_pipelines_tool()
+
+        assert result["total"] == 0
+        mock_list.assert_awaited_once()
+        assert mock_list.await_args.kwargs["team_id"] == _TEAM_A
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_pipelines_passes_none_team_id_for_org_wide_key(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(None)
+        session = AsyncMock()
+        mock_page = MagicMock()
+        mock_page.items = []
+        mock_page.total = 0
+        mock_page.next_cursor = None
+        mock_page.has_more = False
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.pipeline.list_pipelines", AsyncMock(return_value=mock_page)) as mock_list,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_pipelines_tool()
+
+        assert result["total"] == 0
+        mock_list.assert_awaited_once()
+        assert mock_list.await_args.kwargs["team_id"] is None
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_runs_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_runs(pipeline_id=str(pipeline_id))
+
+        assert result["error"] == "team_boundary_violation"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_runs_passes_team_id_when_no_pipeline_filter(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        session = AsyncMock()
+        mock_page = MagicMock()
+        mock_page.items = []
+        mock_page.total = 0
+        mock_page.next_cursor = None
+        mock_page.has_more = False
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.run.list_runs", AsyncMock(return_value=mock_page)) as mock_list,
+            patch("modulo.db.crud.run.get_child_run_rollup", AsyncMock(return_value={})),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_runs()
+
+        assert result["total"] == 0
+        mock_list.assert_awaited_once()
+        assert mock_list.await_args.kwargs["team_id"] == _TEAM_A
+
+
+class TestListPendingHitlTeamScope(_AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_pending_hitl_filters_by_team_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        session = AsyncMock()
+        total_result = MagicMock()
+        total_result.scalar_one.return_value = 0
+        gates_result = MagicMock()
+        gates_result.scalars.return_value = []
+        session.execute.side_effect = [total_result, gates_result]
+        with patch("modulo.api.mcp_server._session") as mock_session:
+            mock_session.return_value = _make_session_context(session)
+            result = await list_pending_hitl()
+
+        assert result["total"] == 0
+        assert result["gates"] == []
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_pending_hitl_org_wide_key_no_team_filter(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(None)
+        session = AsyncMock()
+        total_result = MagicMock()
+        total_result.scalar_one.return_value = 1
+        gates_result = MagicMock()
+        gates_result.scalars.return_value = [MagicMock()]
+        session.execute.side_effect = [total_result, gates_result]
+        with patch("modulo.api.mcp_server._session") as mock_session:
+            mock_session.return_value = _make_session_context(session)
+            result = await list_pending_hitl()
+
+        assert result["total"] == 1
+
+
+class TestTriggerTeamScope(_OperatorAuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_create_trigger_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await create_trigger(pipeline_id=str(pipeline_id))
+
+        assert result["error"] == "team_boundary_violation"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_triggers_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_triggers(pipeline_id=str(pipeline_id))
+
+        assert result["error"] == "team_boundary_violation"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_list_triggers_passes_team_id_when_no_pipeline_filter(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        session = AsyncMock()
+        mock_page = MagicMock()
+        mock_page.items = []
+        mock_page.total = 0
+        mock_page.next_cursor = None
+        mock_page.has_more = False
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.trigger.list_triggers", AsyncMock(return_value=mock_page)) as mock_list,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await list_triggers()
+
+        assert result["total"] == 0
+        mock_list.assert_awaited_once()
+        assert mock_list.await_args.kwargs["team_id"] == _TEAM_A
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_update_trigger_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        trigger_id = uuid.uuid4()
+        trigger = MagicMock()
+        trigger.pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute.return_value = _make_execute_result(trigger)
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await update_trigger(trigger_id=str(trigger_id))
+
+        assert result["error"] == "team_boundary_violation"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_delete_trigger_blocked_for_other_teams_pipeline(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        trigger_id = uuid.uuid4()
+        trigger = MagicMock()
+        trigger.pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute.return_value = _make_execute_result(trigger)
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+            patch("modulo.db.crud.trigger.soft_delete_trigger", AsyncMock()) as mock_delete,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await delete_trigger(trigger_id=str(trigger_id))
+
+        assert result["error"] == "team_boundary_violation"
+        mock_delete.assert_not_awaited()
+
+
+class TestQueryAnalyticsTeamScope(_AuthContext):
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_query_analytics_passes_team_id_for_team_scoped_key(self, mock_validate_auth: AsyncMock) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        session = AsyncMock()
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+            patch("modulo.db.crud.organisation.get_organisation", AsyncMock(return_value=MagicMock())),
+            patch(
+                "modulo.core.feature_flags.resolve_plan_context",
+                AsyncMock(
+                    return_value=MagicMock(
+                        feature_enabled=MagicMock(return_value=True),
+                    )
+                ),
+            ),
+            patch("modulo.api.mcp_server.run_analytics_query", AsyncMock(return_value={"buckets": []})) as mock_query,
+            patch("modulo.api.mcp_server._get_session_factory", return_value=MagicMock()),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await query_analytics()
+
+        assert result["buckets"] == []
+        mock_query.assert_awaited_once()
+        assert mock_query.await_args.kwargs["params"].team_id == _TEAM_A

@@ -14,7 +14,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any
 
-from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text
+from sqlalchemy import Date, bindparam, case, cast, delete, func, or_, select, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -405,6 +405,7 @@ async def list_runs(
     page: int = 1,
     page_size: int = 20,
     cursor: str | None = None,
+    team_id: uuid.UUID | None = None,
 ) -> PageResult[Run]:
     q = (
         select(Run)
@@ -418,6 +419,13 @@ async def list_runs(
         .join(Pipeline, Run.pipeline_id == Pipeline.id, isouter=False)
         .where(Pipeline.deleted_at.is_(None))
     )
+    if team_id is not None:
+        # A team-scoped caller sees runs for its own team's pipelines plus
+        # org-level pipelines (no owner team) — the same boundary the MCP
+        # guard applies.
+        team_scope = or_(Pipeline.owner_team_id.is_(None), Pipeline.owner_team_id == team_id)
+        q = q.where(team_scope)
+        count_q = count_q.where(team_scope)
     if pipeline_id is not None:
         q = q.where(Run.pipeline_id == pipeline_id)
         count_q = count_q.where(Run.pipeline_id == pipeline_id)

@@ -415,6 +415,7 @@ class TestListTriggersSuccess(_AuthContext):
             pipeline_id=pid,
             cursor=None,
             limit=20,
+            team_id=None,
         )
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -439,6 +440,7 @@ class TestListTriggersSuccess(_AuthContext):
             pipeline_id=None,
             cursor=None,
             limit=100,
+            team_id=None,
         )
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -465,4 +467,5 @@ class TestListTriggersSuccess(_AuthContext):
             pipeline_id=None,
             cursor="abc123",
             limit=20,
+            team_id=None,
         )

@@ -128,6 +128,7 @@ class AnalyticsQuery:
     trigger_type: AnalyticsTriggerType | None = None
     status: AnalyticsStatus | None = None
     pipeline_ids: tuple[uuid.UUID, ...] = ()
+    team_id: uuid.UUID | None = None
     error_code: str | None = None
     folder_id: uuid.UUID | None = None
     date_from: date | None = None
@@ -233,6 +234,16 @@ def build_facts_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict[str, 
     if query.pipeline_ids:
         params["pipeline_ids"] = list(query.pipeline_ids)
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+    if query.team_id is not None:
+        # A team-scoped caller sees its own team's facts plus org-level facts
+        # (no owner team) — the same boundary the MCP guard applies.
+        params["team_id"] = query.team_id
+        stmt = stmt.where(
+            sa.or_(
+                RunDailyFact.team_id.is_(None),
+                RunDailyFact.team_id == sa.bindparam("team_id", type_=sa.Uuid),
+            )
+        )
     if query.error_code is not None:
         params["error_code"] = query.error_code
         stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))
@@ -296,6 +307,16 @@ def build_concurrency_query(query: AnalyticsQuery) -> tuple[sa.Select[Any], dict
     if query.pipeline_ids:
         params["pipeline_ids"] = list(query.pipeline_ids)
         stmt = stmt.where(RunDailyFact.pipeline_id.in_(sa.bindparam("pipeline_ids", type_=sa.Uuid, expanding=True)))
+    if query.team_id is not None:
+        # A team-scoped caller sees its own team's facts plus org-level facts
+        # (no owner team) — the same boundary the MCP guard applies.
+        params["team_id"] = query.team_id
+        stmt = stmt.where(
+            sa.or_(
+                RunDailyFact.team_id.is_(None),
+                RunDailyFact.team_id == sa.bindparam("team_id", type_=sa.Uuid),
+            )
+        )
     if query.error_code is not None:
         params["error_code"] = query.error_code
         stmt = stmt.where(RunDailyFact.error_code == sa.bindparam("error_code", type_=sa.String))

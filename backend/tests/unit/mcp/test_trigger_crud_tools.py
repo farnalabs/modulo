@@ -462,6 +462,7 @@ class TestDeleteTrigger(_AuthContext):
         mock_validate_auth: AsyncMock,
     ) -> None:
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(None))
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await delete_trigger(trigger_id=str(uuid.uuid4()))
@@ -480,6 +481,7 @@ class TestDeleteTrigger(_AuthContext):
         trigger = _make_mock_trigger()
         mock_soft_delete.return_value = trigger
         mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
 
         result = await delete_trigger(trigger_id=str(trigger.id))

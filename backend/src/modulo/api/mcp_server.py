@@ -966,7 +966,7 @@ async def list_pipelines_tool(
 
         lim = max(1, min(limit, 100))
         async with _session(org_id) as s:
-            result = await list_pipelines(s, cursor=cursor, page_size=lim)
+            result = await list_pipelines(s, cursor=cursor, page_size=lim, team_id=_ctx_team_id_val())
         return {
             "data": [{"id": str(p.id), "name": p.name, "visibility": p.visibility} for p in result.items],
             "total": result.total,
@@ -1063,6 +1063,10 @@ async def list_runs(
         org_id = _ctx_org_id_val()
         pid = uuid.UUID(pipeline_id) if pipeline_id else None
         async with _session(org_id) as s:
+            if pid is not None:
+                owner_team_id = await _pipeline_owner_team_id(s, pid)
+                if _team_scoped_key_mismatch(owner_team_id):
+                    return _team_scope_error("pipeline", str(pid))
             result = await db_list_runs(
                 s,
                 pipeline_id=pid,
@@ -1070,6 +1074,7 @@ async def list_runs(
                 page=1,
                 page_size=limit,
                 cursor=cursor,
+                team_id=_ctx_team_id_val(),
             )
             # Child-run cost+count rollup: ONE GROUP BY query for the whole
             # page, joined in Python — never a per-row aggregate (avoids N+1).
@@ -1207,6 +1212,7 @@ async def query_analytics(
             trigger_type=tt,
             status=st,
             pipeline_ids=pids,
+            team_id=_ctx_team_id_val(),
             error_code=error_code,
             folder_id=fid,
             date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
@@ -1317,6 +1323,7 @@ async def query_analytics_concurrency(
             trigger_type=tt,
             status=st,
             pipeline_ids=pids,
+            team_id=_ctx_team_id_val(),
             error_code=None,
             folder_id=fid,
             date_from=_parse_mcp_datetime(date_from, "date_from") if date_from is not None else None,
@@ -1755,10 +1762,11 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
-            owner_team_id = await _pipeline_owner_team_id(s, run.pipeline_id) if run is not None else None
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
-        if _team_scoped_key_mismatch(owner_team_id):
+        # The run carries its own owner_team_id (snapshot at creation) — that
+        # is the source of truth, not the pipeline's current team assignment.
+        if _team_scoped_key_mismatch(run.owner_team_id):
             return _team_scope_error("run", run_id)
         result: dict[str, Any] = {
             "run_id": str(run.id),
@@ -1850,10 +1858,9 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
             return {"error": "invalid_id", "field": "run_id", "detail": f"Invalid UUID format: {run_id}"}
         async with _session(org_id) as s:
             run = await get_run(s, rid)
-            owner_team_id = await _pipeline_owner_team_id(s, run.pipeline_id) if run is not None else None
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
-        if _team_scoped_key_mismatch(owner_team_id):
+        if _team_scoped_key_mismatch(run.owner_team_id):
             return _team_scope_error("run", run_id)
         outputs = run.outputs_json or {}
         telemetry = run.node_telemetry_json
@@ -1910,7 +1917,7 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, run.pipeline_id)):
+            if _team_scoped_key_mismatch(run.owner_team_id):
                 return _team_scope_error("run", run_id)
             evals = await db_get_run_evals(s, rid)
 
@@ -2010,7 +2017,7 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
             run = await get_run(s, rid)
             if run is None:
                 return {"error": "run_not_found", "run_id": run_id}
-            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, run.pipeline_id)):
+            if _team_scoped_key_mismatch(run.owner_team_id):
                 return _team_scope_error("run", run_id)
             if run.status in TERMINAL_STATUSES:
                 detail = f"Run is already in terminal status: {run.status}"
@@ -2051,11 +2058,19 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
         terminal_statuses = TERMINAL_STATUSES
         org_id = _ctx_org_id_val()
         async with _session(org_id) as s:
-            base_where = (
+            base_where: list[Any] = [
                 HitlClaim.organisation_id == org_id,
                 HitlClaim.decision.is_(None),
                 Run.status.not_in(terminal_statuses),
-            )
+            ]
+            key_team_id = _ctx_team_id_val()
+            if key_team_id is not None:
+                # A team-scoped key only sees pending gates for runs owned by its
+                # own team (or org-level runs with no owner team) — the same
+                # boundary the run tools enforce.
+                from sqlalchemy import or_
+
+                base_where.append(or_(Run.owner_team_id.is_(None), Run.owner_team_id == key_team_id))
             total_result = await s.execute(
                 select(func.count()).select_from(HitlClaim).join(Run, HitlClaim.run_id == Run.id).where(*base_where)
             )
@@ -2462,7 +2477,18 @@ async def list_triggers(
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
-            result = await db_list_triggers(s, org_id, pipeline_id=pid, cursor=cursor, limit=lim)
+            if pid is not None:
+                owner_team_id = await _pipeline_owner_team_id(s, pid)
+                if _team_scoped_key_mismatch(owner_team_id):
+                    return _team_scope_error("pipeline", str(pid))
+            result = await db_list_triggers(
+                s,
+                org_id,
+                pipeline_id=pid,
+                cursor=cursor,
+                limit=lim,
+                team_id=_ctx_team_id_val(),
+            )
 
         return {
             "data": [
@@ -2648,6 +2674,9 @@ async def create_trigger(
         from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
             trigger = Trigger(
                 organisation_id=org_id,
                 pipeline_id=pid,
@@ -2711,6 +2740,10 @@ async def get_trigger(trigger_id: str) -> dict[str, Any]:
                 Trigger.deleted_at.is_(None),
             )
             trigger = (await s.execute(q)).scalar_one_or_none()
+            if trigger is not None:
+                owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
+                if _team_scoped_key_mismatch(owner_team_id):
+                    return _team_scope_error("pipeline", str(trigger.pipeline_id))
 
         if trigger is None:
             return {"error": "not_found", "detail": "Trigger not found"}
@@ -2784,6 +2817,8 @@ async def update_trigger(
             trigger = (await s.execute(q)).scalar_one_or_none()
             if trigger is None:
                 return {"error": "not_found", "detail": "Trigger not found"}
+            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
+                return _team_scope_error("pipeline", str(trigger.pipeline_id))
 
             if (cron_expression is not None or cron_timezone is not None) and trigger.trigger_type != "cron":
                 return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
@@ -2855,9 +2890,25 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
         except ValueError:
             return {"error": "invalid_id", "field": "trigger_id", "detail": f"Invalid UUID format: {trigger_id}"}
 
+        from sqlalchemy import select
+
         from modulo.db.crud.trigger import soft_delete_trigger
+        from modulo.db.models.trigger import Trigger
 
         async with _session(org_id) as s:
+            trigger = (
+                await s.execute(
+                    select(Trigger).where(
+                        Trigger.id == tid,
+                        Trigger.organisation_id == org_id,
+                        Trigger.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if trigger is None:
+                return {"error": "not_found", "detail": "Trigger not found"}
+            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
+                return _team_scope_error("pipeline", str(trigger.pipeline_id))
             deleted = await soft_delete_trigger(s, tid)
 
         if deleted is None:
@@ -2959,6 +3010,9 @@ async def delete_pipeline(
         from modulo.db.crud.pipeline import soft_delete_pipeline
 
         async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
             deleted = await soft_delete_pipeline(s, pid)
 
         if not deleted:
