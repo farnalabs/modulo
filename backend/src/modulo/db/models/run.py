@@ -191,9 +191,9 @@ class RunNumberCounter(Base):
     collide on ``uq_runs_org_run_number``.
 
     Deliberately NOT ``OrgScoped`` (no ``id`` / timestamps): the organisation_id
-    IS the primary key, and rows are seeded by migration 0092 from the current
+    IS the primary key, and rows are seeded by migration 0093 from the current
     ``MAX(run_number)`` per org so new runs continue the sequence. RLS follows
-    the org-scoped convention (``rls_org_isolation``, migration 0092).
+    the org-scoped convention (``rls_org_isolation``, migration 0093).
     """
 
     __tablename__ = "run_number_counters"

@@ -122,13 +122,3 @@ async def restore_view(session: AsyncSession, view_id: uuid.UUID) -> SavedView |
     )
     await session.flush()
     return result.scalar_one_or_none()
-
-
-async def delete_view(session: AsyncSession, view_id: uuid.UUID) -> bool:
-    """Hard-delete. Only call from admin cleanup."""
-    view = await get_view(session, view_id, include_deleted=True)
-    if view is None:
-        return False
-    await session.delete(view)
-    await session.flush()
-    return True

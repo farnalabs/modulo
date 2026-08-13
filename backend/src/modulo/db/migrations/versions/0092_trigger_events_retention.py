@@ -1,7 +1,7 @@
 """Index trigger_events.received_at for age-based retention (FAR-167)
 
-Revision ID: 0091_trigger_events_retention
-Revises: 0090_add_budget_exceeded_status
+Revision ID: 0092_trigger_events_retention
+Revises: 0091_run_evidence
 Create Date: 2026-08-13
 
 FAR-167 adds an age-based retention job for ``trigger_events`` (the table had
@@ -17,8 +17,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0091_trigger_events_retention"
-down_revision: str | None = "0090_add_budget_exceeded_status"
+revision: str = "0092_trigger_events_retention"
+down_revision: str | None = "0091_run_evidence"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

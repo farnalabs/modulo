@@ -42,7 +42,7 @@ class TriggerEvent(OrgScoped):
             name="ck_trigger_events_validation_result",
         ),
         # Age-based retention (FAR-167) reads ``received_at`` in a bounded
-        # select-then-delete sweep (migration 0091).
+        # select-then-delete sweep (migration 0092).
         Index("ix_trigger_events_received_at", "received_at"),
     )
 

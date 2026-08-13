@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_permission
+from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_in_dev_operator, require_permission
 from modulo.api.middleware.sensitive_mask import mask_config_json
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.auth.jwt import TenantPrincipal
@@ -152,14 +152,23 @@ async def list_connectors_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(default=None),
+    include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("connector.list"),
 ) -> ConnectorListResponse:
+    if include_in_dev:
+        require_in_dev_operator(principal, "connector.list.in_dev")
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
-            result = await list_connector_instances(session, page=page, page_size=page_size, cursor=cursor)
+            result = await list_connector_instances(
+                session,
+                page=page,
+                page_size=page_size,
+                cursor=cursor,
+                excluded_tiers=[] if include_in_dev else None,
+            )
     except IntegrityError:
         logger.exception("connectors.list_connectors_endpoint")
         raise HTTPException(

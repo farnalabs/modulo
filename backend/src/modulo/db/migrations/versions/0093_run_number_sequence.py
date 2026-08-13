@@ -1,7 +1,7 @@
 """Per-org run_number sequence (atomic counter) — FAR-168
 
-Revision ID: 0092_run_number_sequence
-Revises: 0091_trigger_events_retention
+Revision ID: 0093_run_number_sequence
+Revises: 0092_trigger_events_retention
 Create Date: 2026-08-13
 
 FAR-168 replaces the racy ``SELECT MAX(run_number)+1`` allocation in
@@ -26,8 +26,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0092_run_number_sequence"
-down_revision: str | None = "0091_trigger_events_retention"
+revision: str = "0093_run_number_sequence"
+down_revision: str | None = "0092_trigger_events_retention"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
