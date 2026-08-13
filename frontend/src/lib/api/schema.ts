@@ -3597,6 +3597,33 @@ export interface paths {
         patch: operations["update_polling_config_api_v1_triggers__trigger_id__polling_patch"];
         trace?: never;
     };
+    "/api/v1/triggers/{trigger_id}/ongoing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Ongoing Config
+         * @description Update the ongoing configuration for an ``ongoing`` trigger.
+         *
+         *     Mirrors ``update_polling_config``. Only ``ongoing`` triggers accept this
+         *     config surface. Sets the ``config_json`` keys ``scan_interval_seconds`` /
+         *     ``input_template`` / ``snapshot_id`` (merging, never wholesale replacing),
+         *     updates ``target_runs`` -> ``max_concurrent_runs``, and recomputes
+         *     ``next_fire_at = now`` when the scan cadence changes or the trigger is
+         *     turned on so the new configuration is picked up on the next tick.
+         */
+        patch: operations["update_ongoing_config_api_v1_triggers__trigger_id__ongoing_patch"];
+        trace?: never;
+    };
     "/api/v1/triggers/{trigger_id}/polling/test": {
         parameters: {
             query?: never;
@@ -7499,7 +7526,7 @@ export interface components {
          * AnalyticsTriggerType
          * @enum {string}
          */
-        AnalyticsTriggerType: "manual" | "webhook" | "cron" | "polling" | "agent_signal" | "correction";
+        AnalyticsTriggerType: "manual" | "webhook" | "cron" | "polling" | "agent_signal" | "ongoing" | "correction";
         /** AnomalyResponse */
         AnomalyResponse: {
             /** Id */
@@ -10756,6 +10783,27 @@ export interface components {
             actions: {
                 [key: string]: unknown;
             }[];
+        };
+        /**
+         * OngoingConfigUpdate
+         * @description Request body for PATCH /triggers/{id}/ongoing (FAR-158).
+         */
+        OngoingConfigUpdate: {
+            /** Active */
+            active?: boolean | null;
+            /** Scan Interval Seconds */
+            scan_interval_seconds?: number | null;
+            /** Input Template */
+            input_template?: {
+                [key: string]: unknown;
+            } | null;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /**
+             * Target Runs
+             * @description Ongoing pool target (max_concurrent_runs)
+             */
+            target_runs?: number | null;
         };
         /** OrgExportResponse */
         OrgExportResponse: {
@@ -23380,6 +23428,45 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PollingConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_ongoing_config_api_v1_triggers__trigger_id__ongoing_patch: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                trigger_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OngoingConfigUpdate"];
             };
         };
         responses: {

@@ -97,9 +97,16 @@ Two implementations exist: `modulo-migrate` (click-based, JSONL format with auth
 - No data validation before import — corrupt JSONL/JSON is accepted
 - No integration tests for full export→verify→import cycle
 - No concurrency tests (parallel export/import, partial failure during import)
-- No tests for orgs with 500+ records (pagination boundary for migrate_org.py)
+- No tests for orgs with 500+ records (pagination boundary for migrate_org.py) — unit-level pagination boundary now covered (2026-08-13)
 
 ## QA History
+
+### 2026-08-13 — improve-tests QA lens pass on migrate_org CLI test package
+
+- Raised `migrate_org.py` line coverage 54% → 100% (+21 tests, 38 → 59).
+- Added tests for the previously-uncovered DB layer: `_export_entity` (batch + pagination boundary + empty table), `_export_organisation` (found/not found), `_do_export` (bundle/hash structure, DB-connection failure, cancellation propagation), `_do_import` (create, skip, overwrite, rename, rename-exhaustion, per-row error counting, DB failure, cancellation propagation), `_write_bundle` OSError branch, and the `__main__` guard.
+- Fixed latent `AttributeError: type object 'Account' has no attribute 'organisation_id'`: `_export_entity` / `_do_import` unconditionally referenced `model_cls.organisation_id`, but the `users` entity (`Account`) is org-scoped via `OrgMembership`, not a column. Export/import of users crashed. Guarded with `hasattr(model_cls, "organisation_id")`, mirroring the existing click-based `migrate.py`.
+- `migrate_org.py` now passes ruff + mypy strict; `test_migrate_org.py` mypy-clean too.
 
 ### 2026-07-XX — Cross-cutting QA (index 308)
 

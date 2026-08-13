@@ -239,3 +239,140 @@ describe('SettingsTriggersView', () => {
     expect(tpl.attributes('placeholder')).toContain('"key"')
   })
 })
+
+describe('SettingsTriggersView — ongoing trigger (FAR-158)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  const ongoingTrigger = {
+    id: 'trig-ongoing-1',
+    pipeline_id: 'p1',
+    trigger_type: 'ongoing',
+    active: true,
+    max_concurrent_runs: 4,
+    daily_spend_limit: 50,
+    config_json: { scan_interval_seconds: 300, input_template: { topic: 'security' } },
+  }
+
+  // The ``true`` dialog stubs do not render their default slot; the ongoing
+  // form lives inside the FormDialog, so use slot-rendering stubs here.
+  const slotStub = { template: '<div><slot /></div>' }
+  const slotStubs = {
+    Dialog: slotStub,
+    DialogContent: slotStub,
+    DialogDescription: slotStub,
+    DialogFooter: slotStub,
+    DialogHeader: slotStub,
+    DialogTitle: slotStub,
+    FeatureGate: featureGateStub,
+  }
+
+  function mountWithApi(token: string, listData: Record<string, unknown>) {
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url.includes('/pipelines')) {
+        return Promise.resolve({ data: { items: [{ id: 'p1', name: 'P1 Pipeline' }], total: 1 }, error: undefined })
+      }
+      return Promise.resolve({ data: listData, error: undefined })
+    })
+    ;(api.POST as any).mockResolvedValue({ data: null, error: undefined })
+    ;(api.PUT as any).mockResolvedValue({ data: null, error: undefined })
+    ;(getAccessToken as any).mockReturnValue(token)
+    return mount(SettingsTriggersView, { global: { stubs: slotStubs } })
+  }
+
+  it('create: POST body carries exact snake_case keys for the ongoing form', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), { ...baseListData, triggers_paused: false, paused_at: null })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+
+    // Select 'ongoing' in the type dropdown (setupState-backed form binding).
+    ;(wrapper.vm as any).form.trigger_type = 'ongoing'
+    ;(wrapper.vm as any).form.pipeline_id = 'p1'
+    await flush()
+
+    // The ongoing form controls are rendered and carry the expected testids.
+    expect(wrapper.find('[data-testid="settings-triggers-form-ongoing-target"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-triggers-form-ongoing-interval"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-triggers-form-ongoing-template"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-triggers-form-ongoing-spend"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="settings-triggers-form-ongoing-target"]').setValue(3)
+    await wrapper.find('[data-testid="settings-triggers-form-ongoing-interval"]').setValue(120)
+    await wrapper.find('[data-testid="settings-triggers-form-ongoing-template"]').setValue('{"topic": "security"}')
+    await wrapper.find('[data-testid="settings-triggers-form-ongoing-spend"]').setValue(25)
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [url, options] = (api.POST as any).mock.calls[0]
+    expect(url).toBe('/api/v1/pipelines/{pipeline_id}/triggers')
+    expect(options.body).toEqual({
+      trigger_type: 'ongoing',
+      active: true,
+      config_json: { scan_interval_seconds: 120, input_template: { topic: 'security' } },
+      max_concurrent_runs: 3,
+      daily_spend_limit: 25,
+    })
+  })
+
+  it('create: saving without a daily spend limit shows a form error and no POST fires', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), { ...baseListData, triggers_paused: false, paused_at: null })
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    ;(wrapper.vm as any).form.trigger_type = 'ongoing'
+    ;(wrapper.vm as any).form.pipeline_id = 'p1'
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-form-ongoing-target"]').setValue(3)
+    await wrapper.find('[data-testid="settings-triggers-form-ongoing-interval"]').setValue(120)
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(wrapper.find('.text-destructive').exists()).toBe(true)
+  })
+
+  it('edit: the form pre-fills target / interval / spend from the loaded ongoing trigger', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), { ...baseListData, items: [ongoingTrigger] })
+    await flush()
+
+    ;(wrapper.vm as any).openEditDialog(ongoingTrigger)
+    await flush()
+
+    const target = wrapper.find('[data-testid="settings-triggers-form-ongoing-target"]')
+    const interval = wrapper.find('[data-testid="settings-triggers-form-ongoing-interval"]')
+    const spend = wrapper.find('[data-testid="settings-triggers-form-ongoing-spend"]')
+    expect(target.exists()).toBe(true)
+    expect((target.element as HTMLInputElement).value).toBe('4')
+    expect((interval.element as HTMLInputElement).value).toBe('300')
+    expect((spend.element as HTMLInputElement).value).toBe('50')
+  })
+
+  it('edit: PUT preserves existing config keys (merge, never wipe)', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), { ...baseListData, items: [ongoingTrigger] })
+    await flush()
+
+    ;(wrapper.vm as any).openEditDialog(ongoingTrigger)
+    await flush()
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.PUT).toHaveBeenCalledTimes(1)
+    const [url, options] = (api.PUT as any).mock.calls[0]
+    expect(url).toBe('/api/v1/triggers/{trigger_id}')
+    expect(options.body.max_concurrent_runs).toBe(4)
+    expect(options.body.daily_spend_limit).toBe('50')
+    expect(options.body.config_json.scan_interval_seconds).toBe(300)
+    expect(options.body.config_json.input_template).toEqual({ topic: 'security' })
+  })
+})

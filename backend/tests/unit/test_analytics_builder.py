@@ -1020,3 +1020,22 @@ class TestConcurrencyBucketing:
         )
         assert len(out) == 3, "limit must truncate AFTER bucketing"
         assert out[-1]["date"] == "2026-08-10", "the most recent buckets win"
+
+
+# ---------------------------------------------------------------------------
+# ongoing trigger type (FAR-158) — analytics attribution
+# ---------------------------------------------------------------------------
+
+
+class TestOngoingTriggerType:
+    def test_ongoing_enum_stringifies_to_ongoing(self) -> None:
+        assert AnalyticsTriggerType.ONGOING == "ongoing"
+        assert str(AnalyticsTriggerType.ONGOING) == "ongoing"
+
+    def test_ongoing_trigger_type_query_binds_ongoing(self) -> None:
+        stmt, params = build_facts_query(_query(trigger_type=AnalyticsTriggerType.ONGOING))
+        compiled = stmt.compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        # The value is a bound param, never interpolated into the SQL.
+        assert "ongoing" not in sql.lower()
+        assert any(str(v) == "ongoing" for v in params.values()), f"expected an 'ongoing' bound param, got {params}"

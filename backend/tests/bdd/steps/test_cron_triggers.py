@@ -171,6 +171,10 @@ def fire_cron_trigger(request, client):
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    nested_cm = MagicMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
 
@@ -198,6 +202,11 @@ def fire_cron_trigger(request, client):
         patch("modulo.core.cron_helpers._get_engine"),
         patch("modulo.core.cron_helpers.async_sessionmaker", return_value=mock_factory),
         patch("modulo.core.cron_helpers._set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.core.cron_helpers.org_is_paused",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
         patch(
             "modulo.core.cron_helpers._count_active_runs",
             new_callable=AsyncMock,

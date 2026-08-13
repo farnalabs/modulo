@@ -75,6 +75,11 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         tier="community",
     ),
     FeatureFlag(
+        name="ongoing_trigger",
+        description="Keep a pipeline topped up to a target number of in-flight runs",
+        tier="community",
+    ),
+    FeatureFlag(
         name="web_vitals_analytics",
         description="Web Vitals analytics dashboard for monitoring frontend performance",
         tier="community",
