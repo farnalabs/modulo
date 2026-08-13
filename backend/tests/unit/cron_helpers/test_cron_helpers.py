@@ -1608,6 +1608,40 @@ class TestLogEvent:
         assert event.validation_result == "poll_error"
         assert event.error_detail == "boom"
 
+    @pytest.mark.asyncio
+    async def test_logs_poll_event_sanitizes_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        trigger = SimpleNamespace(id=uuid.uuid4())
+
+        event = await ch._log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=uuid.uuid4(),
+            result="poll_error",
+            error_detail="poll query failed postgresql://user:supersecret@db.example/modulo",
+        )
+
+        assert "supersecret" not in event.error_detail
+        assert "<redacted>" in event.error_detail
+
+    @pytest.mark.asyncio
+    async def test_logs_cron_event_sanitizes_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        trigger = SimpleNamespace(id=uuid.uuid4())
+
+        event = await ch._log_event(
+            session,
+            trigger=trigger,
+            org_id=uuid.uuid4(),
+            result="poll_error",
+            error_detail="cron fire failed with Bearer tok1234567890",
+        )
+
+        assert "tok1234567890" not in event.error_detail
+        assert "<redacted>" in event.error_detail
+
 
 class TestIngestSaqError:
     @pytest.mark.asyncio

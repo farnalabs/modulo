@@ -1092,6 +1092,78 @@ async def test_execute_eval_failed_stores_error_detail():
     assert call.kwargs["status"] == "eval_failed"
 
 
+async def test_execute_run_failed_detail_is_sanitized():
+    """A generic failure whose traceback embeds a DB URL must NOT reach the WS
+    event or the persisted error_detail with the secret intact (FAR-163)."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="failed")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(RuntimeError("conn failed postgresql://user:supersecret@db.example/modulo"))
+    registry = _mock_registry()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    broker = registry.get_or_create.return_value
+    failed = [call.args for call in broker.publish.call_args_list if call.args[0] == "run_failed"]
+    assert len(failed) == 1
+    ws_detail = failed[0][1]["detail"]
+    assert "supersecret" not in ws_detail
+    assert "<redacted>" in ws_detail
+
+    persisted = mock_finalize.await_args.kwargs["error_detail"]
+    assert "supersecret" not in persisted
+    assert "<redacted>" in persisted
+
+
+async def test_eval_blocked_audit_payload_error_detail_is_sanitized():
+    """The eval.blocked audit payload (immutable, hash-linked) must carry the
+    SANITIZED error detail — write-site redaction, never the raw message."""
+    from modulo.core.eval_engine import EvalBlockedError
+
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="eval_failed")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled_raising(
+        EvalBlockedError("qa", "conn failed postgresql://user:supersecret@db.example/modulo")
+    )
+    registry = _mock_registry()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as mock_audit,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    call = mock_audit.await_args
+    assert call.kwargs["event_type"] == "eval.blocked"
+    detail = call.kwargs["payload_json"]["error_detail"]
+    assert "supersecret" not in detail
+    assert "<redacted>" in detail
+
+
 # ---------------------------------------------------------------------------
 # PipelineExecutor.execute — graph compilation failure
 # ---------------------------------------------------------------------------

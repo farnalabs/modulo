@@ -32,7 +32,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.dispatch import dispatch_run
 from modulo.core.exceptions import OrgDeletedError
 from modulo.core.node_output_split import node_return, node_telemetry
-from modulo.core.pipeline_engine.error_codes import present_error
+from modulo.core.pipeline_engine.error_codes import present_error, sanitize_error_text
 from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
@@ -1069,7 +1069,7 @@ async def get_run_workspace_events(
     return [
         {
             "event": evt.event_type.replace("workspace_", ""),
-            "detail": (evt.payload_json or {}).get("detail", ""),
+            "detail": sanitize_error_text((evt.payload_json or {}).get("detail", "")),
             "timestamp": evt.created_at.isoformat(),
         }
         for evt in events
