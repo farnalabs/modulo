@@ -8,6 +8,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._retry_headers import parse_retry_after as _parse_retry_after
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
@@ -227,7 +228,7 @@ class SlackConnector(ConnectorBase):
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("channels", []),
-            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
+            next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
     async def _get_messages(self, q: ConnectorQuery) -> ConnectorResult:
@@ -249,7 +250,7 @@ class SlackConnector(ConnectorBase):
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("messages", []),
-            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
+            next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
     async def _list_users(self, q: ConnectorQuery) -> ConnectorResult:
@@ -262,7 +263,7 @@ class SlackConnector(ConnectorBase):
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("members", []),
-            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
+            next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
     async def _post_message(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -294,9 +295,10 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/conversations.members", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.members")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=[{"user_id": uid} for uid in body.get("members", [])],
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
     async def _get_thread_replies(self, q: ConnectorQuery) -> ConnectorResult:
@@ -316,9 +318,10 @@ class SlackConnector(ConnectorBase):
         r = await self._call_api("GET", "/conversations.replies", params=params)
         body = await self._parse_json(r)
         _check_slack_ok(body, "conversations.replies")
+        meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("messages", []),
-            next_cursor=body.get("response_metadata", {}).get("next_cursor"),
+            next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
     async def _post_thread_reply(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -456,7 +459,7 @@ class SlackConnector(ConnectorBase):
         meta = body.get("response_metadata") or {}
         return ConnectorResult(
             records=body.get("scheduled_messages", []),
-            next_cursor=meta.get("next_cursor") if isinstance(meta, dict) else None,
+            next_cursor=_safe_cursor(meta.get("next_cursor")) if isinstance(meta, dict) else None,
         )
 
     async def _delete_scheduled_message(self, data: dict[str, Any]) -> dict[str, Any]:

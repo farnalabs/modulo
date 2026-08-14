@@ -135,6 +135,24 @@ async def test_query_channels_with_cursor(connector):
 
 
 @respx.mock
+async def test_query_channels_dict_cursor_not_emitted(connector):
+    """A corrupt dict next_cursor must not be emitted as a pagination cursor."""
+    respx.get("https://slack.com/api/conversations.list").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "channels": [{"id": "C003", "name": "next-batch"}],
+                "response_metadata": {"next_cursor": {"page": 2}},
+            },
+        ),
+    )
+    result = await connector.query(ConnectorQuery(resource="channels", cursor="page1"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_query_channels_api_error(connector):
     respx.get("https://slack.com/api/conversations.list").mock(
         return_value=httpx.Response(200, json={"ok": False, "error": "not_authed"}),
@@ -783,6 +801,54 @@ async def test_channel_members_api_error(connector):
         await connector.query(
             ConnectorQuery(resource="channel_members", filters={"channel": "C001"}),
         )
+
+
+@respx.mock
+async def test_channel_members_non_dict_response_metadata_does_not_crash(connector):
+    """A non-dict response_metadata must not crash cursor parsing."""
+    respx.get("https://slack.com/api/conversations.members").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "members": ["U001"], "response_metadata": ["corrupt"]},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="channel_members", filters={"channel": "C001"}),
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_channel_members_non_string_cursor_not_emitted(connector):
+    """A corrupt numeric next_cursor must not be emitted as a pagination cursor."""
+    respx.get("https://slack.com/api/conversations.members").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "members": ["U001"], "response_metadata": {"next_cursor": 123}},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="channel_members", filters={"channel": "C001"}),
+    )
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_thread_replies_non_dict_response_metadata_does_not_crash(connector):
+    """A non-dict response_metadata must not crash cursor parsing on thread replies."""
+    respx.get("https://slack.com/api/conversations.replies").mock(
+        return_value=httpx.Response(
+            200,
+            json={"ok": True, "messages": [], "response_metadata": {"next_cursor": {"page": 2}}},
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(resource="thread_replies", filters={"channel": "C001", "thread_ts": "123456.000001"}),
+    )
+    assert result.records == []
+    assert result.next_cursor is None
 
 
 # -- thread_replies --

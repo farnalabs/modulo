@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -95,10 +96,10 @@ class DropboxPaperConnector(ConnectorBase):
                     r.raise_for_status()
                     body = r.json()
                     records: list[dict[str, Any]] = [{"doc_id": did} for did in body.get("doc_ids", [])]
-                    next_cursor: str | None = None
                     cursor_obj = body.get("cursor")
-                    if cursor_obj:
-                        next_cursor = cursor_obj.get("value")
+                    next_cursor: str | None = (
+                        _safe_cursor(cursor_obj.get("value")) if isinstance(cursor_obj, dict) else None
+                    )
                     return ConnectorResult(
                         records=records,
                         total=len(records),
@@ -133,7 +134,9 @@ class DropboxPaperConnector(ConnectorBase):
                     body = r.json()
                     entries = body.get("entries", [])
                     cursor = body.get("cursor")
-                    next_cursor = cursor.get("value") if isinstance(cursor, dict) else cursor
+                    next_cursor = (
+                        _safe_cursor(cursor.get("value")) if isinstance(cursor, dict) else _safe_cursor(cursor)
+                    )
                     return ConnectorResult(
                         records=entries,
                         total=len(entries),
