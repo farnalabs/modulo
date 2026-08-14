@@ -220,7 +220,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
         run: |
-          DISABLED="$(gh api "repos/${{ github.repository }}/actions/variables/DEPLOY_FIXER_DISABLED" --jq '.value' 2>/dev/null || echo 'false')"
+          # Read DEPLOY_FIXER_DISABLED, defaulting to "false" when unset. Key
+          # on the gh api EXIT STATUS, not its output: on a 404 (variable not
+          # set) gh prints the error body to stdout and exits 1, so
+          # `... --jq '.value' 2>/dev/null || echo 'false'` captures the body
+          # AND "false" - never exactly "false". That silently skipped the
+          # Branch Fixer on every deploy failure (2026-08-14, 6 failed
+          # deploys). Only a literal "true" disables the fixer.
+          if DISABLED="$(gh api "repos/${{ github.repository }}/actions/variables/DEPLOY_FIXER_DISABLED" --jq '.value' 2>/dev/null)" && [ "$DISABLED" = "true" ]; then
+            :
+          else
+            DISABLED="false"
+          fi
           echo "disabled=${DISABLED}" >> "$GITHUB_OUTPUT"
           if [ "$DISABLED" = "true" ]; then
             echo "::notice::DEPLOY_FIXER_DISABLED is set - skipping Branch Fixer dispatch for this deploy failure."
