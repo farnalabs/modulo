@@ -138,7 +138,7 @@ Both require a valid JWT (`AuthenticatedPrincipal`). Plugin management (install,
 
 ### ConnectorHub fallback
 
-`ConnectorHub._build_connector()` first matches `type_id` against all built-in connector types (GitHub, GitLab, Linear, Jira, Slack, Filesystem, Shell, CI runners). If no built-in matches, it falls through to the plugin registry:
+The connector factory `_build_connector()` first matches `type_id` against all built-in connector types (GitHub, GitLab, Linear, Jira, Slack, Filesystem, Shell, CI runners). If no built-in matches, it falls through to the plugin registry:
 
 ```python
 # pseudocode from connector_hub/__init__.py
@@ -151,7 +151,7 @@ case _:
 
 ### ModelBackendHub fallback
 
-Identical pattern — match ~20 built-in providers (OpenAI, Anthropic, DeepSeek, Grok, Ollama, etc.), then fall through to the plugin registry:
+Identical pattern — match the built-in providers (OpenAI, Anthropic, DeepSeek, Grok, Ollama, and others), then fall through to the plugin registry:
 
 ```python
 # pseudocode from model_backend_hub/__init__.py
@@ -177,24 +177,31 @@ Create a Python package that implements either `ConnectorBase` or `ModelBackendB
 
 ```python
 # my_plugin/connector.py
-from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult, HealthResult
+from modulo.connectors.base import (
+    ConnectorBase,
+    ConnectorPayload,
+    ConnectorQuery,
+    ConnectorResult,
+    ConnectorType,
+    HealthResult,
+)
 
 
 class MyConnector(ConnectorBase):
     @property
-    def connector_type(self) -> str:
-        return "my-custom-type"
-
-    @property
-    def supported_operations(self) -> list[str]:
-        return ["read", "write"]
+    def connector_type(self) -> ConnectorType:
+        return ConnectorType.GITHUB  # reuse a built-in type, or register a custom one
 
     async def health_check(self) -> HealthResult:
         # verify your external service is reachable
         return HealthResult(ok=True)
 
-    async def execute(self, query: ConnectorQuery) -> ConnectorResult:
-        # implement the operation
+    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        # read data, keyed on q.resource with q.filters
+        ...
+
+    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        # write data; return the created/updated resource
         ...
 ```
 
@@ -208,7 +215,7 @@ from my_plugin.connector import MyConnector
 
 
 def build_my_connector(config: dict, creds: dict) -> MyConnector:
-    return MyConnector(config=config)
+    return MyConnector(api_key=creds["api_key"])
 ```
 
 ### Step 3: Register the entry point
@@ -238,35 +245,44 @@ A complete plugin that adds a "Slack notify" connector type:
 ```python
 """modulo-connector-slack — Slack notification connector for Modulo."""
 
-from modulo.connectors.base import ConnectorBase, ConnectorQuery, ConnectorResult, HealthResult
+from modulo.connectors.base import (
+    ConnectorBase,
+    ConnectorPayload,
+    ConnectorResult,
+    ConnectorType,
+    HealthResult,
+)
 
 
-class SlackNotifier(ConnectorBase):
-    connector_type = "slack-notify"
-
+class SlackNotifier(ConnectorBase):  # custom type, registered by the plugin
     @property
-    def supported_operations(self) -> list[str]:
-        return ["notify"]
+    def connector_type(self) -> ConnectorType:
+        return ConnectorType.SLACK
 
-    def __init__(self, webhook_url: str, default_channel: str = "#general"):
-        self._webhook_url = webhook_url
+    def __init__(self, bot_token: str, default_channel: str = "#general"):
+        self._bot_token = bot_token
         self._default_channel = default_channel
 
     async def health_check(self) -> HealthResult:
         # basic reachability check
         return HealthResult(ok=True)
 
-    async def execute(self, query: ConnectorQuery) -> ConnectorResult:
-        channel = query.params.get("channel", self._default_channel)
-        message = query.params["message"]
-        # send message via Slack webhook API
+    async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        # reads are keyed on q.resource + q.filters
         ...
-        return ConnectorResult(status="ok", data={"channel": channel, "sent": True})
+
+    async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        # posts a message to payload.resource using payload.data
+        channel = payload.data.get("channel", self._default_channel)
+        message = payload.data["message"]
+        # send message via Slack Bot API (uses bot_token from creds)
+        ...
+        return {"channel": channel, "sent": True}
 
 
 def build_slack_connector(config: dict, creds: dict) -> SlackNotifier:
     return SlackNotifier(
-        webhook_url=creds["webhook_url"],
+        bot_token=creds["bot_token"],
         default_channel=config.get("default_channel", "#general"),
     )
 ```
