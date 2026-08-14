@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.opsgenie import OpsgenieConnector
+from modulo.connectors.opsgenie import OpsgenieConnector, _next_offset_cursor, _paging_total_count
 
 API_KEY = "og_test_key"
 _BASE = "https://api.opsgenie.com/v2"
@@ -127,6 +127,120 @@ async def test_query_alerts_with_cursor(connector: OpsgenieConnector) -> None:
     result = await connector.query(ConnectorQuery(resource="alerts", cursor="10"))
     assert len(result.records) == 1
     assert result.next_cursor is not None
+
+
+# ── Query: alerts — corrupt/non-finite paging hardening ───────────────
+
+
+@respx.mock
+async def test_query_alerts_corrupt_total_inf(connector: OpsgenieConnector) -> None:
+    respx.get(f"{_BASE}/alerts").mock(
+        return_value=httpx.Response(200, content=b'{"data": [{"id": "A1"}], "totalCount": 1e999}')
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_alerts_corrupt_total_garbage(connector: OpsgenieConnector) -> None:
+    respx.get(f"{_BASE}/alerts").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "A1"}], "totalCount": "not-a-number"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_alerts_corrupt_total_bool(connector: OpsgenieConnector) -> None:
+    respx.get(f"{_BASE}/alerts").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "A1"}], "totalCount": True},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_alerts_non_dict_paging(connector: OpsgenieConnector) -> None:
+    respx.get(f"{_BASE}/alerts").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "A1"}], "totalCount": 10, "paging": "next"},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_alerts_paging_without_next(connector: OpsgenieConnector) -> None:
+    respx.get(f"{_BASE}/alerts").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "A1"}], "totalCount": 10, "paging": {"first": "offset=0"}},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
+async def test_query_alerts_garbage_offset_cursor(connector: OpsgenieConnector) -> None:
+    respx.get(f"{_BASE}/alerts", params={"offset": "garbage"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [{"id": "A1"}],
+                "totalCount": 10,
+                "paging": {"next": "offset=20"},
+            },
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts", cursor="garbage"))
+    assert len(result.records) == 1
+    assert result.next_cursor == "1"
+
+
+@respx.mock
+async def test_query_teams_corrupt_total_inf(connector: OpsgenieConnector) -> None:
+    respx.get(f"{_BASE}/teams").mock(
+        return_value=httpx.Response(200, content=b'{"data": [{"id": "T1"}], "totalCount": 1e999}')
+    )
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+# ── Pagination helpers — direct unit coverage ──────────────────────────
+
+
+def test_paging_total_count() -> None:
+    assert _paging_total_count({"totalCount": 25}) == 25
+    assert _paging_total_count({"totalCount": "25"}) == 25
+    assert _paging_total_count({"totalCount": 1e999}) == 0
+    assert _paging_total_count({"totalCount": float("nan")}) == 0
+    assert _paging_total_count({"totalCount": True}) == 0
+    assert _paging_total_count({"totalCount": "garbage"}) == 0
+    assert _paging_total_count({}) is None
+
+
+def test_next_offset_cursor() -> None:
+    assert _next_offset_cursor("10", [{"id": "A1"}], {"next": "offset=20"}) == "11"
+    assert _next_offset_cursor(0, [{"id": "A1"}, {"id": "A2"}], {"next": "offset=20"}) == "2"
+    assert _next_offset_cursor("garbage", [{"id": "A1"}], {"next": "offset=20"}) == "1"
+    assert _next_offset_cursor(1e999, [{"id": "A1"}], {"next": "offset=20"}) == "1"
+    assert _next_offset_cursor("10", [{"id": "A1"}], {"first": "offset=0"}) is None
+    assert _next_offset_cursor("10", [{"id": "A1"}], "garbage") is None
+    assert _next_offset_cursor("10", [{"id": "A1"}], None) is None
 
 
 # ── Query: alert (single) ────────────────────────────────────────────

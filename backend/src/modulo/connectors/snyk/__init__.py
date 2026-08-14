@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -23,6 +24,23 @@ def _next_cursor(body: dict[str, Any]) -> str | None:
         nxt = links["next"]
         return str(nxt) if nxt is not None else None
     return None
+
+
+def _meta_total(body: dict[str, Any], fallback: int) -> int:
+    """Extract Snyk's ``meta.count`` as a safe int.
+
+    Guards against two corrupt-response failure modes: a non-dict ``meta``
+    value (which would raise ``AttributeError`` through a bare ``.get()``
+    chain) and a non-finite ``count`` (``inf``/``nan`` from an overflowing
+    JSON literal), which would otherwise poison the reported total.
+    """
+    meta = body.get("meta")
+    if not isinstance(meta, dict):
+        return fallback
+    raw = meta.get("count")
+    if raw is None:
+        return fallback
+    return _safe_int(raw)
 
 
 class SnykConnector(ConnectorBase):
@@ -110,7 +128,7 @@ class SnykConnector(ConnectorBase):
         data: list[dict[str, Any]] = body.get("data", [])
         return ConnectorResult(
             records=data,
-            total=body.get("meta", {}).get("count", len(data)),
+            total=_meta_total(body, len(data)),
             next_cursor=_next_cursor(body),
         )
 
@@ -153,7 +171,7 @@ class SnykConnector(ConnectorBase):
         data: list[dict[str, Any]] = body.get("data", [])
         return ConnectorResult(
             records=data,
-            total=body.get("meta", {}).get("count", len(data)),
+            total=_meta_total(body, len(data)),
             next_cursor=_next_cursor(body),
         )
 
@@ -187,7 +205,7 @@ class SnykConnector(ConnectorBase):
         data: list[dict[str, Any]] = body.get("data", [])
         return ConnectorResult(
             records=data,
-            total=body.get("meta", {}).get("count", len(data)),
+            total=_meta_total(body, len(data)),
             next_cursor=_next_cursor(body),
         )
 
@@ -207,7 +225,7 @@ class SnykConnector(ConnectorBase):
         data: list[dict[str, Any]] = body.get("data", [])
         return ConnectorResult(
             records=data,
-            total=body.get("meta", {}).get("count", len(data)),
+            total=_meta_total(body, len(data)),
             next_cursor=_next_cursor(body),
         )
 
