@@ -141,12 +141,12 @@ async def restore_variant_group(session: AsyncSession, group_id: uuid.UUID) -> V
     return group
 
 
-async def increment_run_count(session: AsyncSession, group_id: uuid.UUID) -> VariantGroup | None:
+async def increment_run_count(session: AsyncSession, group_id: uuid.UUID, *, delta: int = 1) -> VariantGroup | None:
     result = await session.execute(select(VariantGroup).where(VariantGroup.id == group_id).with_for_update())
     group = result.scalar_one_or_none()
     if group is None:
         return None
-    group.run_count = (group.run_count or 0) + 1
+    group.run_count = (group.run_count or 0) + delta
     await session.flush()
     return group
 
@@ -158,6 +158,16 @@ async def check_pipeline_run_quota(session: AsyncSession, group: VariantGroup) -
     """
     active = await count_active_runs_for_pipeline(session, group.pipeline_id, include_pending=True)
     return active < group.max_concurrent_runs
+
+
+async def check_pipeline_run_quota_for_batch(session: AsyncSession, group: VariantGroup, batch_size: int) -> bool:
+    """Check whether firing ``batch_size`` runs at once stays within quota.
+
+    All-or-nothing pre-flight: requires headroom for the entire batch, not just
+    one run, so the group is never partially fired.
+    """
+    active = await count_active_runs_for_pipeline(session, group.pipeline_id, include_pending=True)
+    return active + batch_size <= group.max_concurrent_runs
 
 
 def pick_variant_weighted(
@@ -248,6 +258,85 @@ async def run_variant_weighted(
         "variant": variant,
         "merged_payload": merged_payload,
     }
+
+
+async def run_variant_batch(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    group: VariantGroup,
+    input_payload: dict[str, Any] | None = None,
+    account_id: uuid.UUID | None = None,
+    trigger_type: str = "manual",
+) -> list[dict[str, Any]] | None:
+    """Fire one run per variant, all-or-nothing (PRD 8.19).
+
+    A batch fires ``len(group.variants)`` runs (one per variant, in variant
+    insertion order), each sharing the same ``input_payload`` with the variant's
+    ``run_context_overrides`` merged on top. Before any run is created the group
+    is pre-flighted: at least one variant must exist, every variant must carry a
+    ``snapshot_id``, and the pipeline concurrent-run quota must fit the whole
+    batch at once (``active + N <= max_concurrent_runs``). If any pre-flight
+    check fails the entire group is rejected (returns ``None``) — no partial
+    firing ever happens.
+
+    Returns a list of ``{run_id, variant, merged_payload}`` in variant insertion
+    order, or ``None`` when the group cannot fire.
+    """
+    result = await session.execute(select(VariantGroup).where(VariantGroup.id == group.id).with_for_update())
+    locked = result.scalar_one_or_none()
+    if locked is None:
+        return None
+    group = locked
+
+    variants = [v for v in group.variants if isinstance(v, dict)]
+    if not variants:
+        return None
+
+    for variant in variants:
+        if variant.get("snapshot_id") is None:
+            return None
+
+    batch_size = len(variants)
+    if not await check_pipeline_run_quota_for_batch(session, group, batch_size):
+        return None
+
+    merged_payload = dict(input_payload or {})
+    if group.degraded_evals:
+        merged_payload["_degraded_evals"] = True
+
+    results: list[dict[str, Any]] = []
+    for variant in variants:
+        payload = dict(merged_payload)
+        overrides = variant.get("run_context_overrides", {})
+        if isinstance(overrides, dict):
+            payload.update(overrides)
+
+        raw_sid = variant.get("snapshot_id")
+        if raw_sid is None:
+            return None  # defensive — the pre-flight loop above already guarantees this
+        snapshot_id = uuid.UUID(str(raw_sid)) if isinstance(raw_sid, str) else raw_sid
+
+        run = await create_run(
+            session,
+            org_id=org_id,
+            pipeline_id=group.pipeline_id,
+            snapshot_id=snapshot_id,
+            trigger_type=trigger_type,
+            input_payload=payload,
+            account_id=account_id,
+            variant_group_id=group.id,
+        )
+        results.append(
+            {
+                "run_id": run.id,
+                "variant": variant,
+                "merged_payload": payload,
+            }
+        )
+
+    await increment_run_count(session, group.id, delta=batch_size)
+    return results
 
 
 async def get_coverage_gaps(

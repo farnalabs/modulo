@@ -48,9 +48,11 @@ A/B test variant management — named sets of runs against the same pipeline tha
 ### Running variants
 
 - [x] `POST /{group_id}/run` selects a variant via weighted random, merges `run_context_overrides` into `input_payload`, creates a run with the variant's `snapshot_id`, and returns `{run_id, variant_name, merged_payload}`
+- [x] `POST /{group_id}/batch-run` fires one run per variant (all-or-nothing): pre-flight checks (variants exist, every variant has a `snapshot_id`, `active + N <= max_concurrent_runs` via `check_pipeline_run_quota_for_batch`) run before any run is created, runs are created in variant insertion order, and 429 `variant_group_quota_exceeded` is returned when the batch would breach quota — no partial firing
 - [x] `snapshot_id` accepted as both `str` and `uuid.UUID` in variant definitions
 - [x] `degraded_evals=true` injects `_degraded_evals: True` into merged payload
 - [x] Run count incremented on the variant group after each successful run
+- [x] Batch run count incremented by N (batch size) in one locked update (`increment_run_count(delta=N)`)
 - [x] `trigger_type` defaults to `"manual"` for variant-triggered runs
 - [x] 404 if variant group not found when running
 - [x] 429 if pipeline concurrent run quota exceeded (`check_pipeline_run_quota`)
@@ -116,12 +118,10 @@ A/B test variant management — named sets of runs against the same pipeline tha
 
 ## Known Gaps
 
-- No batch run endpoint: PRD specifies "fires one run per variant" — current code fires only one run per API call, not N variants
 - No comparison view: no frontend, no endpoint for side-by-side eval scores / token cost / HITL outcomes / per-node output diff
 - No eval coverage signal UI: `coverage-gaps` endpoint exists but no UI surfaces the "Variants diverged but evals did not differentiate" warning
 - No HITL partial completion: no handling for one variant reaching `awaiting_human` while others complete
 - No cancel/abandon variant: no endpoint or status for marking a variant run as abandoned and excluding from aggregates
-- No all-or-nothing N-variant pre-flight quota: PRD says check all N variants before firing any — current code checks per-run only
 - No prompt versioning library guide: `get_prompt_diffs` exists but documented library pattern for prompt versioning does not
 - `base_snapshot_ids` parameter for prompt diffs exists in CRUD layer but not exposed as route query parameter
 
@@ -133,6 +133,7 @@ A/B test variant management — named sets of runs against the same pipeline tha
 ## QA History
 
 - 2026-07-06: qa-iterate — Fixed CRITICAL: consolidated error handling sections into one complete section with all exception types (ProgrammingError→501, SQLAlchemyError→503, IntegrityError→409, Exception→500). Fixed MAJOR: designated this file as canonical for weighted selection, coverage gap, and prompt diff behaviours; removed duplicate copies from variant-execution.md and variant-ab-testing.md. Status: partial.
+- 2026-08-13: improve-architecture — **RESOLVED 2 known gaps** — "No batch run endpoint" + "No all-or-nothing N-variant pre-flight quota". `POST /{group_id}/batch-run` (`run_variant_batch` + `check_pipeline_run_quota_for_batch` in `db/crud/variant_group.py`) fires one run per variant in insertion order with an all-or-nothing pre-flight (`active + N <= max_concurrent_runs`); any pre-flight failure rejects the whole group with 429 `variant_group_quota_exceeded` — no partial firing. `increment_run_count` gained a `delta` param. 10 new CRUD unit tests + 6 new route unit tests in `test_variant_group.py`/`test_variants.py`; 2 `variant_groups.feature` BDD scenarios promoted from `@awaiting-implementation` to wired. Status: partial.
 
 ### 2026-07-31 — improve-architecture (product-map walk)
 

@@ -20,6 +20,7 @@ from modulo.db.crud.variant_group import (
     get_variant_group,
     list_variant_groups,
     restore_variant_group,
+    run_variant_batch,
     run_variant_weighted,
     soft_delete_variant_group,
     update_variant_group,
@@ -67,6 +68,11 @@ class RunVariantResponse(BaseModel):
     run_id: uuid.UUID
     variant_name: str
     merged_payload: dict[str, Any]
+
+
+class RunVariantBatchResponse(BaseModel):
+    runs: list[RunVariantResponse]
+    count: int
 
 
 class CoverageGap(BaseModel):
@@ -445,6 +451,81 @@ async def run_variant(
         "variant_name": result["variant"].get("name", "unknown"),
         "merged_payload": result["merged_payload"],
     }
+
+
+@router.post("/{group_id}/batch-run", response_model=RunVariantBatchResponse)
+@handle_db_errors("variants.run_variant_batch")
+async def run_batch(
+    group_id: uuid.UUID,
+    req: RunVariantRequest,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission("variant.run"),
+) -> dict[str, Any]:
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            group = await get_variant_group(session, group_id)
+            if group is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Variant group not found",
+                )
+
+            if not group.variants:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Variant group has no variants configured",
+                )
+
+            results = await run_variant_batch(
+                session,
+                org_id=principal.organisation_id,
+                group=group,
+                input_payload=req.input_payload,
+                account_id=principal.account_id,
+            )
+    except IntegrityError:
+        _log.exception("variants.run_variant_batch")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Resource conflict. The referenced pipeline or snapshot may not exist.",
+        ) from None
+    except ProgrammingError:
+        _log.exception("variants.run_variant_batch")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Feature is not available. Run database migrations to enable it.",
+        ) from None
+    except SQLAlchemyError:
+        _log.exception("variants.run_variant_batch")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error occurred. Please try again.",
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in variant group batch run endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred. Please try again.",
+        ) from None
+
+    if results is None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=("variant_group_quota_exceeded: firing all variants would breach the pipeline concurrent run quota"),
+        ) from None
+
+    runs = [
+        {
+            "run_id": r["run_id"],
+            "variant_name": r["variant"].get("name", "unknown"),
+            "merged_payload": r["merged_payload"],
+        }
+        for r in results
+    ]
+    return {"runs": runs, "count": len(runs)}
 
 
 @router.get("/{group_id}/coverage-gaps", response_model=list[CoverageGap])
