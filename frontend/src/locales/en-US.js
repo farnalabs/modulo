@@ -902,7 +902,9 @@ export default {
       "trend_table_title": "Trend table",
       "bucket_label": "Date",
       "delta": "Delta",
-      "delta_hint": "Current vs previous window"
+      "delta_hint": "Current vs previous window",
+      "stale_data_title": "Data may be stale",
+      "stale_data_detail": "Daily analytics facts for recent days are still being computed. Numbers for the latest days may be incomplete."
     },
     "DashboardView": {
       "dashboard": "Dashboard",

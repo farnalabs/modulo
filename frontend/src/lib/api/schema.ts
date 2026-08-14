@@ -7675,6 +7675,13 @@ export interface components {
             date_from?: string | null;
             /** Date To */
             date_to?: string | null;
+            /** Facts Freshness Hours */
+            facts_freshness_hours?: number | null;
+            /**
+             * Facts Stale
+             * @default false
+             */
+            facts_stale: boolean;
             /** Buckets */
             buckets: components["schemas"]["AnalyticsBucket"][];
         };

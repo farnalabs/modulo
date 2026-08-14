@@ -386,6 +386,10 @@ class TestEmptyOrg:
         payload = resp.json()
         assert payload["buckets"], "an empty org must still return zero-filled buckets for the range"
         assert all(b["count"] == 0 for b in payload["buckets"])
+        # FAR-200 wire contract: the serialized response must carry the
+        # freshness indicator — an empty org reads as "no data yet", not stale.
+        assert payload["facts_stale"] is False, "an empty org reads as 'no data yet', not stale"
+        assert payload["facts_freshness_hours"] is None, "an empty org has no terminal fact day to measure from"
 
 
 class TestDimensionedQuery:
@@ -417,6 +421,12 @@ class TestDimensionedQuery:
         assert {"manual", "cron", "webhook"} <= keys, f"expected dimensioned keys, got {keys}"
         assert None not in keys, "dimensioned buckets must carry non-None keys"
         assert sum(b["count"] for b in payload["buckets"]) == 3
+        # FAR-200 wire contract: the serialized response must carry the
+        # freshness indicator — a fresh org (today's terminal facts) reports
+        # numeric hours within the 36h staleness window and is not stale.
+        assert payload["facts_freshness_hours"] is not None, "a fresh org must report numeric freshness hours"
+        assert payload["facts_freshness_hours"] <= 36, "today's terminal facts are within the 36h staleness window"
+        assert payload["facts_stale"] is False, "a fresh org with today's terminal facts is not stale"
 
     async def test_folder_dimension_returns_uuid_keys(
         self,
