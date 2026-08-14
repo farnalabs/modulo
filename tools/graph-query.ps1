@@ -7,8 +7,9 @@
     --impact feat-<id>      list entries that depend on <id> (downstream dependents)
     --depends feat-<id>     list entries that <id> depends on (upstream prereqs)
 
-  Exit code: 0 = clean, 1 = nothing matched (for --impact/--depends when the
-  id is unknown or has no dependents).
+  Exit code: 0 = matches found / repo clean, 1 = nothing matched (for
+  --impact/--depends when the id is unknown or has no matching entries; for
+  --uncovered when entries need attention).
 #>
 param(
     [switch]$Uncovered,
@@ -18,30 +19,9 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $productMap = Join-Path $repoRoot "docs/product-map"
+. (Join-Path $PSScriptRoot "product-map-metadata.ps1")
 
-$entries = @()
-Get-ChildItem -Recurse -Filter "*.md" -LiteralPath $productMap | Where-Object { $_.Name -ne "_index.md" } | ForEach-Object {
-    $c = Get-Content -Raw -Encoding UTF8 -LiteralPath $_.FullName
-    if ($c -notmatch '(?s)^---[\r\n]+(.+?)[\r\n]+---') { return }
-    $fm = $Matches[1]
-    $id = if ($fm -match '(?m)^id:\s*(\S+)') { $Matches[1] } else { $null }
-    $bdd = @()
-    if ($fm -match '(?m)^bdd:\s*(.+?)[\r\n]') {
-        $bList = $Matches[1].Trim()
-        if ($bList -match '^\[') { $bdd = $bList -replace '[\[\]" ]', '' -split ',' }
-    }
-    if ($fm -match '(?m)^bdd:\s*\n((?:\s+- .+\n?)+)') {
-        $bBlock = $Matches[1] -split '\n' | ForEach-Object { ($_ -replace '^\s*-\s*', '' -replace '"', '' -replace "'", '' -replace '#.*', '').Trim() } | Where-Object { $_ }
-        if ($bBlock) { $bdd = @($bdd) + $bBlock }
-    }
-    $dep = @()
-    if ($fm -match '(?m)^depends-on:\s*\[(.*?)\]') { $dep = $Matches[1] -replace ' ', '' -split ',' }
-    if ($fm -match '(?m)^depends-on:\s*\n((?:\s+- .+\n?)+)') {
-        $depBlock = $Matches[1] -split '\n' | ForEach-Object { ($_ -replace '^\s*-\s*', '' -replace '"', '' -replace "'", '' -replace '#.*', '').Trim() } | Where-Object { $_ }
-        $dep = @($dep + $depBlock) | Where-Object { $_ }
-    }
-    $entries += @{ id = $id; bdd = @($bdd | Where-Object { $_ }); depends = @($dep | Where-Object { $_ }); path = $_.FullName; name = $_.Name }
-}
+$entries = Get-ProductMapEntries -ProductMapDir $productMap
 
 if ($Uncovered) {
     Write-Host "Entries needing attention (empty or missing bdd coverage):" -ForegroundColor Cyan
@@ -54,6 +34,11 @@ if ($Uncovered) {
         Write-Host "  $($e.name) ($($e.id))"
     }
     Write-Host "$($uncoveredEntries.Count) entry(ies) need attention." -ForegroundColor Yellow
+    exit 1
+}
+
+if ($Impact -and $Depends) {
+    Write-Host "Usage: pass only one of -Impact or -Depends." -ForegroundColor Yellow
     exit 1
 }
 
@@ -83,7 +68,7 @@ if ($Impact -or $Depends) {
         }
         if ($entry.depends.Count -eq 0) {
             Write-Host "  None." -ForegroundColor Green
-            exit 0
+            exit 1
         }
         foreach ($d in $entry.depends) { Write-Host "  $d" }
         exit 0
