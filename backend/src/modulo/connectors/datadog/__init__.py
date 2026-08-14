@@ -174,7 +174,10 @@ class DatadogConnector(ConnectorBase):
         resp.raise_for_status()
         body = resp.json()
         logs: list[dict[str, Any]] = body.get("data", [])
-        next_cursor: str | None = body.get("meta", {}).get("page", {}).get("after")
+        meta = body.get("meta")
+        page = meta.get("page") if isinstance(meta, dict) else None
+        after = page.get("after") if isinstance(page, dict) else None
+        next_cursor: str | None = after if isinstance(after, str) else None
         return ConnectorResult(
             records=logs,
             total=None,

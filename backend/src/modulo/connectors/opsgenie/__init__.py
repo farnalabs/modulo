@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -15,6 +16,35 @@ from modulo.connectors.base import (
 )
 
 _BASE = "https://api.opsgenie.com/v2"
+
+
+def _paging_total_count(body: dict[str, Any]) -> int | None:
+    """Extract Opsgenie's ``totalCount`` as a safe int.
+
+    Guards against non-finite floats (``inf``/``nan``) which otherwise crash
+    downstream ``int()`` coercion — Python's json parser produces ``inf`` for
+    overflowing literals such as ``1e999``, so a corrupt or hostile Opsgenie
+    response must not be able to poison the reported total. A missing
+    ``totalCount`` keeps the historical ``None`` behaviour.
+    """
+    raw = body.get("totalCount")
+    if raw is None:
+        return None
+    return _safe_int(raw)
+
+
+def _next_offset_cursor(offset: object, records: list[Any], paging: object) -> str | None:
+    """Derive the next-page cursor from the current offset and page size.
+
+    Emits a cursor only when Opsgenie's ``paging`` block is a dict that
+    actually advertises a ``next`` page (the API omits ``next`` on the final
+    page). A non-dict ``paging`` value — possible in a corrupt response — is
+    treated as absent so it can neither crash the parse nor trigger an
+    unbounded pagination loop.
+    """
+    if not isinstance(paging, dict) or not paging.get("next"):
+        return None
+    return str(_safe_int(offset) + len(records))
 
 
 class OpsgenieConnector(ConnectorBase):
@@ -99,11 +129,10 @@ class OpsgenieConnector(ConnectorBase):
         resp.raise_for_status()
         body = resp.json()
         records = body.get("data", [])
-        total = body.get("totalCount")
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=total,
-            next_cursor=str(int(params.get("offset", 0)) + len(records)) if body.get("paging") else None,
+            total=_paging_total_count(body),
+            next_cursor=_next_offset_cursor(params.get("offset", 0), records, body.get("paging")),
         )
 
     async def _query_alert(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -134,7 +163,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_paging_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -154,7 +183,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_paging_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -172,7 +201,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_paging_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -188,7 +217,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_paging_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -221,7 +250,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_paging_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
