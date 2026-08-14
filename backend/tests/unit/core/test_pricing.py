@@ -44,6 +44,8 @@ class TestGetPricing:
             ("togetherai", "mixtral-8x22b-instruct", 0.60, None),
             ("togetherai", "Llama-3.3-70B-Instruct-Turbo", 0.80, None),
             ("azure_openai", "gpt-4o-2024-08-06", 2.50, None),
+            ("azure_openai", "gpt-4o-mini-2024-07-18", 0.15, None),
+            ("azure_openai", "o4-mini", 1.10, 4.40),
         ],
     )
     def test_known_model_pricing(
