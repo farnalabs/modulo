@@ -253,7 +253,7 @@ def response_shows_community_tier(request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
     assert data["tier"] == "community", f"Expected community tier, got '{data['tier']}'"
-    assert data["features"] == [], f"Expected empty features, got {data['features']}"
+    assert not data["features"], f"Expected empty features, got {data['features']}"
 
 
 @then("the response has_license is false")

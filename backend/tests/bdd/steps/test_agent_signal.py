@@ -332,7 +332,7 @@ def _then_trigger_event_recorded(result: str, request: Any) -> None:
 @then("the result is empty")
 def _then_result_empty(request: Any) -> None:
     ctx = _ctx(request)
-    assert ctx["results"] == []
+    assert not ctx["results"]
 
 
 @then("no child run is created")

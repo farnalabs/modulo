@@ -615,9 +615,9 @@ def test_migration_plan_no_changes(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["field_additions"] == {}
-    assert body["field_removals"] == []
-    assert body["renames"] == {}
+    assert not body["field_additions"]
+    assert not body["field_removals"]
+    assert not body["renames"]
 
 
 def test_migration_plan_unauthenticated_returns_4xx(unauth_client: TestClient) -> None:
@@ -715,7 +715,7 @@ def test_validate_schema_valid_returns_valid_true(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["valid"] is True
-    assert resp.json()["errors"] == []
+    assert not resp.json()["errors"]
 
 
 def test_validate_schema_invalid_returns_valid_false(client: TestClient) -> None:

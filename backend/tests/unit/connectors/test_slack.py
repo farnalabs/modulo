@@ -1757,7 +1757,7 @@ async def test_query_scheduled_messages_with_channel_filter(connector):
     result = await connector.query(
         ConnectorQuery(resource="scheduled_messages", filters={"channel": "C001"}, limit=10),
     )
-    assert result.records == []
+    assert not result.records
     assert respx.calls.last.request.url.params["channel"] == "C001"
 
 

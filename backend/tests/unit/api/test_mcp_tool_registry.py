@@ -133,12 +133,12 @@ class TestBuildToolRegistry:
 
     async def test_empty_tool_registry_yields_empty_definitions(self, fake_mcp: SimpleNamespace) -> None:
         await build_tool_registry()
-        assert get_mcp_tool_definitions() == []
+        assert not get_mcp_tool_definitions()
 
 
 class TestGetMcpToolDefinitions:
     async def test_returns_empty_list_before_build(self, fake_mcp: SimpleNamespace) -> None:
-        assert get_mcp_tool_definitions() == []
+        assert not get_mcp_tool_definitions()
 
     async def test_returns_defensive_copy(self, fake_mcp: SimpleNamespace) -> None:
         fake_mcp._tool_manager._tools = {"foo": _make_tool(name="foo")}

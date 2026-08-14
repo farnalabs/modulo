@@ -203,7 +203,7 @@ class TestDiscoverInstalledPlugins:
             resp = client.get("/api/v1/plugins")
 
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
 
 class TestGetPluginDetail:
@@ -357,7 +357,7 @@ class TestPluginDiscoveryOnStartup:
             discovered = registry.discover_plugins()
 
         assert discovered == []
-        assert registry.list_plugins() == {}
+        assert not registry.list_plugins()
 
 
 class TestPluginManifestValidation:
@@ -377,7 +377,7 @@ class TestPluginManifestValidation:
             discovered = registry.discover_plugins()
 
         assert discovered == []
-        assert registry.list_plugins() == {}
+        assert not registry.list_plugins()
 
     def test_entry_point_load_failure_marks_unhealthy(self) -> None:
         from modulo.core.plugin_registry import PluginRegistry

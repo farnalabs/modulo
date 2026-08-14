@@ -200,7 +200,7 @@ async def test_snapshot_sub_node_prompt_injection_survives_without_agent() -> No
     nodes = snapshot.graph_json["nodes"]
     assert len(nodes) == 1
     assert nodes[0]["prompt_template"] == "argue flying cars"
-    assert snapshot.graph_json["edges"] == []
+    assert not snapshot.graph_json["edges"]
 
     compiled = build_graph_from_json(snapshot.graph_json, pipeline_node_timeout_seconds=300)
     assert compiled is not None

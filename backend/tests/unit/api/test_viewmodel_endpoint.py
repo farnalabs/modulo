@@ -154,7 +154,7 @@ def test_me_returns_200_with_username(client: TestClient) -> None:
     assert body["user"]["username"] == "testuser"
     assert body["org"]["org_id"] == str(_ORG_ID)
     assert body["org_role"] == "admin"
-    assert body["team_memberships"] == []
+    assert not body["team_memberships"]
     assert body["team_memberships_truncated"] is False
 
 
@@ -194,14 +194,14 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
     assert body["user"]["username"] == "testuser"
     assert body["pipelines_total"] == 1
     assert body["runs_total"] == 1
-    assert body["pending_hitl_gates"] == []
+    assert not body["pending_hitl_gates"]
     assert len(body["pipelines"]) == 1
     assert len(body["recent_runs"]) == 1
     assert body["org"]["org_name"] == "Test Org"
     assert body["org_role"] == "admin"
-    assert body["team_memberships"] == []
+    assert not body["team_memberships"]
     assert body["team_memberships_truncated"] is False
-    assert body["preferences"] == {}
+    assert not body["preferences"]
     assert body["feature_flags"]
     assert body["plan"]["tier"] == "community"
 
@@ -313,7 +313,7 @@ def test_viewmodel_current_includes_org_info(client: TestClient) -> None:
     assert body["org"]["org_name"] == "Custom Org"
     assert body["org"]["org_id"] == str(_ORG_ID)
     assert body["org_role"] == "admin"
-    assert body["preferences"] == {}
+    assert not body["preferences"]
 
 
 def test_viewmodel_current_includes_team_memberships(client: TestClient) -> None:

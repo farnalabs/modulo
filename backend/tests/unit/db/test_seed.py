@@ -172,7 +172,7 @@ class TestSeedPartialPreExisting:
         await _seed_all(session, org_id, account_id)
 
         schemas = {s.name: s for s in await _schemas(session, org_id)}
-        assert await _versions_for(session, schemas["schema_text"].id) == []
+        assert not await _versions_for(session, schemas["schema_text"].id)
         # the freshly created schemas still get their versions
         for name in ("schema_freeform", "schema_trigger_payload"):
             assert len(await _versions_for(session, schemas[name].id)) == 1

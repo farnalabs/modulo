@@ -269,7 +269,7 @@ class TestGetTriggerEventsSuccess:
         result = await list_trigger_events(trigger_id=str(uuid.uuid4()))
 
         assert result["total"] == 0
-        assert result["data"] == []
+        assert not result["data"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")

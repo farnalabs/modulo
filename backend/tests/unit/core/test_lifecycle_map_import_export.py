@@ -132,7 +132,7 @@ def test_build_export_envelope_returns_canonical_primitive_shape() -> None:
 def test_build_export_envelope_empty_content() -> None:
     envelope = build_export_envelope(_make_map(content_json={}))
 
-    assert envelope["content_json"] == {}
+    assert not envelope["content_json"]
     assert envelope["name"] == "SDLC Workflow"
 
 

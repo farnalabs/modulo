@@ -93,7 +93,7 @@ def test_schema_drift_flag_returns_none() -> None:
 
 
 def test_build_fields_absent_when_no_report() -> None:
-    assert _build_model_cost_fields({"summary": "x"}) == {}
+    assert not _build_model_cost_fields({"summary": "x"})
 
 
 def test_build_fields_band_clamped_and_flags_unconditional() -> None:

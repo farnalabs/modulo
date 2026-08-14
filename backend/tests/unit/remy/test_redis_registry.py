@@ -269,7 +269,7 @@ async def test_get_and_clear_ui_command_results_missing_returns_empty(
     registry: RemyRedisRegistry, redis_client: MagicMock
 ) -> None:
     redis_client.get.return_value = None
-    assert await registry.get_and_clear_ui_command_results("sess-1") == []
+    assert not await registry.get_and_clear_ui_command_results("sess-1")
     redis_client.delete.assert_not_called()
 
 

@@ -25,9 +25,12 @@ regression that silently weakens the suite:
 - ``assert len(x) == 0`` / ``assert 0 == len(x)`` where the ``len()`` operand
   is an attribute access, subscript, call, or container literal — an
   anti-idiom that should read ``assert not x`` and trips ruff SIM101
-- ``assert len(x) > 0`` where the ``len()`` operand is an attribute access,
-  subscript, call, or container literal — the mirror-image anti-idiom that
-  should read ``assert x`` (sized containers are truthy exactly when non-empty)
+- ``assert len(x) > 0`` / ``assert len(x) >= 1`` / ``assert len(x) != 0``
+  (the non-emptiness mirror of the ``len(x) == 0`` lens) — sized containers
+  are truthy exactly when non-empty, so these should read ``assert x``
+- ``assert x == []`` / ``assert x == {}`` against an empty container literal —
+  ``== []``/``== {}`` is the equality-based twin of the ``len() == 0`` idiom
+  and should read ``assert not x`` (an empty container is falsy)
 - hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
@@ -556,47 +559,96 @@ def test_no_len_equals_zero_assertions():
     )
 
 
-def test_no_len_greater_than_zero_assertions():
-    """``assert len(x) > 0`` should be ``assert x`` — every sized container is
-    truthy exactly when it is non-empty, so the explicit length comparison adds
-    noise and trips ruff SIM101 (flake8-simplify, not enabled in ruff.toml).
-    The lens only flags operands whose type is statically a container that
-    cannot override truthiness: attribute access, subscript, call, or literal.
-    A bare ``len(name) > 0`` is left alone because the name may bind a custom
-    object (``__bool__``) or a non-falsy sized type such as a numpy array."""
+def test_no_len_gt_zero_assertions():
+    """``assert len(x) > 0`` should be ``assert x`` — the non-emptiness mirror
+    of the ``len(x) == 0`` lens above. Every sized container is truthy exactly
+    when it is non-empty, so the explicit length comparison adds noise (and
+    trips ruff SIM101 when flake8-simplify is enabled). For the same reason as
+    the ``len(x) == 0`` lens, only operands whose type is statically a
+    container are flagged (attribute access, subscript, call, or await); a
+    bare ``len(name) > 0`` is left alone because the name may bind a
+    non-falsy sized type such as a numpy array."""
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            if not isinstance(node, ast.Assert):
                 continue
-            op = node.ops[0]
-            if not isinstance(op, ast.Gt):
+            test = node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
                 continue
-            sides = [(node.left, node.comparators[0]), (node.comparators[0], node.left)]
-            for lhs, rhs in sides:
-                if not (isinstance(rhs, ast.Constant) and rhs.value == 0):
-                    continue
-                if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
-                    continue
-                if not lhs.args:
-                    continue
-                operand = lhs.args[0]
-                if isinstance(operand, ast.Name):
-                    continue
-                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.List, ast.Dict, ast.Tuple)):
-                    continue
-                parent = parents.get(node)
-                if not isinstance(parent, ast.Assert):
-                    continue
-                violations.append(f"  {rel}:{node.lineno}  assert len(...) > 0 — prefer 'assert ...'")
+            op = test.ops[0]
+            lhs, rhs = test.left, test.comparators[0]
+            if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
+                continue
+            if not lhs.args:
+                continue
+            if not isinstance(rhs, ast.Constant):
+                continue
+            matches = (
+                (isinstance(op, ast.Gt) and rhs.value == 0)
+                or (isinstance(op, ast.GtE) and rhs.value == 1)
+                or (isinstance(op, ast.NotEq) and rhs.value == 0)
+            )
+            if not matches:
+                continue
+            operand = lhs.args[0]
+            if isinstance(operand, ast.Name):
+                continue
+            if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                continue
+            violations.append(f"  {rel}:{node.lineno}  assert len(...) > 0 — prefer 'assert ...'")
     assert not violations, (
         f"Found {len(violations)} 'assert len(...) > 0' assertion(s).\n"
         "Sized containers are truthy when non-empty; write 'assert <expr>' instead.\n" + "\n".join(violations)
+    )
+
+
+def test_no_empty_container_literal_equality():
+    """``assert x == []`` / ``assert x == {}`` compare a value against an empty
+    container literal — the equality-based twin of the ``len(x) == 0`` idiom.
+    An empty list/dict is falsy, so ``assert not x`` reads the same intent
+    with less noise and no literal-type coupling. Operands whose type is
+    statically a container (attribute access, subscript, call, or await) are
+    flagged; a bare name is left alone because it may bind a ``__bool__``- or
+    ``__eq__``-overloading object whose emptiness is not ``not``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assert):
+                continue
+            test = node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+                continue
+            if not isinstance(test.ops[0], ast.Eq):
+                continue
+            sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
+            for operand, literal in sides:
+                empty_literal = (isinstance(literal, ast.List) and not literal.elts) or (
+                    isinstance(literal, ast.Dict) and not literal.keys
+                )
+                if not empty_literal:
+                    continue
+                if isinstance(operand, ast.Name):
+                    continue
+                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                    continue
+                violations.append(
+                    f"  {rel}:{node.lineno}  asserts value == {'[]' if isinstance(literal, ast.List) else '{}'} "
+                    "— prefer 'assert not ...'"
+                )
+                break
+    assert not violations, (
+        f"Found {len(violations)} empty-container literal comparison(s).\n"
+        "An empty list/dict is falsy; write 'assert not <expr>' instead of "
+        "'assert <expr> == []/{}'.\n" + "\n".join(violations)
     )
 
 

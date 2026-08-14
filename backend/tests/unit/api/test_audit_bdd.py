@@ -181,7 +181,7 @@ class TestBatchDetailEdgeCases:
                 json={"event_ids": ["00000000-0000-0000-0000-000000009999"]},
             )
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     def test_batch_detail_returns_full_payload(self, client: TestClient) -> None:
         event_id = str(uuid.uuid4())

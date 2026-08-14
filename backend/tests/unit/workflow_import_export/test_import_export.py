@@ -247,24 +247,24 @@ def test_sanitize_retry_policy_keeps_minimal_valid_dict() -> None:
 
 
 def test_sanitize_retry_policy_drops_unknown_event() -> None:
-    assert _sanitize_retry_policy({"on": ["bogus"], "max_retries": 2}) == {}
+    assert not _sanitize_retry_policy({"on": ["bogus"], "max_retries": 2})
 
 
 def test_sanitize_retry_policy_drops_out_of_range_budget() -> None:
-    assert _sanitize_retry_policy({"on": ["failure"], "max_retries": 9}) == {}
+    assert not _sanitize_retry_policy({"on": ["failure"], "max_retries": 9})
 
 
 def test_sanitize_retry_policy_drops_non_integer_budget() -> None:
-    assert _sanitize_retry_policy({"on": ["failure"], "max_retries": "lots"}) == {}
+    assert not _sanitize_retry_policy({"on": ["failure"], "max_retries": "lots"})
 
 
 def test_sanitize_retry_policy_drops_non_dict_values() -> None:
-    assert _sanitize_retry_policy("stall") == {}
-    assert _sanitize_retry_policy(["stall"]) == {}
+    assert not _sanitize_retry_policy("stall")
+    assert not _sanitize_retry_policy(["stall"])
 
 
 def test_sanitize_retry_policy_keeps_empty_policy() -> None:
-    assert _sanitize_retry_policy({}) == {}
+    assert not _sanitize_retry_policy({})
 
 
 def test_sanitize_retry_policy_returns_copy_not_reference() -> None:
@@ -756,9 +756,9 @@ async def test_export_pipeline_bundle_without_graph_nodes(monkeypatch: pytest.Mo
     session.execute = AsyncMock(side_effect=[pipeline_result, edges_result])
     data = await export_pipeline_bundle(session, fakes["pipeline"].id)
     bundle = extract_bundle_json_from_zip(data)
-    assert bundle["agents"] == []
-    assert bundle["schemas"] == []
-    assert bundle["model_backends"] == []
+    assert not bundle["agents"]
+    assert not bundle["schemas"]
+    assert not bundle["model_backends"]
     assert bundle["edges"] == [
         {
             "id": str(fakes["edge"].id),
@@ -829,8 +829,8 @@ async def test_export_pipeline_bundle_agent_without_refs(monkeypatch: pytest.Mon
             "token_budget": None,
         }
     ]
-    assert bundle["schemas"] == []
-    assert bundle["model_backends"] == []
+    assert not bundle["schemas"]
+    assert not bundle["model_backends"]
 
 
 # ---------------------------------------------------------------------------
@@ -912,7 +912,7 @@ async def test_export_pipeline_bundle_v2_falls_back_on_trigger_failure(monkeypat
     monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
     text = await export_pipeline_bundle_v2(_v2_session(fakes, trigger_error=True), fakes["pipeline"].id)
     doc = yaml.safe_load(text)
-    assert doc["modulo_workflow"]["triggers"] == []
+    assert not doc["modulo_workflow"]["triggers"]
 
 
 async def test_export_pipeline_bundle_v2_author_falls_back_to_account_id(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -979,8 +979,8 @@ async def test_export_pipeline_bundle_v2_skips_invalid_node_refs(monkeypatch: py
     )
     text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
     doc = yaml.safe_load(text)
-    assert doc["modulo_workflow"]["agents"] == []
-    assert doc["modulo_workflow"]["schemas"] == []
+    assert not doc["modulo_workflow"]["agents"]
+    assert not doc["modulo_workflow"]["schemas"]
 
 
 async def test_export_pipeline_bundle_v2_skips_invalid_output_schema_id(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1047,8 +1047,8 @@ async def test_export_pipeline_bundle_v2_without_graph_nodes(monkeypatch: pytest
     )
     text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
     doc = yaml.safe_load(text)
-    assert doc["modulo_workflow"]["agents"] == []
-    assert doc["modulo_workflow"]["schemas"] == []
+    assert not doc["modulo_workflow"]["agents"]
+    assert not doc["modulo_workflow"]["schemas"]
 
 
 async def test_export_pipeline_bundle_v2_mixed_node_refs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1102,7 +1102,7 @@ async def test_export_pipeline_bundle_v2_agent_without_refs(monkeypatch: pytest.
     text = await export_pipeline_bundle_v2(session, fakes["pipeline"].id)
     doc = yaml.safe_load(text)
     assert doc["modulo_workflow"]["agents"][0]["name"] == "Bare"
-    assert doc["modulo_workflow"]["schemas"] == []
+    assert not doc["modulo_workflow"]["schemas"]
 
 
 async def test_export_pipeline_bundle_v2_without_owner_team(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1171,8 +1171,8 @@ async def test_export_pipeline_bundle_v2_empty_requires_collections(monkeypatch:
     monkeypatch.setattr(mod, "_get_latest_published_version", AsyncMock(return_value=fakes["sv"]))
     text = await export_pipeline_bundle_v2(_v2_aux_session(fakes), fakes["pipeline"].id)
     doc = yaml.safe_load(text)
-    assert doc["modulo_workflow"]["requires"]["connector_types"] == []
-    assert doc["modulo_workflow"]["requires"]["abstract_schemas"] == []
+    assert not doc["modulo_workflow"]["requires"]["connector_types"]
+    assert not doc["modulo_workflow"]["requires"]["abstract_schemas"]
 
 
 # ---------------------------------------------------------------------------
@@ -1297,7 +1297,7 @@ async def test_materialize_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
 
-    assert result["warnings"] == []
+    assert not result["warnings"]
     assert result["pipeline_id"] == str(created["pipeline"].return_value.id)
     assert result["agent_count"] == 1
     assert result["schema_count"] == 1
@@ -1368,14 +1368,14 @@ async def test_materialize_applies_schema_overrides(monkeypatch: pytest.MonkeyPa
         schema_version_overrides={str(export_schema_id): "9"},
     )
     created["schema"].assert_not_awaited()
-    assert result["warnings"] == []
+    assert not result["warnings"]
 
 
 async def test_materialize_drops_malformed_retry_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     created = _patch_crud(monkeypatch)
     bundle = _make_bundle(pipeline={"name": "Imported", "graph_nodes_json": [], "retry_policy": {"on": ["bogus"]}})
     result = await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
-    assert created["pipeline"].return_value.retry_policy == {}
+    assert not created["pipeline"].return_value.retry_policy
     assert any("malformed" in w for w in result["warnings"])
 
 
@@ -1383,7 +1383,7 @@ async def test_materialize_non_list_graph_nodes_warns(monkeypatch: pytest.Monkey
     created = _patch_crud(monkeypatch)
     bundle = _make_bundle(pipeline={"name": "Imported", "graph_nodes_json": {"not": "list"}, "retry_policy": {}})
     result = await materialize_import(_FakeSession(), _ORG_ID, _ACCOUNT_ID, bundle)
-    assert created["pipeline"].return_value.graph_nodes_json == []
+    assert not created["pipeline"].return_value.graph_nodes_json
     assert any("graph_nodes_json" in w for w in result["warnings"])
 
 

@@ -43,7 +43,7 @@ def test_redact_sensitive_nested() -> None:
 
 
 def test_redact_sensitive_empty() -> None:
-    assert redact_sensitive({}) == {}
+    assert not redact_sensitive({})
 
 
 def test_correlation_id_filter_injects() -> None:

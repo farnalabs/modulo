@@ -326,4 +326,4 @@ async def test_replace_pipeline_graph_removes_stale_edges(
 
     loaded = await get_pipeline_graph(rls_session, pipeline.id)
     assert loaded is not None
-    assert loaded[1] == []
+    assert not loaded[1]

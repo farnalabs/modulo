@@ -173,7 +173,7 @@ def test_list_model_backends_include_in_dev_passes_empty_exclusions(client: Test
         resp = client.get("/api/v1/model-backends", params={"include_in_dev": "true"})
     assert resp.status_code == 200
     assert mock_list.await_args is not None
-    assert mock_list.await_args.kwargs["excluded_tiers"] == []
+    assert not mock_list.await_args.kwargs["excluded_tiers"]
     tiers = [item["tier"] for item in resp.json()["items"]]
     assert "in_dev" in tiers, f"Expected an in_dev model backend in the response, got tiers: {tiers}"
 
@@ -818,7 +818,7 @@ def test_get_model_backend_empty_fallback_ids_round_trips(client: TestClient) ->
     ):
         resp = client.get(f"/api/v1/model-backends/{_BACKEND_ID}")
     assert resp.status_code == 200
-    assert resp.json()["fallback_backend_ids"] == []
+    assert not resp.json()["fallback_backend_ids"]
 
 
 def test_create_model_backend_integrity_error_returns_409(client: TestClient) -> None:

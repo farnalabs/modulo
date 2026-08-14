@@ -94,7 +94,7 @@ class TestScanAll:
         assert len(results) == 2
         assert results[0].candidates[0].entity_type == "secret"
         assert results[1].category == "stale_pipelines"
-        assert results[1].candidates == []
+        assert not results[1].candidates
 
     @pytest.mark.asyncio
     async def test_scan_all_returns_category_for_every_scanner(self) -> None:
@@ -103,7 +103,7 @@ class TestScanAll:
             results = await scan_all(session, uuid.uuid4())
         assert len(results) == 1
         assert results[0].category == "empty_teams"
-        assert results[0].candidates == []
+        assert not results[0].candidates
 
 
 class TestMappings:

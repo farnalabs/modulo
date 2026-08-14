@@ -135,7 +135,7 @@ class TestTimeoutResolution:
 
     def test_overrides_default_when_none_passed(self) -> None:
         middleware = RequestTimeoutMiddleware(app=object(), timeout_seconds=120)
-        assert middleware._overrides == {}
+        assert not middleware._overrides
 
     def test_default_timeout_is_120(self) -> None:
         middleware = RequestTimeoutMiddleware(app=object())

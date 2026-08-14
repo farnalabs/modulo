@@ -288,7 +288,7 @@ class TestQueryAnalytics(_AuthContext):
                 stack.enter_context(p)
             result = await query_analytics(limit=5000)
         assert result["group_by"] == "day"
-        assert result["buckets"] == []
+        assert not result["buckets"]
         assert result["deep_link"] == "/analytics?group_by=day"
         mock_run = patches[-1].new
         assert mock_run.await_args.kwargs["params"].limit == 1000, "limit must be clamped to the REST cap of 1000"

@@ -207,7 +207,7 @@ class TestExpiredWebhookDedups:
         )
         await session.commit()
 
-        assert await _scan_expired_webhook_dedups(session, _ORG_A) == []
+        assert not await _scan_expired_webhook_dedups(session, _ORG_A)
 
 
 class TestInactiveTriggers:
@@ -470,7 +470,7 @@ class TestDuplicateTriggers:
         )
         await session.commit()
 
-        assert await _scan_duplicate_triggers(session, _ORG_A) == []
+        assert not await _scan_duplicate_triggers(session, _ORG_A)
 
 
 class TestOrphanSnapshots:
@@ -737,7 +737,7 @@ class TestOrphanSecrets:
         )
         await session.commit()
 
-        assert await _scan_orphan_secrets(session, _ORG_A) == []
+        assert not await _scan_orphan_secrets(session, _ORG_A)
 
 
 class TestUnboundConnectors:
@@ -814,7 +814,7 @@ class TestUnboundConnectors:
         assert _candidate_names(candidates) == ["unbound"]
 
     async def test_returns_empty_when_org_has_no_connectors(self, session: AsyncSession) -> None:
-        assert await _scan_unbound_connectors(session, _ORG_A) == []
+        assert not await _scan_unbound_connectors(session, _ORG_A)
 
     async def test_malformed_binding_id_is_ignored(self, session: AsyncSession) -> None:
         connector = ConnectorInstance(
@@ -895,7 +895,7 @@ class TestUnusedSsoProviders:
         assert _candidate_names(candidates) == ["unused"]
 
     async def test_returns_empty_when_org_has_no_providers(self, session: AsyncSession) -> None:
-        assert await _scan_unused_sso_providers(session, _ORG_A) == []
+        assert not await _scan_unused_sso_providers(session, _ORG_A)
 
     async def test_skips_when_sso_accounts_exist(self, session: AsyncSession) -> None:
         sso_account = Account(id=uuid.uuid4(), email="sso@example.com", display_name="SSO User", auth_provider="oidc")
@@ -904,7 +904,7 @@ class TestUnusedSsoProviders:
         session.add(OrgMembership(id=uuid.uuid4(), organisation_id=_ORG_A, account_id=sso_account.id, role="runner"))
         await session.commit()
 
-        assert await _scan_unused_sso_providers(session, _ORG_A) == []
+        assert not await _scan_unused_sso_providers(session, _ORG_A)
 
     async def test_local_auth_does_not_count_as_sso(self, session: AsyncSession) -> None:
         local_account = Account(

@@ -74,13 +74,13 @@ class TestToTicket:
         assert ticket.title == "Minimal"
         assert ticket.status == "open"
         assert ticket.ticket_type == "task"
-        assert ticket.labels == []
+        assert not ticket.labels
         assert ticket.assignee is None
 
     def test_handles_empty_labels(self, tracker: GitHubTicketTracker) -> None:
         raw = _make_mock_issue({"labels": None})
         ticket = tracker._to_ticket(raw)
-        assert ticket.labels == []
+        assert not ticket.labels
 
 
 class TestListTickets:

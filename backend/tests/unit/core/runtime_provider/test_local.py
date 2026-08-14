@@ -272,7 +272,7 @@ class TestLocalRuntimeProvider:
         with pytest.raises(RuntimeError, match="clone failed"):
             await provider.create_workspace(spec)
 
-        assert provider._workspaces == {}
+        assert not provider._workspaces
         rmtree.assert_called_once()
 
     async def test_destroy_workspace_logs_cleanup_failure(

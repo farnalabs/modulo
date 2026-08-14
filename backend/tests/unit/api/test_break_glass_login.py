@@ -147,7 +147,7 @@ async def test_enforce_break_glass_normal_account_zero_queries() -> None:
     with patch("modulo.api.routes.auth.is_break_glass_denied", side_effect=AssertionError("must not be called")):
         decision = await _enforce_break_glass(user, now=_FUTURE, limiter=limiter, ip="1.2.3.4")
     assert decision is False
-    assert limiter.failures == []
+    assert not limiter.failures
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,7 @@ async def test_enforce_break_glass_live_returns_true() -> None:
     limiter = _FakeLimiter()
     decision = await _enforce_break_glass(user, now=now, limiter=limiter, ip="1.2.3.4")
     assert decision is True
-    assert limiter.failures == []
+    assert not limiter.failures
 
 
 @pytest.mark.parametrize(
@@ -219,7 +219,7 @@ async def test_consume_late_cas_rowcount_1_passes(mock_session: AsyncMock) -> No
     cas.assert_awaited_once()
     assert cas.call_args.kwargs["account_id"] == _USER_ID
     assert cas.call_args.kwargs["current_password_hash"] == user.password_hash
-    assert limiter.failures == []
+    assert not limiter.failures
 
 
 @pytest.mark.asyncio

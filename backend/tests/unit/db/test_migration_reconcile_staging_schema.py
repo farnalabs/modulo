@@ -79,11 +79,11 @@ class TestReconcileHealthySchema:
     def test_upgrade_is_noop_when_tables_exist_in_current_shape(self, reconcile_migration: ModuleType) -> None:
         mock_op = _run_upgrade(reconcile_migration, _HEALTHY)
 
-        assert mock_op.create_table.call_args_list == []
-        assert mock_op.drop_table.call_args_list == []
-        assert mock_op.create_index.call_args_list == []
-        assert mock_op.create_foreign_key.call_args_list == []
-        assert mock_op.execute.call_args_list == []
+        assert not mock_op.create_table.call_args_list
+        assert not mock_op.drop_table.call_args_list
+        assert not mock_op.create_index.call_args_list
+        assert not mock_op.create_foreign_key.call_args_list
+        assert not mock_op.execute.call_args_list
 
 
 class TestReconcileDriftedSchema:
@@ -160,7 +160,7 @@ class TestReconcileDriftedSchema:
     def test_refuses_to_drop_populated_legacy_scheduled_reports(self, reconcile_migration: ModuleType) -> None:
         mock_op = _run_upgrade(reconcile_migration, self._DRIFTED, scheduled_report_rows=3)
 
-        assert mock_op.drop_table.call_args_list == []
+        assert not mock_op.drop_table.call_args_list
         created_tables = {call.args[0] for call in mock_op.create_table.call_args_list}
         assert created_tables == {"mcp_setup_tokens", "lifecycle_maps"}
         executed_sql = " ".join(str(call.args[0].text) for call in mock_op.execute.call_args_list)

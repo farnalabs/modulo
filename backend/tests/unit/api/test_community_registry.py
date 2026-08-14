@@ -473,7 +473,7 @@ class TestListPublishers:
         with patch("modulo.api.routes.registry.list_verified_publishers", return_value=[]):
             resp = client.get(PUBLISHERS_URL)
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     def test_revoked_publisher_excluded_from_list(self, client: TestClient) -> None:
         active = MagicMock()

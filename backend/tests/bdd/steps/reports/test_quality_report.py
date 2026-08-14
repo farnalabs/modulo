@@ -179,4 +179,4 @@ def check_response_body(request) -> None:
 def check_empty_deliveries(request) -> None:
     data = request.node._resp.json()
     assert "deliveries" in data
-    assert data["deliveries"] == []
+    assert not data["deliveries"]

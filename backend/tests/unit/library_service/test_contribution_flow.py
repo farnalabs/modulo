@@ -148,10 +148,10 @@ class TestParseVersionKey:
 
 class TestFilterPrimitivesEmpty:
     def test_empty_input_returns_empty_list(self) -> None:
-        assert _filter_primitives([], primitive_type="schema", search="x") == []
+        assert not _filter_primitives([], primitive_type="schema", search="x")
 
     def test_none_input_returns_empty_list(self) -> None:
-        assert _filter_primitives(None, primitive_type=None, search=None) == []
+        assert not _filter_primitives(None, primitive_type=None, search=None)
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +498,7 @@ class TestListContributions:
         ):
             result = await list_contributions(session, uuid.uuid4())
 
-        assert result.items == []
+        assert not result.items
         assert mock_list.await_args.kwargs["primitive_type"] == "test_fixture"
 
     async def test_filters_by_status(self) -> None:
@@ -589,7 +589,7 @@ class TestSubmitContributionVersion:
         assert result is updated
         assert captured["version"] == "1.1"
         assert captured["forked_from"] == prim_id
-        assert captured["content_json"]["fixture_map"] == {}
+        assert not captured["content_json"]["fixture_map"]
 
     async def test_reuses_existing_version_group(self) -> None:
         session = _mock_session()

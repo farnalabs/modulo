@@ -84,7 +84,7 @@ class TestPublicIngestEndpoint:
         )
         assert resp.status_code == 201
         data = resp.json()
-        assert data["results"] == []
+        assert not data["results"]
 
     def test_level_critical_rejected(self, client):
         """Critical-level events are silently dropped."""
@@ -94,7 +94,7 @@ class TestPublicIngestEndpoint:
         )
         assert resp.status_code == 201
         data = resp.json()
-        assert data["results"] == []
+        assert not data["results"]
 
     def test_body_over_10000_bytes_returns_413(self, client):
         large_message = "x" * 10001

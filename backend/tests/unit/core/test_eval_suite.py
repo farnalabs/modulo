@@ -36,7 +36,7 @@ class TestEvaluateSuite:
         assert result.aggregate_score == 1.0
         assert result.total_evals == 4
         assert result.passed_evals == 4
-        assert result.blocking_failures == []
+        assert not result.blocking_failures
 
     def test_passing_suite_at_threshold(self) -> None:
         """Suite with score exactly equal to threshold should pass."""
@@ -86,7 +86,7 @@ class TestEvaluateSuite:
         assert result.aggregate_score == 0.0
         assert result.total_evals == 0
         assert result.passed_evals == 0
-        assert result.blocking_failures == []
+        assert not result.blocking_failures
 
     def test_suite_result_model_fields(self) -> None:
         """SuiteEvalResult should expose all expected fields."""

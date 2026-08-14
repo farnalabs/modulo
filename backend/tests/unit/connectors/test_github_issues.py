@@ -56,7 +56,7 @@ async def test_query_issues_empty(connector):
     respx.get("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(200, json=[]))
     result = await connector.query(ConnectorQuery(resource="issues", filters={"repo": "owner/repo"}))
     assert result.total == 0
-    assert result.records == []
+    assert not result.records
 
 
 @respx.mock

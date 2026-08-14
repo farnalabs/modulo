@@ -528,8 +528,8 @@ class TestExportOrgData:
         assert "organisation" in bundle
         assert "memberships" in bundle
         assert "pipelines" in bundle
-        assert len(bundle["memberships"]) >= 1
-        assert len(bundle["pipelines"]) >= 1
+        assert bundle["memberships"]
+        assert bundle["pipelines"]
 
 
 # ── Tests: batch_delete_langgraph_checkpoints ───────────────────────

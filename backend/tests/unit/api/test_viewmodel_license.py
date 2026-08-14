@@ -42,7 +42,7 @@ class TestLicenseInfo:
         assert resp.status_code == 200
         body = resp.json()
         assert body["tier"] == "community"
-        assert body["features"] == []
+        assert not body["features"]
         assert body["is_valid"] is True
 
     def test_with_key_returns_team(self, client: TestClient) -> None:

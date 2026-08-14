@@ -126,7 +126,7 @@ def test_list_endpoints_empty_returns_200(client: TestClient) -> None:
         client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
 
     assert resp.status_code == 200
-    assert resp.json() == []
+    assert not resp.json()
 
 
 def test_create_endpoint_returns_201(client: TestClient) -> None:

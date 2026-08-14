@@ -589,9 +589,9 @@ class TestMultiChannelAlertFanout:
             "c@d.com",
             "e@f.com",
         ]
-        assert wl._parse_alert_email_to("") == []
-        assert wl._parse_alert_email_to(None) == []
-        assert wl._parse_alert_email_to("  ,  ") == []
+        assert not wl._parse_alert_email_to("")
+        assert not wl._parse_alert_email_to(None)
+        assert not wl._parse_alert_email_to("  ,  ")
 
     async def test_email_skipped_when_recipient_list_empty(self) -> None:
         settings = _make_settings(ALERT_EMAIL_TO="  , ", smtp_host="smtp.example.com")

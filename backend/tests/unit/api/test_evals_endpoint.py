@@ -288,7 +288,7 @@ class TestListEvalDefinitions:
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 0
-        assert data["items"] == []
+        assert not data["items"]
 
     def test_list_filter_by_pipeline(self, admin_client: TestClient) -> None:
         mock_session = _make_mock_session()

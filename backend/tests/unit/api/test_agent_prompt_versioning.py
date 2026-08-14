@@ -146,7 +146,7 @@ class TestListPromptVersions:
         ):
             resp = client.get(f"{BASE}/prompts")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     def test_list_versions_404(self, client: TestClient) -> None:
         with (

@@ -452,7 +452,7 @@ def test_end_without_start_does_not_raise(bridge: LangGraphOtelBridge) -> None:
     bridge.on_tool_end("x", run_id=run_id)
     bridge.on_chat_model_end(ChatResult(generations=[]), run_id=run_id)
 
-    assert bridge._spans == {}
+    assert not bridge._spans
 
 
 def test_error_without_start_does_not_raise(bridge: LangGraphOtelBridge) -> None:
@@ -463,7 +463,7 @@ def test_error_without_start_does_not_raise(bridge: LangGraphOtelBridge) -> None
     bridge.on_chat_model_error(ValueError("boom"), run_id=run_id)
     bridge.on_tool_error(ValueError("boom"), run_id=run_id)
 
-    assert bridge._spans == {}
+    assert not bridge._spans
 
 
 def test_spans_dict_empty_after_full_lifecycle(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
@@ -478,7 +478,7 @@ def test_spans_dict_empty_after_full_lifecycle(bridge: LangGraphOtelBridge, expo
     bridge.on_tool_end("o", run_id=tool)
     bridge.on_chain_end({}, run_id=root)
 
-    assert bridge._spans == {}
+    assert not bridge._spans
     assert len(exporter.get_finished_spans()) == 3
 
 

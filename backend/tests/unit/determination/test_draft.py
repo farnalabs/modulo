@@ -9,18 +9,18 @@ from .helpers import iso_days_ago, make_finding, make_sample
 
 def test_empty_data_returns_empty_draft() -> None:
     draft = generate_draft([], [])
-    assert draft.nodes == []
-    assert draft.edges == []
-    assert draft.automation_suggestions == []
-    assert draft.findings == []
+    assert not draft.nodes
+    assert not draft.edges
+    assert not draft.automation_suggestions
+    assert not draft.findings
 
 
 def test_only_findings_no_samples_returns_empty() -> None:
     findings = [make_finding("overview", "No SDLC stages detected")]
     draft = generate_draft([], findings)
-    assert draft.nodes == []
-    assert draft.edges == []
-    assert draft.automation_suggestions == []
+    assert not draft.nodes
+    assert not draft.edges
+    assert not draft.automation_suggestions
     assert draft.findings == findings
 
 

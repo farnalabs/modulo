@@ -200,4 +200,4 @@ class TestDailyRunCounts:
         response = client.get("/api/v1/dashboard/daily-run-counts")
         assert response.status_code == 200
         body = response.json()
-        assert body["daily_counts"] == {}
+        assert not body["daily_counts"]
