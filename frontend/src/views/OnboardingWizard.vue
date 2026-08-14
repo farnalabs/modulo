@@ -164,7 +164,7 @@
             </div>
           </div>
           <div>
-            <label for="onboardingwizard-field-3" class="mb-2 block text-sm font-medium">{{ $t('views.OnboardingWizard.fields') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.fields_hint') }}</span></label>
+            <h3 class="mb-2 text-sm font-medium">{{ $t('views.OnboardingWizard.fields') }} <span class="text-muted-foreground">{{ $t('views.OnboardingWizard.fields_hint') }}</span></h3>
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b text-left text-muted-foreground">
@@ -217,7 +217,7 @@
             <input id="onboardingwizard-library-search"
               v-model="librarySearch"
               type="text"
-              :aria-label="$t('views.OnboardingWizard.filter_by_type')"
+              :aria-label="$t('views.OnboardingWizard.search_library')"
               :placeholder="$t('views.OnboardingWizard.filter_items')"
               data-testid="onboarding-wizard-library-search"
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -687,7 +687,7 @@ async function runPipeline() {
       },
     })
     if (err) throw err
-    runResult.value = t('views.OnboardingWizard.pipeline_started_successfully')
+    runResult.value = t('views.OnboardingWizard.pipeline_started')
   } catch (e) {
     pipelineRunError.value = e instanceof Error ? e.message : t('views.OnboardingWizard.failed_to_start_pipeline')
   } finally {

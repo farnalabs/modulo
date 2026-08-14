@@ -1498,7 +1498,6 @@ export default {
       "find_compatible_agents_and_blueprints": "Find compatible agents and blueprints",
       "failed_to_start_pipeline": "Failed to start pipeline",
       "guided_setup_wizard_mdash_connect_tools_infer_schemas_browse": "Guided setup wizard &mdash; connect tools, infer schemas, browse the library, and wire your first pipeline",
-      "pipeline_started_successfully": "Pipeline started successfully.",
       "infer_a_schema_from_your_connected_data_source": "Infer a schema from your connected data source",
       "select_a_connector_instance_github_jira_filesystem": "Select a connector instance (GitHub, Jira, filesystem)",
       "connect_tools": "Connect Tools",
