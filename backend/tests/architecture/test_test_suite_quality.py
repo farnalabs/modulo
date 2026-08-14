@@ -25,6 +25,11 @@ regression that silently weakens the suite:
 - ``assert len(x) == 0`` / ``assert 0 == len(x)`` where the ``len()`` operand
   is an attribute access, subscript, call, or container literal — an
   anti-idiom that should read ``assert not x`` and trips ruff SIM101
+- tautological ``len()`` comparison bounds — ``len(x) >= 0`` and friends
+  compare against a bound that ``len()`` can never cross (it never returns a
+  negative number), so the assertion either always passes (``>= 0``, ``> -1``,
+  ``!= -1``) or always fails (``< 0``, ``<= -1``, ``== -1``) and is dead either
+  way
 - ``assert len(x) > 0`` / ``assert len(x) >= 1`` / ``assert len(x) != 0``
   (the non-emptiness mirror of the ``len(x) == 0`` lens) — sized containers
   are truthy exactly when non-empty, so these should read ``assert x``
@@ -691,6 +696,100 @@ def test_no_precision_fragile_float_equality():
         f"Found {len(violations)} precision-fragile float comparison(s).\n"
         "Use pytest.approx(<literal>) instead of == against a non-representable float literal.\n"
         + "\n".join(violations)
+    )
+
+
+def test_no_tautological_len_bounds():
+    """``len(x) >= 0`` and friends are dead assertions: ``len()`` never returns
+    a negative number, so the comparison can never change outcome. The assert
+    is either guaranteed to pass (``>= 0``, ``> -1``, ``!= -N``) or guaranteed
+    to fail (``< 0``, ``<= -1``, ``== -N``) — it reports green regardless of
+    behaviour, or unconditionally breaks the suite. Assert the condition you
+    actually mean (``assert x`` for non-empty, ``assert not x`` for empty), or
+    drop the check entirely. Both operand orders are covered (``0 <= len(x)``
+    is the same tautology as ``len(x) >= 0``)."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+
+        def _is_len(expr: ast.AST) -> bool:
+            return (
+                isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "len" and expr.args
+            )
+
+        def _int_value(expr: ast.AST) -> int | None:
+            if isinstance(expr, ast.Constant) and isinstance(expr.value, int):
+                return expr.value
+            if (
+                isinstance(expr, ast.UnaryOp)
+                and isinstance(expr.op, ast.USub)
+                and isinstance(expr.operand, ast.Constant)
+                and isinstance(expr.operand.value, int)
+            ):
+                return -expr.operand.value
+            return None
+
+        def _verdict(op: type, value: int) -> str | None:
+            if op is ast.GtE and value <= 0:
+                return "always PASSES"
+            if op is ast.Gt and value < 0:
+                return "always PASSES"
+            if op is ast.Lt and value <= 0:
+                return "always FAILS"
+            if op is ast.LtE and value < 0:
+                return "always FAILS"
+            if op is ast.Eq and value < 0:
+                return "always FAILS"
+            if op is ast.NotEq and value < 0:
+                return "always PASSES"
+            return None
+
+        mirror = {
+            ast.GtE: ast.LtE,
+            ast.LtE: ast.GtE,
+            ast.Gt: ast.Lt,
+            ast.Lt: ast.Gt,
+            ast.Eq: ast.Eq,
+            ast.NotEq: ast.NotEq,
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+                continue
+            op = type(node.ops[0])
+            mirrored = mirror.get(op)
+            if mirrored is None:
+                continue
+            pairs = [
+                (node.left, node.comparators[0], op),
+                (node.comparators[0], node.left, mirrored),
+            ]
+            for len_side, const_side, effective in pairs:
+                if not _is_len(len_side):
+                    continue
+                value = _int_value(const_side)
+                if value is None:
+                    continue
+                verdict = _verdict(effective, value)
+                if verdict is None:
+                    continue
+                op_name = {
+                    ast.GtE: ">=",
+                    ast.Gt: ">",
+                    ast.Lt: "<",
+                    ast.LtE: "<=",
+                    ast.Eq: "==",
+                    ast.NotEq: "!=",
+                }.get(effective, "?")
+                violations.append(
+                    f"  {rel}:{node.lineno}  assert len(...) {op_name} {value} — {verdict} (len() is never negative)"
+                )
+    assert not violations, (
+        f"Found {len(violations)} tautological len() comparison(s).\n"
+        "len() never returns a negative number, so the bound can never be exercised.\n"
+        "Assert the real condition (assert x / assert not x) or drop the dead check.\n" + "\n".join(violations)
     )
 
 
