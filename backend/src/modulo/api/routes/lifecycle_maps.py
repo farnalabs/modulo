@@ -782,6 +782,14 @@ async def restore_lifecycle_map_endpoint(
             lifecycle_map = await restore_lifecycle_map(session, lifecycle_map_id)
             if lifecycle_map is not None:
                 await session.refresh(lifecycle_map)
+                await _record_audit(
+                    session,
+                    org_id=principal.organisation_id,
+                    event_type="lifecycle_map.restored",
+                    account_id=principal.account_id,
+                    resource_id=lifecycle_map.id,
+                    payload_json={"name": lifecycle_map.name},
+                )
     except ProgrammingError as exc:
         _log.exception("lifecycle_maps.restore_lifecycle_map_endpoint")
         raise HTTPException(
@@ -878,7 +886,7 @@ async def save_lifecycle_map_version_endpoint(
                 await _record_audit(
                     session,
                     org_id=principal.organisation_id,
-                    event_type="lifecycle_map.updated",
+                    event_type="lifecycle_map.version_saved",
                     account_id=principal.account_id,
                     resource_id=lifecycle_map.id,
                     payload_json={
@@ -951,7 +959,7 @@ async def update_lifecycle_map_version_endpoint(
                 await _record_audit(
                     session,
                     org_id=principal.organisation_id,
-                    event_type="lifecycle_map.updated",
+                    event_type="lifecycle_map.version_saved",
                     account_id=principal.account_id,
                     resource_id=lifecycle_map.id,
                     payload_json={
