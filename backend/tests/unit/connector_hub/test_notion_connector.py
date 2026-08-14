@@ -88,6 +88,18 @@ async def test_query_databases_with_cursor(connector):
     assert result.next_cursor == "cursor_abc"
 
 
+@respx.mock
+async def test_query_databases_non_string_cursor_not_emitted(connector):
+    """A corrupt non-string next_cursor must not be emitted as a pagination cursor."""
+    results = [{"id": "db1", "object": "database"}]
+    respx.post(f"{_BASE}/search").mock(
+        return_value=httpx.Response(200, json={"results": results, "next_cursor": {"page": 2}}),
+    )
+    result = await connector.query(ConnectorQuery(resource="databases"))
+    assert result.total == 1
+    assert result.next_cursor is None
+
+
 # ---------------------------------------------------------------------------
 # query — single database
 # ---------------------------------------------------------------------------

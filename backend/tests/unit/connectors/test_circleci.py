@@ -279,6 +279,24 @@ async def test_query_pipelines(cc_runner):
 
 
 @respx.mock
+async def test_query_pipelines_non_string_cursor_not_emitted(cc_runner):
+    """A corrupt non-string next_page_token must not be emitted as a pagination cursor."""
+    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [{"id": "p1", "state": "success"}],
+                "next_page_token": {"page": 2},
+            },
+        )
+    )
+    q = ConnectorQuery(resource="pipelines", filters={"slug": "gh/owner/repo"})
+    result = await cc_runner.query(q)
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
+@respx.mock
 async def test_query_workflows(cc_runner):
     respx.get(f"{_CIRCLECI_API}/pipeline/pipe-uuid/workflow").mock(
         return_value=httpx.Response(
