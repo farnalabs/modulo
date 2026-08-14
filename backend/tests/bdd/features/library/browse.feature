@@ -9,7 +9,7 @@ Feature: Browse Library Primitives
 
   Scenario: List all primitives
     When the user requests GET /api/v1/libraries
-    Then the response contains 8 primitives total
+    Then the response contains 21 primitives total
     And each primitive has id, name, primitive_type, source, and version
 
   Scenario: Filter by primitive type
