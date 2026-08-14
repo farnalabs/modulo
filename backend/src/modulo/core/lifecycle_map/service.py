@@ -200,6 +200,7 @@ async def save_map_version(
     await _check_pipeline_uniqueness(session, lifecycle_map)
     await derive_lifecycle_map_stages(session, lifecycle_map)
     await session.flush()
+    await session.refresh(lifecycle_map)
     return lifecycle_map
 
 
