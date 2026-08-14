@@ -1139,9 +1139,7 @@ async def test_agent_command_invalid_template_falls_back_verbatim():
 async def test_agent_command_unclosed_template_falls_back_verbatim():
     """An unclosed ``{{`` in a legacy command is a TemplateSyntaxError — falls
     back to verbatim execution instead of crashing the run."""
-    node_def = _model_node_def(
-        "opencode run --model {{ --auto --format json < /home/user/prompt.md"
-    )
+    node_def = _model_node_def("opencode run --model {{ --auto --format json < /home/user/prompt.md")
     fn = make_sandbox_agent_fn(node_def)
     sandbox = _make_sandbox_mock()
 
