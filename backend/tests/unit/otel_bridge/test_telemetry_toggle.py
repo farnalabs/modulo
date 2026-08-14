@@ -22,7 +22,7 @@ class TestTelemetryDefaults:
         setup_otel(telemetry_enabled=False)
         provider = trace.get_tracer_provider()
         assert isinstance(provider, TracerProvider)
-        assert span_processors(provider) == ()
+        assert not span_processors(provider)
 
     def test_disabled_stdout_exporter_not_used(self):
         """When disabled, the ConsoleSpanExporter must not be instantiated."""

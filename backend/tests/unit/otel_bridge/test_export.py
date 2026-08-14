@@ -75,7 +75,7 @@ def test_setup_otel_disabled_registers_no_span_processors() -> None:
     setup_otel(service_name="disabled")
     provider = trace.get_tracer_provider()
     assert isinstance(provider, TracerProvider)
-    assert provider._active_span_processor._span_processors == ()
+    assert not provider._active_span_processor._span_processors
 
 
 def test_setup_otel_enabled_registers_stdout_processor(monkeypatch: pytest.MonkeyPatch) -> None:
