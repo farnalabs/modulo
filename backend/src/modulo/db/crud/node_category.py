@@ -13,6 +13,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.models.node_category import NodeCategory
+from modulo.db.models.pipeline import Pipeline
+
+
+class NodeCategoryInUseError(ValueError):
+    """Raised when deleting a node category that is still referenced by nodes.
+
+    ``node_category_id`` references live inside each pipeline's
+    ``graph_nodes_json`` (a JSON node list), not in a relational column, so
+    there is no DB-level foreign key to enforce referential integrity — this
+    exception is the app-layer backstop that the delete route maps to 409.
+    """
+
+    def __init__(
+        self,
+        *,
+        category_id: uuid.UUID,
+        pipelines: list[dict[str, Any]],
+    ) -> None:
+        self.category_id = category_id
+        self.pipelines = pipelines
+        names = ", ".join(str(p.get("name")) for p in pipelines)
+        super().__init__(f"Node category {category_id} is referenced by {len(pipelines)} pipeline(s): {names}")
 
 
 async def create_node_category(
@@ -97,10 +119,50 @@ async def update_node_category(
     return category
 
 
+async def node_category_in_use(
+    session: AsyncSession,
+    category_id: uuid.UUID,
+    *,
+    org_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Return pipelines whose graph nodes reference the category.
+
+    Category references are stored per-node as ``node_category_id`` inside
+    each pipeline's ``graph_nodes_json`` JSON column (not a relational FK), so
+    a scan of the org's active pipelines is the referential-integrity backstop.
+    Soft-deleted pipelines and non-dict JSON entries are ignored.
+    """
+    result = await session.execute(
+        select(Pipeline.id, Pipeline.name, Pipeline.graph_nodes_json).where(
+            Pipeline.organisation_id == org_id,
+            Pipeline.deleted_at.is_(None),
+        )
+    )
+    referencing: list[dict[str, Any]] = []
+    category_str = str(category_id)
+    for pipeline_id, name, nodes in result.all():
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                continue
+            ref = node.get("node_category_id")
+            if ref is not None and str(ref) == category_str:
+                referencing.append({"id": str(pipeline_id), "name": name})
+                break
+    return referencing
+
+
 async def soft_delete_node_category(
     session: AsyncSession, category_id: uuid.UUID, *, org_id: uuid.UUID
 ) -> NodeCategory | None:
-    """Soft-delete: set deleted_at. Returns None if not found or already deleted."""
+    """Soft-delete: set deleted_at. Returns None if not found or already deleted.
+
+    Raises ``NodeCategoryInUseError`` when any active pipeline's graph nodes
+    still reference the category — a deleted category must not be left dangling
+    on pipeline nodes.
+    """
+    referencing = await node_category_in_use(session, category_id, org_id=org_id)
+    if referencing:
+        raise NodeCategoryInUseError(category_id=category_id, pipelines=referencing)
     result = await session.execute(
         update(NodeCategory)
         .where(
