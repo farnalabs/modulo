@@ -1427,3 +1427,11 @@ Rules:
   (e.g. `_read_alert_thresholds` overflowed on the very huge ints it guarded
   against, PR #796). If the guard can throw, the failure path is untested —
   add a test for the corruption case the guard is meant to handle.
+
+### 9. Raw-output retention: redact secrets, and never write into the Agent Return Contract columns
+
+Two rules from the FAR-188 raw-output retention work (sandbox stdout retained when `output.json` fails to parse):
+
+- **Redact before you persist.** Sandbox stdout routinely embeds credential-bearing content (tokenized git URLs `https://x-access-token:<PAT>@github.com/...`, `ghp_`/`gho_`/`github_pat_` values, `Bearer ` tokens, `token=` params) because the sandbox command runs with injected `OPENCODE_API_KEY` and `GITHUB_TOKEN`. Any code that stores raw agent output (a `raw_output` marker column, log tails, artifacts) MUST scrub tokenized-URL userinfo and known token patterns before writing. pr_url / structured evidence is extracted from the UNREDACTED source first, then the stored copy is redacted, then truncated. Redaction is best-effort and never blocks retention. Credentials must never enter persistence unmasked (repo rule).
+
+- **Never write failure markers into `outputs_json` / `node_telemetry_json` (the Agent Return Contract columns).** Those columns are consumed by the finalize merge (`split_node_output` idempotence), the node-output API (`GET /runs/{id}/nodes/{nid}/output`), the recovery guard (`recover_node`: `node_id in outputs or node_id in telemetry` => `NodeAlreadyCompletedError`), and cost finalize. A retryable `SandboxNodeFailedError` marker written there (a) wedges the telemetry slot so a successful retry keeps a stale failure marker (evidence + cost undercount), (b) leaks raw stdout up to the API surface, and (c) makes the node look already-completed to recovery. Use a DEDICATED retention column (e.g. `runs.raw_output_markers` keyed by `attempt_key`) instead, and key markers per-attempt so a retry cannot clobber first-attempt PR evidence.

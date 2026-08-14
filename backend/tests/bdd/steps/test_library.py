@@ -4,12 +4,22 @@ tier-classify primitives."""
 import json
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from modulo.db.crud.base import PageResult
+from modulo.db.crud.rating import (
+    CopyToAdaptError,
+    DuplicateRatingError,
+    RatingCooldownError,
+    SelfRatingError,
+)
+from modulo.db.models.library_primitive import LibraryPrimitive
+from modulo.db.models.primitive_rating import PrimitiveRating
 from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_session
 
 scenarios("../features/library/browse.feature")
@@ -35,6 +45,58 @@ def mock_session():
     session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
     session.execute.return_value.scalar_one = MagicMock(return_value=0)
     return session
+
+
+def _to_uuid(primitive_id: str) -> uuid.UUID:
+    """Parse a primitive id, mapping human-readable tokens (e.g. ``comm-001``)
+    to deterministic UUIDs so feature files can use readable ids."""
+    try:
+        return uuid.UUID(primitive_id)
+    except ValueError:
+        return uuid.uuid5(uuid.NAMESPACE_OID, f"modulo-library:{primitive_id}")
+
+
+def _rating_id(name: str) -> uuid.UUID:
+    return uuid.uuid5(uuid.NAMESPACE_OID, f"modulo-library-rating:{name}")
+
+
+def _make_rating(
+    primitive_id: uuid.UUID,
+    *,
+    thumbs_up: bool = True,
+    comment: str | None = None,
+) -> PrimitiveRating:
+    """Build a PrimitiveRating with the Python-side id/timestamps populated
+    (the mock session never flushes server defaults). ``user_id`` mirrors the
+    response model's field (the ORM stores it as ``account_id``)."""
+    rating = PrimitiveRating(
+        organisation_id=ORG_ID,
+        primitive_id=primitive_id,
+        account_id=USER_ID,
+        thumbs_up=thumbs_up,
+        comment=comment,
+    )
+    rating.id = uuid.uuid4()
+    rating.created_at = datetime(2025, 1, 1, tzinfo=UTC)
+    rating.user_id = USER_ID
+    return rating
+
+
+def _patch_service_create() -> patch:
+    """Patch library_service.create_library_primitive so freshly-created ORM
+    objects carry id/created_at/updated_at — the mock session never applies
+    the DB server defaults, which would otherwise break response validation."""
+    from modulo.core.library_service import create_library_primitive as real_create
+
+    async def _create(*args: Any, **kwargs: Any) -> LibraryPrimitive:
+        prim = await real_create(*args, **kwargs)
+        prim.id = uuid.uuid4()
+        now = datetime.now(UTC)
+        prim.created_at = now
+        prim.updated_at = now
+        return prim
+
+    return patch("modulo.core.library_service.create_library_primitive", new=_create)
 
 
 # ---------------------------------------------------------------------------
@@ -151,13 +213,9 @@ def _community_primitives_exist(ctx: dict[str, Any]) -> None:
 
 
 @when(parsers.parse("the user requests GET {path}"))
-def _request_get(client, path: str, ctx: dict[str, Any]) -> None:
+def _request_get(client, path: str, ctx: dict[str, Any], request) -> None:
     ctx["response"] = client.get(path)
-
-
-@when(parsers.parse("the user sends POST {path}"))
-def _request_post(client, path: str, ctx: dict[str, Any]) -> None:
-    ctx["response"] = client.post(path)
+    request.node._resp = ctx["response"]
 
 
 @then(parsers.parse("the response contains {count:d} primitives total"))
@@ -232,13 +290,13 @@ def _response_includes_named_primitive(ctx: dict[str, Any], name: str) -> None:
 
 @given(parsers.parse('a specific primitive exists with id "{primitive_id}"'))
 def _specific_primitive_exists(ctx: dict[str, Any], primitive_id: str) -> None:
-    pid = uuid.UUID(primitive_id)
-    ctx["community_primitive_id"] = pid
+    ctx["community_primitive_id"] = _to_uuid(primitive_id)
 
 
 @when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}"))
-def _request_get_primitive(client, primitive_id: str, ctx: dict[str, Any]) -> None:
+def _request_get_primitive(client, primitive_id: str, ctx: dict[str, Any], request) -> None:
     ctx["response"] = client.get(f"/api/v1/libraries/{primitive_id}")
+    request.node._resp = ctx["response"]
 
 
 @then(parsers.parse('the response has name "{expected_name}"'))
@@ -267,8 +325,11 @@ def _community_primitive_named_exists(ctx: dict[str, Any], name: str) -> None:
 
 
 @when(parsers.parse("the user sends POST /api/v1/libraries/{community_primitive_id}/adapt"))
-def _request_adapt(client, community_primitive_id: str, ctx: dict[str, Any]) -> None:
-    ctx["response"] = client.post(f"/api/v1/libraries/{community_primitive_id}/adapt", json={})
+def _request_adapt(client, community_primitive_id: str, ctx: dict[str, Any], request) -> None:
+    pid = _to_uuid(community_primitive_id)
+    with _patch_service_create():
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/adapt", json={})
+    request.node._resp = ctx["response"]
 
 
 @then("a new library primitive is created in the org")
@@ -291,12 +352,13 @@ def _new_primitive_forked_from(ctx: dict[str, Any]) -> None:
 
 
 @when("an MCP client sends copy_library_primitive with the community primitive id")
-def _mcp_copy_community_primitive(viewer_client, ctx: dict[str, Any]) -> None:
-    """MCP route returns 403 for viewer role when copying community primitives."""
+def _mcp_copy_community_primitive(viewer_client, ctx: dict[str, Any], request) -> None:
+    """MCP runs with a low-privilege role — viewer lacks ``library.copy`` (runner)."""
     ctx["response"] = viewer_client.post(
         f"/api/v1/libraries/{PRIMITIVE_10}/adapt",
         json={},
     )
+    request.node._resp = ctx["response"]
 
 
 @then('the response contains error "community_primitive_read_only"')
@@ -316,18 +378,14 @@ def _response_detail_explains_browser(ctx: dict[str, Any]) -> None:
 
 
 @when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt with target_team_id"))
-def _request_adapt_with_team(client, primitive_id: str, ctx: dict[str, Any]) -> None:
-    ctx["response"] = client.post(
-        f"/api/v1/libraries/{primitive_id}",
-        json={"target_team_id": str(FAKE_TEAM_ID)},
-    )
-
-    # Fallback: the scenario path may use a different endpoint pattern
-    if ctx["response"].status_code == 405:
+def _request_adapt_with_team(client, primitive_id: str, ctx: dict[str, Any], request) -> None:
+    pid = _to_uuid(primitive_id)
+    with _patch_service_create():
         ctx["response"] = client.post(
-            f"/api/v1/libraries/{primitive_id}/adapt",
+            f"/api/v1/libraries/{pid}/adapt",
             json={"target_team_id": str(FAKE_TEAM_ID)},
         )
+    request.node._resp = ctx["response"]
 
 
 @then("the new primitive has owner_team_id set to the requested team")
@@ -337,8 +395,11 @@ def _new_primitive_has_team(ctx: dict[str, Any]) -> None:
 
 
 @when(parsers.parse("the user sends POST /api/v1/libraries/{primitive_id}/adapt"))
-def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any]) -> None:
-    ctx["response"] = client.post(f"/api/v1/libraries/{primitive_id}/adapt", json={})
+def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any], request) -> None:
+    pid = _to_uuid(primitive_id)
+    with _patch_service_create():
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/adapt", json={})
+    request.node._resp = ctx["response"]
 
 
 # ============================================================================
@@ -348,26 +409,13 @@ def _request_adapt_by_id(client, primitive_id: str, ctx: dict[str, Any]) -> None
 
 @given("3 users have rated it (2 thumbs up, 1 thumbs down)")
 def _three_users_rated(ctx: dict[str, Any]) -> None:
+    pid = _rating_id("prd-input")
     ctx["ratings"] = [
-        {
-            "id": str(uuid.uuid4()),
-            "thumbs_up": True,
-            "comment": "Great!",
-            "created_at": "2025-01-01T00:00:00",
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "thumbs_up": True,
-            "comment": "Useful",
-            "created_at": "2025-01-02T00:00:00",
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "thumbs_up": False,
-            "comment": "Needs work",
-            "created_at": "2025-01-03T00:00:00",
-        },
+        _make_rating(pid, thumbs_up=True, comment="Great!"),
+        _make_rating(pid, thumbs_up=True, comment="Useful"),
+        _make_rating(pid, thumbs_up=False, comment="Needs work"),
     ]
+    ctx["rating_aggregate"] = (Decimal(2) / Decimal(3) * Decimal(5), 3)
 
 
 @when(parsers.parse("the user requests GET /api/v1/libraries/{primitive_id}/ratings/aggregate"))
@@ -444,7 +492,8 @@ def _rating_has_thumbs_up(ctx: dict[str, Any], expected: str) -> None:
 @then(parsers.parse("the rating has comment = {expected}"))
 def _rating_has_comment(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
-    expected_val = None if expected.strip().lower() == "null" else expected
+    stripped = expected.strip()
+    expected_val = None if stripped.lower() == "null" else stripped.strip('"')
     assert data.get("comment") == expected_val, f"Expected comment={expected_val}, got {data.get('comment')}"
 
 
@@ -502,6 +551,151 @@ def _aggregate_increases(client, ctx: dict[str, Any]) -> None:
 def _review_count_becomes(client, count: int) -> None:
     agg = client.get(f"/api/v1/libraries/{PRIMITIVE_10}/ratings/aggregate").json()
     assert agg["review_count"] == count, f"Expected review_count={count}, got {agg['review_count']}"
+
+
+# ---------------------------------------------------------------------------
+# ratings.feature step definitions (feature uses readable primitive names)
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('a library primitive "{name}" exists'))
+def _rating_primitive_named_exists(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+
+
+@given(parsers.parse('I have previously copied primitive "{name}"'))
+def _rating_has_copied(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = None
+
+
+@given(parsers.parse('I have not copied primitive "{name}"'))
+def _rating_has_not_copied(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = CopyToAdaptError("You must copy this primitive before rating it")
+
+
+@given(parsers.parse('I created a library primitive "{name}"'))
+def _rating_created_primitive(ctx: dict[str, Any], name: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = SelfRatingError("You cannot rate your own primitive")
+
+
+@given(parsers.parse('I previously rated "{name}" with thumbs_up {value}'))
+def _rating_previously_rated(ctx: dict[str, Any], name: str, value: str) -> None:
+    ctx["rating_primitive_id"] = _rating_id(name)
+    ctx["rating_error"] = DuplicateRatingError("You have already rated this primitive")
+
+
+@given("I submitted a rating 5 minutes ago")
+def _rating_submitted_recently(ctx: dict[str, Any]) -> None:
+    ctx["rating_error"] = RatingCooldownError("Please wait 10 minutes before rating this primitive again")
+
+
+def _submit_rating_for(ctx: dict[str, Any], client, name: str, value: str, comment: str | None = None) -> None:
+    pid = _rating_id(name)
+    thumbs_up = value.strip().lower() == "true"
+    rating = _make_rating(pid, thumbs_up=thumbs_up, comment=comment)
+    error = ctx.get("rating_error")
+    with (
+        patch("modulo.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
+        patch("modulo.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
+    ):
+        if error is not None:
+            mock_submit.side_effect = error
+        else:
+            mock_submit.return_value = rating
+        body: dict[str, Any] = {"thumbs_up": thumbs_up}
+        if comment is not None:
+            body["comment"] = comment
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/ratings", json=body)
+
+
+@when(parsers.parse('I submit a rating for "{name}" with thumbs_up {value}'))
+def _submit_rating(client, name: str, value: str, ctx: dict[str, Any], request) -> None:
+    _submit_rating_for(ctx, client, name, value)
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I submit a rating for "{name}" with thumbs_up {value} and comment "{comment}"'))
+def _submit_rating_with_comment(client, name: str, value: str, comment: str, ctx: dict[str, Any], request) -> None:
+    _submit_rating_for(ctx, client, name, value, comment=comment)
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I request the aggregate rating for "{name}"'))
+def _request_aggregate_rating(client, name: str, ctx: dict[str, Any], request) -> None:
+    pid = _rating_id(name)
+    avg, count = ctx.get("rating_aggregate", (None, 0))
+    with patch("modulo.api.routes.library.get_rating_aggregate", new_callable=AsyncMock, return_value=(avg, count)):
+        ctx["response"] = client.get(f"/api/v1/libraries/{pid}/ratings/aggregate")
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I request the list of ratings for "{name}"'))
+def _request_ratings_list(client, name: str, ctx: dict[str, Any], request) -> None:
+    pid = _rating_id(name)
+    ratings = ctx.get("ratings", [])
+    result = PageResult(items=ratings, total=len(ratings), page=1, page_size=20)
+    with patch("modulo.api.routes.library.list_ratings_for_primitive", new_callable=AsyncMock, return_value=result):
+        ctx["response"] = client.get(f"/api/v1/libraries/{pid}/ratings")
+    request.node._resp = ctx["response"]
+
+
+@when(parsers.parse('I update my rating for "{name}" with thumbs_up {value}'))
+def _update_rating(client, name: str, value: str, ctx: dict[str, Any], request) -> None:
+    """No update endpoint exists — a second rating is rejected as a duplicate (409)."""
+    pid = _rating_id(name)
+    thumbs_up = value.strip().lower() == "true"
+    with (
+        patch("modulo.api.routes.library.submit_rating", new_callable=AsyncMock) as mock_submit,
+        patch("modulo.api.routes.library.update_primitive_ratings_aggregate", new_callable=AsyncMock),
+    ):
+        mock_submit.side_effect = DuplicateRatingError("You have already rated this primitive")
+        ctx["response"] = client.post(f"/api/v1/libraries/{pid}/ratings", json={"thumbs_up": thumbs_up})
+    request.node._resp = ctx["response"]
+
+
+@then("the error indicates you must copy before rating")
+def _error_copy_required(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "copy" in detail.lower(), f"Expected copy-before-rating error, got: {data}"
+
+
+@then("the error indicates self-rating is not allowed")
+def _error_self_rating(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "own primitive" in detail.lower(), f"Expected self-rating error, got: {data}"
+
+
+@then("the error indicates a 10-minute cooldown between ratings")
+def _error_cooldown(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "10 minutes" in detail.lower() or "cooldown" in detail.lower(), f"Expected cooldown error, got: {data}"
+
+
+@then("the error indicates the user has already rated the primitive")
+def _error_duplicate_rating(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "already rated" in detail.lower(), f"Expected duplicate-rating error, got: {data}"
+
+
+@then(parsers.parse("the response contains average_rating = {value}"))
+def _response_average_rating_value(ctx: dict[str, Any], value: str) -> None:
+    data = ctx["response"].json()
+    expected = None if value.strip().lower() == "null" else value
+    assert data["average_rating"] == expected, f"Expected average_rating={expected}, got {data['average_rating']}"
+
+
+@then("the response detail explains the copy permission requires the runner role")
+def _response_detail_explains_permission(ctx: dict[str, Any]) -> None:
+    data = ctx["response"].json()
+    detail = str(data.get("detail", ""))
+    assert "library.copy" in detail or "requires" in detail, f"Expected permission error, got: {data}"
 
 
 # ============================================================================
@@ -687,46 +881,22 @@ def _local_primitive_exists_with_auto_update(ctx: dict[str, Any], primitive_id: 
 
 
 @when(parsers.parse("the user sends PATCH /api/v1/libraries/{primitive_id} with auto_update {value}"))
-def _request_patch_auto_update(client, primitive_id: str, value: str, ctx: dict[str, Any]) -> None:
+def _request_patch_auto_update(client, primitive_id: str, value: str, ctx: dict[str, Any], request) -> None:
     auto_update = value.strip().lower() == "true"
-    now = datetime(2025, 1, 1, tzinfo=UTC).isoformat()
-    mock_prim = MagicMock(
-        id=uuid.UUID(primitive_id),
-        organisation_id=ORG_ID,
-        name="Test Primitive",
-        slug="test-primitive",
-        description=None,
-        primitive_type="schema",
-        source="local",
-        version="1.0",
-        author="testuser",
-        tags=[],
-        content_json={},
-        source_url=None,
-        forked_from=None,
-        checksum=None,
-        ed25519_signature=None,
-        verified=None,
-        download_count=None,
-        average_rating=None,
-        review_count=None,
-        owner_team_id=None,
-        visibility="org",
-        account_id=USER_ID,
-        auto_update=auto_update,
-        created_at=now,
-        updated_at=now,
-    )
+    pid = _to_uuid(primitive_id)
+    updated = _make_primitive_dict(name="Test Primitive", slug="test-primitive", tier="native")
+    updated["id"] = str(pid)
+    updated["auto_update"] = auto_update
     with (
-        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock) as mock_update,
+        patch("modulo.api.routes.library.update_library_primitive", new_callable=AsyncMock, return_value=updated),
         patch("modulo.api.routes.library.set_rls_org"),
         patch("modulo.api.routes.library.set_rls_user_context"),
     ):
-        mock_update.return_value = mock_prim
         ctx["response"] = client.patch(
-            f"/api/v1/libraries/{primitive_id}",
+            f"/api/v1/libraries/{pid}",
             json={"auto_update": auto_update},
         )
+    request.node._resp = ctx["response"]
 
 
 @then(parsers.parse("the primitive has auto_update set to {expected}"))
@@ -740,17 +910,15 @@ def _primitive_has_auto_update(ctx: dict[str, Any], expected: str) -> None:
 
 @given(parsers.parse('a published contribution with id "{primitive_id}" has a new version "{version}"'))
 def _published_contribution_new_version(ctx: dict[str, Any], primitive_id: str, version: str) -> None:
-    ctx["contrib_id"] = uuid.UUID(primitive_id)
+    ctx["contrib_id"] = _to_uuid(primitive_id)
     ctx["contrib_version"] = version
 
 
 @given(parsers.parse('a forked copy of "{primitive_id}" exists with auto_update set to {value}'))
 def _forked_copy_with_auto_update(ctx: dict[str, Any], primitive_id: str, value: str) -> None:
-    from modulo.db.models.library_primitive import LibraryPrimitive
-
     fork = MagicMock(spec=LibraryPrimitive)
     fork.id = uuid.uuid4()
-    fork.forked_from = uuid.UUID(primitive_id)
+    fork.forked_from = _to_uuid(primitive_id)
     fork.auto_update = value.strip().lower() == "true"
     fork.update_available_version_id = None
     ctx["fork_copy"] = fork

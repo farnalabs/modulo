@@ -435,6 +435,97 @@ def get_lifecycle_map_versions(ctx: dict[str, Any], request: Any, client: Any) -
     _store_response(request, ctx, resp)
 
 
+@when("I save a version of the lifecycle map")
+def save_version_capture_audit(ctx: dict[str, Any], request: Any, client: Any, mock_session: Any) -> None:
+    """POST /versions with an audit capture — pins the dedicated
+    ``lifecycle_map.version_saved`` event flowing through the real route's
+    ``_record_audit`` (FAR-203)."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    stages = [{"id": "stage-0", "name": "Stage 0", "type": "modulo"}]
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    with (
+        patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
+    ):
+        updated = _make_lifecycle_map(name=current.name, version=current.version + 1, content_json={"stages": stages})
+        mock_save.return_value = updated
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{current.id}/versions",
+            json={"stages": stages, "edges": [], "notes": ""},
+        )
+    _store_response(request, ctx, resp)
+    ctx["audit_mock"] = mock_audit
+    ctx["lifecycle_map"] = updated
+
+
+@when("I restore the lifecycle map")
+def restore_lifecycle_map(ctx: dict[str, Any], request: Any, client: Any, mock_session: Any) -> None:
+    """POST /{id}/restore with an audit capture — pins the ``lifecycle_map.restored``
+    event flowing through the real route's ``_record_audit`` (FAR-203)."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    restored = _make_lifecycle_map(name=current.name, content_json=current.content_json)
+    begin_nested_cm = AsyncMock()
+    begin_nested_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_nested_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin_nested = MagicMock(return_value=begin_nested_cm)
+    with (
+        patch("modulo.api.routes.lifecycle_maps.restore_lifecycle_map", new=AsyncMock()) as mock_restore,
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", new=AsyncMock()) as mock_audit,
+    ):
+        mock_restore.return_value = restored
+        resp = client.post(f"/api/v1/lifecycle-maps/{current.id}/restore")
+    _store_response(request, ctx, resp)
+    ctx["audit_mock"] = mock_audit
+    ctx["lifecycle_map"] = restored
+
+
+@then(parsers.parse('a "{event_type}" audit event was recorded for the map'))
+def lifecycle_map_audit_event_recorded(event_type: str, ctx: dict[str, Any]) -> None:
+    mock_audit = ctx.get("audit_mock")
+    assert mock_audit is not None, "No audit mock captured — the step did not run"
+    assert mock_audit.await_args is not None, f"No audit event was recorded, expected {event_type!r}"
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == event_type, f"Expected {event_type!r}, got {kwargs['event_type']!r}"
+    assert kwargs["resource_type"] == "lifecycle_map"
+
+
+@given("a lifecycle map with dangling legacy content exists")
+def lifecycle_map_with_dangling_legacy_content(ctx: dict[str, Any], request: Any) -> None:
+    """A pre-FAR-175 stored graph: an edge referencing an undefined stage."""
+    content_json = {
+        "stages": [{"id": "stage-0", "name": "Inbox", "type": "manual"}],
+        "edges": [{"id": "edge-0", "source": "stage-0", "target": "stage-ghost"}],
+    }
+    lm = _make_lifecycle_map(name="Legacy Map", content_json=content_json)
+    ctx["lifecycle_map"] = lm
+    request.node._lifecycle_map = lm
+
+
+@when("the legacy content backfill cleans the map")
+def legacy_backfill_cleans_map(ctx: dict[str, Any]) -> None:
+    from modulo.core.lifecycle_map.validation import clean_legacy_content
+
+    lm = ctx.get("lifecycle_map")
+    assert lm is not None, "No lifecycle map in context"
+    cleaned, changes = clean_legacy_content(lm.content_json)
+    ctx["cleaned_content"] = cleaned
+    ctx["backfill_changes"] = changes
+
+
+@then("the repaired map content is accepted by editor validation")
+def repaired_map_content_accepted(ctx: dict[str, Any]) -> None:
+    from modulo.core.lifecycle_map.validation import normalize_content
+
+    cleaned = ctx.get("cleaned_content")
+    assert cleaned is not None, "The backfill step did not run"
+    assert ctx.get("backfill_changes"), "The backfill made no changes to the legacy content"
+    normalize_content(cleaned)  # raises LifecycleMapContentError if still invalid
+    assert not ctx["cleaned_content"]["edges"], "the dangling edge must be dropped"
+
+
 @then(parsers.parse("the version list contains exactly {count:d} version at version {version:d}"))
 def version_list_exactly(count: int, version: int, request: Any) -> None:
     resp = request.node._resp
