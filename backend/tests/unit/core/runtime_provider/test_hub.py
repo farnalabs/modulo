@@ -98,7 +98,7 @@ def test_list_providers_returns_copy() -> None:
     assert providers["a"] is a
     # Mutating returned dict should not affect hub
     providers.clear()
-    assert not hub.list_providers()
+    assert hub.list_providers() == {"a": a, "b": b}
 
 
 # ---------------------------------------------------------------------------
