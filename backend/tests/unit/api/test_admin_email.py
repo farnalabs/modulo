@@ -139,9 +139,9 @@ class TestGetEmailSettings:
             resp = await client_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
             assert resp.status_code == 200
             data = resp.json()
-            assert data["smtp_host"] == ""
+            assert not data["smtp_host"]
             assert data["smtp_port"] == 587
-            assert data["email_from"] == ""
+            assert not data["email_from"]
             assert data["smtp_timeout"] == 30
         finally:
             admin_email.get_organisation = original

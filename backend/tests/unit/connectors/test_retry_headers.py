@@ -137,12 +137,12 @@ def test_format_rate_limit_detail_omits_absent_headers() -> None:
 
 
 def test_format_rate_limit_detail_no_headers() -> None:
-    assert format_rate_limit_detail(httpx.Response(429), RATE_LIMIT_HEADERS) == ""
+    assert not format_rate_limit_detail(httpx.Response(429), RATE_LIMIT_HEADERS)
 
 
 def test_format_rate_limit_detail_empty_value_is_omitted() -> None:
     response = httpx.Response(429, headers={"X-RateLimit-Limit": ""})
-    assert format_rate_limit_detail(response, RATE_LIMIT_HEADERS) == ""
+    assert not format_rate_limit_detail(response, RATE_LIMIT_HEADERS)
 
 
 # ── extract_rate_limit_metadata ─────────────────────────────────────────────

@@ -266,7 +266,7 @@ def test_prune_deletes_non_kept_matching_files(tmp_path, capsys):
 
 def test_prune_empty_dir_is_noop(tmp_path, capsys):
     prune.prune_backups(str(tmp_path), set(), dry_run=False)
-    assert capsys.readouterr().out == ""
+    assert not capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

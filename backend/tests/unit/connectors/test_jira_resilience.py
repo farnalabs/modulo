@@ -236,7 +236,7 @@ def test_rate_limit_detail_empty_when_absent():
     """No rate-limit headers -> empty detail string."""
     from modulo.connectors.jira import _rate_limit_detail
 
-    assert _rate_limit_detail(httpx.Response(429)) == ""
+    assert not _rate_limit_detail(httpx.Response(429))
 
 
 def test_rate_limit_metadata_only_present_headers():

@@ -328,7 +328,7 @@ def test_sha256_hex_is_deterministic() -> None:
 
 @pytest.mark.parametrize("raw", [None, "not-bytes", 42, ["bytes"]])
 def test_sha256_hex_returns_empty_for_non_bytes(raw: object) -> None:
-    assert sha256_hex(raw) == ""
+    assert not sha256_hex(raw)
 
 
 class TestVerifyTimestamp:

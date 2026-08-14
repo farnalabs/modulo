@@ -417,4 +417,4 @@ class TestSensitiveValueSerialization:
 
         obj = TestModel(secret="")
         dumped = obj.model_dump()
-        assert dumped["secret"] == ""
+        assert not dumped["secret"]

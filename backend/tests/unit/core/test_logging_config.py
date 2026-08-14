@@ -78,7 +78,7 @@ def test_correlation_id_filter_empty_when_not_set() -> None:
         exc_info=None,
     )
     CorrelationIdFilter().filter(record)
-    assert record.correlation_id == ""
+    assert not record.correlation_id
 
 
 def test_sensitive_field_filter_redacts() -> None:

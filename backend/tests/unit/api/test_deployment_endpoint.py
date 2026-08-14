@@ -90,5 +90,5 @@ class TestDeploymentInfo:
     def test_build_metadata_falls_back_to_empty(self, client: TestClient) -> None:
         resp = client.get("/api/v1/deployment")
         body = resp.json()
-        assert body["git_sha"] == ""
-        assert body["ci_job_url"] == ""
+        assert not body["git_sha"]
+        assert not body["ci_job_url"]

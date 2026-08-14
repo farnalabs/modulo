@@ -320,7 +320,7 @@ class TestRotateCheckpoints:
         assert "UPDATE checkpoints" in update_sql
         assert params["org_id"] == "org-1"
         assert params["thread_id"] == "thr-1"
-        assert params["ns"] == ""
+        assert not params["ns"]
         assert params["ckpt_id"] == "ck-1"
         updated = json.loads(params["checkpoint"])
         assert not updated["metadata"]
@@ -378,7 +378,7 @@ class TestRotateCheckpointBlobs:
         assert "UPDATE checkpoint_blobs" in update_sql
         assert params["org_id"] == "org-1"
         assert params["thread_id"] == "thr-1"
-        assert params["ns"] == ""
+        assert not params["ns"]
         assert params["channel"] == "channel-1"
         assert params["version"] == "1"
         assert new_fernet.decrypt(params["blob"]) == b"blob-bytes"
@@ -419,7 +419,7 @@ class TestRotateCheckpointWrites:
         assert "UPDATE checkpoint_writes" in update_sql
         assert params["org_id"] == "org-1"
         assert params["thread_id"] == "thr-1"
-        assert params["ns"] == ""
+        assert not params["ns"]
         assert params["ckpt_id"] == "ck-1"
         assert params["task_id"] == "task-1"
         assert params["idx"] == 0
