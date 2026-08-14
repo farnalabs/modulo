@@ -60,7 +60,7 @@ if ($Uncovered) {
 if ($Impact -or $Depends) {
     if ($Impact) {
         $target = $Impact
-        Write-Host "Downstream dependents of $target:" -ForegroundColor Cyan
+        Write-Host "Downstream dependents of ${target}:" -ForegroundColor Cyan
         $dependents = $entries | Where-Object { $_.depends -contains $target } | Sort-Object id
         if ($dependents.Count -eq 0) {
             if (-not ($entries.id -contains $target)) {
@@ -75,7 +75,7 @@ if ($Impact -or $Depends) {
     }
     if ($Depends) {
         $target = $Depends
-        Write-Host "Upstream dependencies of $target:" -ForegroundColor Cyan
+        Write-Host "Upstream dependencies of ${target}:" -ForegroundColor Cyan
         $entry = $entries | Where-Object { $_.id -eq $target }
         if (-not $entry) {
             Write-Host "  '$target' is not a known product map id." -ForegroundColor Red
