@@ -62,6 +62,13 @@ regression that silently weakens the suite:
 - ``@pytest.mark.parametrize`` with a single case in ``argvalues`` — a
   parametrize that adds no matrix coverage; indistinguishable from an ordinary
   test body and almost always a leftover from trimming the case list down
+- unbounded subprocess calls — ``subprocess.run``/``Popen``/``call``/
+  ``check_call``/``check_output`` without a ``timeout=`` bound, and
+  ``asyncio.create_subprocess_*`` processes whose ``communicate()``/``wait()``
+  is not wrapped in ``asyncio.wait_for(...)``. A child process with no bound
+  can hang CI indefinitely, and the failure is opaque (the runner just stops)
+  instead of surfacing a bound violation the way ``requests_without_timeout``
+  already does for HTTP in ``src/modulo``.
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -1594,3 +1601,164 @@ def test_single_value_parametrize_lens_flags_redundant_cases():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _single_case_parametrize_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_SYNC_SUBPROCESS_CALLS = {"run", "Popen", "call", "check_call", "check_output"}
+
+
+def _unbounded_sync_subprocess_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``subprocess.<fn>(...)`` call
+    made without a ``timeout=`` bound. ``subprocess.run(timeout=None)`` is just
+    as unbounded as an omitted keyword — ``None`` is the default meaning "wait
+    forever" — so an explicit ``None`` literal is still flagged."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if not isinstance(f, ast.Attribute) or f.attr not in _SYNC_SUBPROCESS_CALLS:
+            continue
+        if not isinstance(f.value, ast.Name) or f.value.id != "subprocess":
+            continue
+        bounded = any(
+            kw.arg == "timeout"
+            and not (isinstance(kw.value, ast.Constant) and kw.value.value is None)
+            for kw in node.keywords
+            if kw.arg
+        )
+        if bounded:
+            continue
+        found.append(
+            (node.lineno, f"subprocess.{f.attr}(...) without a timeout bound — a hung child blocks the test forever")
+        )
+    return found
+
+
+_ASYNC_SUBPROCESS_CALLS = {"create_subprocess_exec", "create_subprocess_shell"}
+
+
+def _wait_for_bounds(awaitable: ast.AST) -> bool:
+    """True when ``awaitable`` is ``asyncio.wait_for(..., timeout=...)`` with a
+    non-``None`` timeout, the async twin of a sync ``timeout=`` keyword."""
+    if not (isinstance(awaitable, ast.Call) and isinstance(awaitable.func, ast.Attribute)):
+        return False
+    if awaitable.func.attr != "wait_for":
+        return False
+    timeout = awaitable.args[1] if len(awaitable.args) >= 2 else None
+    if timeout is None:
+        for kw in awaitable.keywords:
+            if kw.arg == "timeout":
+                timeout = kw.value
+    return not (isinstance(timeout, ast.Constant) and timeout.value is None)
+
+
+def _unbounded_async_subprocess_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``asyncio.create_subprocess_*``
+    process whose ``proc.communicate()``/``proc.wait()`` is not wrapped in
+    ``asyncio.wait_for(...)`` with a timeout. ``proc.communicate()`` blocks
+    until the child exits; without a bound the test hangs the event loop."""
+    parent: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+
+    found = []
+    for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        proc_vars = {
+            target.id
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Await)
+            and isinstance(node.value.value, ast.Call)
+            and isinstance(node.value.value.func, ast.Attribute)
+            and node.value.value.func.attr in _ASYNC_SUBPROCESS_CALLS
+            and isinstance(node.value.value.func.value, ast.Name)
+            and node.value.value.func.value.id == "asyncio"
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in ("communicate", "wait"):
+                continue
+            if not isinstance(node.func.value, ast.Name) or node.func.value.id not in proc_vars:
+                continue
+            if isinstance(parent.get(node), ast.Call) and _wait_for_bounds(parent.get(node)):
+                continue
+            found.append(
+                (
+                    node.lineno,
+                    "proc.communicate()/wait() not wrapped in "
+                    "asyncio.wait_for(..., timeout=...) — a hung child blocks the test forever",
+                )
+            )
+    return found
+
+
+def test_no_unbounded_subprocess_calls():
+    """A subprocess spawned by a test — sync via ``subprocess.run``/``Popen``
+    or async via ``asyncio.create_subprocess_*`` — must carry an explicit
+    timeout bound. Without one, a child that hangs takes the whole test (and
+    CI run) down with it, and the failure is opaque: the runner simply stops
+    instead of reporting which bound was exceeded. This is the test-suite twin
+    of the ``requests_without_timeout`` rule that already guards HTTP in
+    ``src/modulo``."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _unbounded_sync_subprocess_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+        for lineno, detail in _unbounded_async_subprocess_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} unbounded subprocess call(s).\n"
+        "Give every child process an explicit timeout bound: add timeout=<secs> "
+        "to the subprocess call, or wrap await proc.communicate()/wait() in "
+        "asyncio.wait_for(..., timeout=<secs>).\n" + "\n".join(violations)
+    )
+
+
+def test_unbounded_subprocess_lens_flags_hang_risks():
+    """Synthetic positive/negative control for the unbounded-subprocess lens:
+    must flag sync calls without a timeout (or with an explicit ``None``), and
+    async ``communicate()``/``wait()`` awaits not wrapped in a timed
+    ``wait_for``; must ignore bounded calls, non-``subprocess`` callers, and
+    plain variable awaits."""
+    positive_sources = [
+        "def test_foo():\n    subprocess.run(['ls'])\n",
+        "def test_foo():\n    subprocess.Popen(['ls'], stdout=subprocess.PIPE)\n",
+        "def test_foo():\n    subprocess.check_call(['ls'], timeout=None)\n",
+        "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
+        "    out = await proc.communicate()\n",
+        "async def test_foo():\n    proc = await asyncio.create_subprocess_exec('ls')\n"
+        "    code = await proc.wait()\n",
+        "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
+        "    out = await asyncio.wait_for(proc.communicate(), timeout=None)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _unbounded_sync_subprocess_violations(tree) or _unbounded_async_subprocess_violations(tree), (
+            f"lens should flag:\n{source}"
+        )
+
+    negative_sources = [
+        "def test_foo():\n    subprocess.run(['ls'], timeout=5)\n",
+        "def test_foo():\n    subprocess.run(['ls'], timeout=TIMEOUT)\n",
+        "def test_foo():\n    os.system('ls')\n",
+        "def test_foo():\n    subprocess.run(['ls'], check=True, capture_output=True, text=True, timeout=5)\n",
+        "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
+        "    out = await asyncio.wait_for(proc.communicate(), timeout=10)\n",
+        "async def test_foo():\n    proc = await asyncio.create_subprocess_shell('ls')\n"
+        "    out = await asyncio.wait_for(proc.communicate(), 10)\n",
+        "async def test_foo():\n    out = await foo.communicate()\n",
+        "def test_foo():\n    subprocess.run(['ls'], timeout=5)\n"
+        "    my_func(subprocess.run)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _unbounded_sync_subprocess_violations(tree), f"lens should NOT flag:\n{source}"
+        assert not _unbounded_async_subprocess_violations(tree), f"lens should NOT flag:\n{source}"
