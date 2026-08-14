@@ -25,6 +25,8 @@ regression that silently weakens the suite:
 - ``assert len(x) == 0`` / ``assert 0 == len(x)`` where the ``len()`` operand
   is an attribute access, subscript, call, or container literal — an
   anti-idiom that should read ``assert not x`` and trips ruff SIM101
+- ``assert len(x) > 0`` where the ``len()`` operand is the same statically
+  container expression — the mirror image that should read ``assert x``
 - hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
@@ -545,6 +547,51 @@ def test_no_len_equals_zero_assertions():
     assert not violations, (
         f"Found {len(violations)} 'assert len(...) == 0' assertion(s).\n"
         "Sized containers are falsy when empty; write 'assert not <expr>' instead.\n" + "\n".join(violations)
+    )
+
+
+def test_no_len_greater_than_zero_assertions():
+    """``assert len(x) > 0`` should be ``assert x`` — the mirror image of the
+    ``== 0`` lens. A sized container is truthy exactly when it is non-empty,
+    so the explicit length comparison adds noise against a truthiness check
+    that expresses the same intent. The lens applies the same statically
+    container-only operand filter as its ``== 0`` sibling (attribute access,
+    subscript, call, or literal); a bare ``len(name) > 0`` is left alone
+    because the name may bind a custom object (``__bool__``) or a non-falsy
+    sized type such as a numpy array."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assert):
+                continue
+            test = node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+                continue
+            op = test.ops[0]
+            if not isinstance(op, ast.Gt):
+                continue
+            lhs, rhs = test.left, test.comparators[0]
+            if not (isinstance(rhs, ast.Constant) and rhs.value == 0):
+                continue
+            if not (isinstance(lhs, ast.Call) and isinstance(lhs.func, ast.Name) and lhs.func.id == "len"):
+                continue
+            if not lhs.args:
+                continue
+            operand = lhs.args[0]
+            if isinstance(operand, ast.Name):
+                continue
+            if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.List, ast.Dict, ast.Tuple)):
+                continue
+            if any(part in EXCLUDED_PACKAGES for part in path.parts):
+                continue
+            violations.append(f"  {rel}:{node.lineno}  assert len(...) > 0 — prefer 'assert ...'")
+    assert not violations, (
+        f"Found {len(violations)} 'assert len(...) > 0' assertion(s).\n"
+        "Sized containers are truthy when non-empty; write 'assert <expr>' instead.\n" + "\n".join(violations)
     )
 
 

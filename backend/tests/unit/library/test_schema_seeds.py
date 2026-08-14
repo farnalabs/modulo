@@ -70,7 +70,7 @@ def test_definition_is_valid_json_schema(entry: dict[str, Any]) -> None:
     assert definition["type"] == "object"
     assert "properties" in definition
     assert isinstance(definition["properties"], dict)
-    assert len(definition["properties"]) > 0
+    assert definition["properties"]
     Draft202012Validator.check_schema(definition)
 
 

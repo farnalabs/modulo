@@ -203,7 +203,7 @@ def see_per_case_scores_and_aggregate(request, ctx):
     data = ctx.get("results_page_data") or request.node._resp
     assert data is not None
     assert "scores" in data, "Missing per-case scores"
-    assert len(data["scores"]) > 0, "Scores list is empty"
+    assert data["scores"], "Scores list is empty"
     assert "aggregate" in data, "Missing aggregate score"
     assert isinstance(data["aggregate"], (int, float))
     # All per-case scores should be present

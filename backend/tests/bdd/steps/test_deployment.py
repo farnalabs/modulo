@@ -33,7 +33,7 @@ def check_required_fields(request):
 def check_non_empty_string(field: str, request):
     body = request.node._body
     assert isinstance(body[field], str)
-    assert len(body[field]) > 0
+    assert body[field]
 
 
 @then(parsers.parse('the "{field}" field is a non-negative integer'))

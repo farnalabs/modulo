@@ -108,7 +108,7 @@ class TestListFeatureFlags:
             resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
         assert "flags" in body
-        assert len(body["flags"]) > 0
+        assert body["flags"]
         for flag in body["flags"]:
             assert "name" in flag
             assert "description" in flag
@@ -132,7 +132,7 @@ class TestListFeatureFlags:
             resp = client.get("/api/v1/admin/feature-flags")
         body = resp.json()
         if body["license"]["tier"] == "community":
-            assert len(body["would_activate"]) > 0
+            assert body["would_activate"]
             for flag in body["would_activate"]:
                 assert flag["tier"] != "community"
 

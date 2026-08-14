@@ -179,7 +179,7 @@ def test_draft_preserves_findings() -> None:
     samples = [make_sample("repos", [{"name": "repo-a"}])]
     findings = infer(samples)
     draft = generate_draft(samples, findings)
-    assert len(draft.findings) > 0
+    assert draft.findings
     assert any(f.category == "overview" for f in draft.findings)
 
 
