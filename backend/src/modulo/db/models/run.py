@@ -176,6 +176,16 @@ class Run(OrgScoped):
     # of outputs_json by the Agent Return Contract (FAR-125). NULL for
     # pre-split runs. Written atomically with outputs_json (migration 0074).
     node_telemetry_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-188 raw-output retention markers (migration 0099) — dedicated JSONB
+    # column keyed by attempt_key, holding raw sandbox output retained when a
+    # sandbox_agent node's output.json fails to parse or the command
+    # stalls/times out. DELIBERATELY separate from outputs_json /
+    # node_telemetry_json so the Agent Return Contract columns stay clean: the
+    # node-output endpoint can never serve raw stdout, recover_node's
+    # already-completed guard never sees a fake completed node, and finalize's
+    # split-output machinery never touches the marker. Generic JSON here for
+    # SQLite/MariaDB parity (the work_item_refs precedent, migration 0083).
+    raw_output_markers: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Journey / work-item tracking (FAR-142, migration 0083) — additive,
     # nullable, never backfilled. ``work_item_id`` is the chain anchor written
     # ONCE at create (floor id or adopted from the parent run) and NEVER

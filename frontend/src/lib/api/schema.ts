@@ -4659,7 +4659,7 @@ export interface paths {
         /**
          * Update Lifecycle Map Version Endpoint
          * @description Update a version. v1 semantics: the active map state is the only version,
-         *     so this behaves identically to save â€” ``version_id`` is validated as a UUID
+         *     so this behaves identically to save — ``version_id`` is validated as a UUID
          *     for contract compatibility but the save targets the map itself.
          */
         put: operations["update_lifecycle_map_version_endpoint_api_v1_lifecycle_maps__lifecycle_map_id__versions__version_id__put"];
@@ -4764,7 +4764,7 @@ export interface paths {
          *     lifecycle-map stage and want the journeys they touched to reflect it.
          *     Per the FAR-143 spec v6 rule, self-report is ADVISORY: a reported ref can
          *     only CONFIRM / MATCH an existing journey keyed by the same canonical
-         *     ``(org, kind, ref)`` â€” a ref with no journey row is dropped (counted as
+         *     ``(org, kind, ref)`` — a ref with no journey row is dropped (counted as
          *     unmatched) and is NEVER minted, and no runs are created or touched. Each
          *     confirmed journey is advanced via ``advance_journeys`` with ``status``
          *     ``"complete"`` (the workflow reached this endpoint, so its stage
@@ -4772,13 +4772,13 @@ export interface paths {
          *     ``latest_terminal_run_id`` is preserved, not overwritten).
          *
          *     The request body is already the self-report wire shape, so entries flow
-         *     straight through ``validate_and_normalise_reported_refs`` â€” the same
+         *     straight through ``validate_and_normalise_reported_refs`` — the same
          *     per-entry validation/canonicalisation the run-finalise path applies to
          *     merged run outputs (``parse_self_report_refs`` is only needed for nested
          *     run-output trees). A malformed entry is rejected and counted, never a
          *     whole-request 422 (fail-open per ref).
          *
-         *     Auth: the documented CI/CD credential path (PRD Â§5.2) â€” a user JWT or an
+         *     Auth: the documented CI/CD credential path (PRD §5.2) — a user JWT or an
          *     org API key (``mk_...``). A GitHub Actions workflow calls this with
          *     ``Authorization: Bearer mk_<key>`` for a key whose owner holds the
          *     ``runner`` role. There is no ``run.create`` permission in the registry;
@@ -9867,7 +9867,7 @@ export interface components {
          * @description Per-ref outcome summary for one self-report request.
          *
          *     ``accepted`` refs matched an existing journey and were advanced;
-         *     ``unmatched`` refs were valid but had no journey row (dropped â€” never
+         *     ``unmatched`` refs were valid but had no journey row (dropped — never
          *     minted); ``rejected`` refs were malformed or dropped by the 100-entry cap.
          */
         JourneySelfReportResponse: {
