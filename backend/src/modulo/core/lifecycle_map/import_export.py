@@ -282,15 +282,16 @@ async def _create_map_via_envelope(
         content_json=first,
     )
     for _, _, snapshot in ordered[1:]:
-        lifecycle_map = await save_map_version(
+        updated = await save_map_version(
             session,
             lifecycle_map.id,
             stages=snapshot["stages"],
             edges=snapshot["edges"],
             notes=snapshot["notes"],
         )
-        if lifecycle_map is None:  # pragma: no cover — the map was just created
+        if updated is None:  # pragma: no cover — the map was just created
             raise LifecycleMapBundleError("version-history import failed mid-chain")
+        lifecycle_map = updated
     return lifecycle_map
 
 
