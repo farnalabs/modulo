@@ -533,7 +533,7 @@ def response_contains_backend_list(request):
         assert "items" in body
         assert isinstance(body["items"], list)
     elif isinstance(body, list):
-        assert len(body) >= 0
+        assert body
 
 
 @then("the response matches the backend details")

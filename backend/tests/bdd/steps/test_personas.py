@@ -1273,7 +1273,7 @@ def bundle_has_abstract_schemas(request):
     body = getattr(request.node, "_resp_body", {})
     if isinstance(body, dict):
         schemas = body.get("schemas", [])
-        assert len(schemas) >= 0
+        assert isinstance(schemas, list), "Bundle schemas must be a list"
 
 
 @when("I import the bundle on another Modulo instance")
