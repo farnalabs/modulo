@@ -162,6 +162,7 @@ async def receive_webhook(
     raw_body = await request.body()
     hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
     modulo_timestamp = request.headers.get("X-Modulo-Timestamp") or str(int(time.time()))
+    trigger: Trigger | None = None
 
     try:
         raw_payload: dict[str, Any] = await request.json()
@@ -292,7 +293,7 @@ async def receive_webhook(
         _log.info(
             "webhooks.receive_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
             trigger_id,
-            getattr(locals().get("trigger", None), "pipeline_id", None),
+            trigger.pipeline_id if trigger is not None else None,
         )
         return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
@@ -361,6 +362,7 @@ async def replay_webhook(
                 detail="Permission 'run.trigger' requires 'runner' role",
             ) from exc
 
+    trigger: Trigger | None = None
     try:
         async with session.begin():
             from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
@@ -491,7 +493,7 @@ async def replay_webhook(
         _log.info(
             "webhooks.replay_webhook.snapshot_lock_busy trigger=%s pipeline=%s",
             trigger_id,
-            getattr(locals().get("trigger", None), "pipeline_id", None),
+            trigger.pipeline_id if trigger is not None else None,
         )
         return {"run_id": None, "status": "queued", "detail": "Pipeline busy — queued for retry"}
     except ProgrammingError:
