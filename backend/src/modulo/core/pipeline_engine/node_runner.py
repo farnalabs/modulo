@@ -1889,40 +1889,58 @@ def make_sandbox_agent_fn(
                         },
                     )
 
-            # A6: an agent that produced no parseable output.json (regardless of
-            # exit code) is a retryable sandbox-infra failure — a node with zero
-            # usable work must never complete the run silently. FAR-188 (QA r1):
-            # the gate is ``not isinstance(output_json, dict)`` — a parseable
-            # but NON-dict output ([], "str", 123, null) is ALSO no-parseable
-            # and must retain + raise rather than silently completing with an
-            # empty summary/pr_url.
-            if not isinstance(output_json, dict):
-                # FAR-188: retain the RAW output so a pr_url created inside the
-                # sandbox is never lost when output.json fails to parse. The
-                # evidence searched is the UNION of raw sources — the file
-                # content AND the captured stdout (a pr_url echoed to stdout
-                # when output.json is present-but-malformed must be found).
-                # pr_url is extracted from the FULL pre-truncation source, then
-                # raw_output is truncated for storage (inside the builder).
-                _parse_error = output_read_error or f"output.json parsed to non-dict type {type(output_json).__name__}"
+            # FAR-188: an agent that produced no usable output.json content — a
+            # failed/unparseable read (output_json None) or a PARSEABLE but
+            # non-dict value ([], "str", 123, null). In BOTH cases the raw
+            # evidence is retained (pr_url extraction, marker persist). Only the
+            # TRULY-no-output case (output_json is None — read failure or
+            # json.loads("null")) raises SandboxNodeFailedError: a node with
+            # zero usable work must never complete the run silently (A6).
+            # A parseable non-dict value retains the marker and CONTINUES
+            # through the existing shaping path — agent_status stays None
+            # exactly as before (corrected FIX 4; test_node_runner_agent_status
+            # asserts this proceed-with-None behaviour and stays green).
+            if output_json is None or not isinstance(output_json, dict):
+                # Evidence is the UNION of raw sources — the file content AND
+                # the captured stdout (a pr_url echoed to stdout when output.json
+                # is present-but-malformed must be found). pr_url is extracted
+                # from the FULL pre-truncation source, then raw_output is
+                # truncated for storage (inside the builder).
                 _raw_parts = [p for p in (_normalize_marker_text(raw_output), agent_stdout_raw) if p]
                 _raw_combined = "\n".join(_raw_parts)
+                if output_json is None:
+                    _parse_error = output_read_error or "output.json is empty or JSON null"
+                    await _retain_raw_output_marker(
+                        session_factory,
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary="Sandbox agent produced no parseable output.json — raw output retained",
+                        source=_raw_combined,
+                        parse_error=_parse_error,
+                        exit_code=exit_code,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
+                    )
+                    raise SandboxNodeFailedError(
+                        "Sandbox agent produced no parseable output.json"
+                        + (f" (exit code {exit_code})" if cmd_result is not None else "")
+                    )
+                # Parseable non-dict output: retain the marker, do NOT raise —
+                # fall through to the shared shaping path below.
                 await _retain_raw_output_marker(
                     session_factory,
                     run_id=run_id,
                     org_id_raw=org_id,
                     node_id=node_id,
                     attempt_key=attempt_key,
-                    summary="Sandbox agent produced no parseable output.json — raw output retained",
+                    summary="Sandbox agent output.json parsed to a non-dict value — raw output retained",
                     source=_raw_combined,
-                    parse_error=_parse_error,
+                    parse_error=f"output.json parsed to non-dict type {type(output_json).__name__}",
                     exit_code=exit_code,
                     stdout_length=_stdout_len,
                     stderr_length=_stderr_len,
-                )
-                raise SandboxNodeFailedError(
-                    "Sandbox agent produced no parseable output.json"
-                    + (f" (exit code {exit_code})" if cmd_result is not None else "")
                 )
 
             _span = _otel_trace.get_current_span()

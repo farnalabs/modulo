@@ -406,13 +406,34 @@ async def test_db_hang_persist_fails_open_and_node_stays_retryable(caplog):
     )
 
 
-@pytest.mark.parametrize("non_dict", ["[]", '"just a string"', "123", "null"])
-async def test_non_dict_output_json_retains_raw_and_raises(non_dict):
-    """FIX 4 (retention gate): a PARSEABLE but non-dict output.json ([], "str",
-    123, null) is treated as no-parseable — the raw content is retained and the
-    node raises (retryable). It must NOT silently complete with an empty
-    summary/pr_url and drop the raw evidence."""
+@pytest.mark.parametrize("non_dict", ["[]", '"just a string"', "123"])
+async def test_non_dict_output_json_retains_marker_and_completes(non_dict):
+    """Corrected FIX 4: a PARSEABLE but non-dict output.json ([], "str", 123)
+    retains the raw evidence as a marker but does NOT raise — it continues
+    through the existing shaping path with agent_status None (the pre-existing
+    test_node_runner_agent_status suite asserts exactly this proceed-with-None
+    behaviour and must stay green)."""
     fn, row, sandbox = _retention_env(output_json=non_dict)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["status"] == "failed"
+    assert "non-dict" in marker["parse_error"]
+    assert non_dict in marker["raw_output"]
+    assert marker["_modulo_marker"] is True
+    # The node did NOT raise: it completed via the existing path, and no
+    # agent_status is fabricated from the non-dict output.
+    assert result["output"]["agent_status"] is None
+    assert result["artifacts"][0]["output"]["agent_status"] is None
+
+
+async def test_json_null_output_retains_and_raises():
+    """``null`` parses to None — the TRULY-no-output case: the raw marker is
+    retained AND the node raises SandboxNodeFailedError (unchanged original
+    FAR-188 semantics)."""
+    fn, row, sandbox = _retention_env(output_json="null")
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
@@ -421,10 +442,30 @@ async def test_non_dict_output_json_retains_raw_and_raises(non_dict):
         await fn(_run_state())
 
     marker = _single_marker(row)
-    assert marker["status"] == "failed"
-    assert "non-dict" in marker["parse_error"]
-    assert non_dict in marker["raw_output"]
+    assert "null" in marker["raw_output"]
     assert marker["_modulo_marker"] is True
+
+
+async def test_non_dict_output_with_stdout_pr_url_extracts_and_completes():
+    """Corrected FIX 4: pr_url extraction works in the non-dict continue path
+    too — a pr_url echoed to stdout when output.json parses to a non-dict value
+    is captured in the marker, and the node still completes (no raise)."""
+    log_content = f"Agent finished. PR: {_PR_777}\n"
+    sandbox = _make_sandbox_mock(output_json="[]", log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert marker["pr_url"] == _PR_777
+    assert _PR_777 in marker["raw_output"]
+    assert result["output"]["agent_status"] is None
 
 
 async def test_pr_url_echoed_to_stdout_found_when_output_json_malformed():
