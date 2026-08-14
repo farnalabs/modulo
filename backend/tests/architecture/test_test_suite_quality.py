@@ -100,6 +100,13 @@ regression that silently weakens the suite:
   ``frozenset()``) — the call-based twin of the ``== []``/``== {}`` literal
   lens. Every such builtin returns a falsy container, so these should read
   ``assert not x`` / ``assert x``
+- ``assert isinstance(a, X) and isinstance(b, Y)`` — an ``and`` conjunction
+  whose operands are all ``isinstance()`` calls is a compound boolean
+  assertion: when it fails, pytest reports the whole conjunction and cannot
+  say which operand had the wrong type. Split it into one ``assert`` per
+  isinstance call so each failure names its own operand. A single isinstance,
+  or an isinstance mixed with a truthiness/``is not None`` check (the
+  deliberate "type and non-empty" idiom), is left alone
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -2336,3 +2343,87 @@ def test_negated_comparison_lens_flags_reversed_asserts():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _negated_comparison_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+def _compound_isinstance_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert isinstance(a, T)
+    and isinstance(b, U)`` whose ``and`` operands are all ``isinstance()``
+    calls."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.BoolOp) or not isinstance(test.op, ast.And):
+            continue
+        if len(test.values) < 2:
+            continue
+        if not all(
+            isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "isinstance" for v in test.values
+        ):
+            continue
+        found.append(
+            (
+                node.lineno,
+                f"asserts {ast.unparse(test)} — compound isinstance 'and'; split into separate asserts "
+                "so a failure reports which operand has the wrong type",
+            )
+        )
+    return found
+
+
+def test_no_compound_isinstance_assertions():
+    """``assert isinstance(a, X) and isinstance(b, Y)`` joins two independent
+    type checks with ``and`` — a compound boolean assertion. When it fails,
+    pytest reports the whole conjunction and cannot say which value had the
+    wrong type, so the first green run hides which operand regressed. Split it
+    into one ``assert`` per isinstance call — the suite keeps the same
+    guarantees and each failure names its own operand. This is the isinstance
+    twin of the compound-``and`` lens, which only flags all-``Compare``
+    conjunctions and so cannot see isinstance calls. A single isinstance on
+    its own, or an isinstance mixed with a truthiness/``is not None`` check,
+    is the deliberate "type and non-empty" idiom and is left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _compound_isinstance_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} compound isinstance 'and' assertion(s).\n"
+        "Each isinstance should be its own assert so a failure names the operand with the wrong type.\n"
+        + "\n".join(violations)
+    )
+
+
+def test_compound_isinstance_lens_flags_split_able_conjunctions():
+    """Synthetic positive/negative control for the compound-isinstance lens:
+    must flag ``and`` conjunctions whose operands are all ``isinstance()``
+    calls (any operand shape, nested or not) and ignore a single isinstance,
+    mixed conjunctions (isinstance + truthiness / ``is not None`` / a
+    comparison), pure comparison compounds (owned by the compound-``and``
+    lens), and ``or`` conjunctions."""
+    positive_sources = [
+        "def test_foo():\n    assert isinstance(a, int) and isinstance(b, str)\n",
+        "def test_foo():\n    assert isinstance(result, dict) and isinstance(result['key'], list)\n",
+        "def test_foo():\n    assert isinstance(a, X) and isinstance(b, Y) and isinstance(c, Z)\n",
+        "def test_foo():\n    assert isinstance(a, (int, float)) and isinstance(b, str)\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _compound_isinstance_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert isinstance(a, int)\n",
+        "def test_foo():\n    assert isinstance(a, int) and a > 0\n",
+        "def test_foo():\n    assert isinstance(a, int) and a is not None\n",
+        "def test_foo():\n    assert isinstance(a, int) and a\n",
+        "def test_foo():\n    assert a == 1 and b == 2\n",
+        "def test_foo():\n    assert isinstance(a, int) or isinstance(b, str)\n",
+        "def test_foo():\n    assert a\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _compound_isinstance_assert_violations(tree), f"lens should NOT flag:\n{source}"
