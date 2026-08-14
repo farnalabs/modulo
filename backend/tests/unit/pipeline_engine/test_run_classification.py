@@ -683,7 +683,8 @@ class TestFailureAndIdempotency:
             run = await _seed_run(session, run_id, status="complete")
             await classify_and_persist_run(session, run)
         existing = await _read_classification(engine, run_id)
-        assert existing is not None and existing["value"] == "no_delivery"
+        assert existing is not None
+        assert existing["value"] == "no_delivery"
 
         async with session.begin():
             run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
