@@ -1,7 +1,7 @@
 """Add the ``guardrail`` eval type + eval_results.observed (FAR-208).
 
-Revision ID: 0099_guardrails
-Revises: 0098_slack_app_mention_trigger_type
+Revision ID: 0100_guardrails
+Revises: 0099_run_raw_output_markers
 Create Date: 2026-08-14
 
 FAR-208 adds structured-credential boundary data-safety at the ingestion edge
@@ -43,8 +43,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0099_guardrails"
-down_revision: str | None = "0098_slack_app_mention_trigger_type"
+revision: str = "0100_guardrails"
+down_revision: str | None = "0099_run_raw_output_markers"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -87,7 +87,7 @@ def _audit_pre_existing_eval_types() -> None:
     offending = sorted({str(row[0]) for row in rows if str(row[0]) not in _ALLOWED_EVAL_TYPES})
     if offending:
         raise RuntimeError(
-            "0099_guardrails: pre-existing eval_type values outside the allowed set: "
+            "0100_guardrails: pre-existing eval_type values outside the allowed set: "
             + ", ".join(offending)
             + " (expected one of "
             + ", ".join(sorted(_ALLOWED_EVAL_TYPES))

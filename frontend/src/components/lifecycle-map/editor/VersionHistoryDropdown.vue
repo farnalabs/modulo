@@ -29,7 +29,7 @@
         </button>
       </div>
       <div v-if="!versions.length" class="px-3 py-2 text-xs text-muted-foreground">
-        No versions yet
+        {{ $t('components.lifecycle-map.editor.VersionHistoryDropdown.no_versions') }}
       </div>
     </div>
   </div>

@@ -58,3 +58,14 @@ Feature: Lifecycle Map Versioning
     Given a lifecycle map named "Release Workflow" exists
     When I save a version of the lifecycle map with duplicate stage ids
     Then the response status is 422
+
+  Scenario: Version saves are recorded with a dedicated audit event
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map
+    Then the response status is 201
+    And a "lifecycle_map.version_saved" audit event was recorded for the map
+
+  Scenario: A legacy map with dangling edges is unblocked by the legacy-content backfill
+    Given a lifecycle map with dangling legacy content exists
+    When the legacy content backfill cleans the map
+    Then the repaired map content is accepted by editor validation

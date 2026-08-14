@@ -168,15 +168,10 @@ async def test_summary_and_other_fields_still_extracted():
     assert artifact_output["pr_url"] == "https://example.com/p"
 
 
-@pytest.mark.parametrize(
-    "output_json",
-    [
-        "not json",
-    ],
-)
-async def test_unparseable_output_json_raises_before_agent_status(output_json):
+async def test_unparseable_output_json_raises_before_agent_status():
     """An unparseable output.json fails the node before the output path — no
     agent_status is surfaced (a missing verdict can never be a false complete)."""
+    output_json = "not json"
     fn = make_sandbox_agent_fn(_base_node_def())
     with (
         patch(
