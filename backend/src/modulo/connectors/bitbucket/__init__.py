@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -15,6 +16,21 @@ from modulo.connectors.base import (
 )
 
 _BITBUCKET_API = "https://api.bitbucket.org/2.0"
+
+
+def _paging_total(body: dict[str, Any]) -> int | None:
+    """Extract Bitbucket's ``size`` field as a safe int.
+
+    Guards against non-finite floats (``inf``/``nan``) which otherwise poison
+    aggregation — Python's json parser produces ``inf`` for overflowing
+    literals such as ``1e999``, so a corrupt or hostile response must not be
+    able to poison the reported total. A missing ``size`` keeps the
+    historical ``None`` behaviour.
+    """
+    raw = body.get("size")
+    if raw is None:
+        return None
+    return _safe_int(raw)
 
 
 class BitbucketConnector(ConnectorBase):
@@ -105,7 +121,7 @@ class BitbucketConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=body.get("values", []),
-                        total=body.get("size"),
+                        total=_paging_total(body),
                     )
                 case "file":
                     workspace = q.filters.get("workspace")
@@ -141,7 +157,7 @@ class BitbucketConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=body.get("values", []),
-                        total=body.get("size"),
+                        total=_paging_total(body),
                     )
                 case "issues":
                     workspace = q.filters.get("workspace")
@@ -161,7 +177,7 @@ class BitbucketConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=body.get("values", []),
-                        total=body.get("size"),
+                        total=_paging_total(body),
                     )
                 case _:
                     raise ValueError(f"Unsupported Bitbucket resource: {q.resource!r}")
