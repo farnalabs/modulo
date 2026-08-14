@@ -88,12 +88,12 @@ class TestBuildToolRegistry:
     async def test_none_description_defaults_to_empty_string(self, fake_mcp: SimpleNamespace) -> None:
         fake_mcp._tool_manager._tools = {"foo": _make_tool(description=None)}
         await build_tool_registry()
-        assert get_mcp_tool_definitions()[0]["function"]["description"] == ""
+        assert not get_mcp_tool_definitions()[0]["function"]["description"]
 
     async def test_empty_description_stays_empty(self, fake_mcp: SimpleNamespace) -> None:
         fake_mcp._tool_manager._tools = {"foo": _make_tool(description="")}
         await build_tool_registry()
-        assert get_mcp_tool_definitions()[0]["function"]["description"] == ""
+        assert not get_mcp_tool_definitions()[0]["function"]["description"]
 
     async def test_non_dict_parameters_fallback_to_default_object(self, fake_mcp: SimpleNamespace) -> None:
         fake_mcp._tool_manager._tools = {

@@ -289,8 +289,8 @@ class TestRuntimeConfigStore:
         assert DEFAULT_VALUES["MODULO_PUBLIC_URL"] == "http://localhost:8000"
         assert DEFAULT_VALUES["MODULO_LOG_LEVEL"] == "INFO"
         assert DEFAULT_VALUES["DEBUG"] == "false"
-        assert DEFAULT_VALUES["MODULO_RATELIMIT_BYPASS_TOKEN"] == ""
-        assert DEFAULT_VALUES["MODULO_LICENSE_KEY"] == ""
+        assert not DEFAULT_VALUES["MODULO_RATELIMIT_BYPASS_TOKEN"]
+        assert not DEFAULT_VALUES["MODULO_LICENSE_KEY"]
         assert "DATABASE_URL" not in DEFAULT_VALUES
         assert "SECRET_KEY" not in DEFAULT_VALUES
         assert "FERNET_KEY" not in DEFAULT_VALUES

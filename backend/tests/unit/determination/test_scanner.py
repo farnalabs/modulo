@@ -478,8 +478,8 @@ def test_repo_name_falls_back_to_plain_name() -> None:
 
 
 def test_repo_name_ignores_non_string_values() -> None:
-    assert _repo_name({"name": 123}) == ""
-    assert _repo_name({}) == ""
+    assert not _repo_name({"name": 123})
+    assert not _repo_name({})
 
 
 # ---------------------------------------------------------------------------

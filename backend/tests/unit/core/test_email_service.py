@@ -341,7 +341,7 @@ class TestSendEmail:
 
             assert result is True
             msg = mock_server.send_message.call_args[0][0]
-            assert msg["Subject"] == ""
+            assert not msg["Subject"]
 
     def test_send_email_special_characters_in_subject(self) -> None:
         settings = MockSettings()

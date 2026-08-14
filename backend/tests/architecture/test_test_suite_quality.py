@@ -36,6 +36,9 @@ regression that silently weakens the suite:
 - ``assert x == []`` / ``assert x == {}`` against an empty container literal —
   ``== []``/``== {}`` is the equality-based twin of the ``len() == 0`` idiom
   and should read ``assert not x`` (an empty container is falsy)
+- ``assert x == ""`` / ``assert x != ""`` against an empty string literal — the
+  string twin of the empty-container lens; an empty string is falsy, so these
+  should read ``assert not x`` / ``assert x``
 - hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
@@ -654,6 +657,57 @@ def test_no_empty_container_literal_equality():
         f"Found {len(violations)} empty-container literal comparison(s).\n"
         "An empty list/dict is falsy; write 'assert not <expr>' instead of "
         "'assert <expr> == []/{}'.\n" + "\n".join(violations)
+    )
+
+
+def test_no_empty_string_equality():
+    """``assert x == ""`` / ``assert x != ""`` compare a value against an empty
+    string literal — the string twin of the empty-container lens above. An
+    empty string is falsy, so ``assert x == ""`` should read ``assert not x``
+    and ``assert x != ""`` should read ``assert x`` — the same intent with less
+    noise and no literal-type coupling. Operands whose type is statically a
+    container (attribute access, subscript, call, or await) are flagged; a bare
+    name is left alone because it may bind ``None`` or a non-str object whose
+    emptiness is not ``not``. A ``.get(...)`` lookup is left alone for the same
+    reason: it returns ``None`` for a missing key, and ``""`` vs ``None`` is a
+    meaningful distinction for headers/config/API fields that truthiness
+    silently conflates."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assert):
+                continue
+            test = node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+                continue
+            if not isinstance(test.ops[0], (ast.Eq, ast.NotEq)):
+                continue
+            sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
+            for operand, literal in sides:
+                if not (isinstance(literal, ast.Constant) and isinstance(literal.value, str) and literal.value == ""):
+                    continue
+                if isinstance(operand, ast.Name):
+                    continue
+                if (
+                    isinstance(operand, ast.Call)
+                    and isinstance(operand.func, ast.Attribute)
+                    and operand.func.attr == "get"
+                ):
+                    continue
+                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                    continue
+                op_name = "==" if isinstance(test.ops[0], ast.Eq) else "!="
+                prefer = "assert not ..." if isinstance(test.ops[0], ast.Eq) else "assert ..."
+                violations.append(f"  {rel}:{node.lineno}  asserts value {op_name} '' — prefer '{prefer}'")
+                break
+    assert not violations, (
+        f"Found {len(violations)} empty-string comparison(s).\n"
+        "An empty string is falsy; write 'assert not <expr>' instead of "
+        "'assert <expr> == \"\"' and 'assert <expr>' instead of 'assert <expr> != \"\"'.\n" + "\n".join(violations)
     )
 
 

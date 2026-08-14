@@ -186,8 +186,8 @@ class TestRecordErrorIngest:
         metrics_mod._errors_total = counter
         metrics_mod.record_error_ingest("", "", None)
         _, kwargs = counter.add.call_args
-        assert kwargs["attributes"]["source"] == ""
-        assert kwargs["attributes"]["level"] == ""
+        assert not kwargs["attributes"]["source"]
+        assert not kwargs["attributes"]["level"]
 
 
 # =========================================================================

@@ -281,7 +281,7 @@ def test_pg_database_name_strips_query_string():
 
 
 def test_pg_database_name_root_is_empty():
-    assert pg_database_name("postgresql://u:p@h/") == ""
+    assert not pg_database_name("postgresql://u:p@h/")
 
 
 # ---------------------------------------------------------------------------

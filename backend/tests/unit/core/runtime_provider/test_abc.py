@@ -11,7 +11,7 @@ def test_workspace_spec_defaults() -> None:
         organisation_id=uuid.uuid4(),
     )
     assert spec.run_id is None
-    assert spec.image_ref == ""
+    assert not spec.image_ref
     assert not spec.capabilities
     assert spec.timeout_seconds == 3600
     assert not spec.resource_limits

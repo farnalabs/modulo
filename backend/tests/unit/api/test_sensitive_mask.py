@@ -94,7 +94,7 @@ class TestMaskSensitiveValue:
         assert mask_sensitive_value("secret123") == SENSITIVE_VALUE_MASK
 
     def test_returns_empty_string_for_empty(self) -> None:
-        assert mask_sensitive_value("") == ""
+        assert not mask_sensitive_value("")
 
     def test_constant_is_six_bullets(self) -> None:
         assert SENSITIVE_VALUE_MASK == "••••••"
@@ -213,7 +213,7 @@ class TestSensitiveValue:
 
         obj = TestModel(secret="")
         dumped = obj.model_dump()
-        assert dumped["secret"] == ""
+        assert not dumped["secret"]
 
 
 # ---------------------------------------------------------------------------

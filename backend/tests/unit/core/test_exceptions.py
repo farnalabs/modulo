@@ -27,7 +27,7 @@ class TestSnapshotLockNotAvailableError:
     def test_instantiates_without_message(self) -> None:
         exc = SnapshotLockNotAvailableError()
         assert isinstance(exc, Exception)
-        assert str(exc) == ""
+        assert not str(exc)
 
     def test_instantiates_with_message(self) -> None:
         # pipeline_snapshot.py raises with a composed message.

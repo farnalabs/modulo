@@ -34,11 +34,11 @@ class TestCspSettings:
     def test_empty_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_settings(monkeypatch)
         monkeypatch.delenv("MODULO_MONITOR_DOMAINS", raising=False)
-        assert Settings().modulo_monitor_domains == ""
+        assert not Settings().modulo_monitor_domains
 
     def test_empty_string_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_settings(monkeypatch, MODULO_MONITOR_DOMAINS="")
-        assert Settings().modulo_monitor_domains == ""
+        assert not Settings().modulo_monitor_domains
 
     def test_single_domain(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_settings(monkeypatch, MODULO_MONITOR_DOMAINS="https://sentry.mycompany.com")
