@@ -1115,9 +1115,14 @@ async def test_no_output_json_message_is_bounded_for_huge_stdout():
         await fn(_run_state())
 
     message = str(excinfo.value)
-    # stdout (2048) + stderr (2048) + log tail (1024) caps + headers/markers.
-    assert len(message) < 6_500
+    # The whole message fits the 5000-char sanitizer/column cap — no downstream
+    # truncation can shave any section (FAR-197 review fix).
+    assert len(message) <= 5000
     assert "...[truncated" in message
+    # High-value diagnostics lead: stderr tail and the sandbox log tail (the
+    # kill reason) come BEFORE the stdout tail, so they survive any truncation.
+    assert message.index("--- stderr tail ---") < message.index("--- stdout tail ---")
+    assert message.index("--- sandbox log tail ---") < message.index("--- stdout tail ---")
 
 
 async def test_no_output_log_tail_fetched_before_kill():

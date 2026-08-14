@@ -1695,15 +1695,24 @@ class PipelineExecutor:
             # (not the raw langgraph class name). Publish the run_failed event
             # so WS subscribers get a live failure notification, consistent
             # with every other terminal-failure path in this file.
+            #
+            # Write cap: 5000, NOT 500 — the transient node-cancelled detail is
+            # the only place the FAR-197 no-output.json diagnostic (stdout/stderr
+            # tails, the E2B log tail where the kill reason lives) reaches the
+            # user. It is bounded by the builder to fit the 5000-char
+            # sanitizer/column cap (runs.error_detail is String(5000)), and every
+            # detail read surface (run-detail REST + MCP) presents at limit=5000;
+            # list surfaces truncate to 200 by design. A 500-char write cap cut
+            # the stderr + log tails entirely for large-output failures.
             final_status = "failed"
             error_code = "node_cancelled"
             if isinstance(exc, NodeCancelledError):
                 error_detail = _sanitize_detail(
-                    "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=500
+                    "Sandbox node cancelled (transient) after retries exhausted: " + str(exc), limit=5000
                 )
             else:
                 error_detail = _sanitize_detail(
-                    "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=500
+                    "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
                 )
             broker.publish("run_failed", {"error": "node_cancelled", "detail": error_detail})
         except Exception as exc:
