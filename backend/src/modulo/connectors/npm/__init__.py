@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -134,12 +135,10 @@ class NpmConnector(ConnectorBase):
         objects = body.get("objects", [])
         records = [o.get("package", {}) for o in objects]
 
-        total = body.get("total", len(records))
+        total = _safe_int(body.get("total"), len(records))
         next_cursor = None
-        if records:
-            has_more = offset + len(records) < total if isinstance(total, int) else len(records) >= size
-            if has_more:
-                next_cursor = str(offset + len(records))
+        if records and offset + len(records) < total:
+            next_cursor = str(offset + len(records))
 
         return ConnectorResult(
             records=records,
