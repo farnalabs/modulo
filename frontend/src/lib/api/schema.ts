@@ -12541,12 +12541,7 @@ export interface components {
             } | null;
             /** Trace Id */
             trace_id?: string | null;
-            /**
-             * Trace Url
-             * Deep-link to the org's configured OTLP backend for this run's
-             * trace. Only populated on the detail endpoint when an otlp_endpoint
-             * is configured.
-             */
+            /** Trace Url */
             trace_url?: string | null;
             /** Node Token Usage */
             node_token_usage?: {
