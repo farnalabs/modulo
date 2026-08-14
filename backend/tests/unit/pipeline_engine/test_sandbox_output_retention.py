@@ -22,6 +22,7 @@ the retryable raise into a terminal ``node_timeout``.
 
 import asyncio
 import logging
+import re
 import uuid
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -540,3 +541,90 @@ async def test_silent_early_returns_are_logged(caplog):
     messages = {r.message for r in caplog.records}
     assert "sandbox_agent.raw_output_marker_skip_no_run_id" in messages
     assert "sandbox_agent.raw_output_marker_skip_unparseable_org" in messages
+
+
+async def test_raw_output_redacts_tokenized_git_urls_but_keeps_pr_url():
+    """FAR-188 QA round 2: a malformed output.json whose raw source embeds a
+    tokenized git URL (the sandbox runs with GITHUB_TOKEN injected; agent
+    git push/clone output embeds ``https://x-access-token:<PAT>@github.com/...``)
+    is persisted with the credential scrubbed — while pr_url extraction still
+    runs against the FULL UNREDACTED source so the evidence is never lost."""
+    malformed = (
+        '{"summary": "clone via tokenized url", '
+        '"log": "https://x-access-token:ghp_abc123@github.com/org/repo.git and '
+        'http://x-access-token:ghp_http456@github.com/org/repo2.git", '
+        '"pr_url": "https://github.com/org/repo/pull/42"'
+    )
+    fn, row, sandbox = _retention_env(output_json=malformed)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert "ghp_abc123" not in marker["raw_output"], "the https tokenized URL userinfo must be redacted"
+    assert "ghp_http456" not in marker["raw_output"], "the http tokenized URL userinfo must be redacted"
+    assert "https://<redacted>@github.com/" in marker["raw_output"]
+    assert "http://<redacted>@github.com/" in marker["raw_output"]
+    assert "x-access-token:" not in marker["raw_output"]
+    # pr_url is extracted from the FULL source BEFORE redaction — never lost.
+    assert marker["pr_url"] == "https://github.com/org/repo/pull/42"
+
+
+async def test_raw_output_redacts_bare_token_patterns():
+    """FAR-188 QA round 2: defensively mask bare credential values that follow
+    known labels (ghp_/gho_/github_pat_, Bearer , token=, x-access-token:) even
+    when they appear OUTSIDE a URL — e.g. echoed auth lines in agent stdout."""
+    log_content = (
+        f"clone ok\nauth: Bearer gho_secret789\ntoken=github_pat_11AAABBBCC\nx-access-token:ghp_zzzzzz\nPR: {_PR_456}\n"
+    )
+    sandbox = _make_sandbox_mock(output_json="[]", log_content=log_content)
+    row = _FakeRunRow()
+
+    def _factory() -> _RetentionSession:
+        return _RetentionSession(row)
+
+    fn = make_sandbox_agent_fn(_base_node_def(timeout_seconds=30), session_factory=_factory)
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert result["output"]["agent_status"] is None
+    assert "gho_secret789" not in marker["raw_output"]
+    assert "github_pat_11AAABBBCC" not in marker["raw_output"]
+    assert "ghp_zzzzzz" not in marker["raw_output"]
+    assert "Bearer <redacted>" in marker["raw_output"]
+    assert "token=<redacted>" in marker["raw_output"]
+    assert "x-access-token:<redacted>" in marker["raw_output"]
+    assert marker["pr_url"] == _PR_456
+
+
+async def test_redaction_failure_never_blocks_retention():
+    """FAR-188 QA round 2: if redaction itself raises (best-effort), the ORIGINAL
+    content is retained and the marker still persists — retention must never be
+    blocked by the scrub step, and pr_url extraction still ran first."""
+    malformed = (
+        '{"log": "https://x-access-token:ghp_abc123@github.com/org/repo.git", '
+        '"pr_url": "https://github.com/org/repo/pull/42", '
+    )
+    fn, row, sandbox = _retention_env(output_json=malformed)
+
+    _boom_pattern = MagicMock()
+    _boom_pattern.sub.side_effect = re.error("boom")
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch(
+            "modulo.core.pipeline_engine.node_runner._TOKENIZED_GIT_URL_PATTERN",
+            new=_boom_pattern,
+        ),
+        pytest.raises(SandboxNodeFailedError),
+    ):
+        await fn(_run_state())
+
+    marker = _single_marker(row)
+    assert "ghp_abc123" in marker["raw_output"], "on redaction failure the original content is kept (fail open)"
+    assert marker["pr_url"] == "https://github.com/org/repo/pull/42"

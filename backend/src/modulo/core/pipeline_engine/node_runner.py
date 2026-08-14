@@ -404,6 +404,17 @@ async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> st
 
 _PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+")
 
+# Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
+# commands run with OPENCODE_API_KEY and GITHUB_TOKEN (a PAT) injected, and
+# agent ``git push``/``git clone``/``gh`` output routinely embeds tokenized
+# URLs like ``https://x-access-token:<PAT>@github.com/...``. The stored
+# ``raw_output`` field is scrubbed BEFORE persistence so credentials never
+# enter it unmasked. ``_TOKENIZED_GIT_URL_PATTERN`` strips the userinfo from
+# any ``http(s)://...@host`` URL; ``_TOKEN_VALUE_PATTERN`` defensively masks
+# bare token values that follow known credential labels.
+_TOKENIZED_GIT_URL_PATTERN = _re.compile(r"(https?://)[^@\s/]+@")
+_TOKEN_VALUE_PATTERN = _re.compile(r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+")
+
 
 def _extract_pr_url(raw_text: str) -> str:
     """Best-effort GitHub PR URL extraction from raw sandbox output.
@@ -416,6 +427,27 @@ def _extract_pr_url(raw_text: str) -> str:
         return ""
     match = _PR_URL_PATTERN.search(raw_text)
     return match.group(0) if match else ""
+
+
+def _redact_raw_output(raw_text: str) -> str:
+    """Best-effort scrub of credentials from retained raw sandbox output.
+
+    FAR-188 (QA round 2): the stored ``raw_output`` marker field must never
+    contain live credentials. Both tokenized git URLs (scheme preserved, e.g.
+    ``https://x-access-token:<PAT>@github.com/...`` → ``https://<redacted>@github.com/...``)
+    and bare token values following known credential labels (``x-access-token:``,
+    ``ghp_``/``gho_``/``ghu_``/``ghs_``, ``github_pat_``, ``Bearer ``,
+    ``token=``) are masked. NEVER raises: a redaction failure returns the
+    original text so retention is never blocked (best-effort, fail open).
+    """
+    if not isinstance(raw_text, str) or not raw_text:
+        return raw_text
+    try:
+        scrubbed = _TOKENIZED_GIT_URL_PATTERN.sub(r"\1<redacted>@", raw_text)
+        return _TOKEN_VALUE_PATTERN.sub(r"\1<redacted>", scrubbed)
+    except (_re.error, TypeError, ValueError):
+        _log.warning("sandbox_agent.raw_output_redact_failed")
+        return raw_text
 
 
 def _normalize_marker_text(raw: Any) -> str:
@@ -452,15 +484,16 @@ async def _retain_raw_output_marker(
     tail, which the drain window bounds to the last ``_MAX_DRAIN_WINDOW``
     (512KB) bytes — the retained ``raw_output`` therefore reflects that
     bounded tail, never a multi-MB log). Bytes are decoded exactly once;
-    ``pr_url`` is extracted from the FULL source, and ONLY THEN is
-    ``raw_output`` truncated to ``_MAX_ARTIFACT_LOG`` for storage.
+    ``pr_url`` is extracted from the FULL UNREDACTED source, then the stored
+    ``raw_output`` copy is scrubbed of credentials (``_redact_raw_output``)
+    and ONLY THEN truncated to ``_MAX_ARTIFACT_LOG`` for storage.
     """
     text = _normalize_marker_text(source)
     marker: dict[str, Any] = {
         "_modulo_marker": True,
         "status": "failed",
         "summary": summary,
-        "raw_output": text[:_MAX_ARTIFACT_LOG],
+        "raw_output": _redact_raw_output(text)[:_MAX_ARTIFACT_LOG],
         "parse_error": parse_error,
         "pr_url": _extract_pr_url(text),
         "exit_code": exit_code,
