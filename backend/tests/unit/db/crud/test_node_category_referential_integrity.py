@@ -78,7 +78,7 @@ async def _seed_pipeline(
 async def test_no_references_returns_empty(session: AsyncSession) -> None:
     category = await _seed_category(session)
     await _seed_pipeline(session, name="no refs", nodes=[{"id": "n1", "type": "agent"}])
-    assert await node_category_in_use(session, category.id, org_id=_ORG_A) == []
+    assert not await node_category_in_use(session, category.id, org_id=_ORG_A)
 
 
 async def test_referencing_pipeline_reported(session: AsyncSession) -> None:
@@ -101,7 +101,7 @@ async def test_only_matching_category_reported(session: AsyncSession) -> None:
         name="uses other",
         nodes=[{"id": "n1", "type": "agent", "node_category_id": str(other.id)}],
     )
-    assert await node_category_in_use(session, category.id, org_id=_ORG_A) == []
+    assert not await node_category_in_use(session, category.id, org_id=_ORG_A)
 
 
 async def test_other_org_references_ignored(session: AsyncSession) -> None:
@@ -112,7 +112,7 @@ async def test_other_org_references_ignored(session: AsyncSession) -> None:
         org_id=_ORG_B,
         nodes=[{"id": "n1", "type": "agent", "node_category_id": str(category.id)}],
     )
-    assert await node_category_in_use(session, category.id, org_id=_ORG_A) == []
+    assert not await node_category_in_use(session, category.id, org_id=_ORG_A)
 
 
 async def test_soft_deleted_pipeline_ignored(session: AsyncSession) -> None:
@@ -123,7 +123,7 @@ async def test_soft_deleted_pipeline_ignored(session: AsyncSession) -> None:
         deleted=True,
         nodes=[{"id": "n1", "type": "agent", "node_category_id": str(category.id)}],
     )
-    assert await node_category_in_use(session, category.id, org_id=_ORG_A) == []
+    assert not await node_category_in_use(session, category.id, org_id=_ORG_A)
 
 
 async def test_non_dict_and_malformed_entries_ignored(session: AsyncSession) -> None:
@@ -133,7 +133,7 @@ async def test_non_dict_and_malformed_entries_ignored(session: AsyncSession) -> 
         name="garbage nodes",
         nodes=[{"id": "n1"}, "not-a-dict", None, {"node_category_id": 12345}],
     )
-    assert await node_category_in_use(session, category.id, org_id=_ORG_A) == []
+    assert not await node_category_in_use(session, category.id, org_id=_ORG_A)
 
 
 async def test_soft_delete_blocked_when_referenced(session: AsyncSession) -> None:
