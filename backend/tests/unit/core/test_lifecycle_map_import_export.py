@@ -121,7 +121,7 @@ def test_build_export_envelope_returns_canonical_primitive_shape() -> None:
     envelope = build_export_envelope(lm)
 
     assert envelope["primitive_type"] == "lifecycle_map"
-    assert envelope["format_version"] == "1"
+    assert envelope["format_version"] == "2"
     assert envelope["name"] == "SDLC Workflow"
     assert envelope["description"] == "Q3"
     # The editor alias is canonicalised to the stored shape (same as a save).
@@ -130,6 +130,13 @@ def test_build_export_envelope_returns_canonical_primitive_shape() -> None:
     assert envelope["content_json"]["edges"][0]["source"] == "s1"
     assert envelope["content_json"]["edges"][0]["target"] == "s2"
     assert envelope["content_json"]["notes"] == "n"
+    # The version history carries the active version's canonical graph + metadata.
+    assert len(envelope["versions"]) == 1
+    version_entry = envelope["versions"][0]
+    assert version_entry["version"] == 1
+    assert version_entry["stages"][0]["type"] == "manual"
+    assert version_entry["edges"][0]["source"] == "s1"
+    assert version_entry["notes"] == "n"
 
 
 def test_build_export_envelope_empty_content() -> None:
@@ -199,7 +206,7 @@ async def test_import_envelope_rejects_wrong_primitive_type(session: AsyncMock) 
 
 async def test_import_envelope_rejects_wrong_format_version(session: AsyncMock) -> None:
     envelope = _valid_envelope()
-    envelope["format_version"] = "2"
+    envelope["format_version"] = "99"
 
     with pytest.raises(LifecycleMapBundleError):
         await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=envelope)
@@ -327,3 +334,214 @@ async def test_materialize_from_primitive_rejects_bad_export_envelope(session: A
 
     with pytest.raises(LifecycleMapBundleError):
         await materialize_map_from_primitive(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive)
+
+
+# ---------------------------------------------------------------------------
+# FAR-204 — version-history export / import
+# ---------------------------------------------------------------------------
+
+
+def test_build_export_envelope_carries_version_history_metadata() -> None:
+    """The envelope is format v2 and carries the active version as history."""
+    lm = _make_map(
+        version=4,
+        content_json={"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "notes": "n"},
+    )
+
+    envelope = build_export_envelope(lm)
+
+    assert envelope["format_version"] == "2"
+    assert len(envelope["versions"]) == 1
+    entry = envelope["versions"][0]
+    assert entry["version"] == 4
+    assert entry["stages"][0]["id"] == "s1"
+    assert entry["notes"] == "n"
+    assert "created_at" in entry
+    assert "created_by" in entry
+
+
+def _valid_v2_envelope() -> dict:
+    envelope = _valid_envelope()
+    envelope["format_version"] = "2"
+    envelope["versions"] = [
+        {"version": 1, "stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": [], "notes": ""}
+    ]
+    return envelope
+
+
+async def test_import_envelope_v1_payload_imports_single_version(session: AsyncMock) -> None:
+    """Backward compat: a format_version 1 envelope (no versions) imports as a version-1 map."""
+    session.execute.return_value = _name_rows()
+    created = _make_map(name="SDLC Workflow")
+    with (
+        patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls,
+        patch("modulo.core.lifecycle_map.import_export.create_library_primitive", new=AsyncMock()),
+        patch("modulo.core.lifecycle_map.import_export.save_map_version", new=AsyncMock()) as mock_save,
+    ):
+        result = await import_lifecycle_map_envelope(
+            session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=_valid_envelope()
+        )
+
+    assert result is created
+    assert model_cls.call_args.kwargs.get("version", 1) == 1
+    assert model_cls.call_args.kwargs["content_json"]["stages"][0]["type"] == "manual"
+    mock_save.assert_not_awaited()
+
+
+async def test_import_envelope_v2_single_version_imports_as_version_one(session: AsyncMock) -> None:
+    """A v2 envelope with a single history entry still imports as a version-1 map."""
+    session.execute.return_value = _name_rows()
+    created = _make_map(name="SDLC Workflow")
+    envelope = _valid_v2_envelope()
+    envelope["versions"][0]["version"] = 3
+    with (
+        patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls,
+        patch("modulo.core.lifecycle_map.import_export.create_library_primitive", new=AsyncMock()),
+        patch("modulo.core.lifecycle_map.import_export.save_map_version", new=AsyncMock()) as mock_save,
+    ):
+        result = await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=envelope)
+
+    assert result is created
+    assert model_cls.call_args.kwargs["version"] == 1
+    assert model_cls.call_args.kwargs["content_json"]["stages"][0]["type"] == "manual"
+    mock_save.assert_not_awaited()
+
+
+async def test_import_envelope_recreates_version_chain(session: AsyncMock) -> None:
+    """Importing a v2 envelope replays every version, recreating the chain."""
+    session.execute.return_value = _name_rows()
+    created = _make_map(name="SDLC Workflow")
+    v2_map = _make_map(name="SDLC Workflow", version=2)
+    v3_map = _make_map(name="SDLC Workflow", version=3)
+    envelope = _valid_v2_envelope()
+    envelope["versions"] = [
+        {"version": 1, "stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+        {
+            "version": 2,
+            "stages": [
+                {"id": "s1", "name": "Inbox", "type": "manual"},
+                {"id": "s2", "name": "Review", "type": "manual"},
+            ],
+            "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+        },
+        {
+            "version": 3,
+            "stages": [
+                {"id": "s1", "name": "Inbox", "type": "manual"},
+                {"id": "s2", "name": "Review", "type": "modulo"},
+            ],
+            "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+        },
+    ]
+    with (
+        patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls,
+        patch("modulo.core.lifecycle_map.import_export.create_library_primitive", new=AsyncMock()),
+        patch("modulo.core.lifecycle_map.import_export.save_map_version", new=AsyncMock()) as mock_save,
+    ):
+        mock_save.side_effect = [v2_map, v3_map]
+        result = await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=envelope)
+
+    assert result is v3_map
+    # The chain is recreated from the first snapshot (version 1) then replayed.
+    assert model_cls.call_args.kwargs["version"] == 1
+    assert mock_save.await_count == 2
+    first_replay = mock_save.await_args_list[0]
+    assert first_replay.kwargs["stages"][1]["id"] == "s2"
+    second_replay = mock_save.await_args_list[1]
+    assert second_replay.kwargs["stages"][1]["type"] == "modulo"
+
+
+async def test_import_envelope_reorders_versions_deterministically(session: AsyncMock) -> None:
+    """Versions are applied in numeric order regardless of exporter ordering."""
+    session.execute.return_value = _name_rows()
+    created = _make_map(name="SDLC Workflow")
+    v2_map = _make_map(name="SDLC Workflow", version=2)
+    v3_map = _make_map(name="SDLC Workflow", version=3)
+    envelope = _valid_v2_envelope()
+    envelope["versions"] = [
+        {"version": 3, "stages": [{"id": "s3", "name": "Three", "type": "manual"}], "edges": []},
+        {"version": 1, "stages": [{"id": "s1", "name": "One", "type": "manual"}], "edges": []},
+        {"version": 2, "stages": [{"id": "s2", "name": "Two", "type": "manual"}], "edges": []},
+    ]
+    with (
+        patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls,
+        patch("modulo.core.lifecycle_map.import_export.create_library_primitive", new=AsyncMock()),
+        patch("modulo.core.lifecycle_map.import_export.save_map_version", new=AsyncMock()) as mock_save,
+    ):
+        mock_save.side_effect = [v2_map, v3_map]
+        await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=envelope)
+
+    assert model_cls.call_args.kwargs["content_json"]["stages"][0]["id"] == "s1"
+    assert mock_save.await_count == 2
+    assert mock_save.await_args_list[0].kwargs["stages"][0]["id"] == "s2"
+    assert mock_save.await_args_list[1].kwargs["stages"][0]["id"] == "s3"
+
+
+async def test_import_envelope_rejects_non_list_versions(session: AsyncMock) -> None:
+    envelope = _valid_envelope()
+    envelope["versions"] = "not-a-list"
+
+    with pytest.raises(LifecycleMapBundleError):
+        await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=envelope)
+
+
+async def test_import_envelope_rejects_bad_version_number(session: AsyncMock) -> None:
+    session.execute.return_value = _name_rows()
+    envelope = _valid_v2_envelope()
+    envelope["versions"] = [{"version": "two", "stages": [], "edges": []}]
+
+    with pytest.raises(LifecycleMapBundleError):
+        await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=envelope)
+
+
+async def test_import_envelope_rejects_version_entry_missing_stages(session: AsyncMock) -> None:
+    session.execute.return_value = _name_rows()
+    envelope = _valid_v2_envelope()
+    envelope["versions"] = [{"version": 1, "edges": []}]
+
+    with pytest.raises(LifecycleMapBundleError):
+        await import_lifecycle_map_envelope(session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, envelope=envelope)
+
+
+async def test_materialize_from_primitive_recreates_version_history(session: AsyncMock) -> None:
+    """Copy-to-adapt of a v2 primitive replays the exported version chain."""
+    session.execute.return_value = _name_rows()
+    primitive = _make_primitive(
+        name="Shared SDLC",
+        content_json={
+            "lifecycle_map_id": str(uuid.uuid4()),
+            "export": {
+                "primitive_type": PRIMITIVE_TYPE,
+                "format_version": "2",
+                "name": "Shared SDLC",
+                "content_json": {"stages": [{"id": "s2", "name": "Review", "type": "manual"}], "edges": []},
+                "versions": [
+                    {"version": 1, "stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+                    {
+                        "version": 2,
+                        "stages": [
+                            {"id": "s1", "name": "Inbox", "type": "manual"},
+                            {"id": "s2", "name": "Review", "type": "manual"},
+                        ],
+                        "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+                    },
+                ],
+            },
+        },
+    )
+    created = _make_map(name="Shared SDLC")
+    v2_map = _make_map(name="Shared SDLC", version=2)
+    with (
+        patch("modulo.core.lifecycle_map.service.LifecycleMap", return_value=created) as model_cls,
+        patch("modulo.core.lifecycle_map.import_export.save_map_version", new=AsyncMock()) as mock_save,
+    ):
+        mock_save.return_value = v2_map
+        result = await materialize_map_from_primitive(
+            session, org_id=_ORG_ID, account_id=_ACCOUNT_ID, primitive=primitive
+        )
+
+    assert result is v2_map
+    assert model_cls.call_args.kwargs["version"] == 1
+    assert model_cls.call_args.kwargs["content_json"]["stages"][0]["id"] == "s1"
+    assert mock_save.await_count == 1
+    assert mock_save.await_args.kwargs["stages"][1]["id"] == "s2"

@@ -118,9 +118,138 @@ def response_is_export_envelope(request: Any) -> None:
     resp = request.node._resp
     data = resp.json()
     assert data.get("primitive_type") == "lifecycle_map", data
-    assert data.get("format_version") == "1", data
+    assert data.get("format_version") == "2", data
     assert "content_json" in data, data
     assert "name" in data, data
+
+
+@then("the export envelope carries the version history")
+def export_envelope_carries_version_history(request: Any) -> None:
+    """FAR-204: the v2 envelope carries a versions array with per-version graph."""
+    resp = request.node._resp
+    data = resp.json()
+    versions = data.get("versions")
+    assert isinstance(versions, list) and versions, data
+    first = versions[0]
+    assert isinstance(first, dict), data
+    assert "stages" in first and "edges" in first, data
+    assert first.get("version") is not None, data
+
+
+@when(parsers.parse('I import a lifecycle map named "{name}" from a v1 envelope'))
+def post_import_lifecycle_map_v1(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """FAR-204 backward compat: a format_version 1 envelope still imports."""
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "1",
+        "name": name,
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+    }
+    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+        mock_lm = _make_lifecycle_map(name=name)
+        mock_import.return_value = mock_lm
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+    ctx["imported_map"] = mock_lm
+
+
+@when(parsers.parse('I import a lifecycle map named "{name}" with version history'))
+def post_import_lifecycle_map_with_versions(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """FAR-204: a v2 envelope carrying a versions array is accepted by the route."""
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "2",
+        "name": name,
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+        "versions": [
+            {"version": 1, "stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+            {
+                "version": 2,
+                "stages": [
+                    {"id": "s1", "name": "Inbox", "type": "manual"},
+                    {"id": "s2", "name": "Review", "type": "manual"},
+                ],
+                "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+            },
+        ],
+    }
+    with patch("modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope", new=AsyncMock()) as mock_import:
+        mock_lm = _make_lifecycle_map(name=name)
+        mock_import.return_value = mock_lm
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx, resp)
+    ctx["imported_map"] = mock_lm
+
+
+@when("I import a lifecycle map with a malformed version history")
+def post_import_lifecycle_map_malformed_versions(request: Any, client: Any) -> None:
+    """FAR-204: a malformed versions entry raises the bundle error → 422."""
+    envelope = {
+        "primitive_type": "lifecycle_map",
+        "format_version": "2",
+        "name": "Broken",
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+        "versions": [{"version": "nope", "stages": [], "edges": []}],
+    }
+    from modulo.core.lifecycle_map.import_export import LifecycleMapBundleError
+
+    bundle_error = LifecycleMapBundleError("Lifecycle map 'versions' entry #0 'version' must be an integer, got 'nope'")
+    with patch(
+        "modulo.api.routes.lifecycle_maps.import_lifecycle_map_envelope",
+        new=AsyncMock(side_effect=bundle_error),
+    ):
+        resp = client.post("/api/v1/lifecycle-maps/import", json=envelope)
+    _store_response(request, ctx={}, resp=resp)
+
+
+@when(parsers.parse('I contribute a lifecycle map primitive named "{name}"'))
+def post_contribute_lifecycle_map(name: str, ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """FAR-204: lifecycle_map is an accepted community-contribute primitive_type."""
+    payload = {
+        "primitive_type": "lifecycle_map",
+        "name": name,
+        "slug": "community-sdlc",
+        "description": "shared lifecycle map",
+        "tags": [],
+        "content_json": {"stages": [{"id": "s1", "name": "Inbox", "type": "manual"}], "edges": []},
+        "source_url": None,
+    }
+
+    def _primitive() -> MagicMock:
+        p = MagicMock()
+        p.id = uuid.uuid4()
+        p.organisation_id = ORG_ID
+        p.source = "local"
+        p.primitive_type = "lifecycle_map"
+        p.name = name
+        p.slug = "community-sdlc"
+        p.description = "shared lifecycle map"
+        p.author = USER_ID.hex
+        p.version = "1.0"
+        p.tags = []
+        p.content_json = payload["content_json"]
+        p.source_url = None
+        p.forked_from = None
+        p.checksum = None
+        p.ed25519_signature = None
+        p.verified = None
+        p.download_count = None
+        p.average_rating = None
+        p.review_count = None
+        p.owner_team_id = None
+        p.visibility = "org"
+        p.account_id = USER_ID
+        p.auto_update = True
+        p.tier = "native"
+        p.trust_tier = None
+        p.created_at = datetime.now(UTC)
+        p.updated_at = datetime.now(UTC)
+        return p
+
+    with patch("modulo.api.routes.library.contribute_primitive", new=AsyncMock(return_value=_primitive())):
+        resp = client.post("/api/v1/libraries/community/contribute", json=payload)
+    _store_response(request, ctx, resp)
+    ctx["contributed"] = name
 
 
 @when(parsers.parse('I import a lifecycle map named "{name}"'))
