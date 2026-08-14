@@ -156,7 +156,7 @@ def test_create_pipeline_accepts_empty_retry_policy(client: TestClient) -> None:
         resp = client.post("/api/v1/pipelines", json={"name": "Pipeline", "retry_policy": {}})
 
     assert resp.status_code == 201
-    assert resp.json()["retry_policy"] == {}
+    assert not resp.json()["retry_policy"]
 
 
 def test_create_pipeline_accepts_all_valid_events(client: TestClient) -> None:
@@ -217,7 +217,7 @@ def test_update_pipeline_clears_retry_policy_with_empty_dict(client: TestClient)
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"retry_policy": {}})
 
     assert resp.status_code == 200
-    assert resp.json()["retry_policy"] == {}
+    assert not resp.json()["retry_policy"]
 
 
 def test_update_pipeline_rejects_unknown_retry_event(client: TestClient) -> None:

@@ -114,7 +114,7 @@ class TestGroupRecords:
         assert not groups
 
     def test_empty_records(self) -> None:
-        assert _group_records([]) == {}
+        assert not _group_records([])
 
 
 class TestReadJsonl:

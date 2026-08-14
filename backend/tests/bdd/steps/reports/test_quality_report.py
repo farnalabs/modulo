@@ -172,11 +172,11 @@ def check_response_body(request) -> None:
     assert "period" in data
     assert "summary" in data
     assert "deliveries" in data
-    assert len(data["deliveries"]) > 0
+    assert data["deliveries"]
 
 
 @then("the response contains empty deliveries")
 def check_empty_deliveries(request) -> None:
     data = request.node._resp.json()
     assert "deliveries" in data
-    assert data["deliveries"] == []
+    assert not data["deliveries"]

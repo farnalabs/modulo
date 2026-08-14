@@ -265,7 +265,7 @@ class TestGetLicense:
         data = resp.json()
         assert data["has_license"] is False
         assert data["tier"] == "community"
-        assert data["features"] == []
+        assert not data["features"]
 
     def test_returns_license_when_set(self, client: TestClient) -> None:
         payload = _make_valid_payload()

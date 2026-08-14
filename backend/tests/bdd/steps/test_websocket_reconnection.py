@@ -272,7 +272,7 @@ def _then_oldest_seq_6(request: Any) -> None:
 @then("no events are returned")
 def _then_no_replayed(request: Any) -> None:
     ctx = _ctx(request)
-    assert ctx.get("replayed_events") == [], f"Expected empty replay, got {ctx.get('replayed_events')}"
+    assert not ctx.get("replayed_events"), f"Expected empty replay, got {ctx.get('replayed_events')}"
 
 
 @then("seq 1 has been evicted from the buffer")

@@ -541,7 +541,7 @@ class TestListContributions:
             result = await list_contributions(session, org_id)
 
         assert result.total == 0
-        assert result.items == []
+        assert not result.items
 
     async def test_contribution_status_param_filters_results(self):
         """contribution_status param filters results from CRUD layer."""

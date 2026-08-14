@@ -188,7 +188,7 @@ def test_filter_subscribed_accepts_list() -> None:
     ep = _make_filter_endpoint(["hitl_awaiting", "run_failed"])
     n = Notifier(MagicMock(), _KEY)
     assert n._filter_subscribed([ep], "run_failed") == [ep]
-    assert n._filter_subscribed([ep], "hitl_overdue") == []
+    assert not n._filter_subscribed([ep], "hitl_overdue")
 
 
 def test_filter_subscribed_parses_json_string_events() -> None:
@@ -200,7 +200,7 @@ def test_filter_subscribed_parses_json_string_events() -> None:
 def test_filter_subscribed_skips_unparseable_events() -> None:
     ep = _make_filter_endpoint("not-json")
     n = Notifier(MagicMock(), _KEY)
-    assert n._filter_subscribed([ep], "run_failed") == []
+    assert not n._filter_subscribed([ep], "run_failed")
 
 
 # ---------------------------------------------------------------------------

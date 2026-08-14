@@ -568,7 +568,7 @@ class TestExportChain:
 
         result = await export_chain(session, uuid.uuid4())
         assert result["total"] == 0
-        assert result["items"] == []
+        assert not result["items"]
 
     async def test_export_page_two(self, session):
         org_id = uuid.uuid4()
@@ -648,7 +648,7 @@ class TestExportChain:
             to_date=to_date,
         )
         assert result["total"] == 0
-        assert result["items"] == []
+        assert not result["items"]
 
         # Every filter must reach the SQL sent to the DB, on both the items
         # and count queries, not just return an empty page.
@@ -774,7 +774,7 @@ class TestListAuditEvents:
 
         result = await list_audit_events(session, org_id)
         assert result["total"] == 0
-        assert result["items"] == []
+        assert not result["items"]
         assert result["limit"] == 50
         assert result["next_cursor"] is None
 
@@ -794,7 +794,7 @@ class TestListAuditEvents:
 
         result = await list_audit_events(session, org_id, cursor="not-a-uuid")
         assert result["total"] == 0
-        assert result["items"] == []
+        assert not result["items"]
         # Falls back to the first page without raising.
         assert result["next_cursor"] is None
 
@@ -815,7 +815,7 @@ class TestListAuditEvents:
 
         with caplog.at_level(logging.WARNING):
             result = await list_audit_events(session, org_id, cursor="garbage")
-        assert result["items"] == []
+        assert not result["items"]
         assert result["next_cursor"] is None
         assert any("failed to decode cursor" in rec.message for rec in caplog.records)
 

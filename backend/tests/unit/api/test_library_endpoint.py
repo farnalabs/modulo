@@ -300,7 +300,7 @@ def test_list_libraries_include_in_dev_passes_empty_exclusions(client: TestClien
         resp = client.get("/api/v1/libraries", params={"include_in_dev": "true"})
     assert resp.status_code == 200, resp.text
     assert mock_list.await_args is not None
-    assert mock_list.await_args.kwargs["excluded_tiers"] == []
+    assert not mock_list.await_args.kwargs["excluded_tiers"]
     tiers = [item["tier"] for item in resp.json()["items"]]
     assert "in_dev" in tiers, f"Expected an in_dev primitive in the response, got tiers: {tiers}"
 

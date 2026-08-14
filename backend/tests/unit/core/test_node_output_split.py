@@ -547,7 +547,7 @@ def test_extend_type_map_source_node_id_fallback() -> None:
 def test_extend_type_map_safe_on_malformed_graph() -> None:
     assert extend_node_type_map_from_edges({"a": "agent"}, None) == {"a": "agent"}
     assert extend_node_type_map_from_edges({"a": "agent"}, {"edges": "nope"}) == {"a": "agent"}
-    assert extend_node_type_map_from_edges(None, {"nodes": [], "edges": []}) == {}
+    assert not extend_node_type_map_from_edges(None, {"nodes": [], "edges": []})
 
 
 def test_extend_type_map_skips_edges_without_source_or_target() -> None:
@@ -558,4 +558,4 @@ def test_extend_type_map_skips_edges_without_source_or_target() -> None:
             {"hitl_gate_config": {"gate_id": "g3"}},
         ]
     }
-    assert extend_node_type_map_from_edges(None, graph) == {}
+    assert not extend_node_type_map_from_edges(None, graph)

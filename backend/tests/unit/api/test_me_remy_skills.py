@@ -91,7 +91,7 @@ class TestListUserSkills:
         ):
             resp = client.get("/api/v1/me/remy/skills")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     def test_list_user_skills_returns_created_skills(self, client: TestClient) -> None:
         skill = _make_skill()

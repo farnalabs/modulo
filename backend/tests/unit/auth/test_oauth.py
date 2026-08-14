@@ -722,10 +722,10 @@ class TestNormalizeScopes:
         assert normalize_scopes("trigger:run hitl:review") == ["hitl:review", "trigger:run"]
 
     def test_empty_string(self) -> None:
-        assert normalize_scopes("") == []
+        assert not normalize_scopes("")
 
     def test_whitespace_only(self) -> None:
-        assert normalize_scopes("   ") == []
+        assert not normalize_scopes("   ")
 
     def test_unknown_scope_raises(self) -> None:
         with pytest.raises(InvalidScopeError, match="unknown:scope"):

@@ -37,7 +37,7 @@ class TestRunOutputValidation:
         ov = OutputValidation()
         result = run_output_validation({"key": "value"}, ov)
         assert result.passed
-        assert result.failures == []
+        assert not result.failures
 
     def test_regex_match_passes(self) -> None:
         ov = OutputValidation(
@@ -52,7 +52,7 @@ class TestRunOutputValidation:
         )
         result = run_output_validation({"score": "42"}, ov)
         assert result.passed
-        assert result.failures == []
+        assert not result.failures
 
     def test_regex_no_match_fails(self) -> None:
         ov = OutputValidation(

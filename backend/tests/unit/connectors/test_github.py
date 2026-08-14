@@ -629,7 +629,7 @@ async def test_query_search_issues_empty(connector):
     )
     result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "nothing"}))
     assert result.total == 0
-    assert result.records == []
+    assert not result.records
 
 
 @respx.mock
@@ -1142,7 +1142,7 @@ async def test_write_commit_duplicate_path_rejected(connector):
                 },
             )
         )
-    assert respx.calls == []
+    assert not respx.calls
 
 
 @respx.mock
@@ -1158,7 +1158,7 @@ async def test_write_commit_move_same_path_rejected(connector):
                 },
             )
         )
-    assert respx.calls == []
+    assert not respx.calls
 
 
 @respx.mock
@@ -1184,7 +1184,7 @@ async def test_write_commit_move_binary_file_raises_descriptive_error(connector)
                 },
             )
         )
-    assert blob_route.calls == []
+    assert not blob_route.calls
 
 
 async def test_write_commit_missing_repo(connector):
@@ -1378,7 +1378,7 @@ def test_rate_limit_metadata_present_headers() -> None:
 
 def test_rate_limit_metadata_absent_headers() -> None:
     response = httpx.Response(200)
-    assert _rate_limit_metadata(response) == {}
+    assert not _rate_limit_metadata(response)
 
 
 def test_rate_limit_detail_summarises_quota() -> None:
@@ -1423,7 +1423,7 @@ async def test_query_result_exposes_rate_limit_metadata(connector):
 async def test_query_result_rate_limit_metadata_absent_when_no_headers(connector):
     respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=[]))
     result = await connector.query(ConnectorQuery(resource="repos", limit=5))
-    assert result.metadata.get("rate_limit", {}) == {}
+    assert not result.metadata.get("rate_limit", {})
 
 
 @respx.mock

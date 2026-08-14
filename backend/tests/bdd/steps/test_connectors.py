@@ -752,7 +752,7 @@ def step_github_query_search(resource, search_query, ctx):
 def step_result_has_records(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert len(result.records) > 0, "Query result has no records"
+    assert result.records, "Query result has no records"
 
 
 @then("the records contain repository metadata")
@@ -765,14 +765,14 @@ def step_records_contain_repo_metadata(ctx):
 @then("the record contains file content")
 def step_record_contains_file_content(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     assert "content" in result.records[0], f"Record missing content: {result.records[0]}"
 
 
 @then("the record contains issue fields")
 def step_record_contains_issue_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert any(k in rec for k in ("id", "key", "identifier")), f"Record missing issue identifier: {rec}"
 
@@ -4316,7 +4316,7 @@ def step_records_contain_issue_metadata(ctx):
 @then("the records contain issue fields")
 def step_records_contain_issue_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert any(k in rec for k in ("id", "iid", "title", "state")), f"Record missing issue fields: {rec}"
 
@@ -5276,7 +5276,7 @@ def step_trello_lists_metadata(ctx):
 @then("the record contains card fields")
 def step_trello_card_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "id" in rec, f"Record missing card fields: {rec}"
     assert "name" in rec, f"Record missing card fields: {rec}"
@@ -5978,7 +5978,7 @@ def step_asana_project_metadata(ctx):
 @then("the record contains project fields")
 def step_asana_project_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "gid" in rec, f"Record missing project fields: {rec}"
     assert "name" in rec, f"Record missing project fields: {rec}"
@@ -6022,7 +6022,7 @@ def step_shortcut_story_metadata(ctx):
 @then("the record contains story fields")
 def step_shortcut_story_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "id" in rec, f"Record missing story fields: {rec}"
     assert "name" in rec, f"Record missing story fields: {rec}"
@@ -6913,7 +6913,7 @@ def step_notion_database_metadata(ctx):
 @then("the record contains database fields")
 def step_notion_database_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "id" in rec, f"Record missing database fields: {rec}"
     assert "title" in rec, f"Record missing database fields: {rec}"
@@ -6922,7 +6922,7 @@ def step_notion_database_fields(ctx):
 @then("the record contains Notion page fields")
 def step_notion_page_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "id" in rec, f"Record missing Notion page fields: {rec}"
     assert "properties" in rec, f"Record missing Notion page fields: {rec}"
@@ -6939,7 +6939,7 @@ def step_confluence_page_metadata(ctx):
 @then("the record contains page fields")
 def step_confluence_page_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "id" in rec, f"Record missing page fields: {rec}"
     assert "title" in rec, f"Record missing page fields: {rec}"
@@ -6974,7 +6974,7 @@ def step_google_docs_document_metadata(ctx):
 @then("the record contains document fields")
 def step_google_docs_document_fields(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "documentId" in rec, f"Record missing document fields: {rec}"
     assert "title" in rec, f"Record missing document fields: {rec}"
@@ -6983,7 +6983,7 @@ def step_google_docs_document_fields(ctx):
 @then("the record contains file metadata")
 def step_google_docs_file_metadata(ctx):
     result = ctx["query_result"]
-    assert len(result.records) > 0
+    assert result.records
     rec = result.records[0]
     assert "id" in rec, f"Record missing file metadata: {rec}"
     assert "name" in rec, f"Record missing file metadata: {rec}"
@@ -7254,7 +7254,7 @@ def step_datadog_health_result(status, ctx):
 def step_datadog_result_contains_monitors(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert len(result.records) > 0, "Expected monitor records"
+    assert result.records, "Expected monitor records"
     for rec in result.records:
         assert "id" in rec, f"Monitor record missing fields: {rec}"
         assert "name" in rec, f"Monitor record missing fields: {rec}"
@@ -7264,7 +7264,7 @@ def step_datadog_result_contains_monitors(ctx):
 def step_datadog_result_contains_events(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert len(result.records) > 0, "Expected event records"
+    assert result.records, "Expected event records"
     for rec in result.records:
         assert "id" in rec, f"Event record missing fields: {rec}"
         assert "title" in rec, f"Event record missing fields: {rec}"
@@ -7274,7 +7274,7 @@ def step_datadog_result_contains_events(ctx):
 def step_datadog_result_contains_metrics(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert len(result.records) > 0, "Expected metric records"
+    assert result.records, "Expected metric records"
     assert "attributes" in result.records[0], f"Metric record missing attributes: {result.records[0]}"
 
 
@@ -7282,7 +7282,7 @@ def step_datadog_result_contains_metrics(ctx):
 def step_datadog_result_contains_dashboards(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert len(result.records) > 0, "Expected dashboard records"
+    assert result.records, "Expected dashboard records"
     for rec in result.records:
         assert "id" in rec, f"Dashboard record missing fields: {rec}"
         assert "attributes" in rec, f"Dashboard record missing fields: {rec}"
@@ -7292,7 +7292,7 @@ def step_datadog_result_contains_dashboards(ctx):
 def step_datadog_result_contains_logs(ctx):
     result = ctx.get("query_result")
     assert result is not None, "No query result"
-    assert len(result.records) > 0, "Expected log records"
+    assert result.records, "Expected log records"
     for rec in result.records:
         assert "id" in rec, f"Log record missing id: {rec}"
 

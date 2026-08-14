@@ -128,7 +128,7 @@ def test_list_deliveries_empty(client: TestClient) -> None:
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["items"] == []
+    assert not body["items"]
     assert body["next_cursor"] is None
     assert body["total"] == 0
 

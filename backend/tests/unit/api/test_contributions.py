@@ -400,7 +400,7 @@ class TestListContributions:
         assert resp.status_code == 200
         body = resp.json()
         assert body["total"] == 0
-        assert body["items"] == []
+        assert not body["items"]
 
     def test_list_contributions_with_status_filter(self, client: TestClient):
         """Verify the contribution_status query param is accepted."""

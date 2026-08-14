@@ -403,7 +403,7 @@ def test_seed_state_merges_defaults_and_input():
     state = _seed_state(snap, {"key": "override", "extra": 1})
     assert state["run_context"]["input"] == {"key": "override", "extra": 1}
     assert state["run_context"]["cancelled"] is False
-    assert state["artifacts"] == []
+    assert not state["artifacts"]
 
 
 def test_seed_state_snapshot_defaults_present():
@@ -437,7 +437,7 @@ def test_seed_state_seeds_iteration_counts():
     """
     snap = _make_snapshot()
     state = _seed_state(snap, {})
-    assert state["_iteration_counts"] == {}
+    assert not state["_iteration_counts"]
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +611,7 @@ async def test_execute_seeds_state_with_run_context():
 
     assert captured_state["run_context"]["cancelled"] is False
     assert captured_state["run_context"]["input"] == {"task": "do it"}
-    assert captured_state["artifacts"] == []
+    assert not captured_state["artifacts"]
 
 
 async def test_execute_fires_on_first_progress_once():

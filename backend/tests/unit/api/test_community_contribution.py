@@ -283,7 +283,7 @@ class TestListCommunityContributions:
             resp = client.get(self.LIST_PATH)
 
         assert resp.status_code == 200
-        assert resp.json()["items"] == []
+        assert not resp.json()["items"]
         assert resp.json()["total"] == 0
 
     def test_list_respects_pagination_params(self, client: TestClient) -> None:

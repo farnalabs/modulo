@@ -65,9 +65,9 @@ def _make_session(rows: list[object] | None = None) -> AsyncMock:
 class TestRotationResult:
     def test_defaults(self) -> None:
         result = RotationResult()
-        assert result.tables_processed == []
+        assert not result.tables_processed
         assert result.total_rows_reencrypted == 0
-        assert result.details == {}
+        assert not result.details
 
     def test_fields_mutable(self) -> None:
         result = RotationResult()
@@ -323,7 +323,7 @@ class TestRotateCheckpoints:
         assert params["ns"] == ""
         assert params["ckpt_id"] == "ck-1"
         updated = json.loads(params["checkpoint"])
-        assert updated["metadata"] == {}
+        assert not updated["metadata"]
         assert new_fernet.decrypt(updated["data"].encode()) == b"checkpoint-state"
 
     @pytest.mark.asyncio

@@ -450,8 +450,8 @@ class TestReconcileEdgeCases:
         assert journey.updated_at == _T3
 
     async def test_drift_refs_empty_canonical_returns_empty(self, session: AsyncSession) -> None:
-        assert await _drift_refs(session, _ORG, [], None, advancing=True) == []
-        assert await _drift_refs(session, _ORG, [], _T2, advancing=False) == []
+        assert not await _drift_refs(session, _ORG, [], None, advancing=True)
+        assert not await _drift_refs(session, _ORG, [], _T2, advancing=False)
 
 
 class TestAdvanceJourneysDirect:
@@ -615,9 +615,9 @@ class TestDriftPredicateDialects:
 
 class TestCanonicalRefs:
     def test_non_list_returns_empty(self) -> None:
-        assert _canonical_refs(None) == []
-        assert _canonical_refs("not-a-list") == []
-        assert _canonical_refs({"kind": "github_pr", "ref": "1"}) == []
+        assert not _canonical_refs(None)
+        assert not _canonical_refs("not-a-list")
+        assert not _canonical_refs({"kind": "github_pr", "ref": "1"})
 
     def test_malformed_entries_dropped_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING", logger="modulo.core.lifecycle_map.reconcile"):

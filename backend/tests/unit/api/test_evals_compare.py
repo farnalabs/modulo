@@ -232,7 +232,7 @@ class TestEvalCompare:
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["results"] == []
+        assert not resp.json()["results"]
 
 
 # ── GET /api/v1/evals/coverage ────────────────────────────────────────────
@@ -320,7 +320,7 @@ class TestEvalCoverage:
         resp = admin_client.get(f"{self.URL}?pipeline_id={_PIPELINE_ID}")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["nodes"] == []
+        assert not data["nodes"]
         assert data["summary"]["total_nodes"] == 0
         assert data["summary"]["coverage_pct"] == 0.0
 
@@ -449,7 +449,7 @@ class TestEvalFromRun:
             },
         )
         assert resp.status_code == 201
-        assert resp.json()["sample_output"] == {}
+        assert not resp.json()["sample_output"]
 
     def test_from_run_admin_required(self, runner_client: TestClient) -> None:
         mock_session = _make_mock_session()

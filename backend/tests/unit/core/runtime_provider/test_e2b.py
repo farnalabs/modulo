@@ -624,7 +624,7 @@ async def test_create_workspace_cancellation_propagates(
     provider = E2BRuntimeProvider(api_key="sk-test")
     with pytest.raises(asyncio.CancelledError):
         await provider.create_workspace(workspace_spec)
-    assert provider._sandboxes == {}
+    assert not provider._sandboxes
 
 
 @pytest.mark.asyncio

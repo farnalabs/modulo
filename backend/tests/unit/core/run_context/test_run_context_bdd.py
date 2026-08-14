@@ -49,7 +49,7 @@ class TestSeedContext:
 
         state = _seed_state(snapshot, {})
 
-        assert state["run_context"]["input"] == {}
+        assert not state["run_context"]["input"]
         assert state["run_context"]["cancelled"] is False
 
     def test_input_overrides_defaults(self) -> None:
@@ -71,7 +71,7 @@ class TestSeedContext:
 
         state = _seed_state(snapshot, {})
         assert "artifacts" in state
-        assert state["artifacts"] == []
+        assert not state["artifacts"]
 
 
 # ===================================================================

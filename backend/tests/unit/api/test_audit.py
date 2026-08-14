@@ -296,7 +296,7 @@ class TestBatchDetail:
         ):
             resp = client.post(self.URL, json={"event_ids": []})
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.post(self.URL, json={"event_ids": []})
@@ -385,7 +385,7 @@ class TestExportChain:
             resp = client.get(f"{self.URL}?page=999")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["items"] == []
+        assert not data["items"]
         assert data["total"] == 0
 
     def test_export_unauthorized(self, unauth_client: TestClient) -> None:

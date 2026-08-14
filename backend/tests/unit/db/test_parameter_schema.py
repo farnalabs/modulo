@@ -148,7 +148,7 @@ class TestParameterSchemaCRUD:
         org_id = uuid.uuid4()
         result = await list_schemas(mock_session, org_id=org_id)
         assert result.total == 0
-        assert result.items == []
+        assert not result.items
 
     @pytest.mark.asyncio
     async def test_delete_schema_not_found(self) -> None:

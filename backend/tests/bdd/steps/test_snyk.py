@@ -181,7 +181,7 @@ def then_health_not_ok():
 @then("the result has records")
 def then_result_has_records():
     assert _last_query_result is not None
-    assert len(_last_query_result.records) > 0
+    assert _last_query_result.records
 
 
 @then("the write succeeds")

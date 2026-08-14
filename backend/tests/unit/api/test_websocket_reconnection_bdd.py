@@ -64,8 +64,8 @@ class TestRunEventBroker:
         q1 = self.broker.subscribe()
         q2 = self.broker.subscribe()
         self.broker.publish("ev", {})
-        assert q1.get_nowait().payload == {}
-        assert q2.get_nowait().payload == {}
+        assert not q1.get_nowait().payload
+        assert not q2.get_nowait().payload
 
     def test_unsubscribed_queue_does_not_receive(self) -> None:
         q = self.broker.subscribe()

@@ -1030,7 +1030,7 @@ def session_messages_deleted(request) -> None:
 @then("the items list is empty")
 def items_list_empty(request) -> None:
     data = request.node._resp.json()
-    assert data.get("items") == []
+    assert not data.get("items")
 
 
 # ── Then steps (Messages) ────────────────────────────────────────────

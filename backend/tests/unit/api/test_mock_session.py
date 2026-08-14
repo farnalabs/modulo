@@ -21,7 +21,7 @@ async def test_empty_execute_result_requires_opt_in() -> None:
 
     assert result.scalar() == 0
     assert result.scalar_one_or_none() is None
-    assert result.scalars().all() == []
+    assert not result.scalars().all()
 
 
 async def test_explicit_execute_result_overrides_strict_default() -> None:

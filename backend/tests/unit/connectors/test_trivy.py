@@ -132,7 +132,7 @@ async def test_query_artifact_image(connector):
         ),
     )
     result = await connector.query(ConnectorQuery(resource="artifact", filters={"image": "alpine:3.18"}))
-    assert len(result.records) > 0
+    assert result.records
     assert result.records[0]["Results"][0]["Target"] == "alpine:3.18"
 
 
