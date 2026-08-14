@@ -1679,7 +1679,7 @@ Planned capability (T1) — all **planned, not yet shipped**:
 - **Conformance** for the `block` action — the run is rejected at the boundary, leaving an auditable, machine-readable rejection record.
 - **Audited override/recovery** — any bypass of a guardrail result is itself an auditable event.
 
-What guardrails do NOT cover (known failure classes, all planned follow-on work, none shipped): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already handled by the shipped §8.17 output-side gates).
+What guardrails do NOT cover (known failure classes, all planned follow-on work, none shipped): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in §8.17 output-side gates).
 
 ---
 
