@@ -311,23 +311,66 @@ def _delete_static_path(payload: dict[str, Any], path: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_top_level_detection(config: dict[str, Any]) -> str:
+    detection_type = config.get("type")
+    if detection_type not in GUARDRAIL_DETECTION_TYPES and isinstance(config.get("schema"), dict):
+        detection_type = EvalType.JSON_SCHEMA
+    return str(detection_type or "regex")
+
+
+def _resolve_detection(eval_def: EvalDefinition) -> tuple[str, dict[str, Any]]:
+    """Resolve a guardrail's detection declaration to (type, effective config).
+
+    Detection may be declared either flattened (top-level ``type`` /
+    ``pattern`` / ``schema`` / ``field``) or inside a ``detection`` envelope
+    (``{"detection": {"type": "regex", "pattern": ..., "field": ...}}``) as
+    documented in the PRD §8.17. The envelope is authoritative when present;
+    the effective config is the flattened merge so the pure eval helpers read
+    a single shape.
+
+    An envelope that DECLARES a detection type outside the allowed set fails
+    closed — validation rejects it, never silently downgrading to another
+    detector. An envelope without a ``type`` key falls back to top-level
+    resolution (its pattern/schema/field keys still merge) so a valid
+    top-level detection is not silently no-op'd by a nested envelope. A
+    top-level ``schema`` dict with no ``type`` implies json_schema (legacy
+    lenient form).
+    """
+    config = eval_def.config
+    envelope = config.get("detection")
+    if isinstance(envelope, dict):
+        env_type = envelope.get("type")
+        merged = {**config, **envelope}
+        if env_type in GUARDRAIL_DETECTION_TYPES:
+            return str(env_type), merged
+        if env_type is not None:
+            return str(env_type), merged
+        return _resolve_top_level_detection(config), merged
+    return _resolve_top_level_detection(config), config
+
+
 def _validate_guardrail_definition(eval_def: EvalDefinition) -> GuardrailConfig:
     if eval_def.eval_type != EvalType.GUARDRAIL:
         raise GuardrailMisroutedError(eval_def.name)
     if eval_def.failure_behaviour in GUARDRAIL_FORBIDDEN_FAILURE_BEHAVIOURS:
         raise GuardrailConfigError(f"Guardrail {eval_def.name!r} must never carry failure_behaviour='retry'")
-    detection = eval_def.config.get("detection")
-    if isinstance(detection, dict) and detection.get("type") in GUARDRAIL_DETECTION_TYPES:
-        # A ``detection`` envelope is optional in T1 — when absent the
-        # top-level config's own ``type`` (regex/json_schema) is used.
-        pass
-    elif (
-        eval_def.config.get("type") not in GUARDRAIL_DETECTION_TYPES
-        and not isinstance(eval_def.config.get("schema"), dict)
-        and not eval_def.config.get("pattern")
-    ):
+    detection_type, effective_config = _resolve_detection(eval_def)
+    if detection_type not in GUARDRAIL_DETECTION_TYPES:
         raise GuardrailConfigError(
             f"Guardrail {eval_def.name!r} must use regex or json_schema detection (got config {eval_def.config!r})"
+        )
+    if detection_type == EvalType.JSON_SCHEMA:
+        if not isinstance(effective_config.get("schema"), dict):
+            raise GuardrailConfigError(
+                f"Guardrail {eval_def.name!r} json_schema detection requires a 'schema' dict "
+                f"(got config {eval_def.config!r})"
+            )
+    elif not effective_config.get("pattern") or not effective_config.get("field"):
+        # Fail-closed at validation: a block/redact guardrail whose detector
+        # cannot run (missing pattern/field) must not silently pass through.
+        raise GuardrailConfigError(
+            f"Guardrail {eval_def.name!r} regex detection requires non-empty 'pattern' and 'field' "
+            f"(got config {eval_def.config!r})"
         )
     return GuardrailConfig.from_eval_config(eval_def.config)
 
@@ -370,11 +413,12 @@ def evaluate_guardrails(
     violations: list[tuple[EvalDefinition, EvalResult]] = []
     for eval_def in definitions:
         _validate_guardrail_definition(eval_def)
-        detection_type = eval_def.config.get("type", "regex")
+        detection_type, effective_config = _resolve_detection(eval_def)
         mirrored = eval_def.model_copy(
             update={
                 "eval_type": EvalType(detection_type),
                 "failure_behaviour": "warn",  # block semantics are guardrail-owned
+                "config": effective_config,
             }
         )
         result = engine.evaluate(payload, mirrored)
@@ -511,7 +555,7 @@ def run_interception_pass(
     block_message: str = ""
     blocking_eval_name: str = ""
     for eval_def, result in zip(definitions, results, strict=True):
-        detection_type = eval_def.config.get("type", "regex")
+        detection_type, _ = _resolve_detection(eval_def)
         if _interpret_violation(detection_type, result) and eval_def.config.get("action") == GuardrailAction.BLOCK:
             blocked = True
             block_message = f"Guardrail {eval_def.name!r} blocked: {result.detail}"

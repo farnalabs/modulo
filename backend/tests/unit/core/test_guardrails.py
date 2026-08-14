@@ -200,6 +200,87 @@ def test_guardrail_config_requires_deterministic_detection():
         evaluate_guardrails(EvalEngine(), [bad], {})
 
 
+def test_guardrail_regex_requires_pattern_and_field_fail_closed():
+    # A block guardrail whose detector cannot run (regex without pattern/field)
+    # must fail closed at validation, never silently pass through.
+    bad = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="regex-missing-pattern",
+        eval_type=EvalType.GUARDRAIL,
+        config={"action": "block", "type": "regex"},
+        failure_behaviour="block",
+    )
+    with pytest.raises(GuardrailConfigError):
+        evaluate_guardrails(EvalEngine(), [bad], {"body": "anything"})
+
+
+def test_guardrail_detection_envelope_form_blocks():
+    # PRD §8.17 documents the ``detection`` envelope as a valid declaration
+    # form. It must be resolved during evaluation — a block guardrail declared
+    # with a nested envelope must actually block on a violating payload.
+    envelope = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="envelope-block",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "interception_point": "input",
+            "detection": {"type": "regex", "field": "body", "pattern": r"SECRET_[A-Z0-9]{8}"},
+        },
+        failure_behaviour="block",
+    )
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(engine, [envelope], {"body": "leak SECRET_ABC12345"})
+    results = evaluate_guardrails(engine, [envelope], {"body": "clean text"})
+    assert results[0].passed is False  # raw eval: regex did not match
+
+
+def test_guardrail_detection_envelope_json_schema_blocks():
+    envelope = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="envelope-schema",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "interception_point": "input",
+            "detection": {
+                "type": "json_schema",
+                "field": "body",
+                "schema": {"type": "object", "required": ["safe"], "properties": {"safe": {"type": "boolean"}}},
+            },
+        },
+        failure_behaviour="block",
+    )
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(engine, [envelope], {"body": {"safe": "not-a-bool"}})
+    results = evaluate_guardrails(engine, [envelope], {"body": {"safe": True}})
+    assert results[0].passed is True
+
+
+def test_guardrail_detection_envelope_forbidden_type_fails_closed():
+    # An envelope that declares a detection type outside the allowed set is
+    # rejected — never silently downgraded to another detector.
+    envelope = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="envelope-llm",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "interception_point": "input",
+            "detection": {"type": "llm_judge", "field": "body", "pattern": r"SECRET_[A-Z0-9]{8}"},
+        },
+        failure_behaviour="block",
+    )
+    with pytest.raises(GuardrailConfigError):
+        evaluate_guardrails(EvalEngine(), [envelope], {"body": "leak SECRET_ABC12345"})
+
+
 def test_evaluate_guardrails_block_action_raises_on_failure():
     eval_def = _guardrail(name="no-secrets", action="block", failure_behaviour="block")
     engine = EvalEngine()

@@ -10,7 +10,7 @@ URLs:
 
 import logging
 import uuid
-from typing import Any, ClassVar
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -43,7 +43,7 @@ class CreateEvalRequest(BaseModel):
     node_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=255)
     eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$")
-    config_json: ClassVar[dict[str, Any]] = {}
+    config_json: dict[str, Any] = Field(default_factory=dict)
     failure_behaviour: str = "warn"
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
     suite_id: str | None = None
@@ -122,6 +122,18 @@ def _validate_guardrail_request(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Guardrail detection must be regex|json_schema (got {detection_type!r}).",
         )
+    # The ``detection`` envelope (PRD §8.17) is an alternative declaration form;
+    # when present, its ``type`` is authoritative and must be deterministic pure
+    # detection too — reject a forbidden envelope type at the API edge rather
+    # than at run time (where it would fail closed as a mechanism error).
+    envelope = config_json.get("detection")
+    if isinstance(envelope, dict):
+        env_type = envelope.get("type")
+        if env_type is not None and env_type not in ("regex", "json_schema"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Guardrail detection envelope type must be regex|json_schema (got {env_type!r}).",
+            )
 
 
 class UpdateEvalRequest(BaseModel):
