@@ -200,8 +200,7 @@ jobs:
     # CREATES the fix vehicle: branch fix/deploy-<short-sha> at the failing SHA,
     # a PR from it, then the Branch Fixer webhook dispatch (mirrors ci.yml
     # notify-pr-failure, extended with branch/PR creation since deploy.yml runs
-    # on push to main). Pause switch: set the DEPLOY_FIXER_DISABLED repo
-    # variable to 'true' to stop this loop dispatching the Branch Fixer.
+    # on push to main).
     if: always() && needs.pre-deploy-tests.result == 'failure' && needs.deploy-throttle.outputs.should_deploy == 'true'
     runs-on: ubicloud-standard-2
     permissions:
@@ -214,21 +213,8 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Check deploy fixer disable flag
-        id: disable-check
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
-        run: |
-          DISABLED="$(gh api "repos/${{ github.repository }}/actions/variables/DEPLOY_FIXER_DISABLED" --jq '.value' 2>/dev/null || echo 'false')"
-          echo "disabled=${DISABLED}" >> "$GITHUB_OUTPUT"
-          if [ "$DISABLED" = "true" ]; then
-            echo "::notice::DEPLOY_FIXER_DISABLED is set - skipping Branch Fixer dispatch for this deploy failure."
-          fi
-
       - name: Create fix branch and PR
         id: fix-pr
-        if: steps.disable-check.outputs.disabled == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
@@ -269,7 +255,6 @@ jobs:
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch Branch Fixer webhook
-        if: steps.disable-check.outputs.disabled == 'false'
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_BRANCH_FIXER_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_BRANCH_FIXER_HMAC_SECRET }}
