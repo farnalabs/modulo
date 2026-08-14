@@ -10339,7 +10339,10 @@ export interface components {
          *
          *     This is the primitive shape ``GET .../export`` returns and ``POST
          *     /import`` accepts: ``content_json`` holds the canonical stages/edges/notes
-         *     graph and is validated with the same rules as an editor save.
+         *     graph and is validated with the same rules as an editor save. ``format_version``
+         *     is ``2`` and the optional ``versions`` array carries the version history
+         *     (each version's stages/edges/notes + metadata); a v1 envelope without
+         *     ``versions`` still imports as a single-version map.
          */
         LifecycleMapTransfer: {
             /**
@@ -10350,7 +10353,7 @@ export interface components {
             primitive_type: "lifecycle_map";
             /**
              * Format Version
-             * @default 1
+             * @default 2
              */
             format_version: string;
             /** Name */
@@ -10361,6 +10364,10 @@ export interface components {
             content_json?: {
                 [key: string]: unknown;
             };
+            /** Versions */
+            versions?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** LifecycleMapTransitionItem */
         LifecycleMapTransitionItem: {
