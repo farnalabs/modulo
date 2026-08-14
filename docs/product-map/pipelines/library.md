@@ -9,6 +9,7 @@ bdd:
   - backend/tests/bdd/features/library/contribute.feature
   - backend/tests/bdd/features/library/schemas.feature
   - backend/tests/bdd/features/composites/composite_library.feature
+  - backend/tests/bdd/features/workflows/dogfooding.feature
 code:
   - backend/src/modulo/core/library_service/__init__.py
   - backend/src/modulo/api/routes/library.py
@@ -22,6 +23,7 @@ unit-tests:
   - backend/tests/unit/library/test_integrations.py
   - backend/tests/unit/library/test_workflows.py
   - backend/tests/unit/library/test_dogfooding.py
+  - backend/tests/bdd/steps/test_dogfooding.py
   - backend/tests/unit/library_service/test_library_service.py
   - backend/tests/unit/library_service/test_composite_library.py
   - backend/tests/unit/api/test_library_endpoint.py
