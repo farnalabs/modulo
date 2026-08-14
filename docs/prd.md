@@ -1666,6 +1666,21 @@ The Eval Engine component appears in the §6.1 architecture diagram. Eval System
 #### V1 delivery dependency
 The Eval System (§8.17) must ship before the Feedback System (§8.20). The Feedback System's `ai_correction` handler, eval gap detection, and proposed eval curation all require a functioning eval suite. The `human` feedback handler mode operates without evals (it is a routing and inbox feature only) and can ship alongside or before the Eval System. V1 Core delivery order: Eval System → Feedback System (`ai_correction` and gap detection). Human feedback inbox can ship earlier as a standalone feature. Additionally, Run Context Propagation (alpha) is a prerequisite for the Feedback System's correction run mechanics — correction runs inherit `run_context` from the original checkpoint. Run Context must be fully implemented and validated in alpha before the Feedback System's correction run feature can ship in v1.
 
+#### Guardrails (planned)
+
+Guardrails are boundary enforcement for agent safety: the same eval primitives as §8.17 extended to the input side, with interception points, transform actions (redaction), and remediation wiring. They are **planned — not yet shipped** (T1 of the phase-guardrails epic). Nothing in this subsection exists in shipped code today.
+
+The boundary philosophy: the agent definition is the driver's manual; boundary controls are the enforcement. An orchestrator CAN enforce deterministic, auditable, tamper-resistant controls at the orchestration boundary — validating what enters and leaves a run. It must DELEGATE agent-internal behaviour and unmediated external runtimes, which no boundary control can observe. Guardrails are therefore not agent-internal safety; they are the contract between the orchestrator and the agent it runs.
+
+Planned capability (T1) — all **planned, not yet shipped**:
+- **Input-side interception** at run creation — evaluated before the run's first node executes.
+- **Actions**: `observe` | `warn` | `block` | `redact` (masks-only; redaction replaces matched field values with a placeholder, never logs the raw value).
+- **Deterministic detection** — the same `regex` / `json_schema` primitives as §8.17; no LLM judge on the input side.
+- **Conformance** for the `block` action — the run is rejected at the boundary, leaving an auditable, machine-readable rejection record.
+- **Audited override/recovery** — any bypass of a guardrail result is itself an auditable event.
+
+What guardrails do NOT cover (known failure classes, all planned follow-on work, none shipped): free-text PII embedded in otherwise-valid field values, content-based detection (semantic, not structural), the interior of an agent loop (e.g. a long-running agent's intermediate steps), and output-side effects (already specified in §8.17 output-side gates).
+
 ---
 
 ### 8.18 Run Context Propagation (alpha)
