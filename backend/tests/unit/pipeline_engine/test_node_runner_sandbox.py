@@ -1115,9 +1115,17 @@ async def test_no_output_json_message_is_bounded_for_huge_stdout():
         await fn(_run_state())
 
     message = str(excinfo.value)
-    # stdout (2048) + stderr (2048) + log tail (1024) caps + headers/markers.
-    assert len(message) < 6_500
+    # log tail (1024) + stderr (1536) + stdout (1024) caps + headers/markers.
+    # The WHOLE message must stay under 5000 so it survives BOTH the
+    # sanitizer's hard cap and the executor's terminal-fail write surface
+    # (`_sanitize_detail("...: " + msg, limit=5000)`) + the String(5000)
+    # runs.error_detail column — the diagnostic is never truncated away.
+    assert len(message) < 5_000
     assert "...[truncated" in message
+    # The kill-reason log tail leads the sections, so at ANY truncation the
+    # highest-value diagnostic (the only place the kill reason lives) survives.
+    assert message.index("--- sandbox log tail ---") < message.index("--- stderr tail ---")
+    assert message.index("--- stderr tail ---") < message.index("--- stdout tail ---")
 
 
 async def test_no_output_log_tail_fetched_before_kill():
@@ -1178,6 +1186,37 @@ async def test_no_output_json_log_includes_lengths_and_sandbox_id(caplog):
     assert record.stdout_length == 3
     assert record.stderr_length == 2
     assert record.sandbox_id == "sbx-log"
+
+
+def test_no_output_json_message_survives_executor_terminal_fail_surface():
+    """The FAR-197 diagnostic is NOT truncated at the user-facing write surface.
+
+    After retries are exhausted the executor writes the raised message to
+    runs.error_detail via ``_sanitize_detail("Sandbox node failed (transient)
+    after retries exhausted: " + str(exc), limit=5000)`` (executor.py) — the
+    exact field the RunDetail view renders. Round-trip the WORST-CASE message
+    (huge stdout/stderr + log tail) through that write and assert the whole
+    diagnostic — including the kill-reason log tail, which is the first thing
+    a 500-char cap would have cut — survives in full (FAR-197 review).
+    """
+    from modulo.core.pipeline_engine.executor import _sanitize_detail
+    from modulo.core.pipeline_engine.node_runner import _build_no_output_message
+
+    message = _build_no_output_message(
+        exit_code=1,
+        stdout_raw="z" * 200_000,
+        stderr_raw="s" * 200_000,
+        sandbox_id="sbx-roundtrip",
+        read_raw="",
+        log_tail="l" * 50_000 + " KILL_REASON_ONLY_HERE",
+    )
+    stored = _sanitize_detail("Sandbox node failed (transient) after retries exhausted: " + message, limit=5000)
+
+    assert stored == "Sandbox node failed (transient) after retries exhausted: " + message
+    assert "KILL_REASON_ONLY_HERE" in stored
+    assert "--- sandbox log tail ---" in stored
+    assert "--- stderr tail ---" in stored
+    assert "--- stdout tail ---" in stored
 
 
 async def test_fetch_sandbox_log_tail_returns_empty_without_api_key(monkeypatch):

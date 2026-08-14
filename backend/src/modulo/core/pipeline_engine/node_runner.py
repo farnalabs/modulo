@@ -113,14 +113,20 @@ _MAX_OTEL_LOG_ATTR = 32768
 _MAX_ERROR_MSG = 500
 
 # FAR-197: bounds for the no-output.json diagnostic message. The raised
-# SandboxNodeFailedError message surfaces through error_codes.sanitize_error_text
-# (hard cap 5000 chars), so every section stays small — combined stdout + stderr
-# tails are ~4KB, keeping the WHY visible without ever building an unbounded
-# string.
-_NO_OUTPUT_STDOUT_TAIL = 2048
-_NO_OUTPUT_STDERR_TAIL = 2048
-_NO_OUTPUT_RAW_SNIPPET = 1024
+# SandboxNodeFailedError message must survive the executor's terminal-fail
+# surface AFTER retries exhausted — `_sanitize_detail("Sandbox node failed
+# (transient) after retries exhausted: " + msg, limit=5000)` — and the
+# `runs.error_detail` String(5000) column, so every section stays small and
+# the COMBINED message (sections + headers + truncation markers) stays well
+# under 5000 chars. Sections are ordered by diagnostic value: the E2B log
+# tail (the only place the kill reason lives) FIRST, then stderr (agent
+# errors typically sit at the END of stderr), stdout, and the raw-output
+# snippet last — so any residual truncation at any surface cuts the LEAST
+# valuable sections first.
 _NO_OUTPUT_LOG_TAIL = 1024
+_NO_OUTPUT_STDERR_TAIL = 1536
+_NO_OUTPUT_STDOUT_TAIL = 1024
+_NO_OUTPUT_RAW_SNIPPET = 512
 
 _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
@@ -438,11 +444,14 @@ def _build_no_output_message(
     """Compose the FAR-197 diagnostic for an unparseable/missing output.json.
 
     A compact, bounded message: a prefix naming the exit code and sandbox id,
-    then bounded tails of the captured agent stdout/stderr, any raw bytes read
-    back from output.json (the invalid-JSON case), and the best-effort E2B log
-    tail (the only place the kill reason lives). Downstream error-detail
-    sanitization (``sanitize_error_text``) strips control chars and redacts
-    secrets; this just keeps the WHY visible within the sanitizer's hard cap.
+    then bounded tails ordered by diagnostic value — the best-effort E2B log
+    tail FIRST (the only place the kill reason lives), then the captured agent
+    stderr and stdout (agent errors typically sit at the END of stderr), and
+    any raw bytes read back from output.json (the invalid-JSON case) LAST.
+    Section caps are sized so the whole message stays under the sanitizer's
+    hard cap (5000 chars) AND the executor's terminal-fail write surface
+    (``_sanitize_detail(..., limit=5000)``) and the ``runs.error_detail``
+    String(5000) column, so the diagnostic is never truncated away.
     """
     stdout_raw = str(stdout_raw)
     stderr_raw = str(stderr_raw)
@@ -452,22 +461,22 @@ def _build_no_output_message(
     parts = [f"Sandbox agent produced no parseable output.json (exit code {exit_code})"]
     if isinstance(sandbox_id, str) and sandbox_id:
         parts.append(f"sandbox id: {sandbox_id}")
-    stdout_tail = _bounded_tail(stdout_raw, _NO_OUTPUT_STDOUT_TAIL)
-    if stdout_tail:
-        parts.append("--- stdout tail ---")
-        parts.append(stdout_tail)
-    stderr_tail = _bounded_tail(stderr_raw, _NO_OUTPUT_STDERR_TAIL)
-    if stderr_tail:
-        parts.append("--- stderr tail ---")
-        parts.append(stderr_tail)
-    read_snippet = _bounded_tail(read_raw, _NO_OUTPUT_RAW_SNIPPET)
-    if read_snippet:
-        parts.append(f"--- output.json read ({len(read_raw)} chars) ---")
-        parts.append(read_snippet)
     log_tail_cap = _bounded_tail(log_tail, _NO_OUTPUT_LOG_TAIL)
     if log_tail_cap:
         parts.append("--- sandbox log tail ---")
         parts.append(log_tail_cap)
+    stderr_tail = _bounded_tail(stderr_raw, _NO_OUTPUT_STDERR_TAIL)
+    if stderr_tail:
+        parts.append("--- stderr tail ---")
+        parts.append(stderr_tail)
+    stdout_tail = _bounded_tail(stdout_raw, _NO_OUTPUT_STDOUT_TAIL)
+    if stdout_tail:
+        parts.append("--- stdout tail ---")
+        parts.append(stdout_tail)
+    read_snippet = _bounded_tail(read_raw, _NO_OUTPUT_RAW_SNIPPET)
+    if read_snippet:
+        parts.append(f"--- output.json read ({len(read_raw)} chars) ---")
+        parts.append(read_snippet)
     return "\n".join(parts)
 
 
