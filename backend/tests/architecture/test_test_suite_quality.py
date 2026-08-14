@@ -128,14 +128,11 @@ def test_no_always_pass_or_fail_assertions():
     )
 
 
-_LITERAL_COMPARISON_OPS = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.In, ast.NotIn)
-"""Comparison operators whose outcome is fully determined when both operands
-are literal constants (numbers, strings, booleans, ``None``, or container
-literals). ``is``/``is not`` are deliberately excluded: for *distinct*
-literals their outcome is implementation-defined (small-int/string
-interning), and for *identical* operands the self-comparison lens already
-owns them."""
-
+# Folders for comparison operators whose outcome is fully determined when both
+# operands are literal constants (numbers, strings, booleans, ``None``, or
+# container literals). ``is``/``is not`` are deliberately excluded: for *distinct*
+# literals their outcome is implementation-defined (small-int/string interning),
+# and for *identical* operands the self-comparison lens already owns them.
 _LITERAL_COMPARISON_FOLDERS = {
     ast.Eq: operator.eq,
     ast.NotEq: operator.ne,
