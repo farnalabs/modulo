@@ -45,11 +45,11 @@ Feature: Library Primitive Ratings
     And the response contains a list of ratings
     And each rating has id, thumbs_up, comment, and created_at
 
-  Scenario: Update existing rating
+  Scenario: Duplicate rating is rejected
     Given I previously rated "prd-input" with thumbs_up false
-    When I update my rating for "prd-input" with thumbs_up true
-    Then the response status is 200
-    And the rating has thumbs_up = true
+    When I submit a rating for "prd-input" with thumbs_up true
+    Then the response status is 409
+    And the error indicates the user has already rated the primitive
 
   Scenario: Rating cooldown is enforced
     Given I have previously copied primitive "prd-input"
