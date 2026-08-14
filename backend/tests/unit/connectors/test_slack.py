@@ -847,7 +847,7 @@ async def test_thread_replies_non_dict_response_metadata_does_not_crash(connecto
     result = await connector.query(
         ConnectorQuery(resource="thread_replies", filters={"channel": "C001", "thread_ts": "123456.000001"}),
     )
-    assert result.records == []
+    assert not result.records
     assert result.next_cursor is None
 
 
