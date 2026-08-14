@@ -46,6 +46,10 @@ regression that silently weakens the suite:
 - no-op ``test_*`` functions whose body contains no verification at all (they
   report green even when the code under test is completely broken, as long as
   no exception escapes)
+- assertions comparing two *literal constants* (``assert 1 == 1``,
+  ``assert 3 > 5``, ``assert 'a' not in {'b': 1}``) — the outcome is fixed at
+  source time, so the assertion either always passes (dead green) or always
+  fails (unconditionally red) regardless of the behaviour under test
 - ``is``/``is not`` identity comparisons against a mutable container literal
   (``assert x is []``, ``assert result is {}``, ``assert x is not {1}``) —
   list/dict/set literals are freshly allocated on every evaluation, so the
@@ -57,6 +61,7 @@ of a bare "assert not violations", mirroring the sibling architecture tests.
 """
 
 import ast
+import operator
 import re
 from fractions import Fraction
 from pathlib import Path
@@ -126,6 +131,130 @@ def test_no_always_pass_or_fail_assertions():
         f"Found {len(violations)} assertion(s) against literal constants.\n"
         "Assert against the actual behavior under test instead of a constant.\n" + "\n".join(violations)
     )
+
+
+# Folders for comparison operators whose outcome is fully determined when both
+# operands are literal constants (numbers, strings, booleans, ``None``, or
+# container literals). ``is``/``is not`` are deliberately excluded: for *distinct*
+# literals their outcome is implementation-defined (small-int/string interning),
+# and for *identical* operands the self-comparison lens already owns them.
+_LITERAL_COMPARISON_FOLDERS = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.In: lambda a, b: a in b,
+    ast.NotIn: lambda a, b: a not in b,
+}
+
+
+def _fold_literal_comparison(node: ast.Compare) -> str | None:
+    """Return ``"always PASSES"``/``"always FAILS"`` for a comparison whose
+    operands are both literal constants, or ``None`` when it cannot be folded
+    statically (variables, calls, ``is``/``is not``, or a chained compare)."""
+    if len(node.ops) != 1:
+        return None
+    op = node.ops[0]
+    folder = _LITERAL_COMPARISON_FOLDERS.get(type(op))
+    if folder is None:
+        return None
+    try:
+        left = ast.literal_eval(node.left)
+        right = ast.literal_eval(node.comparators[0])
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return None
+    if isinstance(left, complex) or isinstance(right, complex):
+        return None
+    try:
+        outcome = folder(left, right)
+    except (TypeError, KeyError):
+        return None
+    return "always PASSES" if outcome else "always FAILS"
+
+
+def test_no_literal_constant_comparisons():
+    """An assertion comparing two *literal constants* — ``assert 1 == 1``,
+    ``assert 3 > 5``, ``assert 'a' not in {'b': 1}`` — is fully determined at
+    source time, so it is dead code either way: it always passes (reporting
+    green no matter how broken the code under test is) or always fails
+    (breaking the suite unconditionally). These are almost always leftover
+    debugging, or a broken attempt to reference a value where the intended
+    object was accidentally replaced by a literal — the outcome never depends
+    on the code under test. ``is``/``is not`` are excluded (interning makes
+    their outcome implementation-defined for distinct literals) and the
+    self-comparison lens owns identical operands.
+    """
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assert):
+                continue
+            for sub in ast.walk(node.test):
+                if not isinstance(sub, ast.Compare):
+                    continue
+                verdict = _fold_literal_comparison(sub)
+                if verdict is None:
+                    continue
+                violations.append(
+                    f"  {rel}:{sub.lineno}  {ast.unparse(sub)} — {verdict} (both operands are literal constants)"
+                )
+    assert not violations, (
+        f"Found {len(violations)} literal-constant comparison(s) in assertions.\n"
+        "Both operands are source literals, so the outcome is fixed at write time.\n"
+        "Assert against the actual value under test, or the comparison is dead code.\n" + "\n".join(violations)
+    )
+
+
+def test_literal_comparison_lens_flags_constant_outcomes():
+    """Synthetic positive/negative control for the literal-constant lens,
+    mirroring the no-op and self-comparison lens patterns: it must flag every
+    assertion whose operands are both source literals (fixed outcome) and
+    ignore comparisons involving variables, calls, chained compares, or
+    ``is``/``is not`` identity on distinct literals."""
+    positive_sources = [
+        "def test_foo():\n    assert 1 == 1\n",
+        "def test_foo():\n    assert 3 > 5\n",
+        "def test_foo():\n    assert 'a' != 'b'\n",
+        "def test_foo():\n    assert 0.5 >= 0.25\n",
+        "def test_foo():\n    assert [] == []\n",
+        "def test_foo():\n    assert 'x' in {'x': 1}\n",
+        "def test_foo():\n    assert 'hitl_gate_a_b' not in {'a': 'agent'}\n",
+        "def test_foo():\n    assert 1 == 1 and x == 2\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Assert))
+        flagged = any(
+            isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None
+            for sub in ast.walk(assert_node.test)
+        )
+        assert flagged, f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x == 1\n",
+        "def test_foo():\n    assert 1 == x\n",
+        "def test_foo():\n    assert x in {'a': 1}\n",
+        "def test_foo():\n    assert x == x\n",
+        "def test_foo():\n    assert len(a) != len(a)\n",
+        "def test_foo():\n    assert 'a' in some_dict\n",
+        "def test_foo():\n    assert x is None\n",
+        "def test_foo():\n    assert 1 == 1 == 1\n",
+        "def test_foo():\n    assert x == 1 and y == 2\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert_node = next(n for n in ast.walk(tree) if isinstance(n, ast.Assert))
+        flagged = any(
+            isinstance(sub, ast.Compare) and _fold_literal_comparison(sub) is not None
+            for sub in ast.walk(assert_node.test)
+        )
+        assert not flagged, f"lens should NOT flag:\n{source}"
 
 
 def test_no_none_equality_comparison():
