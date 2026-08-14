@@ -68,13 +68,14 @@ def decide(reviews, commits, head_sha):
     # "merge origin/main" churn). No new PR code exists. Decide whether a
     # re-review can still change the outcome:
     state = rev.get("state") or ""
-    body = (rev.get("body") or "").lower()
-    if state == "CHANGES_REQUESTED" and "merge conflict" in body:
-        # Prior review was blocked on mergeability, which this merge may have
-        # just resolved. Skip would deadlock the PR in CHANGES_REQUESTED.
-        return False, "Prior review was a merge-conflict CR - merge may resolve it - dispatch."
-    if state in ("APPROVED", "CHANGES_REQUESTED"):
+    if state == "APPROVED":
+        # Approval stands: head moved only via merges, no new code. Skip.
         return True, "Only merge commits since last review (no new code) - skip."
+    if state == "CHANGES_REQUESTED":
+        # FAIL OPEN: a merge can resolve a CI-failure CR or realign a stale
+        # base. A re-review can only re-confirm the CR (still blocked) or
+        # approve (unblock) - never wrongly unblock. Skipping deadlocks the PR.
+        return False, "Prior review was a CHANGES_REQUESTED - merge may resolve it - dispatch (fail open)."
     # COMMENTED / DISMISSED / empty: no decisive prior decision, so a fresh
     # formal review after a main merge is worth the cost (fail open).
     return False, f"Prior state {state or 'empty'} is not decisive - dispatch."
