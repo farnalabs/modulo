@@ -72,8 +72,10 @@ the graph validator uses to bind pipeline node requirements to the bound
 connector at save-time and run-time. Read/write permissions are enforced by
 the `ConnectorPermissionError` checks in `modulo/connectors/base.py`.
 
-**Connector type naming convention:** `kebab-case` identifiers like
-`filesystem`, `github`, `ci-runner`, `ticket-tracker`.
+**Connector type naming convention:** mostly lowercase `kebab-case`
+identifiers like `filesystem`, `github`, `ci-runner`, `ticket-tracker`, though
+some members use `snake_case` (e.g. `azure_repos`, `dropbox_paper`,
+`microsoft_teams`).
 
 ## Credential handling
 
@@ -105,7 +107,7 @@ async def test_your_connector():
     result = await connector.query(
         ConnectorQuery(resource="issues", filters={"state": "open"})
     )
-    assert len(result.records) >= 0
+    assert result.total is None or len(result.records) <= result.total
 ```
 
 ## Registration
@@ -130,6 +132,13 @@ from modulo.core.plugin_registry import PluginManifest, get_plugin_registry
 
 registry = get_plugin_registry()
 registry.register_connector_type(
-    "your_connector", build_your_connector, PluginManifest(PLUGIN_ID="my-plugins")
+    "your_connector",
+    build_your_connector,
+    PluginManifest(
+        PLUGIN_ID="my-plugins",
+        display_name="My Plugins",
+        description="Custom connector plugin",
+        version="0.1.0",
+    ),
 )
 ```

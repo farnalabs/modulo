@@ -275,7 +275,7 @@ class SlackNotifier(ConnectorBase):  # custom type, registered by the plugin
         # posts a message to payload.resource using payload.data
         channel = payload.data.get("channel", self._default_channel)
         message = payload.data["message"]
-        # send message via Slack webhook API
+        # send message via Slack Bot API (uses bot_token from creds)
         ...
         return {"channel": channel, "sent": True}
 
