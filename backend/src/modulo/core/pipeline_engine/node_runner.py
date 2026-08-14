@@ -112,6 +112,16 @@ _MAX_ARTIFACT_LOG = 512000
 _MAX_OTEL_LOG_ATTR = 32768
 _MAX_ERROR_MSG = 500
 
+# FAR-197: bounds for the no-output.json diagnostic message. The raised
+# SandboxNodeFailedError message surfaces through error_codes.sanitize_error_text
+# (hard cap 5000 chars), so every section stays small — combined stdout + stderr
+# tails are ~4KB, keeping the WHY visible without ever building an unbounded
+# string.
+_NO_OUTPUT_STDOUT_TAIL = 2048
+_NO_OUTPUT_STDERR_TAIL = 2048
+_NO_OUTPUT_RAW_SNIPPET = 1024
+_NO_OUTPUT_LOG_TAIL = 1024
+
 _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
@@ -395,6 +405,65 @@ async def _fetch_sandbox_log_tail(sandbox_id: str | None, limit: int = 60) -> st
         return "\n".join(combined)[-6000:]
     except Exception:
         return raw[:4000]
+
+
+def _bounded_tail(text: str, limit: int) -> str:
+    """Return the last ``limit`` chars of *text* with a clear truncation marker.
+
+    Empty input yields "" (no marker); a short tail reads verbatim. When cut,
+    a marker line naming how many chars were dropped precedes the retained
+    suffix so consumers can tell truncation from a genuine short tail.
+    """
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"...[truncated {len(text) - limit} chars]...\n{text[-limit:]}"
+
+
+def _build_no_output_message(
+    *,
+    exit_code: int,
+    stdout_raw: str,
+    stderr_raw: str,
+    sandbox_id: str | None,
+    read_raw: str = "",
+    log_tail: str = "",
+) -> str:
+    """Compose the FAR-197 diagnostic for an unparseable/missing output.json.
+
+    A compact, bounded message: a prefix naming the exit code and sandbox id,
+    then bounded tails of the captured agent stdout/stderr, any raw bytes read
+    back from output.json (the invalid-JSON case), and the best-effort E2B log
+    tail (the only place the kill reason lives). Downstream error-detail
+    sanitization (``sanitize_error_text``) strips control chars and redacts
+    secrets; this just keeps the WHY visible within the sanitizer's hard cap.
+    """
+    stdout_raw = str(stdout_raw)
+    stderr_raw = str(stderr_raw)
+    read_raw = str(read_raw)
+    log_tail = str(log_tail)
+
+    parts = [f"Sandbox agent produced no parseable output.json (exit code {exit_code})"]
+    if isinstance(sandbox_id, str) and sandbox_id:
+        parts.append(f"sandbox id: {sandbox_id}")
+    stdout_tail = _bounded_tail(stdout_raw, _NO_OUTPUT_STDOUT_TAIL)
+    if stdout_tail:
+        parts.append("--- stdout tail ---")
+        parts.append(stdout_tail)
+    stderr_tail = _bounded_tail(stderr_raw, _NO_OUTPUT_STDERR_TAIL)
+    if stderr_tail:
+        parts.append("--- stderr tail ---")
+        parts.append(stderr_tail)
+    read_snippet = _bounded_tail(read_raw, _NO_OUTPUT_RAW_SNIPPET)
+    if read_snippet:
+        parts.append(f"--- output.json read ({len(read_raw)} chars) ---")
+        parts.append(read_snippet)
+    log_tail_cap = _bounded_tail(log_tail, _NO_OUTPUT_LOG_TAIL)
+    if log_tail_cap:
+        parts.append("--- sandbox log tail ---")
+        parts.append(log_tail_cap)
+    return "\n".join(parts)
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -1654,16 +1723,35 @@ def make_sandbox_agent_fn(
                 except Exception:
                     _log.info(
                         "sandbox_agent.no_output_json",
-                        extra={"node_id": node_id, "exit_code": exit_code, "command_error": command_error},
+                        extra={
+                            "node_id": node_id,
+                            "exit_code": exit_code,
+                            "command_error": command_error,
+                            "stdout_length": _stdout_len,
+                            "stderr_length": _stderr_len,
+                            "sandbox_id": _sandbox_id,
+                        },
                     )
 
             # A6: an agent that produced no parseable output.json (regardless of
             # exit code) is a retryable sandbox-infra failure — a node with zero
             # usable work must never complete the run silently.
             if output_json is None:
+                # FAR-197: surface WHY the agent failed. The captured
+                # stdout/stderr tails plus the E2B log tail (the only place the
+                # kill reason lives) are fetched BEFORE the finally-block kill,
+                # while the sandbox is still alive — the logs endpoint only
+                # serves live sandboxes.
+                _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
                 raise SandboxNodeFailedError(
-                    "Sandbox agent produced no parseable output.json"
-                    + (f" (exit code {exit_code})" if cmd_result is not None else "")
+                    _build_no_output_message(
+                        exit_code=exit_code,
+                        stdout_raw=agent_stdout_raw,
+                        stderr_raw=agent_stderr_raw,
+                        sandbox_id=_sandbox_id,
+                        read_raw=raw_output,
+                        log_tail=_no_output_log_tail,
+                    )
                 )
 
             _span = _otel_trace.get_current_span()
