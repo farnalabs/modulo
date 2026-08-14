@@ -67,13 +67,13 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
-class _EnterprisePlan:
-    """Stub plan context that enables all enterprise features for tests."""
+class _TeamPlan:
+    """Stub plan context that enables all team features for tests."""
 
     def feature_enabled(self, name: str) -> bool:
         return True
@@ -85,7 +85,7 @@ class _EnterprisePlan:
 @pytest.fixture
 def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
-    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -106,7 +106,7 @@ def operator_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="operator",
     )
-    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -538,7 +538,7 @@ class TestGetAnomalies:
         app.dependency_overrides[get_settings] = _make_settings
         app.dependency_overrides[get_db_session] = override_session
         app.dependency_overrides[_get_engine] = lambda: MagicMock()
-        app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+        app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
             username="admin",
             organisation_id=_ORG_ID,

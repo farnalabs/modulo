@@ -180,7 +180,7 @@ Immutable SHA-256-linked audit event chain per organisation. Each event records 
 ## Known Gaps
 - No event type vocabulary enforcement (any string accepted)
 - payload_json has no schema validation (free-form JSON)
-- Event recording is free-tier; read-only event listing and chain verification are also free (no gate). Bulk export and batch-detail are enterprise-gated via `require_feature("audit_viewer")` on the route.
+- Event recording is free-tier; read-only event listing and chain verification are also free (no gate). Bulk export and batch-detail are team-gated via `require_feature("audit_viewer")` on the route.
 - Cryptographic chaining is V2 in PRD but partially implemented (SHA-256 linking exists; reader UI is V1)
 - verify_chain limited to 10000 events by default — large orgs may need higher limit or batched verification
 - No event retention policy (events accumulate indefinitely)

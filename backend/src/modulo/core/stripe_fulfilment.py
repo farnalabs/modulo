@@ -1,7 +1,7 @@
 """Stripe purchase fulfilment — idempotent license generation + email delivery.
 
 Flow (FAR-178/180): Stripe webhook -> verify signature (in the route) ->
-generate an Ed25519-signed enterprise license -> email it to the customer ->
+generate an Ed25519-signed team license -> email it to the customer ->
 claim the Stripe event id. Runs as a FastAPI BackgroundTask so the webhook
 responds 200 immediately.
 
@@ -30,7 +30,7 @@ from redis.asyncio import Redis
 
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.core.license import parse_and_verify
-from modulo.core.license_signing import LicenseSigningError, generate_enterprise_license
+from modulo.core.license_signing import LicenseSigningError, generate_team_license
 from modulo.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ _log = logging.getLogger(__name__)
 # duplicate deliveries and manual replays never double-fulfil.
 _IDEMPOTENCY_TTL_SECONDS = 90 * 24 * 3600
 
-_RENEWAL_NOTE = "Your Modulo Enterprise license renews annually at list price."
+_RENEWAL_NOTE = "Your Modulo Team License renews annually at list price."
 
 # Process-local fallback for event-id idempotency when Redis is unavailable
 # (single process only; production uses Redis).
@@ -52,7 +52,7 @@ def _licence_email_html(license_key: str, expires_at: str) -> str:
     return f"""\
 <html>
 <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #1f2937;">
-  <p>Thank you for purchasing <strong>Modulo Enterprise</strong>. Your license key is:</p>
+  <p>Thank you for purchasing <strong>Modulo Team License</strong>. Your license key is:</p>
   <pre style="background:#f3f4f6;padding:12px;border-radius:6px;overflow-x:auto;">MODULO_LICENSE_KEY={key_html}</pre>
   <p>This license is valid until <strong>{expiry_html}</strong>.</p>
   <p>To activate it:</p>
@@ -69,7 +69,7 @@ def _licence_email_html(license_key: str, expires_at: str) -> str:
 
 def _licence_email_text(license_key: str, expires_at: str) -> str:
     return (
-        "Thank you for purchasing Modulo Enterprise.\n\n"
+        "Thank you for purchasing Modulo Team License.\n\n"
         f"Your license key is:\n\n  MODULO_LICENSE_KEY={license_key}\n\n"
         f"This license is valid until {expires_at or 'N/A'}.\n\n"
         "To activate it, set MODULO_LICENSE_KEY to the value above in your "
@@ -140,11 +140,11 @@ async def _is_event_claimed(settings: Settings, event_id: str) -> bool:
     return event_id in _processed_event_ids
 
 
-async def email_enterprise_license(settings: Settings, to: str, license_key: str, expires_at: str) -> bool:
-    """Send the enterprise license key to *to*.
+async def email_team_license(settings: Settings, to: str, license_key: str, expires_at: str) -> bool:
+    """Send the team license key to *to*.
 
     Returns True on success, False on failure — never raises. The caller
-    (``fulfil_enterprise_purchase``) relies on the bool to decide whether the
+    (``fulfil_team_purchase``) relies on the bool to decide whether the
     event may be claimed: a False result leaves the event unclaimed so Stripe's
     retries re-attempt the email.
     """
@@ -153,7 +153,7 @@ async def email_enterprise_license(settings: Settings, to: str, license_key: str
             send_email,
             settings,
             [to],
-            "Your Modulo Enterprise license",
+            "Your Modulo Team License",
             _licence_email_html(license_key, expires_at),
             _licence_email_text(license_key, expires_at),
         )
@@ -167,7 +167,7 @@ async def email_enterprise_license(settings: Settings, to: str, license_key: str
         return False
 
 
-async def fulfil_enterprise_purchase(
+async def fulfil_team_purchase(
     settings: Settings,
     *,
     event_id: str,
@@ -176,11 +176,11 @@ async def fulfil_enterprise_purchase(
     term_months: int = 12,
     send_key_email: bool = True,
 ) -> str | None:
-    """Idempotently fulfil a Stripe purchase: generate + email an enterprise license.
+    """Idempotently fulfil a Stripe purchase: generate + email a team license.
 
     Ordering (FAR-180): duplicate-check -> generate -> email -> claim. The event
     id is claimed ONLY AFTER a successful email send, so a transient SMTP
-    failure (``email_enterprise_license`` returns False) leaves the event
+    failure (``email_team_license`` returns False) leaves the event
     unclaimed and Stripe's automatic retries re-attempt the fulfilment — the
     customer never permanently loses their key to an SMTP outage. A duplicate
     delivery (already claimed) is detected BEFORE generation/emailing and
@@ -192,7 +192,7 @@ async def fulfil_enterprise_purchase(
         return None
 
     try:
-        license_key = generate_enterprise_license(
+        license_key = generate_team_license(
             org_name,
             term_months=term_months,
             private_key_hex=settings.modulo_license_private_key or None,
@@ -212,7 +212,7 @@ async def fulfil_enterprise_purchase(
             validation.error,
         )
 
-    if send_key_email and not await email_enterprise_license(settings, customer_email, license_key, expires_at):
+    if send_key_email and not await email_team_license(settings, customer_email, license_key, expires_at):
         _log.error(
             "stripe.fulfilment.email_failed_event_not_claimed event_id=%s — "
             "event left unclaimed so Stripe's retries will re-attempt",

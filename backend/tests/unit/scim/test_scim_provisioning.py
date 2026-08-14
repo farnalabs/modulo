@@ -36,7 +36,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
-        modulo_license_key="enterprise-license",
+        modulo_license_key="team-license",
         modulo_scim_token=_SCIM_TOKEN,
         modulo_public_url="http://localhost:8000",
     )
@@ -147,7 +147,7 @@ class TestAuthEdgeCases:
                 secret_key=_VALID_32,
                 fernet_key=_VALID_32,
                 modulo_admin_password="testpass",
-                modulo_license_key="enterprise-license",
+                modulo_license_key="team-license",
                 modulo_scim_token="",
                 modulo_public_url="http://localhost:8000",
             )
@@ -178,7 +178,7 @@ class TestAuthEdgeCases:
                 secret_key=_VALID_32,
                 fernet_key=_VALID_32,
                 modulo_admin_password="testpass",
-                modulo_license_key="enterprise-license",
+                modulo_license_key="team-license",
                 modulo_scim_token=_SCIM_TOKEN,
                 modulo_scim_default_org_id="not-a-uuid",
                 modulo_public_url="http://localhost:8000",

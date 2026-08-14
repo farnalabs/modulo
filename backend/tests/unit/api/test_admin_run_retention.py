@@ -44,7 +44,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-class _EnterprisePlan:
+class _TeamPlan:
     """Stub plan context that enables all features for tests."""
 
     def feature_enabled(self, name: str) -> bool:
@@ -64,7 +64,7 @@ def _make_client(mock_session: AsyncMock) -> TestClient:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,

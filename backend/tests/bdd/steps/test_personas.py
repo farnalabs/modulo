@@ -1107,7 +1107,7 @@ def jordan_pipeline_posts_release_notes(ctx):
 
 
 # ===========================================================================
-# Jordan ÔÇö No Enterprise Friction
+# Jordan ÔÇö No Team Friction
 # ===========================================================================
 
 

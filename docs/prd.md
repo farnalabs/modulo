@@ -1856,14 +1856,14 @@ The entire View Modes feature is **Team-gated** (`view_modes` feature flag). Wit
 
 #### Default UX: Simple/Advanced Toggle
 
-On first enterprise setup, two views are seeded:
+On first team setup, two views are seeded:
 - **Simple** — core navigation (pipelines, stages, runs, library, settings), dashboard summary widgets, basic run/trigger views, HITL review queue, run list, basic agent/schema/connector management. Advanced features (evals, variants, schema inference, feedback inbox, cost breakdown, audit viewer, etc.) are hidden.
 - **Advanced** — everything visible.
 
 A toggle in the sidebar footer (adjacent to the theme toggle and tier badge) switches between them. The page re-renders in place via Vue's reactive system — no route change, no reload, no flash, no state mutation. The current selection is persisted in `localStorage`.
 
 **When the toggle is hidden**:
-- No enterprise license → no toggle, no view system at all, all features visible
+- No team license → no toggle, no view system at all, all features visible
 - User is assigned a view other than "Simple" or "Advanced" → the toggle is hidden. The assigned view is applied silently.
 - User has an enforced view → the toggle is hidden (choice removed)
 
@@ -1916,7 +1916,7 @@ Views are assigned to users, teams, or org roles via a `view_assignments` table:
 
 #### Admin Configuration: `/settings/view-modes`
 
-`/settings/view-modes` (admin only, enterprise-gated):
+`/settings/view-modes` (admin only, team-gated):
 
 | Section | Content |
 |---|---|
@@ -2100,7 +2100,7 @@ data: {"type":"run","id":"uuid","action":"updated","version":42,"org_id":"uuid"}
 
 #### Flag / Gating
 
-This feature is **free-tier** (no enterprise gate). Real-time sync is a UX baseline, not a premium feature.
+This feature is **free-tier** (no team gate). Real-time sync is a UX baseline, not a premium feature.
 
 ---
 
@@ -2314,7 +2314,7 @@ A second Remy ingress at the full-screen route `/remy` renders the **same** sess
 
 #### Flag / Gating
 
-Remy is a **Team-tier** feature (enterprise-gated via `remy` feature flag). The base access control (which users/teams see Remy) is org-level admin configuration, not a separate license gate. The feature flag controls whether Remy exists in the org at all; the access list controls who sees it.
+Remy is a **Team-tier** feature (team-gated via `remy` feature flag). The base access control (which users/teams see Remy) is org-level admin configuration, not a separate license gate. The feature flag controls whether Remy exists in the org at all; the access list controls who sees it.
 
 ---
 
@@ -3586,7 +3586,7 @@ These are not required for the initial release but should follow shortly after.
 - LangGraph PostgresSaver subclass with organisation_id isolation (pre-SaaS requirement)
 
 ### V3 (SaaS — conditional on V1/V2 traction)
-- modulo-cloud service layer (org lifecycle, SaaS plan enforcement, subdomain routing) — build only if community traction and enterprise license sales justify the operational overhead
+- modulo-cloud service layer (org lifecycle, SaaS plan enforcement, subdomain routing) — build only if community traction and team license sales justify the operational overhead
 - Multi-tenancy active (RLS fully enforced; LangGraph isolation complete)
 - Hosted community registry (Modulo-operated)
 - Multi-region data residency architecture
@@ -4411,9 +4411,9 @@ A dedicated `GET /api/v1/analytics/concurrency` endpoint (and the `query_analyti
 | Rating system scope | Deferred to v1. Alpha is single-user internal — no user community to rate. |
 | MODULO_DEMO_MODE | Auto-configures StubModelBackend + FilesystemConnector with pre-canned data. Demo walkable with zero external API keys. |
 | Component library | shadcn-vue + Radix Vue. Headless accessible primitives styled via Tailwind + CSS custom properties. Copy-paste model (`src/components/ui/`). Chosen because it uses the same `[data-theme]` CSS custom property token approach as the Modulo theme system — no theming conflict. Never build button/dialog/focus logic from scratch. |
-| Tier badge placement | Sidebar nav footer pill, every authenticated page. Reads `planStore`; links to `/settings/license`. Enterprise-gated features show lock icon + disabled control + tooltip instead of being hidden — passive upgrade funnel. |
-| MODULO_LICENSE_KEY | Base64-encoded signed JSON enterprise license payload. Verified against embedded Ed25519 public key on startup. If absent, invalid, or expired: FreeTierPlanContext applies (enterprise features disabled). No outbound network call required. V1. |
-| License model | BSL 1.1 — source-available (`Development/Product/LICENSE`). Free for all internal use (personal, commercial, production) except resale or paid hosting. Enterprise tier = gated features only (SSO, RBAC, audit viewer, admin spend limits) — no SLAs, no dedicated support. Each version auto-converts to Apache 2.0 three years after its release date. The semver release process updates the LICENSE file's version and Change Date. Flat annual fee for enterprise license key; no telemetry billing. |
+| Tier badge placement | Sidebar nav footer pill, every authenticated page. Reads `planStore`; links to `/settings/license`. Team-gated features show lock icon + disabled control + tooltip instead of being hidden — passive upgrade funnel. |
+| MODULO_LICENSE_KEY | Base64-encoded signed JSON team license payload. Verified against embedded Ed25519 public key on startup. If absent, invalid, or expired: FreeTierPlanContext applies (team features disabled). No outbound network call required. V1. |
+| License model | BSL 1.1 — source-available (`Development/Product/LICENSE`). Free for all internal use (personal, commercial, production) except resale or paid hosting. Team tier = gated features only (SSO, RBAC, audit viewer, admin spend limits) — no SLAs, no dedicated support. Each version auto-converts to Apache 2.0 three years after its release date. The semver release process updates the LICENSE file's version and Change Date. Flat annual fee for team license key; no telemetry billing. |
 | Alpha exit criteria | 5 explicit criteria (§9.3b). Alpha does not become v1 by default — explicit decision required. |
 | V1 split | V1 Core (public launch — must ship together) + V1 Extended (post-launch incremental). Prevents V1 from becoming a never-shipping monolith. |
 | Alpha documentation | dev-setup.md, architecture.md, CONTRIBUTING.md required before alpha is shared with a second developer. |

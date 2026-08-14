@@ -151,7 +151,7 @@ Accepts manual, webhook, cron, polling, and agent_signal trigger types. Creates 
 
 ### Audit Logger (`modulo/core/audit_logger/`)
 
-Immutable event recording for all state-changing actions. Written in alpha; viewer/export is enterprise-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`.
+Immutable event recording for all state-changing actions. Written in alpha; viewer/export is team-gated. All events carry `organisation_id`, `actor_id`, `action`, `resource_type`, `resource_id`, and `timestamp`.
 
 ### Notification System (`modulo/core/notifier/`)
 
@@ -263,7 +263,7 @@ Every table carries `organisation_id`. Row-Level Security is enforced via `SET L
 | API key (bearer token) | Alpha | CI/CD, MCP clients – role-scoped (operator/runner) |
 | Basic Auth | Alpha | Multi-user alpha (`MODULO_USERS` env var) |
 | OAuth 2.0 (authlib) | V1 | MCP clients (PKCE, exact redirect_uri) |
-| OIDC / SAML 2.0 | V1 (enterprise) | SSO with JIT provisioning |
+| OIDC / SAML 2.0 | V1 (team) | SSO with JIT provisioning |
 
 ### JWT Security
 

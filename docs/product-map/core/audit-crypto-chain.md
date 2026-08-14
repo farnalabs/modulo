@@ -111,4 +111,4 @@ SHA-256 cryptographic chaining of audit events per organisation, providing tampe
 - No event-level retention policy — chain grows unbounded
 - No alerting when verify_chain detects tampering — caller must poll or integrate manually
 - V2 cryptographic chaining is documented as V2 in PRD but implementation exists alongside V1 audit trail
-- Audit viewer UI is enterprise-gated (V1) — chain export is enterprise; recording is free-tier
+- Audit viewer UI is team-gated (V1) — chain export is team; recording is free-tier

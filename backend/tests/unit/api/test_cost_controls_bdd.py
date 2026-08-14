@@ -22,6 +22,7 @@ from modulo.settings import Settings, get_settings
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_VIEWER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _TEAM_ID = uuid.UUID("10000000-0000-0000-0000-000000000001")
 
 
@@ -44,7 +45,7 @@ def _make_mock_session() -> AsyncMock:
     return session
 
 
-class _EnterprisePlan:
+class _TeamPlan:
     def feature_enabled(self, name: str) -> bool:
         return True
 
@@ -62,7 +63,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="admin",
         organisation_id=_ORG_ID,
@@ -83,11 +84,11 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_plan_context] = lambda: _EnterprisePlan()
+    app.dependency_overrides[get_plan_context] = lambda: _TeamPlan()
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="viewer",
         organisation_id=_ORG_ID,
-        account_id=_USER_ID,
+        account_id=_VIEWER_ID,
         org_role="viewer",
     )
     yield TestClient(app)

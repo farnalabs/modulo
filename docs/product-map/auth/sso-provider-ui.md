@@ -29,7 +29,7 @@ status: partial
 ---
 # SSO Provider UI
 
-Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterprise-gated feature (§9.4, license key feature `sso`).
+Admin settings page for configuring OIDC and SAML 2.0 identity providers. Team-gated feature (§9.4, license key feature `sso`).
 
 ## Behaviours
 
@@ -46,8 +46,8 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 - [x] Adds/edits/deletes raise audit events (`sso_provider.created`, `.updated`, `.deleted`, `.toggled`)
 - [x] SSO provider management is admin-only (403 for non-admin users)
 
-### Enterprise gating
-- [x] SSO settings page is hidden or locked behind enterprise license check (`<FeatureGate show-disabled>`)
+### Team gating
+- [x] SSO settings page is hidden or locked behind team license check (`<FeatureGate show-disabled>`)
 - [x] All 8 admin SSO routes return 402 when license lacks `sso` feature flag
 - [~] Sidebar SSO nav entry is tier-gated (`required_tier: team` + `required_roles: [admin]` in manifest.yaml) but not feature-flag-gated — team-tier users see the link even if SSO is not enabled by license key (the FeatureGate on the page itself shows a locked prompt)
 
@@ -93,7 +93,7 @@ Admin settings page for configuring OIDC and SAML 2.0 identity providers. Enterp
 - [x] Test connection on OIDC provider with invalid/unreachable discovery URL shows error inline
 - [x] Test connection on SAML provider with invalid/empty metadata shows error inline
 - [ ] Delete provider warns about effect on active user sessions ("This action cannot be undone" only — no SSO session warning)
-- [x] SAML endpoints return 402 when enterprise license is absent
+- [x] SAML endpoints return 402 when team license is absent
 - [x] Form state is preserved on validation failure (no page loss)
 - [x] Test connection results show success or failure details inline (no page navigation)
 - [x] Empty provider list shows "No SSO providers configured" empty state
