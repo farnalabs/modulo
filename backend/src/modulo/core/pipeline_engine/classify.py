@@ -18,7 +18,7 @@ never re-implements or re-scans anything:
   ``pr_url`` of a delivered run is recovered from real node output — from BOTH
   the node return (outputs_json) and the node telemetry VALUE (a pr_url buried
   in node_telemetry_json is a real delivery signal too).
-* ``evidence._inner_declared_success`` counts declared-success nodes (recorded
+* ``evidence._declared_success_nodes`` counts declared-success nodes (recorded
   as metadata) without re-deriving the split/legacy shapes.
 * ``runs.raw_output_markers`` supplies the FAR-188 ``pr_url`` per attempt_key —
   a pr_url recovered from ANY attempt key is a valid delivery signal
@@ -71,7 +71,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from modulo.core.node_output_split import node_return, node_telemetry
-from modulo.core.pipeline_engine.evidence import _inner_declared_success
+from modulo.core.pipeline_engine.evidence import _declared_success_nodes
 
 _log = logging.getLogger(__name__)
 
@@ -277,18 +277,6 @@ def collect_pr_urls(
 # --- terminalization-fact reuse --------------------------------------------
 
 
-def _count_declared_success_nodes(telemetry_json: Any, outputs_json: Any) -> int:
-    """How many stored nodes declared ``completed``/``success`` — the
-    ``evidence._inner_declared_success`` gate over the legacy-safe
-    ``node_telemetry`` accessor (mirrors ``evidence._declared_success_nodes``).
-    """
-    return sum(
-        1
-        for nid in _node_id_union(outputs_json, telemetry_json)
-        if _inner_declared_success(node_telemetry(telemetry_json, outputs_json, nid))
-    )
-
-
 def _any_marker_parse_error(raw_output_markers: Any) -> bool:
     """True when any FAR-188 marker carries a non-empty ``parse_error``
     (the run's output.json failed to parse — a parse-error no-delivery)."""
@@ -354,7 +342,7 @@ def classify_run(
     from modulo.db.models.run import TERMINAL_STATUSES
 
     computed_at = datetime.now(UTC)
-    declared_success_nodes = _count_declared_success_nodes(telemetry_json, outputs_json)
+    declared_success_nodes = len(_declared_success_nodes(outputs_json, telemetry_json))
 
     # operator/HITL-cancelled + budget_exceeded -> EXCLUDED. A cancelled run is
     # never countable, even with an unparseable reason; budget_exceeded is

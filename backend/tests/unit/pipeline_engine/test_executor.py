@@ -223,6 +223,141 @@ async def test_resume_routes_completed_outputs_to_finalize_cost():
 
 
 # ---------------------------------------------------------------------------
+# FAR-189 — executor terminalization wires the work_intact reclassify
+# ---------------------------------------------------------------------------
+
+
+def _spy_fix3_wiring(order: list[str]) -> tuple[AsyncMock, AsyncMock]:
+    """Build the FAR-189 FIX 3 spies: ``_apply_work_intact`` then
+    ``_reclassify_after_work_intact``, each appending its name to *order* when
+    awaited, so the test can assert the reclassify runs AFTER the work_intact
+    write (the order the fix depends on)."""
+
+    async def _apply(*_args: Any, **_kwargs: Any) -> None:
+        order.append("apply_work_intact")
+
+    async def _reclassify(*_args: Any, **_kwargs: Any) -> None:
+        order.append("reclassify_after_work_intact")
+
+    return AsyncMock(side_effect=_apply), AsyncMock(side_effect=_reclassify)
+
+
+async def test_execute_wires_reclassify_after_work_intact():
+    """FAR-189 FIX 3 wiring is regression-tested at the EXECUTOR integration
+    point: ``execute()``'s terminalization block must await
+    ``_reclassify_after_work_intact`` AFTER ``_apply_work_intact`` so the
+    persisted classification record carries the real work_intact.
+
+    Deleting the ``await _reclassify_after_work_intact(...)`` line (or
+    reordering it before the work_intact write) must leave this test red — a
+    direct helper-call test cannot catch a deleted wiring line (AGENTS.md
+    lesson, the sweep wiring already got this treatment via
+    ``test_dispatcher_reconcile_invokes_classification_sweep``).
+    """
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {
+                "output": {
+                    "output": {"status": "completed", "cost_estimate_usd": 0.5},
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    order: list[str] = []
+    apply_mock, reclassify_mock = _spy_fix3_wiring(order)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+        patch("modulo.core.pipeline_engine.executor._apply_work_intact", new=apply_mock),
+        patch("modulo.core.pipeline_engine.executor._reclassify_after_work_intact", new=reclassify_mock),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+
+    assert mock_finalize.await_args.kwargs["status"] == "complete"
+    assert mock_finalize.await_args.kwargs["is_terminal"] is True
+    assert apply_mock.await_count == 1
+    assert reclassify_mock.await_count == 1
+    assert order == ["apply_work_intact", "reclassify_after_work_intact"]
+
+
+async def test_resume_wires_reclassify_after_work_intact():
+    """FAR-189 FIX 3 wiring on the RESUME terminalization path — same
+    integration-point assertion as the execute() test. The resume block is a
+    separate copy of the wiring (executor.py:1992), so it needs its own test."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    session = _make_resume_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    events = [
+        {
+            "event": "on_chain_end",
+            "name": "node-a",
+            "data": {
+                "output": {
+                    "output": {"status": "completed", "cost_estimate_usd": 0.75},
+                }
+            },
+        }
+    ]
+    compiled = _mock_compiled(events)
+    compiled.aupdate_state = AsyncMock()
+
+    checkpointer_mock = MagicMock()
+    checkpointer_mock.__aenter__ = AsyncMock(return_value=checkpointer_mock)
+    checkpointer_mock.__aexit__ = AsyncMock(return_value=False)
+
+    settings_mock = MagicMock()
+    settings_mock.fernet_key = "test-fernet-key-not-for-production="
+
+    order: list[str] = []
+    apply_mock, reclassify_mock = _spy_fix3_wiring(order)
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch("modulo.core.pipeline_engine.executor._checkpointer_scope", return_value=checkpointer_mock),
+        patch("modulo.settings.get_settings", return_value=settings_mock),
+        patch("modulo.core.pipeline_engine.executor.RunawayGuard", return_value=MagicMock()),
+        patch("modulo.core.pipeline_engine.executor._apply_work_intact", new=apply_mock),
+        patch("modulo.core.pipeline_engine.executor._reclassify_after_work_intact", new=reclassify_mock),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        executor._checkpointer_conn_string = "sqlite:///test.db"
+        await executor.resume(run_id=run.id, org_id=uuid.uuid4(), resume_data={"action": "approved"})
+
+    assert mock_finalize.await_args.kwargs["status"] == "complete"
+    assert mock_finalize.await_args.kwargs["is_terminal"] is True
+    assert apply_mock.await_count == 1
+    assert reclassify_mock.await_count == 1
+    assert order == ["apply_work_intact", "reclassify_after_work_intact"]
+
+
+# ---------------------------------------------------------------------------
 # FAR-198 — deterministic OTel trace context seeding + per-node span stamps
 # ---------------------------------------------------------------------------
 
