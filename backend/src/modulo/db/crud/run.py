@@ -14,7 +14,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any
 
-from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text
+from sqlalchemy import Date, bindparam, case, cast, delete, func, select, text, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -579,21 +579,58 @@ def _json_bind(value: Any) -> str | bytes | None:
     return json.dumps(value)
 
 
+async def _write_unclassified_classification(session: AsyncSession, run: Run) -> None:
+    """Fail-closed marker write for a terminal run the classifier could not process.
+
+    Called when importing/calling the classifier itself failed — the classifier
+    module may be the very thing that raised, so this write is fully
+    self-contained (no ``classify`` import). A terminal run must NEVER commit
+    with ``run_classification = NULL`` (a missing record breaks the FAR-190
+    walk); the ``unclassified`` marker is what keeps the walk alive.
+    Best-effort and NEVER raises.
+    """
+    try:
+        await session.execute(
+            update(Run)
+            .where(Run.id == run.id)
+            .values(
+                run_classification={
+                    "value": "unclassified",
+                    "reason": "classifier_error",
+                    "delivered_pr_urls": [],
+                    "computed_at": datetime.now(UTC).isoformat(),
+                    "work_intact": None,
+                    "declared_success_nodes": 0,
+                }
+            )
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("classification.marker_fallback_failed run=%s", run.id)
+
+
 async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
     """FAR-189 hook: classify + persist the run-outcome record for a terminal run.
 
-    Best-effort and NEVER raises — a classifier/persist failure is absorbed
-    inside ``classify_and_persist_run`` (an ``unclassified`` marker is written
-    instead), so terminalization is never blocked and no terminalizer that
-    funnels through this module leaves a run without a record. Imported lazily
-    so the classification machinery stays off the hot CRUD import path (the
-    vast majority of ``update_run_status`` calls are non-terminal).
+    Best-effort and NEVER raises. Imported lazily so the classification
+    machinery stays off the hot CRUD import path (the vast majority of
+    ``update_run_status`` calls are non-terminal). The import AND the call are
+    guarded: a classifier import failure must not roll back the terminal status
+    write that already flushed — on any failure an ``unclassified`` marker is
+    written directly instead. All callers gate on ``TERMINAL_STATUSES`` before
+    invoking, so the status guard lives only in
+    ``classify_and_persist_run`` (the shared entry point).
     """
-    if run.status not in TERMINAL_STATUSES:
-        return
-    from modulo.core.pipeline_engine.classify import classify_and_persist_run
+    try:
+        from modulo.core.pipeline_engine.classify import classify_and_persist_run
 
-    await classify_and_persist_run(session, run)
+        await classify_and_persist_run(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("classification.import_or_call_failed run=%s", run.id)
+        await _write_unclassified_classification(session, run)
 
 
 async def update_run_status(

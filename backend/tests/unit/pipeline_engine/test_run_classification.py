@@ -9,20 +9,21 @@ failures never block terminalization; an ``unclassified`` marker is written),
 idempotency (UNIQUE(run_id)), and re-terminalization refresh (upsert).
 """
 
-import json
+import builtins
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import StaticPool, Table, select
+from sqlalchemy import StaticPool, Table, event, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session as SASession
 
 from modulo.core.pipeline_engine.classify import (
     REASON_BUDGET_EXCEEDED,
@@ -37,11 +38,12 @@ from modulo.core.pipeline_engine.classify import (
     classify_and_persist_run,
     classify_run,
     collect_pr_urls,
+    persist_classification,
     reconcile_missing_classifications,
 )
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
-from modulo.db.models.run import Run
+from modulo.db.models.run import TERMINAL_STATUSES, Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -130,6 +132,19 @@ class TestDecisionTable:
         assert result.value == RunClassificationValue.excluded
         assert result.reason.startswith("unrecognized_status")
 
+    def test_new_terminal_status_fails_loudly_not_complete(self) -> None:
+        """FIX 6: a terminal status outside the excluded/countable buckets AND
+        != complete classifies as excluded — a new status added to
+        TERMINAL_STATUSES must fail loudly in tests, never silently inherit
+        complete semantics."""
+        with patch(
+            "modulo.db.models.run.TERMINAL_STATUSES",
+            frozenset({*TERMINAL_STATUSES, "expired"}),
+        ):
+            result = classify_run("expired", None)
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason.startswith("unrecognized_status")
+
 
 class TestPrUrlValidity:
     """Spec §2 — urlsplit with scheme http/https + non-empty netloc."""
@@ -201,6 +216,22 @@ class TestPrUrlSources:
         outputs = {"n1": _node_return_with_pr(_PR)}
         markers = _markers(_PR)
         urls = collect_pr_urls(outputs, {"n1": {}}, markers)
+        assert urls == [_PR]
+
+    def test_pr_url_only_in_telemetry_value_is_delivered(self) -> None:
+        """FIX 2: a pr_url carried ONLY in a node telemetry VALUE (not the node
+        return) is a real delivery signal — telemetry VALUES are scanned, not
+        just keys."""
+        outputs = {"n1": {"summary": "no pr_url here"}}
+        telemetry = {"n1": {"agent_status": "completed", "agent_outcome": "success", "pr_url": _PR}}
+        result = classify_run("complete", None, outputs_json=outputs, telemetry_json=telemetry)
+        assert result.value == RunClassificationValue.delivered
+        assert _PR in result.delivered_pr_urls
+
+    def test_pr_url_in_both_node_and_telemetry_deduplicated(self) -> None:
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        telemetry = {"n1": {"agent_status": "completed", "agent_outcome": "success", "pr_url": _PR}}
+        urls = collect_pr_urls(outputs, telemetry, None)
         assert urls == [_PR]
 
     def test_failed_with_pr_url_from_markers_is_still_no_delivery(self) -> None:
@@ -319,6 +350,7 @@ async def _seed_run(
     telemetry: dict[str, Any] | None = None,
     markers: dict[str, Any] | None = None,
     error_code: str | None = None,
+    work_intact: bool | None = None,
 ) -> Run:
     run = Run(
         id=run_id,
@@ -337,6 +369,7 @@ async def _seed_run(
         outputs_json=outputs,
         node_telemetry_json=telemetry,
         error_code=error_code,
+        work_intact=work_intact,
     )
     session.add(run)
     await session.flush()
@@ -409,6 +442,64 @@ class TestPersistenceHook:
         async with session.begin():
             await _seed_run(session, run_id)
             await update_run_status(session, run_id, "running", claimed_by="worker")
+        assert await _read_classification(engine, run_id) is None
+
+    async def test_work_intact_flows_through_orm_persist(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """FIX 3: work_intact is read from the MAPPED ORM column (migration 0091)
+        and recorded as metadata — the terminalization write observes it."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await _seed_run(session, run_id, status="complete", work_intact=True)
+            await update_run_status(session, run_id, "complete")
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "no_delivery"
+        assert record["work_intact"] is True
+
+
+class TestCrossTenantIsolation:
+    async def test_cross_tenant_terminalization_never_classifies_other_org(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """FIX 9: org A terminalizing a run must not classify org B's run.
+
+        Exercises the generic-backend tenant filter path (the SQLite analogue
+        of Postgres RLS): with ``session.info["org_id"] = org_a`` the terminal
+        select is scoped to org A, so org B's run is invisible and no
+        classification record can be written for it.
+        """
+        from modulo.db.rls import _inject_tenant_filter
+
+        org_a = uuid.UUID("00000000-0000-0000-0000-0000000000a9")
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await _seed_run(session, run_id)  # organisation_id = _ORG (org B)
+
+        event.listen(SASession, "do_orm_execute", _inject_tenant_filter)
+        try:
+            maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+            async with maker() as org_a_session:
+                org_a_session.info["org_id"] = org_a
+                async with org_a_session.begin():
+                    updated = await update_run_status(
+                        org_a_session,
+                        run_id,
+                        "complete",
+                        outputs_json={"n1": _node_return_with_pr(_PR)},
+                        node_telemetry_json={"n1": {"agent_status": "completed", "agent_outcome": "success"}},
+                    )
+                # The tenant filter injects WHERE organisation_id = org_a, so org A
+                # cannot even see org B's run — nothing is terminalized, nothing
+                # classified.
+                assert updated is None
+        finally:
+            event.remove(SASession, "do_orm_execute", _inject_tenant_filter)
         assert await _read_classification(engine, run_id) is None
 
 
@@ -514,16 +605,106 @@ class TestFailureAndIdempotency:
                 ok = await classify_and_persist_run(session, run)
         assert ok is False
 
-    async def test_result_to_json_roundtrip(self) -> None:
+    async def test_terminalization_survives_classifier_import_failure(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """FIX 4: an unguarded classifier import raising inside the terminal write
+        must NOT roll back the terminal status write — an unclassified marker is
+        written directly instead."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await _seed_run(session, run_id)
+        real_import = builtins.__import__
+
+        def _failing_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "modulo.core.pipeline_engine.classify":
+                raise ImportError("simulated classifier import failure")
+            return real_import(name, *args, **kwargs)
+
+        async with session.begin():
+            with patch("builtins.__import__", side_effect=_failing_import):
+                updated = await update_run_status(session, run_id, "failed", error_code="node.cancelled")
+        assert updated is not None
+        assert updated.status == "failed"
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "unclassified"
+
+    async def test_status_guarded_persist_cannot_overwrite_stale_record(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """FIX 5/10: a stale verdict persisted with a status guard that no longer
+        matches writes 0 rows and returns failure — the fresh record survives."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            run = await _seed_run(session, run_id, status="complete")
+            await classify_and_persist_run(session, run)
+        existing = await _read_classification(engine, run_id)
+        assert existing is not None and existing["value"] == "no_delivery"
+
+        async with session.begin():
+            run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+            stale = ClassificationResult(
+                RunClassificationValue.delivered,
+                REASON_DELIVERED,
+                delivered_pr_urls=(_PR,),
+            )
+            ok = await persist_classification(session, run, stale, expected_status="failed")
+            assert ok is False
+        after = await _read_classification(engine, run_id)
+        assert after == existing
+
+    async def test_persist_zero_rows_reports_failure_not_success(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """FIX 10: a silently RLS-filtered / status-guarded 0-row UPDATE must never
+        report success with no record."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await _seed_run(session, run_id, status="complete")
+        async with session.begin():
+            run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+            result = classify_run("complete", None)
+            ok = await persist_classification(session, run, result, expected_status="failed")
+        assert ok is False
+        assert await _read_classification(engine, run_id) is None
+
+    async def test_persist_failure_never_leaves_record_missing(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """FIX 11: on persist failure the simpler unclassified marker is written —
+        a terminal run NEVER commits with run_classification = NULL."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            run = await _seed_run(session, run_id, status="complete")
+            with patch(
+                "modulo.core.pipeline_engine.classify.persist_classification",
+                new=AsyncMock(return_value=False),
+            ):
+                ok = await classify_and_persist_run(session, run)
+        assert ok is False
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "unclassified"
+
+    async def test_result_to_dict_roundtrip(self) -> None:
         result = ClassificationResult(
             RunClassificationValue.delivered,
             REASON_DELIVERED,
             delivered_pr_urls=(_PR,),
         )
-        parsed = json.loads(result.to_json())
-        assert parsed["value"] == "delivered"
-        assert parsed["delivered_pr_urls"] == [_PR]
-        assert "computed_at" in parsed
+        payload = result.to_dict()
+        assert payload["value"] == "delivered"
+        assert payload["delivered_pr_urls"] == [_PR]
+        assert "computed_at" in payload
 
 
 class TestSweep:
@@ -558,3 +739,46 @@ class TestSweep:
         maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
         summary = await reconcile_missing_classifications(maker, org_ids=[_ORG], max_runs=10, budget_seconds=30.0)
         assert summary["scanned"] == 0
+
+
+class TestPeriodicWiring:
+    """FIX 1: the reconciliation sweep is wired into a periodic production path."""
+
+    async def test_reconcile_sweep_wired_into_periodic_cron_path(self) -> None:
+        """The cron_helpers entrypoint (invoked by dispatcher_reconcile every
+        60s) actually calls the sweep — proven by patching the sweep."""
+        from modulo.core import cron_helpers
+        from modulo.core.pipeline_engine import classify as classify_module
+
+        with (
+            patch.object(
+                classify_module,
+                "reconcile_missing_classifications",
+                new=AsyncMock(return_value={"scanned": 0, "classified": 0, "unclassified": 0, "errors": 0}),
+            ) as sweep_mock,
+            patch.object(cron_helpers, "_open_factory"),
+        ):
+            summary = await cron_helpers.run_classification_reconcile()
+        assert sweep_mock.await_count == 1
+        assert summary == {"scanned": 0, "classified": 0, "unclassified": 0, "errors": 0}
+
+    async def test_run_classification_reconcile_classifies_through_periodic_path(
+        self,
+        engine: AsyncEngine,
+    ) -> None:
+        """End-to-end: the periodic entrypoint backfills an unclassified terminal
+        run (raw-SQL-terminalizer shape) against a real DB."""
+        from modulo.core import cron_helpers
+
+        run_id = uuid.uuid4()
+        maker = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+        async with maker() as s, s.begin():
+            await _seed_run(s, run_id, status="failed", error_code="task_failure")
+
+        with patch.object(cron_helpers, "_open_factory", return_value=maker):
+            summary = await cron_helpers.run_classification_reconcile()
+        assert summary["scanned"] >= 1
+        assert summary["classified"] == 1
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "no_delivery"

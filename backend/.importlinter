@@ -82,7 +82,12 @@ ignore_imports =
     modulo.db.session -> modulo.core.audit_logger.append_only
     # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
     # variant / transition_run / request_cancellation) invokes the run-outcome
-    # classifier so EVERY terminalizer persists a classification record. Same
+    # classifier inline, so every terminalizer that funnels through db.crud.run
+    # persists a classification record. NOT every terminalizer funnels through
+    # the hook: the raw-SQL writers (cron_helpers dispatcher_reconcile / stale-
+    # run sweeps, saq_hooks._mark_run_failed, pipeline_execution) are covered by
+    # the wired periodic backfill sweep instead (cron_helpers' dispatcher_reconcile
+    # -> classify.reconcile_missing_classifications, every 60s). Same
     # cross-boundary wiring category as the audit_logger / composite_engine
     # exceptions above: db.crud.run exposes the terminal write, classify.py is
     # the pure decision function.

@@ -100,9 +100,9 @@ async def runs_engine():
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__]))
-        # runs.work_intact comes from migration 0087, not the ORM — mirror it
-        # so the fenced UPDATE can be exercised against a real row.
-        await conn.execute(text("ALTER TABLE runs ADD COLUMN work_intact BOOLEAN"))
+        # runs.work_intact (migration 0091) is now MAPPED on the Run ORM model,
+        # so create_all provides the column — no manual ALTER needed (a
+        # duplicate ALTER TABLE would fail with "duplicate column name").
     yield engine
     await engine.dispose()
 

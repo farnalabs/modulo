@@ -172,6 +172,12 @@ class Run(OrgScoped):
     # E2B sandbox id surfaced for observability (migration 0074).
     sandbox_id: Mapped[str | None] = mapped_column(Text)
     outputs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-152 work_intact (migration 0091) — computed at terminalization by the
+    # executor from completed-node artifacts + the full DAG (``evidence.compute_work_intact``)
+    # and written via a fenced raw UPDATE (``executor._apply_work_intact``). Mapped on
+    # the ORM so the FAR-189 classifier can record it as metadata (the old
+    # ``getattr(run, "work_intact", None)`` never observed the column).
+    work_intact: Mapped[bool | None] = mapped_column(Boolean)
     # Per-node telemetry (status, wall_clock_time_ms, exit_code, ...) split out
     # of outputs_json by the Agent Return Contract (FAR-125). NULL for
     # pre-split runs. Written atomically with outputs_json (migration 0074).
