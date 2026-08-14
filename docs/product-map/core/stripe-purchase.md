@@ -10,7 +10,7 @@ code:
   - backend/src/modulo/core/email_service.py
 bdd:
   - backend/tests/bdd/features/licensing/license_management.feature
-  - backend/tests/bdd/features/licensing/enterprise_gates.feature
+  - backend/tests/bdd/features/licensing/team_gates.feature
 unit-tests:
   - backend/tests/unit/api/test_stripe_webhook.py
   - backend/tests/unit/core/test_stripe_fulfilment.py
@@ -22,12 +22,12 @@ status: partial
 
 # Stripe Purchase Fulfilment
 
-Enterprise licence purchase fulfilment. Stripe checkout for a paid subscription
+Team licence purchase fulfilment. Stripe checkout for a paid subscription
 signals `invoice.paid` (and `checkout.session.completed`) webhooks to
 `POST /api/v1/webhooks/stripe`. The webhook verifies the `Stripe-Signature`
 header (HMAC-SHA256 over the raw body with a 300s replay window) against the
 `STRIPE_WEBHOOK_SECRET`, then schedules a background fulfilment task that signs
-an Ed25519 enterprise licence key (`modulo_license_private_key`), provisions the
+an Ed25519 team licence key (`modulo_license_private_key`), provisions the
 customer's org, and emails the licence to the buyer. Fails closed: any missing
 or invalid signature returns 400 and never reaches fulfilment.
 

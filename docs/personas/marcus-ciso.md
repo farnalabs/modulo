@@ -50,4 +50,4 @@
 
 ## What success looks like
 
-Marcus reviews Modulo's architecture: self-hosted, Fernet-encrypted credential store, immutable audit log with hash chain, RLS-enforced tenant isolation, `human_only` gate enforcement. He approves a pilot with the platform engineering team. After the first SOC 2 surveillance audit, the auditor notes "agentic SDLC controls exceed manual equivalent" — no findings. Marcus signs the Enterprise licence renewal.
+Marcus reviews Modulo's architecture: self-hosted, Fernet-encrypted credential store, immutable audit log with hash chain, RLS-enforced tenant isolation, `human_only` gate enforcement. He approves a pilot with the platform engineering team. After the first SOC 2 surveillance audit, the auditor notes "agentic SDLC controls exceed manual equivalent" — no findings. Marcus signs the Team licence renewal.

@@ -48,7 +48,7 @@ def _make_settings() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
-        modulo_license_key="enterprise-license",
+        modulo_license_key="team-license",
         modulo_scim_token=_SCIM_TOKEN,
         modulo_public_url="http://localhost:8000",
     )
@@ -76,7 +76,7 @@ class _AllFeatures:
         return []
 
     def tier(self) -> str:
-        return "enterprise"
+        return "team"
 
     def has_license_key(self) -> bool:
         return True
@@ -220,7 +220,7 @@ def _make_settings_no_public_url() -> Settings:
         secret_key=_VALID_32,
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
-        modulo_license_key="enterprise-license",
+        modulo_license_key="team-license",
         modulo_scim_token=_SCIM_TOKEN,
         modulo_public_url="",
     )

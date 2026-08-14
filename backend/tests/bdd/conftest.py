@@ -233,7 +233,7 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
             return []
 
         def tier(self) -> str:
-            return "enterprise"
+            return "team"
 
         def has_license_key(self) -> bool:
             return True

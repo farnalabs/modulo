@@ -40,7 +40,7 @@
 
 ## Anti-scenarios (must NOT require)
 
-- An enterprise licence, SSO, or team setup to publish library contributions
+- A team licence, SSO, or team setup to publish library contributions
 - A SaaS account, credit card, or telemetry opt-in to share work with the community
 - Manual approval from Modulo maintainers for every contribution (automated validation first)
 - Forking a library primitive losing the "forked_from" provenance metadata

@@ -52,7 +52,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 |----------|----------|---------|-------------|
 | `MODULO_LICENSE_KEY` | No | – | Base64-encoded signed JSON payload enabling Team-tier features. Verified at startup using the embedded Ed25519 public key. |
 | `MODULO_LICENSE_PUBLIC_KEY` | No | – | Ed25519 public key (hex) for license signature verification. Defaults to dev/test key; set in production. |
-| `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN enterprise license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
+| `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN team license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
 
 ---
 
@@ -61,7 +61,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 The `POST /api/v1/webhooks/stripe` webhook verifies the `Stripe-Signature`
 header (HMAC-SHA256 over `t=<timestamp>.<body>` with the webhook secret,
 ±300s replay window), then idempotently generates an Ed25519-signed
-enterprise license and emails it to the customer on their first successful
+team license and emails it to the customer on their first successful
 payment (`invoice.paid`). `checkout.session.completed` is treated as a pure
 ack and never fulfils, so a single card-paid purchase (which emits both
 events) issues exactly one license.

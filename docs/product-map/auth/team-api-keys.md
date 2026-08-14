@@ -86,7 +86,7 @@ Per-org, role-scoped API keys for CI/CD pipelines and external agents, with opti
 - [x] OAuth 2.0 access tokens are the fallback auth mechanism (checked after API key)
 - [x] Health check endpoint (`/mcp/healthz`) is exempt from auth
 
-### Enterprise gating
+### Team gating
 
 - [x] Team RBAC toggle controls whether team-scoped API keys are usable
 
