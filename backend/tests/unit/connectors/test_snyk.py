@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.snyk import SnykConnector
+from modulo.connectors.snyk import SnykConnector, _meta_total
 
 TOKEN = "snyk_test_token"
 API_BASE = "https://api.snyk.io/rest"
@@ -114,6 +114,97 @@ async def test_query_projects(connector):
     assert len(result.records) == 2
     assert result.records[0]["id"] == "proj-1"
     assert result.total == 2
+
+
+@respx.mock
+async def test_query_projects_non_dict_meta(connector):
+    respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [{"id": "proj-1"}],
+                "meta": "garbage",
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert len(result.records) == 1
+    assert result.total == 1
+
+
+@respx.mock
+async def test_query_projects_corrupt_count_inf(connector):
+    respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(
+            200,
+            content=b'{"data": [{"id": "proj-1"}], "meta": {"count": 1e999}}',
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_projects_corrupt_count_garbage(connector):
+    respx.get(f"{API_BASE}/orgs/my-org/projects", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [{"id": "proj-1"}],
+                "meta": {"count": "not-a-number"},
+            },
+        ),
+    )
+    result = await connector.query(
+        ConnectorQuery(
+            resource="projects",
+            filters={"org_id": "my-org"},
+            limit=100,
+        )
+    )
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_orgs_non_dict_meta_falls_back_to_records(connector):
+    respx.get(f"{API_BASE}/orgs", params={"version": VERSION, "limit": "100"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [{"id": "org-1"}, {"id": "org-2"}],
+                "meta": [],
+            },
+        ),
+    )
+    result = await connector.query(ConnectorQuery(resource="orgs", limit=100))
+    assert len(result.records) == 2
+    assert result.total == 2
+
+
+def test_meta_total() -> None:
+    assert _meta_total({"meta": {"count": 7}}, 0) == 7
+    assert _meta_total({"meta": {"count": "7"}}, 0) == 7
+    assert _meta_total({"meta": {"count": 1e999}}, 3) == 0
+    assert _meta_total({"meta": {"count": float("nan")}}, 3) == 0
+    assert _meta_total({"meta": {"count": True}}, 3) == 0
+    assert _meta_total({"meta": {"count": "garbage"}}, 3) == 0
+    assert _meta_total({"meta": {}}, 3) == 3
+    assert _meta_total({"meta": "garbage"}, 3) == 3
+    assert _meta_total({}, 3) == 3
 
 
 @respx.mock
