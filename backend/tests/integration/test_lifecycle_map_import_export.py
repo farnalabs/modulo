@@ -136,6 +136,7 @@ async def test_import_v2_envelope_recreates_version_chain_with_real_persistence(
         notes="second pass",
     )
     assert current is not None
+    await rls_session.refresh(current)
     snapshots.append(build_export_envelope(current)["versions"][0])
 
     current = await save_map_version(
@@ -149,6 +150,7 @@ async def test_import_v2_envelope_recreates_version_chain_with_real_persistence(
         notes="third pass",
     )
     assert current is not None
+    await rls_session.refresh(current)
     snapshots.append(build_export_envelope(current)["versions"][0])
 
     assert [entry["version"] for entry in snapshots] == [1, 2, 3]
