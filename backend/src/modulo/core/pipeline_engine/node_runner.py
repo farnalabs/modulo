@@ -1118,6 +1118,33 @@ def make_sandbox_agent_fn(
                 "exit_code": 0,
             }
 
+        # Render agent_command through the same SandboxedEnvironment + template
+        # vars as the prompt, so the LLM model (or any other command flag) can
+        # be a per-run / per-parameter value (e.g. ``--model {{ input.model }}``
+        # for A/B testing). A command with NO ``{{ }}`` templates renders to
+        # itself unchanged — backward compatible with every existing pipeline.
+        try:
+            rendered_agent_command = env.from_string(agent_command).render(**template_vars)
+        except jinja2.UndefinedError as e:
+            _log.warning(
+                "agent_command template UndefinedError for run %s node %s: %s",
+                run_id,
+                node_id,
+                e,
+            )
+            return {
+                "status": "skipped",
+                "summary": f"Skipped: agent_command template references missing input fields ({e})",
+                "agent_stdout": "",
+                "agent_stderr": "",
+                "exit_code": 0,
+            }
+        if not rendered_agent_command.strip():
+            raise ValueError(
+                f"sandbox_agent node '{node_id}' rendered agent_command is empty after template resolution"
+                " — a sandbox agent cannot run an empty command"
+            )
+
         start_time = time.monotonic()
         sandbox: AsyncSandbox | None = None
         # The executor's CAPTURED claim token (seeded into LangGraph state as
@@ -1493,7 +1520,7 @@ def make_sandbox_agent_fn(
                 # the process writes to a regular file — never a pipe that can
                 # fill and block a long session (FAR-97). The subshell preserves
                 # the command's exit code for the SDK's wait().
-                wrapped_command = f"( {agent_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
+                wrapped_command = f"( {rendered_agent_command} ) > {_SANDBOX_LOG_PATH} 2>&1"
                 # System env vars first — provide defaults from the host. DO NOT
                 # move pipeline env before these: pipelines need to override
                 # GITHUB_TOKEN for identity separation (e.g. PR Reviewer uses
