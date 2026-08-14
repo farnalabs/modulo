@@ -1013,3 +1013,121 @@ async def test_fetch_sandbox_log_tail_returns_empty_for_invalid_id(monkeypatch):
     with patch("urllib.request.urlopen") as _urlopen:
         assert not await _fetch_sandbox_log_tail(None)
     _urlopen.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# agent_command Jinja rendering (LLM model as a per-run / per-parameter value)
+# ---------------------------------------------------------------------------
+
+
+def _model_node_def(command: str, **overrides) -> dict:
+    node_def = _base_node_def(agent_command=command)
+    node_def.update(overrides)
+    return node_def
+
+
+async def test_agent_command_renders_input_model():
+    """`{{ input.model }}` in agent_command resolves from the run's input payload."""
+    node_def = _model_node_def("opencode run --model {{ input.model }} --auto --format json < /home/user/prompt.md")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(
+            {
+                "run_context": {"input": {"model": "opencode-go/mimo-v2.5"}},
+                "_run_id": "run-1",
+                "_pipeline_id": "pipe-1",
+                "_org_id": _ORG_ID,
+            }
+        )
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/mimo-v2.5" in wrapped
+    assert "{{" not in wrapped
+
+
+async def test_agent_command_renders_parameter_model():
+    """`{{ parameter.model }}` in agent_command resolves from the resolved parameter schema."""
+    node_def = _model_node_def(
+        "opencode run --model {{ parameter.model }} --auto --format json < /home/user/prompt.md",
+        _resolved_parameters={"model": "opencode-go/mimo-v2.5"},
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/mimo-v2.5" in wrapped
+    assert "{{" not in wrapped
+
+
+async def test_agent_command_default_filter():
+    """A missing input.model falls back to the `default()` filter value."""
+    node_def = _model_node_def(
+        'opencode run --model {{ input.model | default("opencode-go/deepseek-v4-flash") }} '
+        "--auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert "--model opencode-go/deepseek-v4-flash" in wrapped
+    assert "{{" not in wrapped
+
+
+async def test_agent_command_without_template_unchanged():
+    """A plain agent_command (no {{ }} templates) executes byte-for-byte unchanged."""
+    node_def = _base_node_def(timeout_seconds=30)
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["output"]["status"] == "completed"
+    wrapped = sandbox.commands.run.call_args.args[0]
+    assert f"( {_AGENT_COMMAND} )" in wrapped
+    assert _AGENT_COMMAND in wrapped
+
+
+async def test_agent_command_undefined_error_skips():
+    """A command template referencing a missing nested input field raises
+    UndefinedError -> the node returns status 'skipped' and NO sandbox command
+    is executed (mirrors the prompt's UndefinedError handling)."""
+    node_def = _model_node_def(
+        "opencode run --model {{ input.missing.deep.path }} --auto --format json < /home/user/prompt.md"
+    )
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)):
+        result = await fn(_run_state())
+
+    assert result["status"] == "skipped"
+    assert "agent_command" in result["summary"]
+    sandbox.commands.run.assert_not_called()
+
+
+async def test_agent_command_empty_after_render_fails():
+    """A command that renders to empty (e.g. `{{ input.model }}` with no default
+    and no value) fails with a clear ValueError and NO sandbox command executes."""
+    node_def = _model_node_def("{{ input.model }}")
+    fn = make_sandbox_agent_fn(node_def)
+    sandbox = _make_sandbox_mock()
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        pytest.raises(ValueError, match="rendered agent_command is empty"),
+    ):
+        await fn(_run_state())
+
+    sandbox.commands.run.assert_not_called()
