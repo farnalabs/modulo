@@ -38,7 +38,6 @@ async def test_health_check_ok(connector):
     result = await connector.health_check()
     assert result.ok is True
     assert result.detail == "Authenticated as admin@example.com"
-    assert route.called
     auth = route.calls[0].request.headers.get("Authorization")
     assert auth == f"Bearer {TOKEN}"
 
@@ -63,7 +62,6 @@ async def test_query_docs(connector):
     assert result.records[0]["doc_id"] == "doc1"
     assert result.records[1]["doc_id"] == "doc2"
     assert result.next_cursor == "next_cursor_val"
-    assert route.called
     sent = route.calls[0].request.content
     payload = json.loads(sent)
     assert payload["limit"] == 10
@@ -93,7 +91,6 @@ async def test_query_doc(connector):
     assert len(result.records) == 1
     assert result.records[0]["doc_id"] == doc_id
     assert result.records[0]["content"] == content
-    assert route.called
     arg_header = route.calls[0].request.headers.get("Dropbox-API-Arg")
     assert arg_header == f'{{"doc_id": "{doc_id}"}}'
 
@@ -160,7 +157,6 @@ async def test_write_doc(connector):
     result = await connector.write(ConnectorPayload(resource="doc", data={"title": title, "content": content}))
     assert result["doc_id"] == "new_doc_123"
     assert result["title"] == "New Paper Doc"
-    assert route.called
     assert route.calls[0].request.url.params["import_format"] == "markdown"
     arg_header = route.calls[0].request.headers.get("Dropbox-API-Arg")
     assert arg_header == f'{{"path": "/{title}"}}'

@@ -55,6 +55,11 @@ regression that silently weakens the suite:
   list/dict/set literals are freshly allocated on every evaluation, so the
   comparison can never hold (``is``) or can never fail (``is not``) and is
   dead either way (Python 3.8+ also emits a SyntaxWarning for it)
+- redundant ``assert <mock>.called`` right before the test inspects the same
+  mock's recorded calls (``<mock>.calls[0]``/``<mock>.call_args[0]``) — the
+  introspection access that follows already fails loudly when the call never
+  happened, so the ``.called`` assert is dead code that can silently drift out
+  of sync with what the test actually inspects
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -1386,3 +1391,100 @@ def test_identity_literal_lens_flags_tautologies():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _identity_literal_tautologies(tree), f"lens should NOT flag:\n{source}"
+
+
+_MOCK_CALL_INTROSPECTION = frozenset({"calls", "call_args", "call_args_list", "call_count"})
+"""Mock attributes that inspect the recorded calls after the fact. Accessing
+``<mock>.calls[0]``/``<mock>.call_args[0]`` fails loudly (``IndexError``/
+``AttributeError``) when the call never happened, so a ``.called`` assertion
+immediately before such an access is dead — it duplicates the check the
+introspection access already performs, and can silently drift out of sync with
+what the test actually inspects."""
+
+
+def _redundant_called_assertions(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert <mock>.called`` that
+    is immediately followed by an introspection access on the same mock."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for i, stmt in enumerate(node.body[:-1]):
+            test = stmt.test if isinstance(stmt, ast.Assert) else None
+            if not isinstance(test, ast.Attribute) or test.attr != "called":
+                continue
+            base = test.value
+            if not isinstance(base, (ast.Attribute, ast.Name)):
+                continue
+            nxt = node.body[i + 1]
+            nxt_attrs = [
+                sub
+                for sub in ast.walk(nxt)
+                if isinstance(sub, ast.Attribute) and sub.attr in _MOCK_CALL_INTROSPECTION
+            ]
+            if any(ast.dump(sub.value) == ast.dump(base) for sub in nxt_attrs):
+                found.append(
+                    (
+                        stmt.lineno,
+                        f"assert {ast.unparse(base)}.called is redundant — the "
+                        f"following {ast.unparse(base)}.<calls>/<call_args> access already "
+                        "fails loudly when no call was recorded",
+                    )
+                )
+    return found
+
+
+def test_no_redundant_called_assertions():
+    """``assert <mock>.called`` immediately before the test inspects the same
+    mock's recorded calls (``<mock>.calls[0]``, ``<mock>.call_args[0]``, ...) is
+    dead code: the introspection access that follows fails loudly — an
+    ``IndexError`` on ``calls[0]``/``call_args[0]``, an empty ``call_args_list``
+    that makes later ``in``-style assertions fail — if the call never happened.
+    The ``.called`` assert therefore duplicates the very check the next line
+    performs, and because the two can drift apart (asserting one mock's
+    ``.called`` while inspecting a *different* call path), it quietly gives a
+    false sense of rigour. Drop the assert and keep the introspection access.
+    The lens only flags bare ``assert <x>.called`` used positively; a negated
+    ``assert not <x>.called`` is a genuine no-call check and is left alone."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _redundant_called_assertions(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} redundant 'assert <mock>.called' assertion(s).\n"
+        "The immediately following <mock>.calls[0]/<mock>.call_args access already fails "
+        "loudly when the call never happened, so the .called assert is dead code.\n"
+        "Drop the redundant assert and keep the introspection access.\n" + "\n".join(violations)
+    )
+
+
+def test_redundant_called_lens_flags_dead_asserts():
+    """Synthetic positive/negative control for the redundant-``.called`` lens,
+    mirroring the identity-literal lens pattern: it must flag a bare
+    ``assert <mock>.called`` that is immediately followed by a recorded-calls
+    access on the same mock, and ignore negated no-call checks, ``.called``
+    without a follow-up introspection, and introspection on a different mock."""
+    positive_sources = [
+        "def test_foo():\n    assert route.called\n    assert route.calls[0].request.url.endswith('/x')\n",
+        "def test_foo():\n    assert session.add.called\n    row = session.add.call_args.args[0]\n",
+        "def test_foo():\n    assert mock.execute.called\n    calls = mock.execute.call_args_list\n",
+        "def test_foo():\n    assert response.called\n    response.calls[0]\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _redundant_called_assertions(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert not mock.called\n",
+        "def test_foo():\n    assert mock.called\n",
+        "def test_foo():\n    assert mock.called\n    mock.other_attr\n",
+        "def test_foo():\n    assert mock.called\n    other.calls[0]\n",
+        "def test_foo():\n    assert mock.called\n    return\n    mock.calls[0]\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _redundant_called_assertions(tree), f"lens should NOT flag:\n{source}"
