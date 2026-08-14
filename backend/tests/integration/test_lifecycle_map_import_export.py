@@ -60,7 +60,7 @@ async def test_export_import_round_trip_with_real_persistence(
     assert imported.description == "Q3 delivery"
     assert imported.version == len(envelope["versions"])
     assert imported.content_json["stages"][0]["type"] == "manual"
-    assert imported.content_json["edges"] == []
+    assert not imported.content_json["edges"]
 
     persisted = await get_lifecycle_map(rls_session, imported.id)
     assert persisted is not None
