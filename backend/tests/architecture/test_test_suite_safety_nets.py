@@ -122,12 +122,10 @@ PINNED_AWAITING_IMPLEMENTATION: dict[str, frozenset[str]] = {
     ),
     "tests/bdd/features/variants/variant_groups.feature": frozenset(
         {
-            "Weighted batch run distributes N runs by variant weights",
             "Sequential execution order matches insertion order",
             "Variant comparison returns eval scores per node and token cost",
             "Eval coverage gap is detected when variants diverge but evals match",
             "Comparison shows token cost breakdown per variant",
-            "Batch run is rejected when quota is exceeded",
         }
     ),
     "tests/bdd/features/workflows/import.feature": frozenset(
