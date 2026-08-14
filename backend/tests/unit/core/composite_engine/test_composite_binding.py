@@ -14,7 +14,7 @@ class TestCompositeBinding:
         )
         assert binding.composite_template_id == tid
         assert binding.composite_version == "1.0.0"
-        assert binding.parameter_values == {}
+        assert not binding.parameter_values
         assert binding.input_mapping is None
         assert binding.output_mapping is None
 

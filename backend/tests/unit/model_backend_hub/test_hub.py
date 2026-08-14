@@ -54,7 +54,7 @@ print(json.dumps(provider_modules))
         text=True,
         timeout=90,
     )
-    assert json.loads(result.stdout) == []
+    assert not json.loads(result.stdout)
 
 
 def _encrypt(payload: dict[str, Any]) -> bytes:
@@ -1363,11 +1363,11 @@ async def test_extract_fixture_map_falls_back_to_creds():
 
 
 async def test_extract_fixture_map_empty_when_absent():
-    assert _extract_fixture_map({}, {}) == {}
+    assert not _extract_fixture_map({}, {})
 
 
 async def test_extract_fixture_map_ignores_non_dict():
-    assert _extract_fixture_map({"fixture_map": "nope"}, {}) == {}
+    assert not _extract_fixture_map({"fixture_map": "nope"}, {})
 
 
 async def test_backend_class_lazy_import():

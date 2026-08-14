@@ -85,10 +85,10 @@ def test_parse_scalar_value_surfaces_as_malformed_entry() -> None:
 
 
 def test_parse_empty_when_no_matching_keys() -> None:
-    assert parse_self_report_refs({"node_1": {"output": {"summary": "nope"}}}) == []
-    assert parse_self_report_refs({}) == []
-    assert parse_self_report_refs("not a dict") == []
-    assert parse_self_report_refs(None) == []  # type: ignore[arg-type]
+    assert not parse_self_report_refs({"node_1": {"output": {"summary": "nope"}}})
+    assert not parse_self_report_refs({})
+    assert not parse_self_report_refs("not a dict")
+    assert not parse_self_report_refs(None)  # type: ignore[arg-type]
 
 
 def test_parse_handles_self_referential_dict_cycle() -> None:

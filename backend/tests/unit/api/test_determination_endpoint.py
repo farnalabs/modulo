@@ -214,7 +214,7 @@ class TestRunDetermination:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["samples"] == []
+        assert not data["samples"]
         assert data["summary"] == "No SDLC stages could be detected from connected tools"
 
     def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:
@@ -307,8 +307,8 @@ class TestCreateDeterminationDraft:
         assert data["summary"] == "SDLC stages detected: development"
         assert len(data["nodes"]) == 2
         assert data["nodes"][0]["id"] == "start"
-        assert data["edges"] == []
-        assert data["automation_suggestions"] == []
+        assert not data["edges"]
+        assert not data["automation_suggestions"]
         assert len(data["findings"]) == 1
 
     def test_unauthenticated_returns_4xx(self, unauth_client: TestClient) -> None:

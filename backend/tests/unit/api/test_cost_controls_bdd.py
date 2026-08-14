@@ -462,7 +462,7 @@ class TestAdminGetCostControls:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["teams"] == []
+        assert not data["teams"]
         assert data["budget"] is None
 
     def test_missing_org_returns_defaults(self, client: TestClient) -> None:
@@ -478,7 +478,7 @@ class TestAdminGetCostControls:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["teams"] == []
+        assert not data["teams"]
         assert data["budget"] is None
 
     def test_populated_database_returns_values(self, client: TestClient) -> None:
@@ -530,5 +530,5 @@ class TestAdminGetCostControls:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["teams"] == []
+        assert not data["teams"]
         assert data["budget"] is None

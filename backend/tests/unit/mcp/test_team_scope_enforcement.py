@@ -295,7 +295,7 @@ class TestPipelineGraphTeamScope(_AuthContext):
             result = await get_pipeline_graph_tool(pipeline_id=str(pipeline_id))
 
         assert result["node_count"] == 0
-        assert result["edges"] == []
+        assert not result["edges"]
 
 
 class TestRunToolsTeamScope(_AuthContext):
@@ -654,7 +654,7 @@ class TestListPendingHitlTeamScope(_AuthContext):
             result = await list_pending_hitl()
 
         assert result["total"] == 0
-        assert result["gates"] == []
+        assert not result["gates"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     async def test_list_pending_hitl_org_wide_key_no_team_filter(self, mock_validate_auth: AsyncMock) -> None:
@@ -781,7 +781,7 @@ class TestQueryAnalyticsTeamScope(_AuthContext):
             mock_session.return_value = _make_session_context(session)
             result = await query_analytics()
 
-        assert result["buckets"] == []
+        assert not result["buckets"]
         mock_query.assert_awaited_once()
         assert mock_query.await_args.kwargs["params"].team_id == _TEAM_A
 

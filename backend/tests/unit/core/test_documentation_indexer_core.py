@@ -33,8 +33,8 @@ class TestSearch:
         index = DocumentationIndex(
             entries=[DocEntry(heading_path="Pipelines", heading="Pipelines", first_paragraph="Core.")]
         )
-        assert index.search("") == []
-        assert index.search("   ") == []
+        assert not index.search("")
+        assert not index.search("   ")
 
     def test_single_word_matches_heading(self) -> None:
         index = DocumentationIndex(
@@ -86,13 +86,13 @@ class TestSearch:
         index = DocumentationIndex(
             entries=[DocEntry(heading_path="Pipelines", heading="Pipeline Config", first_paragraph="Nodes.")]
         )
-        assert index.search("pipeline secrets") == []
+        assert not index.search("pipeline secrets")
 
     def test_no_match_returns_empty(self) -> None:
         index = DocumentationIndex(
             entries=[DocEntry(heading_path="Pipelines", heading="Pipelines", first_paragraph="")]
         )
-        assert index.search("nonexistent-topic") == []
+        assert not index.search("nonexistent-topic")
 
     def test_section_filter_limits_to_matching_paths(self) -> None:
         index = DocumentationIndex(
@@ -119,11 +119,11 @@ class TestSearch:
         index = DocumentationIndex(
             entries=[DocEntry(heading_path="Pipelines", heading="Pipelines", first_paragraph="Core.")]
         )
-        assert index.search("core", section="Releases") == []
+        assert not index.search("core", section="Releases")
 
     def test_blank_entries_do_not_raise(self) -> None:
         index = DocumentationIndex(entries=[])
-        assert index.search("anything") == []
+        assert not index.search("anything")
 
 
 class TestFormatResults:
@@ -189,7 +189,7 @@ class TestBuild:
         missing = tmp_path / "does-not-exist.md"
         with caplog.at_level("WARNING"):
             index = DocumentationIndex.build(missing)
-        assert index.entries == []
+        assert not index.entries
         assert "PRD not found" in caplog.text
 
     def test_build_undecodable_file_returns_empty_index(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -197,7 +197,7 @@ class TestBuild:
         bad.write_bytes(b"\xff\xfe invalid utf8 \x00\x01")
         with caplog.at_level("ERROR"):
             index = DocumentationIndex.build(bad)
-        assert index.entries == []
+        assert not index.entries
         assert "Failed to read PRD" in caplog.text
 
     def test_build_unreadable_file_returns_empty_index(
@@ -212,7 +212,7 @@ class TestBuild:
         monkeypatch.setattr(Path, "read_text", _raise)
         with caplog.at_level("ERROR"):
             index = DocumentationIndex.build(unreadable)
-        assert index.entries == []
+        assert not index.entries
         assert "Failed to read PRD" in caplog.text
 
 
@@ -270,11 +270,11 @@ class TestParse:
         assert index.entries[0].first_paragraph == "First line. Second line."
 
     def test_blank_input_produces_no_entries(self) -> None:
-        assert DocumentationIndex._parse("").entries == []
-        assert DocumentationIndex._parse("\n\n\n").entries == []
+        assert not DocumentationIndex._parse("").entries
+        assert not DocumentationIndex._parse("\n\n\n").entries
 
     def test_no_heading_input_produces_no_entries(self) -> None:
-        assert DocumentationIndex._parse("plain prose without headings\n").entries == []
+        assert not DocumentationIndex._parse("plain prose without headings\n").entries
 
 
 class TestExtractFirstParagraph:

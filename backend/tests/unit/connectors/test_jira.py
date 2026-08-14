@@ -343,7 +343,7 @@ async def test_query_field_metadata_unknown_project(connector):
         )
     )
     result = await connector.query(ConnectorQuery(resource="field_metadata", filters={"project": "NOPE"}))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 
@@ -513,7 +513,7 @@ async def test_rate_limit_metadata_empty_when_absent(connector):
     issue_data = {"id": "10001", "key": "PROJ-123"}
     respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json=issue_data))
     result = await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
-    assert result.metadata["rate_limit"] == {}
+    assert not result.metadata["rate_limit"]
 
 
 @respx.mock
@@ -812,7 +812,7 @@ async def test_query_issue_attachments_empty(connector):
         return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123", "fields": {}})
     )
     result = await connector.query(ConnectorQuery(resource="issue_attachments", filters={"issue_key": "PROJ-123"}))
-    assert result.records == []
+    assert not result.records
 
 
 @respx.mock
@@ -939,7 +939,7 @@ async def test_query_issue_remote_links(connector):
 async def test_query_issue_remote_links_empty(connector):
     respx.get(f"{_BASE}/issue/PROJ-123/remotelink").mock(return_value=httpx.Response(200, json=[]))
     result = await connector.query(ConnectorQuery(resource="issue_remote_links", filters={"issue_key": "PROJ-123"}))
-    assert result.records == []
+    assert not result.records
 
 
 @respx.mock
@@ -1162,7 +1162,7 @@ async def test_query_attachments_empty(connector):
         return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123", "fields": {}})
     )
     result = await connector.query(ConnectorQuery(resource="attachments", filters={"issue_key": "PROJ-123"}))
-    assert result.records == []
+    assert not result.records
     assert result.total == 0
 
 

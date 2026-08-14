@@ -168,7 +168,7 @@ class TestGlobalSearchAuth:
         resp = client.get("/api/v1/admin/search?q=test")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["results"] == []
+        assert not body["results"]
         assert body["total_by_type"] == {
             "pipeline": 0,
             "run": 0,
@@ -184,7 +184,7 @@ class TestGlobalSearchEndpoint:
         resp = client.get("/api/v1/admin/search?q=zzzznonexistent")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["results"] == []
+        assert not body["results"]
         assert body["total_by_type"] == {
             "pipeline": 0,
             "run": 0,

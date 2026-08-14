@@ -104,7 +104,7 @@ class TestParseSchemaFromResponse:
     def test_adds_missing_type_and_properties(self) -> None:
         result = parse_schema_from_response("{}")
         assert result["type"] == "object"
-        assert result["properties"] == {}
+        assert not result["properties"]
 
     def test_strips_markdown_without_lang_hint(self) -> None:
         raw = '```\n{"type": "object"}\n```'

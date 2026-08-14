@@ -165,7 +165,7 @@ def _bdd_has_samples(request) -> None:
 
 @then("the response has an empty sample list")
 def _bdd_empty_samples(request) -> None:
-    assert request.node._resp.json()["samples"] == []
+    assert not request.node._resp.json()["samples"]
 
 
 @then("the response contains draft nodes and edges")

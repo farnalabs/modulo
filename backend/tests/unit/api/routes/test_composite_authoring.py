@@ -419,7 +419,7 @@ class TestCompositeDetectParams:
             json={"nodes": nodes},
         )
         assert resp.status_code == 200
-        assert resp.json()["ports"] == []
+        assert not resp.json()["ports"]
 
     def test_unauthorized(self, unauth_client: TestClient) -> None:
         resp = unauth_client.post(

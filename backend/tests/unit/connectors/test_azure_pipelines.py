@@ -461,7 +461,7 @@ async def test_double_health_check(ap_double):
 
 async def test_double_query(ap_double):
     result = await ap_double.query(ConnectorQuery(resource="projects"))
-    assert result.records == []
+    assert not result.records
 
 
 async def test_double_write(ap_double):

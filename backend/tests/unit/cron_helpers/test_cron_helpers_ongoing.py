@@ -592,11 +592,11 @@ class TestPersistentFailureDeactivation:
     async def test_bump_without_redis_is_noop(self) -> None:
         session = _RoutedSession(trigger=_make_trigger())
         await ch._bump_ongoing_failure(session, None, TRIGGER_ID)
-        assert session.executed == []
+        assert not session.executed
 
     @pytest.mark.asyncio
     async def test_clear_without_redis_is_noop(self) -> None:
-        await ch._clear_ongoing_failure(None, TRIGGER_ID)
+        assert await ch._clear_ongoing_failure(None, TRIGGER_ID) is None
 
     @pytest.mark.asyncio
     async def test_success_clears_failure_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -701,7 +701,7 @@ class TestFireOngoingTrigger:
         assert len(first["dispatched"]) == 2
         assert second["status"] == "noop"
         assert second["created"] == 0
-        assert second["dispatched"] == []
+        assert not second["dispatched"]
         redis_client.aclose.assert_awaited()
 
     def test_never_dispatched_pending_matches_reconcile_predicate(self) -> None:

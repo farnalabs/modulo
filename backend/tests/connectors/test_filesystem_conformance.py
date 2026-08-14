@@ -28,7 +28,7 @@ class TestFilesystemConnector:
     async def test_browse_root(self, fs_connector: FilesystemConnector) -> None:
         result = await fs_connector.query(ConnectorQuery(resource="directory"))
         assert_result_shape(result)
-        assert result.records == []
+        assert not result.records
         assert result.total == 0
 
     async def test_read_write_file(self, fs_connector: FilesystemConnector) -> None:

@@ -216,7 +216,7 @@ class TestSearchLibrary:
         assert "insufficient_scope" not in result
         # The tool must still perform its work — not just avoid raising.
         mock_list.assert_called_once()
-        assert result["items"] == []
+        assert not result["items"]
         assert result["total"] == 0
 
     async def test_error_handling(self) -> None:

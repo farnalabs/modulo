@@ -133,15 +133,15 @@ class TestOidcProviderParsing:
 
     def test_empty_when_no_providers(self) -> None:
         settings = _override(modulo_oidc_providers="[]")
-        assert parse_oidc_providers(settings) == []
+        assert not parse_oidc_providers(settings)
 
     def test_empty_when_invalid_json(self) -> None:
         settings = _override(modulo_oidc_providers="not-json")
-        assert parse_oidc_providers(settings) == []
+        assert not parse_oidc_providers(settings)
 
     def test_skips_non_object_entry(self) -> None:
         settings = _override(modulo_oidc_providers=json.dumps(["invalid-provider"]))
-        assert parse_oidc_providers(settings) == []
+        assert not parse_oidc_providers(settings)
 
     def test_skips_missing_fields(self) -> None:
         settings = _override(
@@ -323,19 +323,19 @@ class TestDecodeIdTokenClaims:
     def test_returns_empty_for_malformed_token(self) -> None:
         from modulo.auth.sso import _decode_id_token_claims
 
-        assert _decode_id_token_claims("not-a-jwt") == {}
-        assert _decode_id_token_claims("no.dots") == {}
+        assert not _decode_id_token_claims("not-a-jwt")
+        assert not _decode_id_token_claims("no.dots")
 
     def test_returns_empty_on_bad_padding(self) -> None:
         from modulo.auth.sso import _decode_id_token_claims
 
         id_token = "header.bad-payload.sig"
-        assert _decode_id_token_claims(id_token) == {}
+        assert not _decode_id_token_claims(id_token)
 
     def test_returns_empty_on_empty_string(self) -> None:
         from modulo.auth.sso import _decode_id_token_claims
 
-        assert _decode_id_token_claims("") == {}
+        assert not _decode_id_token_claims("")
 
     @pytest.mark.parametrize("payload", [[], "claims", None])
     def test_returns_empty_when_payload_is_not_an_object(self, payload: object) -> None:
@@ -343,7 +343,7 @@ class TestDecodeIdTokenClaims:
 
         encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
 
-        assert _decode_id_token_claims(f"header.{encoded}.signature") == {}
+        assert not _decode_id_token_claims(f"header.{encoded}.signature")
 
 
 class TestOidcJsonResponseShapes:

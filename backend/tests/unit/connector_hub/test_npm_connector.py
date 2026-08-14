@@ -146,7 +146,7 @@ async def test_query_search_malformed_object_not_echoed_as_package(connector):
     respx.get(f"{_BASE}/-/v1/search").mock(return_value=httpx.Response(200, json=body))
     result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}, limit=10))
     assert result.records[0]["name"] == "react"
-    assert result.records[1] == {}
+    assert not result.records[1]
 
 
 @respx.mock

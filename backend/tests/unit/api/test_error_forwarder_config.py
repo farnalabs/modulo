@@ -181,7 +181,7 @@ class TestValidateForwarderConfig:
     """Tests for the per-forwarder-type config schema validation."""
 
     def test_unknown_forwarder_type_has_no_schema(self) -> None:
-        assert validate_forwarder_config("unknown", {"anything": 1}) == []
+        assert not validate_forwarder_config("unknown", {"anything": 1})
 
     def test_empty_config_reports_all_required_keys(self) -> None:
         errors = validate_forwarder_config("sentry", None)
@@ -197,7 +197,7 @@ class TestValidateForwarderConfig:
             "loki": {"push_url": "https://loki.example.com/loki/api/v1/push"},
         }
         for ftype, config in valid.items():
-            assert validate_forwarder_config(ftype, config) == [], ftype
+            assert not validate_forwarder_config(ftype, config), ftype
 
     def test_missing_required_key_reported(self) -> None:
         assert validate_forwarder_config("datadog", {}) == ["missing or empty required config key 'api_key'"]

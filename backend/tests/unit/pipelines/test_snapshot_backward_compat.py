@@ -211,7 +211,7 @@ def test_diff_handles_node_type_field():
     assert changes["node_type"] == {"old": None, "new": "agent"}
 
     # Both without node_type should be unchanged
-    assert _compute_node_changes(old_node, old_node) == {}
+    assert not _compute_node_changes(old_node, old_node)
 
 
 async def test_list_snapshots_returns_total_count():

@@ -28,7 +28,7 @@ class TestSavedViewsFlag:
         registry = FeatureFlagRegistry()
         flag = registry.get_flag("saved_views")
         assert flag is not None
-        assert len(flag.description) > 0
+        assert flag.description
 
     def test_flag_default_state(self) -> None:
         registry = FeatureFlagRegistry()
@@ -53,7 +53,7 @@ class TestMobileSidebarRailFlag:
         registry = FeatureFlagRegistry()
         flag = registry.get_flag("mobile_sidebar_rail")
         assert flag is not None
-        assert len(flag.description) > 0
+        assert flag.description
 
 
 class TestFeatureFlagModel:
@@ -131,7 +131,7 @@ class TestRegistryLifecycle:
 
     def test_tier_gap_flags_empty_when_not_community(self) -> None:
         registry = FeatureFlagRegistry(current_tier="team")
-        assert registry.tier_gap_flags() == []
+        assert not registry.tier_gap_flags()
 
     def test_tier_gap_flags_reports_inactive_team_flags(self) -> None:
         registry = FeatureFlagRegistry(current_tier="community")

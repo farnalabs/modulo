@@ -115,8 +115,8 @@ def test_get_status_first_run(client: TestClient, mock_session: AsyncMock) -> No
     assert resp.status_code == 200
     data = resp.json()
     assert data["is_first_run"] is True
-    assert data["completed_actions"] == []
-    assert data["skipped_actions"] == []
+    assert not data["completed_actions"]
+    assert not data["skipped_actions"]
     assert data["dismissed"] is False
     assert data["progress_pct"] == 0.0
     assert len(data["actions"]) == 6

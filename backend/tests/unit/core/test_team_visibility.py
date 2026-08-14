@@ -124,14 +124,14 @@ def test_extract_connector_bindings_valid_node() -> None:
 
 def test_extract_connector_bindings_skips_nodes_without_binding() -> None:
     node_id = str(uuid.uuid4())
-    assert extract_connector_bindings([{"id": node_id}]) == []
+    assert not extract_connector_bindings([{"id": node_id}])
 
 
 def test_extract_connector_bindings_skips_non_dict_bindings() -> None:
     node_id = str(uuid.uuid4())
     for bad in ("instance_id", 42, None, ["instance_id"]):
         nodes = [{"id": node_id, "connector_binding": bad}]
-        assert extract_connector_bindings(nodes) == []
+        assert not extract_connector_bindings(nodes)
 
 
 def test_extract_connector_bindings_skips_missing_instance_id() -> None:
@@ -140,7 +140,7 @@ def test_extract_connector_bindings_skips_missing_instance_id() -> None:
         {"id": node_id, "connector_binding": {}},
         {"id": node_id, "connector_binding": {"instance_id": None}},
     ]
-    assert extract_connector_bindings(nodes) == []
+    assert not extract_connector_bindings(nodes)
 
 
 def test_extract_connector_bindings_missing_node_id_stringifies_none() -> None:
@@ -157,7 +157,7 @@ def test_extract_connector_bindings_missing_node_id_stringifies_none() -> None:
 @pytest.mark.asyncio
 async def test_empty_bindings_return_no_mismatches() -> None:
     session = _mock_session([])
-    assert await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, []) == []
+    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, [])
     session.execute.assert_not_awaited()
 
 
@@ -166,7 +166,7 @@ async def test_same_team_connector_is_allowed() -> None:
     conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="eng-db")
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
     session = _mock_session([conn])
-    assert await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, bindings) == []
+    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, bindings)
 
 
 @pytest.mark.asyncio
@@ -174,7 +174,7 @@ async def test_org_connector_is_allowed_across_teams() -> None:
     conn = _connector(visibility="org", owner_team_id=None, name="shared")
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
     session = _mock_session([conn])
-    assert await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings) == []
+    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
 
 
 @pytest.mark.asyncio
@@ -232,7 +232,7 @@ async def test_mixed_valid_and_invalid_instance_ids() -> None:
 async def test_missing_connector_is_ignored() -> None:
     session = _mock_session([])
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(uuid.uuid4())}]
-    assert await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings) == []
+    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
 
 
 @pytest.mark.asyncio
@@ -241,12 +241,12 @@ async def test_connector_from_other_org_is_ignored() -> None:
     conn.organisation_id = uuid.uuid4()
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
     session = _mock_session([])
-    assert await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings) == []
+    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
 
 
 @pytest.mark.asyncio
 async def test_invalid_binding_ids_are_ignored() -> None:
     session = _mock_session([])
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": "not-a-uuid"}]
-    assert await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings) == []
+    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
     session.execute.assert_not_awaited()

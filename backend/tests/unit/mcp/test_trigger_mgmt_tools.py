@@ -408,7 +408,7 @@ class TestListTriggersSuccess(_AuthContext):
         result = await list_triggers(pipeline_id=str(pid))
 
         assert result.get("error") is None
-        assert result["data"] == []
+        assert not result["data"]
         mock_db_list.assert_awaited_once_with(
             mock_sesh,
             _PLACEHOLDER_ORG_ID,

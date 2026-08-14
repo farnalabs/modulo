@@ -867,8 +867,8 @@ async def test_hitl_gate_resume_with_deliver_manual_empty_output():
     )
 
     assert result["artifacts"][0]["result"] == "delivered_manual"
-    assert result["output"] == {}
-    assert result["artifacts"][0]["manual_output"] == {}
+    assert not result["output"]
+    assert not result["artifacts"][0]["manual_output"]
 
 
 # ---------------------------------------------------------------------------

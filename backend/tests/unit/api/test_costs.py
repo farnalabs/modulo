@@ -225,7 +225,7 @@ class TestGetSpendLimits:
 
         assert resp.status_code == 200
         assert resp.json()["org_daily_spend_limit"] is None
-        assert resp.json()["team_limits"] == []
+        assert not resp.json()["team_limits"]
 
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get("/api/v1/admin/costs/limits")
@@ -488,7 +488,7 @@ class TestListReports:
             resp = client.get(self.ENDPOINT)
 
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
 
 class TestDeleteReport:
@@ -582,7 +582,7 @@ class TestGetAnomalies:
             resp = anomaly_client.get(self.ENDPOINT)
 
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert not resp.json()
 
     def test_unauthorized_returns_4xx(self, unauth_client: TestClient) -> None:
         resp = unauth_client.get(self.ENDPOINT)

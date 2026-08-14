@@ -277,7 +277,7 @@ class TestListRatings:
 
         ratings = await list_ratings_for_primitive(mock_session, prim_id)
         assert isinstance(ratings, PageResult)
-        assert ratings.items == []
+        assert not ratings.items
         assert ratings.total == 0
 
     async def test_list_ratings_with_results(self, mock_session):

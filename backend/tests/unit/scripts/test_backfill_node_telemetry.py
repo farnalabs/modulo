@@ -174,7 +174,7 @@ def test_split_row_regular_agent_returns_outer_output():
     )
     assert ok is True and reason is None
     assert new_outputs["n1"] == {"text": "hello"}
-    assert new_telemetry["n1"] == {}
+    assert not new_telemetry["n1"]
 
 
 def test_split_row_skipped_recovery_marker_is_telemetry_only():
@@ -264,7 +264,7 @@ def test_loop_dry_run_does_not_write_and_samples():
     assert summary["batches"] == 1
     assert summary["rows_processed"] == 1
     assert summary["rows_split"] == 1
-    assert summary["skips"] == []
+    assert not summary["skips"]
     assert summary["sample"] == ["r1"]
     assert not any(sql.startswith("UPDATE") for sql, _ in conn.executed)
 

@@ -181,7 +181,7 @@ def test_composite_content_json_optional_fields():
 
     assert content["input_schema_id"] is None
     assert content["output_schema_id"] is None
-    assert content["parameter_ports_json"] == []
+    assert not content["parameter_ports_json"]
 
 
 # ---------------------------------------------------------------------------

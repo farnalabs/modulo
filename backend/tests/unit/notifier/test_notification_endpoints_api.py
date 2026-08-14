@@ -91,7 +91,7 @@ def client() -> Generator[TestClient, None, None]:
 def test_list_endpoints_empty(client: TestClient) -> None:
     resp = client.get("/api/v1/notifications")
     assert resp.status_code == 200
-    assert resp.json() == []
+    assert not resp.json()
 
 
 # ---------------------------------------------------------------------------

@@ -71,7 +71,7 @@ async def test_empty_channel_list(connector):
     result: ConnectorResult = await connector.query(
         ConnectorQuery(resource="channels", limit=10),
     )
-    assert result.records == []
+    assert not result.records
     assert result.next_cursor is None
 
 
@@ -83,7 +83,7 @@ async def test_empty_message_history(connector):
     result: ConnectorResult = await connector.query(
         ConnectorQuery(resource="messages", filters={"channel": "C12345"}, limit=10),
     )
-    assert result.records == []
+    assert not result.records
     assert result.next_cursor is None
 
 
@@ -95,7 +95,7 @@ async def test_empty_user_list(connector):
     result: ConnectorResult = await connector.query(
         ConnectorQuery(resource="users", limit=10),
     )
-    assert result.records == []
+    assert not result.records
     assert result.next_cursor is None
 
 

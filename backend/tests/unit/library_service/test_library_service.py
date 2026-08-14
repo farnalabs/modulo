@@ -195,7 +195,7 @@ def test_filter_community_by_search():
 
 
 def test_filter_community_no_match():
-    assert _filter_community(primitive_type=None, search="zzz_no_match_zzz") == []
+    assert not _filter_community(primitive_type=None, search="zzz_no_match_zzz")
 
 
 def test_community_by_id_index():
@@ -316,7 +316,7 @@ async def test_list_primitives_exclude_community():
     ):
         result = await list_primitives(session, org_id, include_community=False)
 
-    assert result.items == []
+    assert not result.items
     assert result.total == 0
 
 

@@ -218,12 +218,12 @@ class TestValidateBundle:
     }
 
     def test_valid_bundle_has_no_errors(self) -> None:
-        assert _validate_bundle(dict(self.VALID)) == []
+        assert not _validate_bundle(dict(self.VALID))
 
     def test_empty_bundle_has_no_errors(self) -> None:
         # A bundle that only carries meta + organisation (no entity tables yet)
         # is structurally fine — empty tables are valid.
-        assert _validate_bundle({"__meta__": {"version": 1}, "organisation": {"id": "o1"}}) == []
+        assert not _validate_bundle({"__meta__": {"version": 1}, "organisation": {"id": "o1"}})
 
     def test_non_object_root_reports_error(self) -> None:
         errors = _validate_bundle([1, 2, 3])
@@ -259,11 +259,8 @@ class TestValidateBundle:
     def test_null_row_id_is_accepted(self) -> None:
         # A row without a persistent id is re-created fresh on import; export
         # never emits one, but null is a legitimate structural shape.
-        assert (
-            _validate_bundle(
-                {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": None, "email": "a@b.com"}]}
-            )
-            == []
+        assert not _validate_bundle(
+            {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": None, "email": "a@b.com"}]}
         )
 
     def test_multiple_problems_accumulate(self) -> None:
@@ -282,7 +279,7 @@ class TestValidateBundle:
     def test_unknown_top_level_keys_are_ignored(self) -> None:
         bundle = dict(self.VALID)
         bundle["not_an_entity"] = "ignored"
-        assert _validate_bundle(bundle) == []
+        assert not _validate_bundle(bundle)
 
 
 class TestLoadBundle:
@@ -771,7 +768,7 @@ class TestDoImport:
         with patch("modulo.cli.migrate_org.AsyncSessionLocal", return_value=mock_local):
             counts = await _do_import(bundle, org_id, "skip")
         assert counts == {"created": 0, "overwritten": 0, "skipped": 1, "errors": 0}
-        assert session.added == []
+        assert not session.added
 
     async def test_overwrite_existing_records(self, org_id: uuid.UUID) -> None:
         existing: Any = _Existing(id=uuid.uuid4(), name="Platform", description="old")

@@ -138,7 +138,7 @@ class TestSanitiseSampleRecords:
         assert sanitise_sample_records("not-a-list") == "not-a-list"
 
     def test_empty_and_scalar_records(self) -> None:
-        assert sanitise_sample_records([]) == []
+        assert not sanitise_sample_records([])
         assert sanitise_sample_records([None]) == [None]
         assert sanitise_sample_records([42]) == [42]
 
