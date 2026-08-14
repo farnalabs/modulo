@@ -127,6 +127,15 @@ watch(selectedIndex, (idx) => {
   })
 })
 
+watch(filteredItems, () => {
+  const count = filteredItems.value.length
+  if (count === 0) {
+    selectedIndex.value = 0
+  } else if (selectedIndex.value > count - 1) {
+    selectedIndex.value = count - 1
+  }
+})
+
 function open() {
   isOpen.value = true
   query.value = ''

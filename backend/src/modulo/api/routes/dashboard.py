@@ -644,7 +644,7 @@ async def dashboard_summary(
                 except Exception:
                     _log.warning("dashboard.config_warnings.remy_failed", exc_info=True)
 
-        total_runs = sum(status_counts.values())
+        total_runs = sum(v for k, v in status_counts.items() if k not in _IDLE_STATUSES)
         result: dict[str, Any] = {
             "total_runs": total_runs,
             "active_pipelines": active_pipelines,

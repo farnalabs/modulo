@@ -273,7 +273,7 @@ async function loadData() {
       get<any>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),
       get<{ items: PipelineSummary[] }>('/api/v1/pipelines?limit=200').catch(() => ({ items: [] })),
     ])
-    mapName.value = mapData.name
+    mapName.value = mapData?.name ?? ''
     pipelines.value = pipelinesData.items || []
 
     const versionList = await get<LifecycleMapVersion[]>(`/api/v1/lifecycle-maps/${props.mapId}/versions`)
