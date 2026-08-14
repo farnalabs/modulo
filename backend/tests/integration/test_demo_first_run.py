@@ -305,13 +305,15 @@ async def test_seed_demo_data_creates_demo_user(db_engine: AsyncEngine, db_url: 
 
 
 async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url: str) -> None:
-    """_seed_demo_data should complete without crashing.
+    """_seed_demo_data should complete and write the demo account to the DB.
 
     The shared integration database always contains at least the
     session-scoped ``test_org`` organisation (pulled in by the module's
     autouse onboarding-cleanup fixture), so the org-free early-return path in
-    ``_seed_demo_data`` cannot be exercised here — this test only verifies the
-    seeder runs to completion without raising.
+    ``_seed_demo_data`` cannot be exercised here. Starting from a clean slate,
+    this test verifies the seeder runs to completion AND actually persists the
+    demo account with its expected admin role — not just that it does not
+    raise.
     """
     from modulo.api.main import _seed_demo_data
     from modulo.settings import Settings
@@ -325,6 +327,12 @@ async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url:
     )
 
     import modulo.api.dependencies as deps
+
+    # Start from a clean slate so the demo account asserted below is the work
+    # of this seeding run, not leftover state from an earlier test.
+    async with db_engine.connect() as conn:
+        await _delete_demo_accounts(conn)
+        await conn.commit()
 
     deps._engine = None
     deps._session_factory = None
@@ -347,6 +355,26 @@ async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url:
 
     deps._engine = None
     deps._session_factory = None
+
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT a.display_name, om.role "
+                "FROM accounts a "
+                "JOIN org_memberships om ON om.account_id = a.id "
+                "WHERE a.email = 'demo'",
+            ),
+        )
+        row = result.one_or_none()
+        assert row is not None, "Demo account was not created by _seed_demo_data"
+        display_name, role = row
+        assert display_name == "Demo User"
+        assert role == "admin"
+
+    # Clean up the seed-created user to avoid cross-test contamination
+    async with db_engine.connect() as conn:
+        await _delete_demo_accounts(conn)
+        await conn.commit()
 
 
 async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_url: str) -> None:
