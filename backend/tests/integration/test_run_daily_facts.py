@@ -158,11 +158,18 @@ async def _insert_run(
 
 
 async def _insert_cost_component(session: AsyncSession, org_id: uuid.UUID) -> None:
+    # Idempotent: several tests seed the same 'llm_tokens' component for the
+    # shared module-scoped org; ON CONFLICT DO NOTHING prevents the second
+    # insert from tripping uq_cost_components_org_name_active (deploy-gate
+    # isolation fix, FAR-200). The unique index is partial
+    # (WHERE deleted_at IS NULL), so the ON CONFLICT inference clause must
+    # repeat the predicate to match it.
     await session.execute(
         text(
             "INSERT INTO cost_components (id, organisation_id, name, display_name, kind, rate_usd, "
             "formula, enabled, sort_order) "
-            "VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0)",
+            "VALUES (:id, :oid, 'llm_tokens', 'LLM Tokens', 'calculated', NULL, :formula, true, 0) "
+            "ON CONFLICT (organisation_id, name) WHERE deleted_at IS NULL DO NOTHING",
         ),
         {
             "id": str(uuid.uuid4()),

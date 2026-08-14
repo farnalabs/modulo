@@ -307,6 +307,19 @@ async def user_b(db_engine: AsyncEngine, org_b: uuid.UUID) -> uuid.UUID:
 
 
 @pytest_asyncio.fixture(scope="module")
+async def empty_org(db_engine: AsyncEngine) -> uuid.UUID:
+    """Dedicated org for the empty-series test — module-scoped but NEVER written
+    to by any other test, so it stays truly empty (org_a is polluted by the
+    two-org isolation test which inserts facts for it)."""
+    return await _seed_org(db_engine, "AnalyticsEndpoint-Empty")
+
+
+@pytest_asyncio.fixture(scope="module")
+async def empty_user(db_engine: AsyncEngine, empty_org: uuid.UUID) -> uuid.UUID:
+    return await _seed_user(db_engine, empty_org, "analytics-empty@test.local")
+
+
+@pytest_asyncio.fixture(scope="module")
 async def concurrency_org(db_engine: AsyncEngine) -> uuid.UUID:
     """Dedicated org for the concurrency test.
 
@@ -374,10 +387,10 @@ class TestEmptyOrg:
     async def test_empty_org_returns_empty_series(
         self,
         integration_client: AsyncClient,
-        org_a: uuid.UUID,
-        user_a: uuid.UUID,
+        empty_org: uuid.UUID,
+        empty_user: uuid.UUID,
     ) -> None:
-        token = _token(org_a, user_a, "admin")
+        token = _token(empty_org, empty_user, "admin")
         resp = await integration_client.get(
             "/api/v1/analytics/query?date_from=2026-07-01&date_to=2026-07-07",
             headers={"Authorization": f"Bearer {token}"},
