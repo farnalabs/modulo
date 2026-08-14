@@ -10,7 +10,6 @@ import { VueQueryPlugin } from '@tanstack/vue-query'
 import { onAuthChange } from './lib/api/client'
 import './style.css'
 import 'overlayscrollbars/styles/overlayscrollbars.css'
-import 'overlayscrollbars/styles/overlayscrollbars.css'
 
 async function main() {
   const app = createApp(App)

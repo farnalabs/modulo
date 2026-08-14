@@ -214,6 +214,25 @@ def _make_period_mock_session(
     return session
 
 
+def _make_status_count_mock_session(status_counts: dict[str, int]) -> AsyncMock:
+    """Session mock that seeds raw ``Run.status`` counts for the summary's
+    status-count query and returns benign empty results for every other query."""
+
+    def _execute_side_effect(stmt: object, *_args: object, **_kwargs: object) -> _MockResult:
+        text = str(stmt)
+        if "GROUP BY runs.status" in text and "owner_team_id" not in text:
+            return _MockResult(rows=[_MockRow(status=s, cnt=c) for s, c in status_counts.items()])
+        return _MockResult()
+
+    session = configure_mock_session(AsyncMock())
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.execute = AsyncMock(side_effect=_execute_side_effect)
+    return session
+
+
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
     mock_session = _make_mock_session()
@@ -365,6 +384,54 @@ class TestDashboardSummary:
     def test_requires_auth(self, unauth_client: TestClient) -> None:
         response = unauth_client.get("/api/v1/dashboard/summary")
         assert response.status_code in (401, 403)
+
+    def test_total_runs_excludes_pending_and_claimed(self) -> None:
+        """``total_runs`` must not double-count ``pending``/``claimed`` runs.
+
+        Those statuses are aggregated into ``idle`` (FAR dashboard semantics),
+        so summing every ``status_counts`` value double-counts them. Seeds runs
+        in ``pending``, ``claimed``, ``running``, and ``failed`` and asserts
+        ``total_runs == running + failed + idle`` — a regression test for the
+        fix at ``dashboard.py`` ``total_runs`` (previously ``sum(status_counts.values())``).
+        """
+        mock_session = _make_status_count_mock_session({"pending": 2, "claimed": 3, "running": 4, "failed": 1})
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_settings] = _make_settings
+        app.dependency_overrides[get_db_session] = override_session
+        app.dependency_overrides[_get_engine] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+            username="testuser",
+            organisation_id=_ORG_ID,
+            account_id=_USER_ID,
+            org_role="admin",
+        )
+        app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+            username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+        )
+        mock_plan = MagicMock()
+        mock_plan.feature_enabled.return_value = True
+        app.dependency_overrides[get_plan_context] = lambda: mock_plan
+        try:
+            response = TestClient(app).get("/api/v1/dashboard/summary")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        body = response.json()
+        counts = body["run_counts_by_status"]
+        assert counts["pending"] == 2
+        assert counts["claimed"] == 3
+        assert counts["running"] == 4
+        assert counts["failed"] == 1
+        # idle aggregates the pending/claimed slot holders.
+        assert counts["idle"] == 5
+        # The fix: total_runs counts each run exactly once — idle replaces its
+        # raw pending/claimed components instead of adding on top of them.
+        assert body["total_runs"] == counts["running"] + counts["failed"] + counts["idle"]
+        assert body["total_runs"] == 10
 
 
 class TestDashboardSummaryPeriod:

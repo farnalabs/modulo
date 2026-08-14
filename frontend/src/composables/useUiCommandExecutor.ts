@@ -93,7 +93,7 @@ async function acquireElementLock(selector: string, timeout = 5000): Promise<boo
 
     timer = setTimeout(() => {
       if (!resolved) {
-        resolved = true
+        cleanup()
         resolve(false)
       }
     }, timeout)

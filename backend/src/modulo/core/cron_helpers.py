@@ -2174,7 +2174,14 @@ async def fire_due_triggers() -> dict[str, Any]:
                         connector_instance_id = uuid.UUID(str(ci_id_str)) if ci_id_str else None
                     except (ValueError, TypeError):
                         connector_instance_id = None
-                    interval = max(int(config.get("poll_interval_seconds") or 60), 1)
+                    try:
+                        interval = max(int(config.get("poll_interval_seconds") or 60), 1)
+                    except (ValueError, TypeError):
+                        _log.warning(
+                            "fire_due_triggers: invalid poll_interval_seconds for trigger %s, using default",
+                            row.id,
+                        )
+                        interval = 60
                     if connector_instance_id is None:
                         # Missing connector instance — log poll_error and advance
                         # (mirrors the legacy beat _fetch_due_triggers behaviour).
