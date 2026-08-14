@@ -331,6 +331,18 @@ async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url:
 
     await _seed_demo_data(settings)
 
+    async with db_engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT email FROM accounts WHERE email = 'demo'"),
+        )
+        row = result.one_or_none()
+        assert row is not None, "Demo user was not created by _seed_demo_data"
+
+    # Clean up the seed-created user to avoid cross-test contamination
+    async with db_engine.connect() as conn:
+        await _delete_demo_accounts(conn)
+        await conn.commit()
+
     deps._engine = None
     deps._session_factory = None
 
