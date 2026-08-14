@@ -2144,6 +2144,7 @@ export default {
     },
     "LifecycleMapView": {
       "version_label": "Version:",
+      "version_placeholder": "Select version",
       "edit": "Edit",
       "export_map": "Export",
       "exporting": "Exporting...",
@@ -2239,7 +2240,8 @@ export default {
           "edge_config": "Edge Config"
         },
         "VersionHistoryDropdown": {
-          "version_history": "Version History"
+          "version_history": "Version History",
+          "no_versions": "No versions yet"
         },
         "StagePalette": {
           "stage_types": "Stage Types"
