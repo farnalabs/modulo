@@ -112,8 +112,8 @@ def test_site_e_orm_and_migration_check_include_guardrail():
     import pathlib
 
     migration_dir = pathlib.Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-    migration_file = migration_dir / "0100_guardrails.py"
-    assert migration_file.exists(), "migration 0100_guardrails.py missing"
+    migration_file = migration_dir / "0101_guardrails.py"
+    assert migration_file.exists(), "migration 0101_guardrails.py missing"
     content = migration_file.read_text(encoding="utf-8")
     assert "'guardrail'" in content
     assert "eval_type IN" in content
