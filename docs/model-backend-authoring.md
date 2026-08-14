@@ -96,8 +96,9 @@ class MyCustomBackend(ModelBackendBase):
 `ModelBackendBase.health_check()` has a default that verifies connectivity
 with a minimal ping `invoke(..., max_tokens=1)`. Override it when a cheaper
 or more accurate probe (such as `openai_compatible_health_check`, which GETs
-`{base_url}/models`) is available. The `ModelBackendHub` calls `health_check()`
-at load time.
+`{base_url}/models`) is available. `health_check()` can be invoked directly via
+`ModelBackendHub.health_check(backend_id)`; it is not run automatically at load
+time.
 
 ```python
 async def health_check(self) -> HealthResult:
