@@ -109,7 +109,10 @@ def test_build_export_envelope_returns_canonical_primitive_shape() -> None:
         name="SDLC Workflow",
         description="Q3",
         content_json={
-            "stages": [{"id": "s1", "name": "Inbox", "stage_type": "manual", "pipeline_id": None}],
+            "stages": [
+                {"id": "s1", "name": "Inbox", "stage_type": "manual", "pipeline_id": None},
+                {"id": "s2", "name": "Review", "stage_type": "manual", "pipeline_id": None},
+            ],
             "edges": [{"id": "e1", "source_stage_id": "s1", "target_stage_id": "s2"}],
             "notes": "n",
         },

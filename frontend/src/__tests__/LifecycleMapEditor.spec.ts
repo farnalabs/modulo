@@ -11,6 +11,7 @@ vi.mock('../lib/api/auth', () => ({
 
 import LifecycleMapEditor from '../components/lifecycle-map/editor/LifecycleMapEditor.vue'
 import VersionHistoryDropdown from '../components/lifecycle-map/editor/VersionHistoryDropdown.vue'
+import { formatApiError } from '../lib/api/formatError'
 
 const stageA = {
   id: 'stage-a',
@@ -48,6 +49,9 @@ const versions = [
   { id: 'ver-2', lifecycle_map_id: 'map-1', version_number: 2, stages: [stageB], edges: [], created_by: 'alice', created_at: '2026-01-02T00:00:00Z', notes: '' },
 ]
 
+const putMock = vi.fn()
+const postMock = vi.fn()
+
 vi.mock('../composables/useApi', () => ({
   useApi: vi.fn(() => ({
     get: vi.fn((url: string) => {
@@ -55,8 +59,8 @@ vi.mock('../composables/useApi', () => ({
       if (url.includes('/pipelines')) return Promise.resolve({ items: [] })
       return Promise.resolve({ id: 'map-1', name: 'Launch Flow' })
     }),
-    post: vi.fn(),
-    put: vi.fn(),
+    post: postMock,
+    put: putMock,
   })),
 }))
 
@@ -134,5 +138,29 @@ describe('LifecycleMapEditor version loading', () => {
     expect(nodes).toHaveLength(1)
     expect(nodes[0].data.name).toBe('Stage B')
     expect(edges).toHaveLength(0)
+  })
+
+  it('surfaces the backend 422 validation detail in saveError', async () => {
+    const cycleDetail = "Stage 'Review' -> 'Merge' -> 'Review' forms a cycle"
+    putMock.mockRejectedValueOnce(new Error(cycleDetail))
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    await (wrapper.vm as unknown as { handleSave: () => Promise<void> }).handleSave()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(cycleDetail)
+  })
+
+  it('formats FastAPI array-typed 422 detail into readable messages', () => {
+    expect(
+      formatApiError({
+        detail: [
+          { loc: ['body', 'name'], msg: 'String should have at least 1 character', type: 'string_too_short' },
+          { loc: ['body', 'visibility'], msg: 'String should match pattern', type: 'string_pattern_mismatch' },
+        ],
+      }),
+    ).toBe('String should have at least 1 character; String should match pattern')
   })
 })

@@ -48,3 +48,13 @@ Feature: Lifecycle Map Versioning
     Given a lifecycle map named "Release Workflow" exists
     When I save a version of the lifecycle map with a circular transition
     Then the response status is 422
+
+  Scenario: Dangling edge transitions are rejected as invalid content
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map with a dangling edge
+    Then the response status is 422
+
+  Scenario: Duplicate stage ids are rejected as invalid content
+    Given a lifecycle map named "Release Workflow" exists
+    When I save a version of the lifecycle map with duplicate stage ids
+    Then the response status is 422

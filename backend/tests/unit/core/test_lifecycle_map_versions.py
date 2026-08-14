@@ -22,6 +22,7 @@ from modulo.api.routes.lifecycle_maps import (
     LifecycleMapUpdate,
     VersionSaveRequest,
     create_lifecycle_map_endpoint,
+    delete_lifecycle_map_endpoint,
     graduate_lifecycle_map_stage_endpoint,
     save_lifecycle_map_version_endpoint,
     update_lifecycle_map_endpoint,
@@ -93,7 +94,7 @@ def _compiled_sql(statement: object) -> str:
 
 
 # ---------------------------------------------------------------------------
-# normalize_content — pure validation
+# normalize_content â€” pure validation
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +129,12 @@ def test_normalize_content_normalizes_editor_aliases() -> None:
                     "external_url": "https://ci.example.com",
                     "owner": "platform",
                     "graduated": True,
-                }
+                },
+                {
+                    "id": "s2",
+                    "name": "Approve",
+                    "stage_type": "manual",
+                },
             ],
             "edges": [{"id": "e1", "source_stage_id": "s1", "target_stage_id": "s2", "trigger_type": "manual"}],
         }
@@ -144,7 +150,15 @@ def test_normalize_content_normalizes_editor_aliases() -> None:
 
 
 def test_normalize_content_accepts_from_to_edge_keys() -> None:
-    result = normalize_content({"edges": [{"id": "e1", "from_stage_id": "a", "to_stage_id": "b"}]})
+    result = normalize_content(
+        {
+            "stages": [
+                {"id": "a", "name": "Alpha", "type": "manual"},
+                {"id": "b", "name": "Beta", "type": "manual"},
+            ],
+            "edges": [{"id": "e1", "from_stage_id": "a", "to_stage_id": "b"}],
+        }
+    )
     assert result["edges"][0]["source"] == "a"
     assert result["edges"][0]["target"] == "b"
 
@@ -236,7 +250,15 @@ def test_normalize_content_rejects_edge_without_target() -> None:
 
 
 def test_normalize_content_accepts_transitions_alias() -> None:
-    result = normalize_content({"transitions": [{"id": "e1", "source": "s1", "target": "s2"}]})
+    result = normalize_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            "transitions": [{"id": "e1", "source": "s1", "target": "s2"}],
+        }
+    )
     assert result["edges"] == [{"id": "e1", "source": "s1", "target": "s2"}]
     assert "transitions" not in result
 
@@ -265,6 +287,79 @@ def test_normalize_content_accepts_acyclic_transition_chain() -> None:
     assert [e["target"] for e in result["edges"]] == ["s2", "s3"]
 
 
+# ---------------------------------------------------------------------------
+# invalid graph structure â€” duplicate ids + dangling edges (FAR-175)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_content_rejects_duplicate_stage_ids() -> None:
+    with pytest.raises(LifecycleMapContentError, match="duplicate stage id 's1'"):
+        normalize_content(
+            {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s1", "name": "Build again", "type": "manual"},
+                ]
+            }
+        )
+
+
+def test_normalize_content_rejects_duplicate_stage_ids_with_no_edges() -> None:
+    """Duplicate stage ids are invalid even when no edges reference them."""
+    with pytest.raises(LifecycleMapContentError, match="duplicate stage id 's1'"):
+        normalize_content(
+            {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s1", "name": "Build again", "type": "manual"},
+                ],
+                "edges": [],
+            }
+        )
+
+
+def test_normalize_content_rejects_duplicate_edge_ids() -> None:
+    with pytest.raises(LifecycleMapContentError, match="duplicate edge id 'e1'"):
+        normalize_content(
+            {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s2", "name": "Approve", "type": "manual"},
+                ],
+                "edges": [
+                    {"id": "e1", "source": "s1", "target": "s2"},
+                    {"id": "e1", "source": "s1", "target": "s2"},
+                ],
+            }
+        )
+
+
+def test_normalize_content_rejects_dangling_edge_source() -> None:
+    with pytest.raises(LifecycleMapContentError, match="source stage 'ghost' is not defined"):
+        normalize_content(
+            {
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "ghost", "target": "s1"}],
+            }
+        )
+
+
+def test_normalize_content_rejects_dangling_edge_target() -> None:
+    with pytest.raises(LifecycleMapContentError, match="target stage 'ghost' is not defined"):
+        normalize_content(
+            {
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "s1", "target": "ghost"}],
+            }
+        )
+
+
+def test_normalize_content_rejects_edge_without_stages() -> None:
+    """A payload with edges but no stages has nothing for them to connect to."""
+    with pytest.raises(LifecycleMapContentError, match="source stage 'a' is not defined"):
+        normalize_content({"edges": [{"id": "e1", "source": "a", "target": "b"}]})
+
+
 def test_normalize_content_rejects_circular_transitions() -> None:
     with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
         normalize_content(
@@ -283,17 +378,26 @@ def test_normalize_content_rejects_circular_transitions() -> None:
 
 def test_normalize_content_rejects_self_loop_transition() -> None:
     with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
-        normalize_content({"edges": [{"id": "e1", "source": "s1", "target": "s1"}]})
+        normalize_content(
+            {
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "s1", "target": "s1"}],
+            }
+        )
 
 
 def test_normalize_content_rejects_cycle_in_transitions_alias() -> None:
     with pytest.raises(LifecycleMapContentError, match="transitions form a cycle"):
         normalize_content(
             {
+                "stages": [
+                    {"id": "a", "name": "Alpha", "type": "manual"},
+                    {"id": "b", "name": "Beta", "type": "manual"},
+                ],
                 "transitions": [
                     {"id": "e1", "source": "a", "target": "b"},
                     {"id": "e2", "source": "b", "target": "a"},
-                ]
+                ],
             }
         )
 
@@ -302,11 +406,16 @@ def test_normalize_content_rejects_three_node_cycle() -> None:
     with pytest.raises(LifecycleMapContentError, match=r"cycle: s1 -> s2 -> s3 -> s1"):
         normalize_content(
             {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s2", "name": "Approve", "type": "manual"},
+                    {"id": "s3", "name": "Deploy", "type": "external"},
+                ],
                 "edges": [
                     {"id": "e1", "source": "s1", "target": "s2"},
                     {"id": "e2", "source": "s2", "target": "s3"},
                     {"id": "e3", "source": "s3", "target": "s1"},
-                ]
+                ],
             }
         )
 
@@ -315,11 +424,16 @@ def test_normalize_content_cycle_error_names_the_path() -> None:
     with pytest.raises(LifecycleMapContentError, match=r"cycle: s2 -> s3 -> s2"):
         normalize_content(
             {
+                "stages": [
+                    {"id": "s1", "name": "Build", "type": "modulo"},
+                    {"id": "s2", "name": "Approve", "type": "manual"},
+                    {"id": "s3", "name": "Deploy", "type": "external"},
+                ],
                 "edges": [
                     {"id": "e1", "source": "s1", "target": "s2"},
                     {"id": "e2", "source": "s2", "target": "s3"},
                     {"id": "e3", "source": "s3", "target": "s2"},
-                ]
+                ],
             }
         )
 
@@ -327,11 +441,17 @@ def test_normalize_content_cycle_error_names_the_path() -> None:
 def test_normalize_content_accepts_unconnected_and_parallel_edges() -> None:
     result = normalize_content(
         {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+                {"id": "s3", "name": "Review", "type": "manual"},
+                {"id": "s4", "name": "Deploy", "type": "external"},
+            ],
             "edges": [
                 {"id": "e1", "source": "s1", "target": "s2"},
                 {"id": "e2", "source": "s3", "target": "s4"},
                 {"id": "e3", "source": "s1", "target": "s2"},
-            ]
+            ],
         }
     )
     assert len(result["edges"]) == 3
@@ -535,7 +655,7 @@ async def test_restore_lifecycle_map_propagates_integrity_error_for_re_registere
 
 
 # ---------------------------------------------------------------------------
-# update_lifecycle_map — content_json path validates + derives
+# update_lifecycle_map â€” content_json path validates + derives
 # ---------------------------------------------------------------------------
 
 
@@ -560,13 +680,13 @@ async def test_update_lifecycle_map_normalizes_content_and_derives(session: Asyn
 
 
 # ---------------------------------------------------------------------------
-# Concurrent-save semantics — atomic version counter via SELECT ... FOR UPDATE
+# Concurrent-save semantics â€” atomic version counter via SELECT ... FOR UPDATE
 #
 # FAR-176: two agents saving versions of the same map concurrently must never
 # produce duplicate version numbers. Every version-bumping write path must fetch
 # the row with FOR UPDATE so, on Postgres (READ COMMITTED), the later save
 # blocks, re-reads the earlier save's committed version and bumps from there.
-# These tests assert the compiled SQL carries the lock — they FAIL if a write
+# These tests assert the compiled SQL carries the lock â€” they FAIL if a write
 # path regresses back to a plain read-then-increment.
 # ---------------------------------------------------------------------------
 
@@ -634,7 +754,7 @@ async def test_update_lifecycle_map_metadata_only_reads_without_lock(session: As
 
 
 async def test_update_lifecycle_map_bumps_version_internally_on_content_change(session: AsyncMock) -> None:
-    """The service owns the version bump under the row lock — the caller must
+    """The service owns the version bump under the row lock â€” the caller must
     not pre-compute it (a stale pre-computed value reintroduces duplicates)."""
     lm = _make_map(version=2)
     session.execute.return_value = MagicMock(
@@ -663,7 +783,7 @@ async def test_update_lifecycle_map_metadata_only_keeps_version(session: AsyncMo
 
 
 # ---------------------------------------------------------------------------
-# Concurrent-save semantics — real DB (SQLite) pin of the documented behaviour
+# Concurrent-save semantics â€” real DB (SQLite) pin of the documented behaviour
 #
 # SQLite serialises writes and ignores FOR UPDATE, so true interleaving is only
 # provable on Postgres (see the integration test). These tests pin the *result*
@@ -736,7 +856,7 @@ class TestLifecycleMapConcurrentSaves:
 
     async def test_read_during_open_write_transaction_sees_committed_snapshot(self, tmp_path: Path) -> None:
         """A version-list read concurrent with an uncommitted save must see the
-        last committed snapshot — never a half-written map."""
+        last committed snapshot â€” never a half-written map."""
         engine = await self._engine(tmp_path)
         try:
             await self._seed(engine, version=2)
@@ -771,7 +891,7 @@ class TestLifecycleMapConcurrentSaves:
 
 
 # ---------------------------------------------------------------------------
-# create_lifecycle_map — friendly pipeline-uniqueness pre-check
+# create_lifecycle_map â€” friendly pipeline-uniqueness pre-check
 # ---------------------------------------------------------------------------
 async def test_create_lifecycle_map_rejects_pipeline_registered_elsewhere(session: AsyncMock) -> None:
     """The create path runs the friendly pipeline-uniqueness pre-check, so a
@@ -814,7 +934,7 @@ async def test_create_lifecycle_map_without_pipeline_ids_skips_uniqueness_query(
 
 
 # ---------------------------------------------------------------------------
-# derive_lifecycle_map_stages — tolerant of shape-incompatible rows
+# derive_lifecycle_map_stages â€” tolerant of shape-incompatible rows
 # ---------------------------------------------------------------------------
 
 
@@ -837,12 +957,12 @@ async def test_derive_skips_shape_incompatible_rows(session: AsyncMock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Route exception ordering — a pipeline conflict must surface as 409, not 422
+# Route exception ordering â€” a pipeline conflict must surface as 409, not 422
 #
 # LifecycleMapPipelineConflictError subclasses LifecycleMapContentError, so a
 # handler that lists the parent clause first swallows the conflict and returns
 # 422. These tests drive the conflict through the ROUTE handlers (the exact
-# except-clause ordering that was dead code), not the service layer — a
+# except-clause ordering that was dead code), not the service layer â€” a
 # regression that reintroduces the dead 409 branch fails here.
 # ---------------------------------------------------------------------------
 
@@ -865,6 +985,10 @@ def _route_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=session)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=session)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
     return session
 
 
@@ -944,7 +1068,7 @@ async def test_create_route_maps_pipeline_conflict_to_409() -> None:
 
 async def test_save_version_route_maps_content_error_to_422() -> None:
     """A plain content-validation error still maps to 422 after the conflict
-    clause moved ahead of the parent class — the parent clause must remain
+    clause moved ahead of the parent class â€” the parent clause must remain
     reachable for genuine shape errors."""
     with (
         patch(
@@ -965,7 +1089,139 @@ async def test_save_version_route_maps_content_error_to_422() -> None:
 
 
 # ---------------------------------------------------------------------------
-# PUT route round-trip — prove-the-fix regression for the update 500
+# Audit logging on mutation routes (FAR-175) â€” create/update/delete/graduate
+#
+# Each mutation route appends an AuditEvent via append_audit_event (fail-open).
+# These tests pin the event_type + resource identity per route and FAIL if a
+# route drops its audit write.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_route_writes_audit_event() -> None:
+    created = _make_map()
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            AsyncMock(return_value=created),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        resp = await create_lifecycle_map_endpoint(
+            req=LifecycleMapCreate(name="SDLC", content_json={"stages": []}),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert resp.name == "SDLC Workflow"
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.created"
+    assert kwargs["resource_type"] == "lifecycle_map"
+    assert kwargs["resource_id"] == created.id
+    assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
+
+
+async def test_update_route_writes_audit_event() -> None:
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.update_lifecycle_map",
+            AsyncMock(return_value=_make_map()),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await update_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            req=LifecycleMapUpdate(name="Renamed"),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["resource_id"] == _MAP_ID
+    assert kwargs["payload_json"]["content_changed"] is False
+
+
+async def test_delete_route_writes_audit_event() -> None:
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.delete_lifecycle_map",
+            AsyncMock(return_value=True),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        result = await delete_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert result is None
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.deleted"
+    assert kwargs["resource_id"] == _MAP_ID
+
+
+async def test_graduate_route_writes_audit_event() -> None:
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.graduate_stage",
+            AsyncMock(return_value=_make_map()),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await graduate_lifecycle_map_stage_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            stage_id="s1",
+            req=GraduateStageRequest(pipeline_id=str(_PIPE_ID)),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.stage_graduated"
+    assert kwargs["resource_id"] == _MAP_ID
+    assert kwargs["payload_json"]["stage_id"] == "s1"
+    assert kwargs["payload_json"]["pipeline_id"] == str(_PIPE_ID)
+
+
+async def test_create_route_audit_failure_does_not_fail_create() -> None:
+    """Audit is fail-open: a write failure must never turn create into an error."""
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            AsyncMock(return_value=_make_map()),
+        ),
+        patch(
+            "modulo.api.routes.lifecycle_maps.append_audit_event",
+            AsyncMock(side_effect=RuntimeError("audit down")),
+        ),
+    ):
+        resp = await create_lifecycle_map_endpoint(
+            req=LifecycleMapCreate(name="SDLC", content_json={"stages": []}),
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert resp.name == "SDLC Workflow"
+
+
+# ---------------------------------------------------------------------------
+# PUT route round-trip â€” prove-the-fix regression for the update 500
 #
 # The map PUT committed + version-bumped correctly but returned HTTP 500: the
 # ``updated_at`` column carries ``onupdate=func.current_timestamp()``, so the
@@ -974,7 +1230,7 @@ async def test_save_version_route_maps_content_error_to_422() -> None:
 # triggered a lazy refresh on a session with ``autobegin=False``
 # (``InvalidRequestError``). The fix refreshes the map inside the transaction.
 # This test drives the REAL route against a REAL SQLite session and asserts a
-# 200 + the updated fields + the version bump — it FAILS (500) without the fix.
+# 200 + the updated fields + the version bump â€” it FAILS (500) without the fix.
 # ---------------------------------------------------------------------------
 
 
