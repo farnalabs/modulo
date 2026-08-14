@@ -50,7 +50,10 @@ def main() -> int:
 
     if missing:
         for m in missing:
-            pass
+            sys.stderr.write(f"  {m}\n")
+        sys.stderr.write(
+            f"bdd-coverage: {len(missing)} feature file(s) have no scenarios() reference in a step file.\n"
+        )
         return 1
     return 0
 
