@@ -15,7 +15,7 @@
         api-base="/api/v1/schema-folders"
         i18n-ns="views.SchemaListView"
         all-items-key="all_schemas"
-        item-noun="Schemas"
+        :item-noun="$t('views.SchemaListView.schemas')"
         @select-folder="onSelectFolder"
         @folders-changed="onFoldersChanged"
         @move-pipeline="onMoveSchema"
@@ -28,8 +28,8 @@
 
         <div v-if="moveError" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="schema-list-move-error">
           <span>{{ moveError }}</span>
-          <button class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('views.SchemaListView.cancel')" @click="moveError = null">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <button class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('views.SchemaListView.cancel')" data-testid="schema-list-dismiss-move-error" @click="moveError = null">
+            <X class="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -73,21 +73,20 @@
           <!-- Breadcrumb navigation -->
           <div class="mb-4 flex items-center gap-2 text-sm">
             <template v-if="selectedFolderId && selectedFolderName">
-              <button class="text-muted-foreground hover:text-foreground transition-colors" @click="onSelectFolder(null)">
+              <button class="text-muted-foreground hover:text-foreground transition-colors" data-testid="schema-list-all-schemas" @click="onSelectFolder(null)">
                 {{ $t('views.SchemaListView.all_schemas') }}
               </button>
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><polyline points="9 18 15 12 9 6"/></svg>
+              <ChevronRight class="h-3 w-3 text-muted-foreground" aria-hidden="true" />
               <span class="font-medium text-foreground">{{ selectedFolderName }}</span>
             </template>
             <h2 v-else class="text-base font-semibold text-foreground">{{ $t('views.SchemaListView.all_schemas') }}</h2>
           </div>
 
-          <div v-if="schemas.length === 0" class="card p-8 text-center">
-            <p class="text-lg font-medium">{{ $t('views.SchemaListView.no_schemas_found') }}</p>
-            <p class="mt-1 text-sm text-muted-foreground">
-              {{ $t('views.SchemaListView.empty_hint') }}
-            </p>
-          </div>
+          <EmptyState
+            v-if="schemas.length === 0"
+            :title="$t('views.SchemaListView.no_schemas_found')"
+            :description="$t('views.SchemaListView.empty_hint')"
+          />
 
           <template v-else>
             <div class="overflow-x-auto rounded-lg border">
@@ -118,14 +117,14 @@
                         v-if="schema.deprecated"
                         class="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive"
                       >
-                        <span class="h-1.5 w-1.5 rounded-full bg-destructive" />
+                        <span class="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
                         {{ $t('views.SchemaListView.deprecated') }}
                       </span>
                       <span
                         v-else
                         class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success"
                       >
-                        <span class="h-1.5 w-1.5 rounded-full bg-success" />
+                        <span class="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
                         {{ $t('views.SchemaListView.active') }}
                       </span>
                     </td>
@@ -138,7 +137,7 @@
                             :aria-label="$t('views.SchemaListView.schema_actions')"
                             @click.stop
                           >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                            <MoreVertical class="h-3.5 w-3.5" aria-hidden="true" />
                           </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" class="w-40">
@@ -207,7 +206,7 @@
             :data-testid="`schema-move-folder-${f.id}`"
             @click="moveToFolderId = f.id"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+            <Folder class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
             {{ f.name }}
           </button>
           <button
@@ -216,7 +215,7 @@
             data-testid="schema-move-nofolder"
             @click="moveToFolderId = null"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 text-muted-foreground"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <FolderOpen class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
             {{ $t('views.SchemaListView.no_folder') }}
           </button>
           <div v-if="moveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
@@ -245,8 +244,10 @@ import { useApi } from '../composables/useApi'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FolderTree from '../components/pipelines/FolderTree.vue'
+import { ChevronRight, Folder, FolderOpen, MoreVertical, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
