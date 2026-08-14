@@ -441,12 +441,14 @@ def test_conformance_present_when_all_confirmed():
 
 def test_conformance_absent_when_any_confirmed_missing():
     d = derive_conformance_state(["github.read", "github.write"], {"github.read": True, "github.write": False})
-    assert d.state == "absent" and d.missing == ("github.write",)
+    assert d.state == "absent"
+    assert d.missing == ("github.write",)
 
 
 def test_conformance_unknown_fail_closed_when_unreadable():
     d = derive_conformance_state(["github.read"], {"github.read": None})
-    assert d.state == "unknown" and d.unreadable == ("github.read",)
+    assert d.state == "unknown"
+    assert d.unreadable == ("github.read",)
 
 
 def test_conformance_empty_required_is_no_claim():
