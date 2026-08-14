@@ -388,6 +388,44 @@ def save_version_with_circular_transition(ctx: dict[str, Any], request: Any, cli
     _store_response(request, ctx, resp)
 
 
+@when("I save a version of the lifecycle map with a dangling edge")
+def save_version_with_dangling_edge(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """POST /versions with an edge referencing an undefined stage — the route
+    maps the ``LifecycleMapContentError`` raised by the content validator to a 422."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    stages = [{"id": "stage-0", "name": "Stage 0", "type": "modulo"}]
+    edges = [{"id": "edge-0", "source": "stage-0", "target": "stage-ghost"}]
+    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+        mock_save.side_effect = LifecycleMapContentError(
+            "lifecycle-map edge/transition #0 (id 'edge-0'): target stage 'stage-ghost' is not defined in stages"
+        )
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{current.id}/versions",
+            json={"stages": stages, "edges": edges, "notes": ""},
+        )
+    _store_response(request, ctx, resp)
+
+
+@when("I save a version of the lifecycle map with duplicate stage ids")
+def save_version_with_duplicate_stage_ids(ctx: dict[str, Any], request: Any, client: Any) -> None:
+    """POST /versions with two stages sharing an id — the route maps the
+    ``LifecycleMapContentError`` raised by the content validator to a 422."""
+    current = ctx.get("lifecycle_map", _make_lifecycle_map())
+    stages = [
+        {"id": "stage-0", "name": "Stage 0", "type": "modulo"},
+        {"id": "stage-0", "name": "Stage 0 again", "type": "manual"},
+    ]
+    with patch("modulo.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
+        mock_save.side_effect = LifecycleMapContentError(
+            "lifecycle-map stage #1: duplicate stage id 'stage-0' (already used by stage #0)"
+        )
+        resp = client.post(
+            f"/api/v1/lifecycle-maps/{current.id}/versions",
+            json={"stages": stages, "edges": [], "notes": ""},
+        )
+    _store_response(request, ctx, resp)
+
+
 @when("I get the lifecycle map versions")
 def get_lifecycle_map_versions(ctx: dict[str, Any], request: Any, client: Any) -> None:
     lm = ctx.get("lifecycle_map", _make_lifecycle_map())
