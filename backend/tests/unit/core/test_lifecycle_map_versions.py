@@ -1,16 +1,18 @@
 """Tests for lifecycle-map content validation, versioning and junction projection."""
 
+import importlib.util
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy import Table
+from sqlalchemy import Table, create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool, StaticPool
@@ -24,6 +26,7 @@ from modulo.api.routes.lifecycle_maps import (
     create_lifecycle_map_endpoint,
     delete_lifecycle_map_endpoint,
     graduate_lifecycle_map_stage_endpoint,
+    restore_lifecycle_map_endpoint,
     save_lifecycle_map_version_endpoint,
     update_lifecycle_map_endpoint,
     update_lifecycle_map_version_endpoint,
@@ -47,6 +50,7 @@ from modulo.core.lifecycle_map.service import (
 from modulo.core.lifecycle_map.validation import (
     LifecycleMapContentError,
     LifecycleMapPipelineConflictError,
+    clean_legacy_content,
     normalize_content,
 )
 from modulo.db.models.base import Base
@@ -456,6 +460,242 @@ def test_normalize_content_accepts_unconnected_and_parallel_edges() -> None:
         }
     )
     assert len(result["edges"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# clean_legacy_content — repair legacy graphs blocked by FAR-175 (FAR-203)
+#
+# FAR-175 made dangling edges / duplicate ids a 422 on EVERY content edit,
+# including graduation. clean_legacy_content repairs such pre-validation
+# content so the backfill script can unblock those maps. Every test asserts the
+# cleaned result passes normalize_content (the exact gate that was blocking).
+# ---------------------------------------------------------------------------
+
+
+def _assert_clean_passes(cleaned: dict[str, object]) -> None:
+    """The repair contract: cleaned legacy content must satisfy normalize_content."""
+    normalize_content(cleaned)  # raises LifecycleMapContentError when invalid
+
+
+def test_clean_legacy_content_dedupes_stage_ids() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s1", "name": "Build again", "type": "manual"},
+            ],
+            "edges": [],
+        }
+    )
+    assert [s["id"] for s in cleaned["stages"]] == ["s1"]
+    assert any("duplicate stage id 's1'" in c for c in changes)
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_dedupes_edge_ids() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            "edges": [
+                {"id": "e1", "source": "s1", "target": "s2"},
+                {"id": "e1", "source": "s1", "target": "s2"},
+            ],
+        }
+    )
+    assert len(cleaned["edges"]) == 1
+    assert any("duplicate edge id 'e1'" in c for c in changes)
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_drops_dangling_edges() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+            "edges": [
+                {"id": "e1", "source": "ghost", "target": "s1"},
+                {"id": "e2", "source": "s1", "target": "ghost"},
+            ],
+        }
+    )
+    assert not cleaned["edges"]
+    assert any("dangling edge 'e1'" in c and "source 'ghost'" in c for c in changes)
+    assert any("dangling edge 'e2'" in c and "target 'ghost'" in c for c in changes)
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_breaks_transition_cycle_greedily() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            "edges": [
+                {"id": "e1", "source": "s1", "target": "s2"},
+                {"id": "e2", "source": "s2", "target": "s1"},
+            ],
+        }
+    )
+    assert [e["id"] for e in cleaned["edges"]] == ["e1"]
+    assert any("cycle-closing edge 'e2'" in c for c in changes)
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_drops_self_loop() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+            "edges": [{"id": "e1", "source": "s1", "target": "s1"}],
+        }
+    )
+    assert not cleaned["edges"]
+    assert any("cycle-closing edge 'e1'" in c for c in changes)
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_keeps_larger_acyclic_graph_intact() -> None:
+    """Only cycle-closing edges are dropped — a healthy acyclic graph is preserved."""
+    content = {
+        "stages": [
+            {"id": "s1", "name": "Build", "type": "modulo"},
+            {"id": "s2", "name": "Review", "type": "manual"},
+            {"id": "s3", "name": "Deploy", "type": "external"},
+        ],
+        "edges": [
+            {"id": "e1", "source": "s1", "target": "s2"},
+            {"id": "e2", "source": "s2", "target": "s3"},
+        ],
+    }
+    cleaned, changes = clean_legacy_content(content)
+    assert cleaned["edges"] == content["edges"]
+    assert changes == []
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_preserves_notes_and_metadata_keys() -> None:
+    content = {
+        "stages": [
+            {"id": "s1", "name": "Build", "type": "modulo"},
+            {"id": "s1", "name": "dup", "type": "manual"},
+        ],
+        "edges": [],
+        "notes": "release cut",
+        "viewport": {"zoom": 1.2},
+    }
+    cleaned, changes = clean_legacy_content(content)
+    assert cleaned["notes"] == "release cut"
+    assert cleaned["viewport"] == {"zoom": 1.2}
+    assert changes
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_drops_non_dict_stage_and_edge() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": ["not-a-dict", {"id": "s1", "name": "Build", "type": "modulo"}],
+            "edges": ["also-not-an-edge", {"id": "e1", "source": "s1", "target": "s1"}],
+        }
+    )
+    assert [s["id"] for s in cleaned["stages"]] == ["s1"]
+    assert not cleaned["edges"]
+    assert any("stage #0 (not an object)" in c for c in changes)
+    assert any("edge #0 (not an object)" in c for c in changes)
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_honours_editor_alias_edge_keys() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            "edges": [{"id": "e1", "source_stage_id": "s1", "target_stage_id": "s2"}],
+        }
+    )
+    assert len(cleaned["edges"]) == 1
+    assert not any("dangling" in c for c in changes)
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_drops_transitions_alias() -> None:
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            "transitions": [{"id": "e1", "source": "s1", "target": "s2"}],
+        }
+    )
+    assert "transitions" not in cleaned
+    assert cleaned["edges"] == [{"id": "e1", "source": "s1", "target": "s2"}]
+    assert changes == []
+    _assert_clean_passes(cleaned)
+
+
+def test_clean_legacy_content_returns_no_changes_for_clean_content() -> None:
+    content = {
+        "stages": [
+            {"id": "s1", "name": "Build", "type": "modulo"},
+            {"id": "s2", "name": "Approve", "type": "manual"},
+        ],
+        "edges": [{"id": "e1", "source": "s1", "target": "s2"}],
+        "notes": "plan",
+    }
+    cleaned, changes = clean_legacy_content(content)
+    assert cleaned == content
+    assert changes == []
+
+
+def test_clean_legacy_content_leaves_non_list_stages_for_manual_repair() -> None:
+    content = {"stages": {"id": "s1"}, "edges": []}
+    cleaned, changes = clean_legacy_content(content)
+    assert cleaned == content
+    assert any("left for manual repair" in c and "stages must be an array" in c for c in changes)
+
+
+def test_clean_legacy_content_leaves_non_list_edges_for_manual_repair() -> None:
+    content = {"stages": [{"id": "s1", "name": "Build", "type": "modulo"}], "edges": {"id": "e1"}}
+    cleaned, changes = clean_legacy_content(content)
+    assert cleaned == content
+    assert any("left for manual repair" in c and "edges/transitions must be an array" in c for c in changes)
+
+
+def test_clean_legacy_content_empty_payload() -> None:
+    assert clean_legacy_content({}) == ({}, [])
+    assert clean_legacy_content(None) == ({}, [])
+
+
+def test_clean_legacy_content_complex_messy_legacy_map_fully_repairs() -> None:
+    """End-to-end legacy shape: duplicates + dangling edges + a cycle together
+    must clean to a graph that passes the editor's validation gate."""
+    cleaned, changes = clean_legacy_content(
+        {
+            "stages": [
+                {"id": "s1", "name": "Inbox", "type": "manual"},
+                {"id": "s2", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)},
+                {"id": "s2", "name": "Build dup", "type": "manual"},
+                {"id": "s3", "name": "Approve", "type": "manual"},
+            ],
+            "edges": [
+                {"id": "e1", "source": "s1", "target": "s2"},
+                {"id": "e2", "source": "s2", "target": "s3"},
+                {"id": "e2", "source": "s2", "target": "s3"},
+                {"id": "e3", "source": "s3", "target": "s1"},
+                {"id": "e4", "source": "s2", "target": "ghost"},
+            ],
+            "notes": "legacy",
+        }
+    )
+    assert [s["id"] for s in cleaned["stages"]] == ["s1", "s2", "s3"]
+    assert [e["id"] for e in cleaned["edges"]] == ["e1", "e2"]
+    assert cleaned["notes"] == "legacy"
+    assert len(changes) >= 3
+    _assert_clean_passes(cleaned)
 
 
 # ---------------------------------------------------------------------------
@@ -1342,7 +1582,7 @@ async def test_save_version_route_writes_audit_event() -> None:
         )
     mock_audit.assert_awaited_once()
     kwargs = mock_audit.await_args.kwargs
-    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["event_type"] == "lifecycle_map.version_saved"
     assert kwargs["resource_type"] == "lifecycle_map"
     assert kwargs["resource_id"] == lm.id
     assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
@@ -1352,7 +1592,7 @@ async def test_save_version_route_writes_audit_event() -> None:
 
 async def test_update_version_route_writes_audit_event() -> None:
     """PUT /versions/{version_id} — the editor's in-place save path — must append
-    an audit event just like the other map mutations (FAR-175)."""
+    a dedicated ``version_saved`` audit event just like the POST route (FAR-203)."""
     lm = _make_map()
     session = _route_session()
     with (
@@ -1377,12 +1617,63 @@ async def test_update_version_route_writes_audit_event() -> None:
         )
     mock_audit.assert_awaited_once()
     kwargs = mock_audit.await_args.kwargs
-    assert kwargs["event_type"] == "lifecycle_map.updated"
+    assert kwargs["event_type"] == "lifecycle_map.version_saved"
     assert kwargs["resource_type"] == "lifecycle_map"
     assert kwargs["resource_id"] == lm.id
     assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
     assert kwargs["payload_json"]["stages"] == 1
     assert kwargs["payload_json"]["edges"] == 1
+
+
+async def test_restore_route_writes_audit_event() -> None:
+    """POST /{id}/restore must append a ``lifecycle_map.restored`` audit event
+    (FAR-203) — the restore path was the only map mutation without one."""
+    lm = _make_map(name="Restored Map")
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.restore_lifecycle_map",
+            AsyncMock(return_value=lm),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+    ):
+        await restore_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    mock_audit.assert_awaited_once()
+    kwargs = mock_audit.await_args.kwargs
+    assert kwargs["event_type"] == "lifecycle_map.restored"
+    assert kwargs["resource_type"] == "lifecycle_map"
+    assert kwargs["resource_id"] == lm.id
+    assert kwargs["actor_user_id"] == _RoutePrincipal.account_id
+    assert kwargs["payload_json"]["name"] == "Restored Map"
+
+
+async def test_restore_route_404_does_not_write_audit_event() -> None:
+    """A restore of a missing/deleted map returns 404 and must not emit an
+    audit event — there is no mutation to record."""
+    session = _route_session()
+    with (
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        patch(
+            "modulo.api.routes.lifecycle_maps.restore_lifecycle_map",
+            AsyncMock(return_value=None),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.append_audit_event", AsyncMock()) as mock_audit,
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await restore_lifecycle_map_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            session=session,
+            principal=_RoutePrincipal(),
+        )
+    assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
+    mock_audit.assert_not_awaited()
 
 
 async def test_create_route_audit_failure_does_not_fail_create() -> None:
@@ -1529,3 +1820,239 @@ class TestUpdateLifecycleMapRoute:
             assert body["version"] == 3  # no content_json -> no bump
         finally:
             await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# One-off legacy-content backfill script (FAR-203)
+#
+# The script (backend/scripts/backfill_lifecycle_map_legacy_content.py) repairs
+# legacy content_json blocked by FAR-175 so maps become editable again. These
+# tests run its real `_run_backfill` against a SQLite DB and assert both the
+# content repair and the junction-projection rebuild.
+# ---------------------------------------------------------------------------
+
+
+def _load_backfill_script() -> object:
+    script_path = Path(__file__).resolve().parents[3] / "scripts" / "backfill_lifecycle_map_legacy_content.py"
+    spec = importlib.util.spec_from_file_location("backfill_lifecycle_map_legacy_content", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_LEGACY_MESSY_CONTENT = {
+    "stages": [
+        {"id": "s1", "name": "Inbox", "type": "manual"},
+        {"id": "s2", "name": "Build", "type": "modulo", "pipeline_id": str(_PIPE_ID)},
+        {"id": "s2", "name": "Build dup", "type": "manual"},
+    ],
+    "edges": [
+        {"id": "e1", "source": "s1", "target": "s2"},
+        {"id": "e1", "source": "s1", "target": "s2"},
+        {"id": "e2", "source": "s2", "target": "ghost"},
+    ],
+    "notes": "legacy",
+}
+
+
+class TestLegacyBackfillScript:
+    def _sync_engine(self, tmp_path: Path) -> Any:
+        return create_engine(f"sqlite:///{tmp_path / 'lm_backfill.db'}")
+
+    async def _seed(self, engine: AsyncEngine) -> None:
+        tables: list[Table] = cast(
+            list[Table],
+            [Organisation.__table__, LifecycleMap.__table__, LifecycleMapStage.__table__],
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        async with async_sessionmaker(engine, expire_on_commit=False, autobegin=False)() as s, s.begin():
+            s.add(Organisation(id=_ORG_ID, name="org", slug="org"))
+            s.add(
+                LifecycleMap(
+                    id=_MAP_ID,
+                    organisation_id=_ORG_ID,
+                    name="Legacy",
+                    account_id=_ACCOUNT_ID,
+                    visibility="org",
+                    version=4,
+                    content_json=_LEGACY_MESSY_CONTENT,
+                )
+            )
+            # The stale junction projection is a READ projection of an earlier
+            # (pre-FAR-175) content state: the DB unique constraint
+            # (map_id, version, stage_id) means duplicate stage ids never made
+            # it to rows, but the projection can still lag content (extra stale
+            # row "s9") and carry wrong values. The backfill must reconcile it.
+            s.add_all(
+                [
+                    LifecycleMapStage(
+                        organisation_id=_ORG_ID,
+                        account_id=_ACCOUNT_ID,
+                        map_id=_MAP_ID,
+                        version=4,
+                        stage_id="s1",
+                        stage_name="Inbox",
+                        position=0,
+                        stage_type="manual",
+                        pipeline_id=None,
+                    ),
+                    LifecycleMapStage(
+                        organisation_id=_ORG_ID,
+                        account_id=_ACCOUNT_ID,
+                        map_id=_MAP_ID,
+                        version=4,
+                        stage_id="s2",
+                        stage_name="Build",
+                        position=1,
+                        stage_type="modulo",
+                        pipeline_id=_PIPE_ID,
+                    ),
+                    LifecycleMapStage(
+                        organisation_id=_ORG_ID,
+                        account_id=_ACCOUNT_ID,
+                        map_id=_MAP_ID,
+                        version=4,
+                        stage_id="s9",
+                        stage_name="Stale",
+                        position=9,
+                        stage_type="placeholder",
+                        pipeline_id=None,
+                    ),
+                ]
+            )
+
+    async def test_backfill_repairs_content_and_junction_on_apply(self, tmp_path: Path) -> None:
+        async_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'lm_backfill.db'}")
+        try:
+            await self._seed(async_engine)
+        finally:
+            await async_engine.dispose()
+
+        module = _load_backfill_script()
+        sync_engine = self._sync_engine(tmp_path)
+        try:
+            with sync_engine.connect() as conn:
+                summary = module._run_backfill(conn, apply=True, batch_size=50, limit=None)
+        finally:
+            sync_engine.dispose()
+
+        assert summary["mode"] == "apply"
+        assert summary["maps_scanned"] == 1
+        assert summary["maps_repaired"] == 1
+        assert not summary["skips"]
+
+        check_engine = create_engine(f"sqlite:///{tmp_path / 'lm_backfill.db'}")
+        try:
+            with check_engine.connect() as conn:
+                content_raw = conn.execute(
+                    text("SELECT content_json FROM lifecycle_maps WHERE id = :mid"),
+                    {"mid": _MAP_ID.hex},
+                ).scalar_one()
+                content = json.loads(content_raw)
+                stage_rows = conn.execute(
+                    text(
+                        "SELECT stage_id, stage_name, position, pipeline_id "
+                        "FROM lifecycle_map_stages WHERE map_id = :mid"
+                    ),
+                    {"mid": _MAP_ID.hex},
+                ).fetchall()
+        finally:
+            check_engine.dispose()
+
+        assert [s["id"] for s in content["stages"]] == ["s1", "s2"]
+        assert [e["id"] for e in content["edges"]] == ["e1"]
+        assert content["notes"] == "legacy"
+        normalize_content(content)  # the repaired map must pass the editor gate
+
+        assert len(stage_rows) == 2, "junction must be rebuilt from the cleaned content"
+        assert {r.stage_id for r in stage_rows} == {"s1", "s2"}
+        build_row = next(r for r in stage_rows if r.stage_id == "s2")
+        assert str(build_row.pipeline_id) == str(_PIPE_ID)
+
+    async def test_backfill_dry_run_writes_nothing(self, tmp_path: Path) -> None:
+        async_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'lm_backfill.db'}")
+        try:
+            await self._seed(async_engine)
+        finally:
+            await async_engine.dispose()
+
+        module = _load_backfill_script()
+        sync_engine = self._sync_engine(tmp_path)
+        try:
+            with sync_engine.connect() as conn:
+                summary = module._run_backfill(conn, apply=False, batch_size=50, limit=None)
+        finally:
+            sync_engine.dispose()
+
+        assert summary["mode"] == "dry-run"
+        assert summary["maps_repaired"] == 1
+        assert not summary["skips"]
+
+        check_engine = create_engine(f"sqlite:///{tmp_path / 'lm_backfill.db'}")
+        try:
+            with check_engine.connect() as conn:
+                content_raw = conn.execute(
+                    text("SELECT content_json FROM lifecycle_maps WHERE id = :mid"),
+                    {"mid": _MAP_ID.hex},
+                ).scalar_one()
+                stage_count = conn.execute(
+                    text("SELECT COUNT(*) FROM lifecycle_map_stages WHERE map_id = :mid"),
+                    {"mid": _MAP_ID.hex},
+                ).scalar_one()
+        finally:
+            check_engine.dispose()
+
+        assert json.loads(content_raw) == _LEGACY_MESSY_CONTENT, "dry-run must not write"
+        assert stage_count == 3, "dry-run must not touch the junction projection"
+
+    async def test_backfill_leaves_uncleanable_map_untouched(self, tmp_path: Path) -> None:
+        async_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'lm_backfill.db'}")
+        tables: list[Table] = cast(
+            list[Table],
+            [Organisation.__table__, LifecycleMap.__table__, LifecycleMapStage.__table__],
+        )
+        try:
+            async with async_engine.begin() as conn:
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+            async with async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False)() as s, s.begin():
+                s.add(Organisation(id=_ORG_ID, name="org", slug="org"))
+                s.add(
+                    LifecycleMap(
+                        id=_MAP_ID,
+                        organisation_id=_ORG_ID,
+                        name="Broken",
+                        account_id=_ACCOUNT_ID,
+                        visibility="org",
+                        version=1,
+                        content_json={"stages": "not-an-array"},
+                    )
+                )
+        finally:
+            await async_engine.dispose()
+
+        module = _load_backfill_script()
+        sync_engine = self._sync_engine(tmp_path)
+        try:
+            with sync_engine.connect() as conn:
+                summary = module._run_backfill(conn, apply=True, batch_size=50, limit=None)
+        finally:
+            sync_engine.dispose()
+
+        assert summary["maps_scanned"] == 1
+        assert summary["maps_repaired"] == 0
+        assert len(summary["skips"]) == 1
+        skip_reason = summary["skips"][0][1]
+        assert "left for manual repair" in skip_reason or "cleaned content still invalid" in skip_reason
+
+        check_engine = create_engine(f"sqlite:///{tmp_path / 'lm_backfill.db'}")
+        try:
+            with check_engine.connect() as conn:
+                content_raw = conn.execute(
+                    text("SELECT content_json FROM lifecycle_maps WHERE id = :mid"),
+                    {"mid": _MAP_ID.hex},
+                ).scalar_one()
+        finally:
+            check_engine.dispose()
+        assert json.loads(content_raw) == {"stages": "not-an-array"}, "uncleanable map must not be modified"

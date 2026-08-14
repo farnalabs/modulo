@@ -124,6 +124,11 @@ _NO_OUTPUT_LOG_TAIL = 1024
 
 _OUTPUT_READ_TIMEOUT = 30.0  # max seconds to wait for sandbox output after command times out
 _DECORATOR_GRACE = 5.0  # scheduling + finally-block margin for decorator safety net
+# FAR-188 (QA round 1): the raw-output retention DB write is bounded to fit
+# inside the node decorator's grace budget (_DECORATOR_GRACE = 5.0s) so a hung
+# DB fails open with a log BEFORE the safety-net timer can convert the
+# retryable SandboxNodeFailedError into a terminal node_timeout.
+_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT = 5.0
 _SANDBOX_IO_TIMEOUT = 30.0  # max seconds for a single sandbox file read/write
 _SANDBOX_IDLE_TIMEOUT = 300.0  # max seconds of agent silence before treating the command as stalled (FAR-97)
 _STREAM_FLUSH_INTERVAL = 1.0  # min seconds between live stdout/stderr chunk publishes per node (FAR-98)
@@ -464,6 +469,231 @@ def _build_no_output_message(
         parts.append("--- sandbox log tail ---")
         parts.append(log_tail_cap)
     return "\n".join(parts)
+
+
+_PR_URL_PATTERN = _re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+")
+
+# Credential redaction for retained raw output (FAR-188 QA round 2): sandbox
+# commands run with OPENCODE_API_KEY and GITHUB_TOKEN (a PAT) injected, and
+# agent ``git push``/``git clone``/``gh`` output routinely embeds tokenized
+# URLs like ``https://x-access-token:<PAT>@github.com/...``. The stored
+# ``raw_output`` field is scrubbed BEFORE persistence so credentials never
+# enter it unmasked. ``_TOKENIZED_GIT_URL_PATTERN`` strips the userinfo from
+# any ``http(s)://...@host`` URL; ``_TOKEN_VALUE_PATTERN`` defensively masks
+# bare token values that follow known credential labels.
+_TOKENIZED_GIT_URL_PATTERN = _re.compile(r"(https?://)[^@\s/]+@")
+_TOKEN_VALUE_PATTERN = _re.compile(r"(x-access-token:|gh[pous]_|github_pat_|Bearer\s+|token=)[^\s\"'<>]+")
+
+
+def _extract_pr_url(raw_text: str) -> str:
+    """Best-effort GitHub PR URL extraction from raw sandbox output.
+
+    FAR-188: when ``output.json`` fails to parse, the run record retains the RAW
+    content so a ``pr_url`` the agent created inside the sandbox is never lost.
+    Classification (FAR-189) reads the marker directly instead of re-parsing.
+    """
+    if not raw_text:
+        return ""
+    match = _PR_URL_PATTERN.search(raw_text)
+    return match.group(0) if match else ""
+
+
+def _redact_raw_output(raw_text: str) -> str:
+    """Best-effort scrub of credentials from retained raw sandbox output.
+
+    FAR-188 (QA round 2): the stored ``raw_output`` marker field must never
+    contain live credentials. Both tokenized git URLs (scheme preserved, e.g.
+    ``https://x-access-token:<PAT>@github.com/...`` → ``https://<redacted>@github.com/...``)
+    and bare token values following known credential labels (``x-access-token:``,
+    ``ghp_``/``gho_``/``ghu_``/``ghs_``, ``github_pat_``, ``Bearer ``,
+    ``token=``) are masked. NEVER raises: a redaction failure returns the
+    original text so retention is never blocked (best-effort, fail open).
+    """
+    if not isinstance(raw_text, str) or not raw_text:
+        return raw_text
+    try:
+        scrubbed = _TOKENIZED_GIT_URL_PATTERN.sub(r"\1<redacted>@", raw_text)
+        return _TOKEN_VALUE_PATTERN.sub(r"\1<redacted>", scrubbed)
+    except (_re.error, TypeError, ValueError):
+        _log.warning("sandbox_agent.raw_output_redact_failed")
+        return raw_text
+
+
+def _normalize_marker_text(raw: Any) -> str:
+    """Normalize a raw-output source to text — bytes decoded exactly once."""
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw)
+
+
+async def _retain_raw_output_marker(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    attempt_key: str | None,
+    summary: str,
+    source: Any,
+    parse_error: str,
+    exit_code: int,
+    stdout_length: int,
+    stderr_length: int,
+) -> None:
+    """Single builder + persist for a raw-output retention marker (FAR-188).
+
+    Both failure branches (no-parseable output.json and stall/timeout) funnel
+    through this ONE helper so the marker shape cannot drift between them.
+
+    ``source`` is the FULL pre-truncation evidence: for the no-parseable branch
+    it is the union of the file content AND the captured stdout; for the
+    stall/timeout branch it is whatever raw source is available (the drained
+    tail, which the drain window bounds to the last ``_MAX_DRAIN_WINDOW``
+    (512KB) bytes — the retained ``raw_output`` therefore reflects that
+    bounded tail, never a multi-MB log). Bytes are decoded exactly once;
+    ``pr_url`` is extracted from the FULL UNREDACTED source, then the stored
+    ``raw_output`` copy is scrubbed of credentials (``_redact_raw_output``)
+    and ONLY THEN truncated to ``_MAX_ARTIFACT_LOG`` for storage.
+    """
+    text = _normalize_marker_text(source)
+    marker: dict[str, Any] = {
+        "_modulo_marker": True,
+        "status": "failed",
+        "summary": summary,
+        "raw_output": _redact_raw_output(text)[:_MAX_ARTIFACT_LOG],
+        "parse_error": parse_error,
+        "pr_url": _extract_pr_url(text),
+        "exit_code": exit_code,
+        "stdout_length": stdout_length,
+        "stderr_length": stderr_length,
+        "attempt_key": attempt_key,
+        "node_id": node_id,
+    }
+    await _persist_raw_output_marker(
+        session_factory,
+        run_id=run_id,
+        org_id_raw=org_id_raw,
+        node_id=node_id,
+        attempt_key=attempt_key,
+        marker=marker,
+    )
+
+
+async def _persist_raw_output_marker(
+    session_factory: Callable[..., Any] | None,
+    *,
+    run_id: str,
+    org_id_raw: Any,
+    node_id: str,
+    attempt_key: str | None,
+    marker: dict[str, Any],
+) -> None:
+    """Best-effort persist of a raw-output retention marker onto ``runs.raw_output_markers``.
+
+    FAR-188 (QA round 1): the marker lives in a DEDICATED column keyed by
+    ``attempt_key`` — NEVER in ``outputs_json`` / ``node_telemetry_json``. This
+    keeps the Agent Return Contract columns clean: the node-output endpoint can
+    never serve raw stdout, ``recover_node``'s already-completed guard never
+    sees a fake completed node, and finalize's split-output machinery never
+    touches the marker.
+
+    Keyed by ``attempt_key`` (not ``node_id``) so a retry that re-executes the
+    same node does not clobber the previous attempt's evidence: if an existing
+    marker for the SAME attempt_key already carries a non-empty ``pr_url`` it is
+    preserved (a retry's empty pr_url never wipes attempt-1's evidence).
+
+    The whole session body is bounded by ``asyncio.wait_for(..., timeout=
+    _RAW_OUTPUT_MARKER_PERSIST_TIMEOUT)``: a hung DB fails open with a log
+    BEFORE the node decorator grace budget is consumed, so the retryable
+    ``SandboxNodeFailedError`` survives instead of being replaced by a terminal
+    ``node_timeout``.
+
+    NEVER raises (except cancellation): a persistence failure must not block the
+    node's retryable raise — run terminalization depends on it.
+    """
+    if session_factory is None:
+        _log.warning(
+            "sandbox_agent.raw_output_marker_skip_no_session",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return
+    if not run_id:
+        _log.warning("sandbox_agent.raw_output_marker_skip_no_run_id", extra={"node_id": node_id})
+        return
+    org_uuid: uuid.UUID | None = None
+    try:
+        org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+    except (TypeError, ValueError):
+        org_uuid = None
+    if org_uuid is None:
+        _log.warning(
+            "sandbox_agent.raw_output_marker_skip_unparseable_org",
+            extra={"run_id": run_id, "node_id": node_id},
+        )
+        return
+
+    async def _persist() -> None:
+        # Imports live INSIDE the try so a first-call import failure is
+        # swallowed+logged like any other persist failure — it must never
+        # propagate and convert the retryable raise into a generic failed node.
+        from sqlalchemy import select as _sql_select
+
+        from modulo.db.models.run import Run as _RunModel
+
+        try:
+            async with session_factory() as session, session.begin():
+                await set_rls_org(session, org_uuid)
+                run = (
+                    await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id).with_for_update())
+                ).scalar_one_or_none()
+                if run is None:
+                    _log.warning(
+                        "sandbox_agent.raw_output_marker_skip_row_not_found",
+                        extra={
+                            "run_id": run_id,
+                            "node_id": node_id,
+                            "hint": "row missing or RLS-hidden by another org",
+                        },
+                    )
+                    return
+                markers = dict(run.raw_output_markers) if isinstance(run.raw_output_markers, dict) else {}
+                key = attempt_key or f"run:{run_id}:node:{node_id}:fallback"
+                existing = markers.get(key)
+                persisted_marker: dict[str, Any] = marker
+                if isinstance(existing, dict) and existing.get("pr_url"):
+                    persisted_marker = dict(marker)
+                    persisted_marker["pr_url"] = existing["pr_url"]
+                markers[key] = persisted_marker
+                run.raw_output_markers = markers
+                await session.flush()
+                _log.info(
+                    "sandbox_agent.raw_output_marker_persisted",
+                    extra={
+                        "run_id": run_id,
+                        "node_id": node_id,
+                        "attempt_key": key,
+                        "retained_bytes": len(persisted_marker.get("raw_output") or ""),
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception(
+                "sandbox_agent.raw_output_marker_persist_failed",
+                extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
+            )
+
+    try:
+        await asyncio.wait_for(_persist(), timeout=_RAW_OUTPUT_MARKER_PERSIST_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "sandbox_agent.raw_output_marker_persist_timeout_or_error",
+            extra={"run_id": run_id, "node_id": node_id, "attempt_key": attempt_key},
+        )
 
 
 def _evaluate_eval_condition(score: float, threshold: float, operator: str) -> bool:
@@ -1703,12 +1933,39 @@ def make_sandbox_agent_fn(
                     )
                 # A6: a stall or total timeout is a retryable sandbox-infra
                 # failure — RAISE (never a silent completed/wrong-success node).
+                # FAR-188: output.json was never read, so retain the captured
+                # stdout as the raw evidence — a pr_url created before the stall
+                # must not be lost either. The drain window keeps only the last
+                # _MAX_DRAIN_WINDOW (512KB) tail, so the marker's raw_output is
+                # a bounded tail (documented in _retain_raw_output_marker).
+                _stall_source: str = agent_stdout_raw
+                if cmd_result is not None:
+                    _sdk_stdout = str(getattr(cmd_result, "stdout", "") or "")
+                    if len(_sdk_stdout) > len(_stall_source):
+                        _stall_source = _sdk_stdout
+                await _retain_raw_output_marker(
+                    session_factory,
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    summary=(
+                        "Sandbox agent command stalled/timed out — raw stdout retained "
+                        "(drain window keeps the last 512KB tail)"
+                    ),
+                    source=_stall_source,
+                    parse_error=command_error,
+                    exit_code=exit_code,
+                    stdout_length=_stdout_len,
+                    stderr_length=_stderr_len,
+                )
                 raise SandboxNodeFailedError(
                     command_error or f"Sandbox agent command failed (no output within {sandbox_timeout}s)"
                 )
 
             raw_output: str = ""
             output_json: Any = None
+            output_read_error: str = ""
             if cmd_result is not None:
                 try:
                     _remaining_after_cmd = max(_OUTPUT_READ_TIMEOUT, sandbox_timeout - (time.monotonic() - start_time))
@@ -1720,38 +1977,87 @@ def make_sandbox_agent_fn(
                         timeout=_remaining_after_cmd,
                     )
                     output_json = json.loads(raw_output)
-                except Exception:
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _read_exc:
+                    output_read_error = f"{type(_read_exc).__name__}: {str(_read_exc)[:_MAX_ERROR_MSG]}"
                     _log.info(
                         "sandbox_agent.no_output_json",
                         extra={
                             "node_id": node_id,
                             "exit_code": exit_code,
                             "command_error": command_error,
+                            "output_read_error": output_read_error,
                             "stdout_length": _stdout_len,
                             "stderr_length": _stderr_len,
                             "sandbox_id": _sandbox_id,
                         },
                     )
 
-            # A6: an agent that produced no parseable output.json (regardless of
-            # exit code) is a retryable sandbox-infra failure — a node with zero
-            # usable work must never complete the run silently.
-            if output_json is None:
-                # FAR-197: surface WHY the agent failed. The captured
-                # stdout/stderr tails plus the E2B log tail (the only place the
-                # kill reason lives) are fetched BEFORE the finally-block kill,
-                # while the sandbox is still alive — the logs endpoint only
-                # serves live sandboxes.
-                _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
-                raise SandboxNodeFailedError(
-                    _build_no_output_message(
+            # FAR-188: an agent that produced no usable output.json content — a
+            # failed/unparseable read (output_json None) or a PARSEABLE but
+            # non-dict value ([], "str", 123, null). In BOTH cases the raw
+            # evidence is retained (pr_url extraction, marker persist). Only the
+            # TRULY-no-output case (output_json is None — read failure or
+            # json.loads("null")) raises SandboxNodeFailedError: a node with
+            # zero usable work must never complete the run silently (A6).
+            # A parseable non-dict value retains the marker and CONTINUES
+            # through the existing shaping path — agent_status stays None
+            # exactly as before (corrected FIX 4; test_node_runner_agent_status
+            # asserts this proceed-with-None behaviour and stays green).
+            if output_json is None or not isinstance(output_json, dict):
+                # Evidence is the UNION of raw sources — the file content AND
+                # the captured stdout (a pr_url echoed to stdout when output.json
+                # is present-but-malformed must be found). pr_url is extracted
+                # from the FULL pre-truncation source, then raw_output is
+                # truncated for storage (inside the builder).
+                _raw_parts = [p for p in (_normalize_marker_text(raw_output), agent_stdout_raw) if p]
+                _raw_combined = "\n".join(_raw_parts)
+                if output_json is None:
+                    _parse_error = output_read_error or "output.json is empty or JSON null"
+                    await _retain_raw_output_marker(
+                        session_factory,
+                        run_id=run_id,
+                        org_id_raw=org_id,
+                        node_id=node_id,
+                        attempt_key=attempt_key,
+                        summary="Sandbox agent produced no parseable output.json — raw output retained",
+                        source=_raw_combined,
+                        parse_error=_parse_error,
                         exit_code=exit_code,
-                        stdout_raw=agent_stdout_raw,
-                        stderr_raw=agent_stderr_raw,
-                        sandbox_id=_sandbox_id,
-                        read_raw=raw_output,
-                        log_tail=_no_output_log_tail,
+                        stdout_length=_stdout_len,
+                        stderr_length=_stderr_len,
                     )
+                    # FAR-197: surface WHY the agent failed. The captured
+                    # stdout/stderr tails plus the E2B log tail (the only place
+                    # the kill reason lives) are fetched BEFORE the finally-block
+                    # kill, while the sandbox is still alive — the logs endpoint
+                    # only serves live sandboxes.
+                    _no_output_log_tail = await _fetch_sandbox_log_tail(_sandbox_id)
+                    raise SandboxNodeFailedError(
+                        _build_no_output_message(
+                            exit_code=exit_code,
+                            stdout_raw=agent_stdout_raw,
+                            stderr_raw=agent_stderr_raw,
+                            sandbox_id=_sandbox_id,
+                            read_raw=raw_output,
+                            log_tail=_no_output_log_tail,
+                        )
+                    )
+                # Parseable non-dict output: retain the marker, do NOT raise —
+                # fall through to the shared shaping path below.
+                await _retain_raw_output_marker(
+                    session_factory,
+                    run_id=run_id,
+                    org_id_raw=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    summary="Sandbox agent output.json parsed to a non-dict value — raw output retained",
+                    source=_raw_combined,
+                    parse_error=f"output.json parsed to non-dict type {type(output_json).__name__}",
+                    exit_code=exit_code,
+                    stdout_length=_stdout_len,
+                    stderr_length=_stderr_len,
                 )
 
             _span = _otel_trace.get_current_span()
