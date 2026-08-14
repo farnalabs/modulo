@@ -356,7 +356,8 @@ class TestLiveWriter:
             ).first()
         assert row is not None, "a fenced terminal finalize must write a fact"
         assert row[0] == "complete", "a fenced finalize must record the TERMINAL status, not the pre-write 'running'"
-        assert row[1] is not None and float(row[1]) > 0, "the fact must carry the run's cost"
+        assert row[1] is not None, "the fact must carry the run's cost"
+        assert float(row[1]) > 0, "the fact must carry a positive cost"
         assert row[2] == 1000
         assert row[3] == date(2026, 8, 4)
 
