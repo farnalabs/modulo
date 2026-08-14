@@ -26,6 +26,7 @@ from modulo.api.routes.lifecycle_maps import (
     graduate_lifecycle_map_stage_endpoint,
     save_lifecycle_map_version_endpoint,
     update_lifecycle_map_endpoint,
+    update_lifecycle_map_version_endpoint,
 )
 from modulo.api.routes.lifecycle_maps import (
     router as lifecycle_maps_router,
@@ -94,7 +95,7 @@ def _compiled_sql(statement: object) -> str:
 
 
 # ---------------------------------------------------------------------------
-# normalize_content â€” pure validation
+# normalize_content — pure validation
 # ---------------------------------------------------------------------------
 
 
@@ -288,7 +289,7 @@ def test_normalize_content_accepts_acyclic_transition_chain() -> None:
 
 
 # ---------------------------------------------------------------------------
-# invalid graph structure â€” duplicate ids + dangling edges (FAR-175)
+# invalid graph structure — duplicate ids + dangling edges (FAR-175)
 # ---------------------------------------------------------------------------
 
 
@@ -532,6 +533,61 @@ async def test_save_map_version_validates_and_rejects_bad_stage_type(session: As
         )
 
 
+async def test_save_map_version_rejects_dangling_edge(session: AsyncMock) -> None:
+    """The versions save path (POST and PUT both call save_map_version) must
+    run the graph-structure checks, not just the per-stage shape checks."""
+    lm = _make_map()
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="target stage 'ghost' is not defined"):
+        await save_map_version(
+            session,
+            _MAP_ID,
+            stages=[{"id": "s1", "name": "Build", "type": "modulo"}],
+            edges=[{"id": "e1", "source": "s1", "target": "ghost"}],
+            notes="",
+        )
+
+
+async def test_save_map_version_rejects_duplicate_stage_ids(session: AsyncMock) -> None:
+    """Duplicate stage ids are rejected on the versions save path."""
+    lm = _make_map()
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="duplicate stage id 's1'"):
+        await save_map_version(
+            session,
+            _MAP_ID,
+            stages=[
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s1", "name": "Build again", "type": "manual"},
+            ],
+            edges=[],
+            notes="",
+        )
+
+
+async def test_save_map_version_rejects_duplicate_edge_ids(session: AsyncMock) -> None:
+    """Duplicate edge ids are rejected on the versions save path."""
+    lm = _make_map()
+    session.execute.return_value = MagicMock(scalar_one_or_none=MagicMock(return_value=lm))
+
+    with pytest.raises(LifecycleMapContentError, match="duplicate edge id 'e1'"):
+        await save_map_version(
+            session,
+            _MAP_ID,
+            stages=[
+                {"id": "s1", "name": "Build", "type": "modulo"},
+                {"id": "s2", "name": "Approve", "type": "manual"},
+            ],
+            edges=[
+                {"id": "e1", "source": "s1", "target": "s2"},
+                {"id": "e1", "source": "s1", "target": "s2"},
+            ],
+            notes="",
+        )
+
+
 # ---------------------------------------------------------------------------
 # graduate_stage
 # ---------------------------------------------------------------------------
@@ -655,7 +711,7 @@ async def test_restore_lifecycle_map_propagates_integrity_error_for_re_registere
 
 
 # ---------------------------------------------------------------------------
-# update_lifecycle_map â€” content_json path validates + derives
+# update_lifecycle_map — content_json path validates + derives
 # ---------------------------------------------------------------------------
 
 
@@ -680,13 +736,13 @@ async def test_update_lifecycle_map_normalizes_content_and_derives(session: Asyn
 
 
 # ---------------------------------------------------------------------------
-# Concurrent-save semantics â€” atomic version counter via SELECT ... FOR UPDATE
+# Concurrent-save semantics — atomic version counter via SELECT ... FOR UPDATE
 #
 # FAR-176: two agents saving versions of the same map concurrently must never
 # produce duplicate version numbers. Every version-bumping write path must fetch
 # the row with FOR UPDATE so, on Postgres (READ COMMITTED), the later save
 # blocks, re-reads the earlier save's committed version and bumps from there.
-# These tests assert the compiled SQL carries the lock â€” they FAIL if a write
+# These tests assert the compiled SQL carries the lock — they FAIL if a write
 # path regresses back to a plain read-then-increment.
 # ---------------------------------------------------------------------------
 
@@ -754,7 +810,7 @@ async def test_update_lifecycle_map_metadata_only_reads_without_lock(session: As
 
 
 async def test_update_lifecycle_map_bumps_version_internally_on_content_change(session: AsyncMock) -> None:
-    """The service owns the version bump under the row lock â€” the caller must
+    """The service owns the version bump under the row lock — the caller must
     not pre-compute it (a stale pre-computed value reintroduces duplicates)."""
     lm = _make_map(version=2)
     session.execute.return_value = MagicMock(
@@ -783,7 +839,7 @@ async def test_update_lifecycle_map_metadata_only_keeps_version(session: AsyncMo
 
 
 # ---------------------------------------------------------------------------
-# Concurrent-save semantics â€” real DB (SQLite) pin of the documented behaviour
+# Concurrent-save semantics — real DB (SQLite) pin of the documented behaviour
 #
 # SQLite serialises writes and ignores FOR UPDATE, so true interleaving is only
 # provable on Postgres (see the integration test). These tests pin the *result*
@@ -856,7 +912,7 @@ class TestLifecycleMapConcurrentSaves:
 
     async def test_read_during_open_write_transaction_sees_committed_snapshot(self, tmp_path: Path) -> None:
         """A version-list read concurrent with an uncommitted save must see the
-        last committed snapshot â€” never a half-written map."""
+        last committed snapshot — never a half-written map."""
         engine = await self._engine(tmp_path)
         try:
             await self._seed(engine, version=2)
@@ -891,7 +947,7 @@ class TestLifecycleMapConcurrentSaves:
 
 
 # ---------------------------------------------------------------------------
-# create_lifecycle_map â€” friendly pipeline-uniqueness pre-check
+# create_lifecycle_map — friendly pipeline-uniqueness pre-check
 # ---------------------------------------------------------------------------
 async def test_create_lifecycle_map_rejects_pipeline_registered_elsewhere(session: AsyncMock) -> None:
     """The create path runs the friendly pipeline-uniqueness pre-check, so a
@@ -933,8 +989,24 @@ async def test_create_lifecycle_map_without_pipeline_ids_skips_uniqueness_query(
     session.flush.assert_awaited()
 
 
+async def test_create_lifecycle_map_validates_content_when_provided(session: AsyncMock) -> None:
+    """A map created WITH content must run the graph-structure checks: a
+    dangling edge is rejected up-front, not silently stored."""
+    with pytest.raises(LifecycleMapContentError, match="source stage 'ghost' is not defined"):
+        await create_lifecycle_map(
+            session,
+            org_id=_ORG_ID,
+            name="Broken",
+            account_id=_ACCOUNT_ID,
+            content_json={
+                "stages": [{"id": "s1", "name": "Build", "type": "modulo"}],
+                "edges": [{"id": "e1", "source": "ghost", "target": "s1"}],
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
-# derive_lifecycle_map_stages â€” tolerant of shape-incompatible rows
+# derive_lifecycle_map_stages — tolerant of shape-incompatible rows
 # ---------------------------------------------------------------------------
 
 
@@ -957,12 +1029,12 @@ async def test_derive_skips_shape_incompatible_rows(session: AsyncMock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Route exception ordering â€” a pipeline conflict must surface as 409, not 422
+# Route exception ordering — a pipeline conflict must surface as 409, not 422
 #
 # LifecycleMapPipelineConflictError subclasses LifecycleMapContentError, so a
 # handler that lists the parent clause first swallows the conflict and returns
 # 422. These tests drive the conflict through the ROUTE handlers (the exact
-# except-clause ordering that was dead code), not the service layer â€” a
+# except-clause ordering that was dead code), not the service layer — a
 # regression that reintroduces the dead 409 branch fails here.
 # ---------------------------------------------------------------------------
 
@@ -1068,7 +1140,7 @@ async def test_create_route_maps_pipeline_conflict_to_409() -> None:
 
 async def test_save_version_route_maps_content_error_to_422() -> None:
     """A plain content-validation error still maps to 422 after the conflict
-    clause moved ahead of the parent class â€” the parent clause must remain
+    clause moved ahead of the parent class — the parent clause must remain
     reachable for genuine shape errors."""
     with (
         patch(
@@ -1088,8 +1160,55 @@ async def test_save_version_route_maps_content_error_to_422() -> None:
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
+async def test_update_version_route_maps_content_error_to_422() -> None:
+    """The versions PUT route (update_lifecycle_map_version_endpoint) must map
+    a content-validation error to 422 exactly like the POST route — it shares
+    the same save_map_version path."""
+    with (
+        patch(
+            "modulo.api.routes.lifecycle_maps.save_map_version",
+            AsyncMock(side_effect=LifecycleMapContentError("lifecycle-map stage #1: duplicate stage id 's1'")),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await update_lifecycle_map_version_endpoint(
+            lifecycle_map_id=_MAP_ID,
+            version_id=_MAP_ID,
+            req=VersionSaveRequest(stages=[], edges=[]),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+async def test_create_route_maps_content_error_to_422_when_content_provided() -> None:
+    """Creating a map with invalid content must surface a 422, not store it —
+    the route maps the content validator's LifecycleMapContentError to 422."""
+    with (
+        patch(
+            "modulo.api.routes.lifecycle_maps.create_lifecycle_map",
+            AsyncMock(
+                side_effect=LifecycleMapContentError(
+                    "lifecycle-map edge/transition #0: source stage 'ghost' is not defined"
+                )
+            ),
+        ),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_org", AsyncMock()),
+        patch("modulo.api.routes.lifecycle_maps.set_rls_user_context", AsyncMock()),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await create_lifecycle_map_endpoint(
+            req=LifecycleMapCreate(name="Broken", content_json={"stages": [], "edges": []}),
+            session=_route_session(),
+            principal=_RoutePrincipal(),
+        )
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
 # ---------------------------------------------------------------------------
-# Audit logging on mutation routes (FAR-175) â€” create/update/delete/graduate
+# Audit logging on mutation routes (FAR-175) — create/update/delete/graduate
 #
 # Each mutation route appends an AuditEvent via append_audit_event (fail-open).
 # These tests pin the event_type + resource identity per route and FAIL if a
@@ -1221,7 +1340,7 @@ async def test_create_route_audit_failure_does_not_fail_create() -> None:
 
 
 # ---------------------------------------------------------------------------
-# PUT route round-trip â€” prove-the-fix regression for the update 500
+# PUT route round-trip — prove-the-fix regression for the update 500
 #
 # The map PUT committed + version-bumped correctly but returned HTTP 500: the
 # ``updated_at`` column carries ``onupdate=func.current_timestamp()``, so the
@@ -1230,7 +1349,7 @@ async def test_create_route_audit_failure_does_not_fail_create() -> None:
 # triggered a lazy refresh on a session with ``autobegin=False``
 # (``InvalidRequestError``). The fix refreshes the map inside the transaction.
 # This test drives the REAL route against a REAL SQLite session and asserts a
-# 200 + the updated fields + the version bump â€” it FAILS (500) without the fix.
+# 200 + the updated fields + the version bump — it FAILS (500) without the fix.
 # ---------------------------------------------------------------------------
 
 

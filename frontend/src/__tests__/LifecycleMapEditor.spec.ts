@@ -141,8 +141,12 @@ describe('LifecycleMapEditor version loading', () => {
   })
 
   it('surfaces the backend 422 validation detail in saveError', async () => {
-    const cycleDetail = "Stage 'Review' -> 'Merge' -> 'Review' forms a cycle"
-    putMock.mockRejectedValueOnce(new Error(cycleDetail))
+    // FastAPI returns a Pydantic 422 as { detail: [{loc, msg, type}, ...] };
+    // formatApiError must collapse it to readable text inside the editor.
+    const validationDetail = { detail: [
+      { loc: ['body', 'stages', 1, 'id'], msg: 'lifecycle-map stage #1: duplicate stage id', type: 'value_error' },
+    ] }
+    putMock.mockRejectedValueOnce(validationDetail)
 
     const wrapper = mountEditor()
     await flushPromises()
@@ -150,7 +154,8 @@ describe('LifecycleMapEditor version loading', () => {
     await (wrapper.vm as unknown as { handleSave: () => Promise<void> }).handleSave()
     await flushPromises()
 
-    expect(wrapper.text()).toContain(cycleDetail)
+    expect(wrapper.text()).toContain('lifecycle-map stage #1: duplicate stage id')
+    expect(wrapper.text()).not.toContain('"detail"')
   })
 
   it('formats FastAPI array-typed 422 detail into readable messages', () => {
