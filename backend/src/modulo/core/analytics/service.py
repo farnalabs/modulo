@@ -265,6 +265,15 @@ async def _facts_freshness(
                     await set_rls_org(session, org_id)
                     if account_id is not None:
                         await set_rls_user_context(session, account_id, org_role or "")
+                    dialect = (await session.connection()).dialect.name
+                    if dialect == "postgresql":
+                        timeout_ms = getattr(
+                            settings, "analytics_query_statement_timeout_ms", _DEFAULT_STATEMENT_TIMEOUT_MS
+                        )
+                        await session.execute(
+                            text("SELECT set_config('statement_timeout', :ms, true)"),
+                            {"ms": str(int(timeout_ms))},
+                        )
                     newest_terminal_day = (
                         await session.execute(
                             sa.select(sa.func.max(RunDailyFact.run_date)).where(

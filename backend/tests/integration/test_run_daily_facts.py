@@ -360,6 +360,78 @@ class TestLiveWriter:
         assert row[2] == 1000
         assert row[3] == date(2026, 8, 4)
 
+    async def test_refresh_failure_never_rolls_back_terminal_write(
+        self,
+        db_session: AsyncSession,
+        org: uuid.UUID,
+        pipeline: uuid.UUID,
+        snapshot: uuid.UUID,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ADR-020 envelope (FAR-200 review): a facts-refresh failure must not
+        propagate out of ``finalize_cost`` nor roll back the terminal status
+        write + ledger.
+
+        The refresh previously ran at the CALL SITE — ``session.refresh(run)``
+        evaluated BEFORE ``record_run_facts``'s fail-open guard, so a refresh
+        failure (PendingRollbackError, connection drop) bubbled out of
+        ``finalize_cost`` and rolled back the run's terminal status + ledger.
+        The refresh now lives INSIDE ``record_run_facts``'s guard and degrades
+        to recording from the in-memory object on failure, so the terminal
+        outcome always commits.
+        """
+        from modulo.core.cost_controller.finalize import finalize_cost
+
+        run_id = await _insert_run(
+            db_session,
+            org_id=org,
+            pipeline_id=pipeline,
+            snapshot_id=snapshot,
+            status="running",
+            started_at=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
+            claim_token="tok-refresh-fail",
+        )
+        await _insert_cost_component(db_session, org)
+        await db_session.commit()
+
+        async def _boom(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("simulated facts refresh failure")
+
+        monkeypatch.setattr(AsyncSession, "refresh", _boom)
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            await finalize_cost(
+                db_session,
+                run_id=run_id,
+                org_id=org,
+                status="complete",
+                segment_node_token_usage={"n1": {"input_tokens": 1000, "output_tokens": 0, "total_tokens": 1000}},
+                segment_completed_node_outputs=None,
+                node_type_map={"n1": "agent"},
+                is_terminal=True,
+                claim_token="tok-refresh-fail",
+            )
+
+        async with db_session.begin():
+            await db_session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org)})
+            run_status = (
+                await db_session.execute(text("SELECT status FROM runs WHERE id = :rid"), {"rid": str(run_id)})
+            ).scalar_one()
+            ledger_total = (
+                await db_session.execute(
+                    text(
+                        "SELECT total_spend_usd FROM org_daily_run_counts "
+                        "WHERE organisation_id = :oid AND team_id IS NULL AND run_date = '2026-08-13'"
+                    ),
+                    {"oid": str(org)},
+                )
+            ).scalar_one_or_none()
+
+        assert run_status == "complete", "the terminal status write must commit despite a refresh failure"
+        assert ledger_total is not None, "the ledger must commit despite a refresh failure"
+        assert float(ledger_total) > 0, "the ledger must commit despite a refresh failure"
+
     async def test_fallback_path_writes_fact(
         self,
         db_session: AsyncSession,

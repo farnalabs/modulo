@@ -68,6 +68,10 @@ def _acm() -> AsyncMock:
 def _session(*, execute_side_effect) -> SimpleNamespace:
     session = SimpleNamespace()
     session.execute = AsyncMock(side_effect=execute_side_effect)
+    # record_run_facts refreshes the run at the start (inside its fail-open
+    # guard) so the fact snapshots the terminal row after a fenced status
+    # write — the double mirrors a real AsyncSession.
+    session.refresh = AsyncMock()
     session.begin = MagicMock(return_value=_acm())
     session.begin_nested = MagicMock(return_value=_acm())
     return session
