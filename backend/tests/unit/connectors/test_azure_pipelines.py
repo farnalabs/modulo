@@ -7,6 +7,7 @@ import respx
 from modulo.connectors.azure_pipelines import (
     AzurePipelinesConnector,
     _AzurePipelinesTestDouble,
+    _paging_total,
 )
 from modulo.connectors.base import (
     CIRunStatus,
@@ -369,6 +370,33 @@ async def test_query_unsupported_resource(ap_runner):
     q = ConnectorQuery(resource="invalid")
     with pytest.raises(ValueError, match="Unsupported query resource"):
         await ap_runner.query(q)
+
+
+@respx.mock
+async def test_query_pipelines_corrupt_total(ap_runner):
+    """A non-finite ``count`` must not poison the reported total."""
+    respx.get(
+        f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines",
+        params={"api-version": "7.0"},
+    ).mock(return_value=httpx.Response(200, content=b'{"value": [{"id": 1}], "count": 1e999}'))
+    result = await ap_runner.query(ConnectorQuery(resource="pipelines"))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+# ---------------------------------------------------------------------------
+# Pagination helpers — direct unit coverage
+# ---------------------------------------------------------------------------
+
+
+def test_paging_total() -> None:
+    assert _paging_total({"count": 25}) == 25
+    assert _paging_total({"count": "25"}) == 25
+    assert _paging_total({"count": 1e999}) == 0
+    assert _paging_total({"count": float("nan")}) == 0
+    assert _paging_total({"count": True}) == 0
+    assert _paging_total({"count": "garbage"}) == 0
+    assert _paging_total({}) is None
 
 
 # ---------------------------------------------------------------------------

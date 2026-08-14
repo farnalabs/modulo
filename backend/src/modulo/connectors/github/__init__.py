@@ -17,6 +17,7 @@ from modulo.connectors._retry_headers import (
     parse_rate_limit_reset,
     parse_retry_after,
 )
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -28,6 +29,22 @@ from modulo.connectors.base import (
 
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
+
+
+def _search_total(body: dict[str, Any]) -> int | None:
+    """Extract GitHub Search's ``total_count`` as a safe int.
+
+    Guards against non-finite floats (``inf``/``nan``) which otherwise poison
+    aggregation — Python's json parser produces ``inf`` for overflowing
+    literals such as ``1e999``, so a corrupt or hostile response must not be
+    able to poison the reported total. A missing ``total_count`` keeps the
+    historical ``None`` behaviour.
+    """
+    raw = body.get("total_count")
+    if raw is None:
+        return None
+    return _safe_int(raw)
+
 
 REQUIRED_SCOPES = frozenset({"repo", "read:org"})
 
@@ -968,7 +985,7 @@ class GitHubConnector(ConnectorBase):
                 body = await self._parse_json_object(r)
                 items = cast("list[dict[str, Any]]", body.get("items", []))
                 links = _parse_link_header(r)
-                return self._result(items, r, total=body.get("total_count"), next_cursor=links.get("next"))
+                return self._result(items, r, total=_search_total(body), next_cursor=links.get("next"))
             case "rate_limit":
                 r = await self._call_api("GET", "/rate_limit")
                 body = await self._parse_json_object(r)

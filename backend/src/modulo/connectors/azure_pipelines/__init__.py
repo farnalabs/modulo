@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -18,6 +19,22 @@ from modulo.connectors.base import (
 )
 
 _AZURE_DEVOPS_API = "https://dev.azure.com"
+
+
+def _paging_total(body: dict[str, Any]) -> int | None:
+    """Extract Azure DevOps' ``count`` field as a safe int.
+
+    Guards against non-finite floats (``inf``/``nan``) which otherwise poison
+    aggregation — Python's json parser produces ``inf`` for overflowing
+    literals such as ``1e999``, so a corrupt or hostile response must not be
+    able to poison the reported total. A missing ``count`` keeps the
+    historical ``None`` behaviour.
+    """
+    raw = body.get("count")
+    if raw is None:
+        return None
+    return _safe_int(raw)
+
 
 _STATUS_MAP: dict[str, CIRunStatus] = {
     "unknown": CIRunStatus.UNKNOWN,
@@ -230,7 +247,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=body.get("value", []),
-                        total=body.get("count"),
+                        total=_paging_total(body),
                     )
                 case "pipelines":
                     r = await client.get(
@@ -241,7 +258,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=body.get("value", []),
-                        total=body.get("count"),
+                        total=_paging_total(body),
                     )
                 case "runs":
                     pipeline_id = q.filters.get("pipeline_id", "")
@@ -255,7 +272,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=body.get("value", []),
-                        total=body.get("count"),
+                        total=_paging_total(body),
                     )
                 case "releases":
                     r = await client.get(
@@ -266,7 +283,7 @@ class AzurePipelinesConnector(ConnectorBase):
                     body = r.json()
                     return ConnectorResult(
                         records=body.get("value", []),
-                        total=body.get("count"),
+                        total=_paging_total(body),
                     )
                 case _:
                     raise ValueError(f"Unsupported query resource: {q.resource!r}")

@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from modulo.connectors.azure_repos import AzureReposConnector
+from modulo.connectors.azure_repos import AzureReposConnector, _paging_total
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
 
 TOKEN = "azure_test_token"
@@ -230,6 +230,27 @@ async def test_unsupported_write_resource(connector):
 
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.AZURE_REPOS
+
+
+@respx.mock
+async def test_query_repos_corrupt_total(connector):
+    """A non-finite ``count`` must not poison the reported total."""
+    respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
+        return_value=httpx.Response(200, content=b'{"value": [{"id": "repo-1"}], "count": 1e999}')
+    )
+    result = await connector.query(ConnectorQuery(resource="repos", filters={"project": "myproject"}))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+def test_paging_total() -> None:
+    assert _paging_total({"count": 25}) == 25
+    assert _paging_total({"count": "25"}) == 25
+    assert _paging_total({"count": 1e999}) == 0
+    assert _paging_total({"count": float("nan")}) == 0
+    assert _paging_total({"count": True}) == 0
+    assert _paging_total({"count": "garbage"}) == 0
+    assert _paging_total({}) is None
 
 
 def test_auth_header_format():

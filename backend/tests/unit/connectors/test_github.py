@@ -14,6 +14,7 @@ from modulo.connectors.github import (
     _parse_rate_limit_reset,
     _rate_limit_detail,
     _rate_limit_metadata,
+    _search_total,
 )
 
 TOKEN = "ghp_test_token"
@@ -630,6 +631,17 @@ async def test_query_search_issues_empty(connector):
     result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "nothing"}))
     assert result.total == 0
     assert not result.records
+
+
+@respx.mock
+async def test_query_search_issues_corrupt_total(connector):
+    """A non-finite ``total_count`` must not poison the reported total."""
+    respx.get("https://api.github.com/search/issues?q=bug&per_page=100").mock(
+        return_value=httpx.Response(200, content=b'{"total_count": 1e999, "items": [{"number": 1}]}')
+    )
+    result = await connector.query(ConnectorQuery(resource="search_issues", filters={"q": "bug"}))
+    assert len(result.records) == 1
+    assert result.total == 0
 
 
 @respx.mock
@@ -1349,6 +1361,16 @@ RATE_LIMIT_HEADERS = {
     "X-RateLimit-Reset": str(int(time.time()) + 60),
     "X-RateLimit-Resource": "core",
 }
+
+
+def test_search_total_coerces_corrupt_values() -> None:
+    assert _search_total({"total_count": 25}) == 25
+    assert _search_total({"total_count": "25"}) == 25
+    assert _search_total({"total_count": 1e999}) == 0
+    assert _search_total({"total_count": float("nan")}) == 0
+    assert _search_total({"total_count": True}) == 0
+    assert _search_total({"total_count": "garbage"}) == 0
+    assert _search_total({}) is None
 
 
 def test_parse_rate_limit_reset_future() -> None:
