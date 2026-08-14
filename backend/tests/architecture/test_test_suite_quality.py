@@ -1418,9 +1418,7 @@ def _redundant_called_assertions(tree: ast.AST) -> list[tuple[int, str]]:
                 continue
             nxt = node.body[i + 1]
             nxt_attrs = [
-                sub
-                for sub in ast.walk(nxt)
-                if isinstance(sub, ast.Attribute) and sub.attr in _MOCK_CALL_INTROSPECTION
+                sub for sub in ast.walk(nxt) if isinstance(sub, ast.Attribute) and sub.attr in _MOCK_CALL_INTROSPECTION
             ]
             if any(ast.dump(sub.value) == ast.dump(base) for sub in nxt_attrs):
                 found.append(
