@@ -596,7 +596,7 @@ class TestPersistentFailureDeactivation:
 
     @pytest.mark.asyncio
     async def test_clear_without_redis_is_noop(self) -> None:
-        await ch._clear_ongoing_failure(None, TRIGGER_ID)
+        assert await ch._clear_ongoing_failure(None, TRIGGER_ID) is None
 
     @pytest.mark.asyncio
     async def test_success_clears_failure_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:

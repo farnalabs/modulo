@@ -292,7 +292,7 @@ class TestRequireInDevOperator:
     def test_operator_allowed(self, permission: str) -> None:
         from modulo.api.dependencies import require_in_dev_operator
 
-        require_in_dev_operator(_tenant("operator"), permission)
+        assert require_in_dev_operator(_tenant("operator"), permission) is None
 
     @pytest.mark.parametrize(
         "permission",
@@ -301,7 +301,7 @@ class TestRequireInDevOperator:
     def test_admin_allowed(self, permission: str) -> None:
         from modulo.api.dependencies import require_in_dev_operator
 
-        require_in_dev_operator(_tenant("admin"), permission)
+        assert require_in_dev_operator(_tenant("admin"), permission) is None
 
     @pytest.mark.parametrize(
         "permission",

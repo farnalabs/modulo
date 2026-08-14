@@ -32,6 +32,9 @@ regression that silently weakens the suite:
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
   original exception and discards its traceback context)
+- no-op ``test_*`` functions whose body contains no verification at all (they
+  report green even when the code under test is completely broken, as long as
+  no exception escapes)
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -47,6 +50,17 @@ TESTS = Path(__file__).resolve().parent.parent
 #: Test packages that are tooling rather than assertions and may legitimately
 #: emit progress output or take long pauses (load/benchmark harnesses).
 EXCLUDED_PACKAGES = {"load", "performance"}
+
+
+def _decorator_name(dec: ast.AST) -> str | None:
+    """Return the bare name of a decorator (``pytest.fixture`` -> ``fixture``)."""
+    if isinstance(dec, ast.Call):
+        dec = dec.func
+    if isinstance(dec, ast.Attribute):
+        return dec.attr
+    if isinstance(dec, ast.Name):
+        return dec.id
+    return None
 
 
 def _iter_test_modules():
@@ -468,15 +482,6 @@ def test_no_dead_fixtures():
         for token in re.findall(r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']', path.read_text(encoding="utf-8")):
             used_names[token] = used_names.get(token, 0) + 1
 
-    def _decorator_name(dec: ast.AST) -> str | None:
-        if isinstance(dec, ast.Call):
-            dec = dec.func
-        if isinstance(dec, ast.Attribute):
-            return dec.attr
-        if isinstance(dec, ast.Name):
-            return dec.id
-        return None
-
     def _decorator_autouse(dec: ast.AST) -> bool:
         if not isinstance(dec, ast.Call):
             return False
@@ -696,3 +701,155 @@ def test_no_assert_inside_except():
         f"Found {len(violations)} assertion(s) inside except handler(s).\n"
         "Use pytest.raises(...) as exc_info and assert on exc_info.value outside the handler.\n" + "\n".join(violations)
     )
+
+
+_RAISES_CONTEXT_NAMES = frozenset(
+    {
+        "raises",
+        "assert_raises",
+        "assert_does_not_raise",
+        "rejects",
+        "raises_match",
+        "warns",
+        "warns_match",
+        "deprecated_call",
+    }
+)
+"""``with`` context-manager names that count as verification of a no-op test."""
+
+_FAIL_CALL_NAMES = frozenset({"fail", "skip", "xfail"})
+"""Calls that report test outcome directly (other than ``assert``)."""
+
+_SCHEMATISEST_SELF_VALIDATING = frozenset(
+    {"call_and_validate", "call_and_validate_examples", "call_and_validate_frozen"}
+)
+"""Schemathesis case methods that validate every generated response internally."""
+
+
+def _noop_lens_verifies(node: ast.AST) -> bool:
+    """True if ``node`` contains anything that verifies behavior (any assert,
+    raises-context, fail/skip/xfail call, or call to an assert/self-validating
+    helper). Nested defs/classes are skipped — they define helpers, not the
+    test body itself — unless the test body references the helper, in which
+    case its asserts actually run and count. A helper that is defined but never
+    called cannot report a broken code path, so an assert trapped inside it
+    does not make the test a verifier."""
+    invoked = _names_referenced_outside_nested_defs(node)
+    stack: list[tuple[ast.AST, bool]] = [(node, False)]
+    while stack:
+        sub, in_invoked_class = stack.pop()
+        if isinstance(sub, ast.Assert):
+            return True
+        if isinstance(sub, ast.Raise):
+            return True
+        if isinstance(sub, (ast.With, ast.AsyncWith)):
+            for item in sub.items:
+                ctx = item.context_expr
+                if not isinstance(ctx, ast.Call):
+                    continue
+                f = ctx.func
+                name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+                if name in _RAISES_CONTEXT_NAMES:
+                    return True
+        if isinstance(sub, ast.Call):
+            f = sub.func
+            name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+            if name in _FAIL_CALL_NAMES or name in _SCHEMATISEST_SELF_VALIDATING:
+                return True
+            if name and "assert" in name:
+                return True
+        if (
+            isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and sub is not node
+            and not in_invoked_class
+            and sub.name not in invoked
+        ):
+            continue
+        if isinstance(sub, ast.ClassDef) and sub is not node:
+            if sub.name not in invoked:
+                continue
+            in_invoked_class = True
+        stack.extend((child, in_invoked_class) for child in ast.iter_child_nodes(sub))
+    return False
+
+
+def _names_referenced_outside_nested_defs(node: ast.AST) -> set[str]:
+    """Names referenced in the test body excluding the bodies of nested
+    defs/classes — used to tell whether a nested helper is actually invoked."""
+    names: set[str] = set()
+    stack = [node]
+    while stack:
+        sub = stack.pop()
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and sub is not node:
+            continue
+        if isinstance(sub, ast.Name):
+            names.add(sub.id)
+        stack.extend(ast.iter_child_nodes(sub))
+    return names
+
+
+def test_no_noop_test_functions():
+    """A ``test_*`` function whose body contains no verification at all is a
+    no-op test: it reports green even when the code under test is completely
+    broken, as long as no exception escapes. Smoke tests that merely 'call the
+    code' must assert something about the outcome (or wrap the call in
+    ``pytest.raises``) — otherwise a silent regression slips through."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if any(_decorator_name(d) == "fixture" for d in node.decorator_list):
+                continue
+            if not (node.name.startswith("test_") or any(_decorator_name(d) == "mark" for d in node.decorator_list)):
+                continue
+            if _noop_lens_verifies(node):
+                continue
+            violations.append(f"  {rel}:{node.lineno}  {node.name}() — no assertion or raises context in body")
+    assert not violations, (
+        f"Found {len(violations)} no-op test function(s) that never verify anything.\n"
+        "Add an assertion on the outcome, or wrap the call in pytest.raises(...) if it must raise.\n"
+        + "\n".join(violations)
+    )
+
+
+def test_noop_lens_recognizes_verification_patterns():
+    """The no-op lens must count every legitimate pytest verification pattern
+    as verification — otherwise adding a correct test trips the lens. This
+    covers ``with``/``async with`` raises-contexts, warning contexts, and
+    direct outcome calls. Asserts inside nested helpers count only when the
+    test body actually invokes the helper; an assert trapped in a never-called
+    helper does not verify anything."""
+    verifying_sources = [
+        "def test_foo():\n    assert foo() == 1\n",
+        "def test_foo():\n    with pytest.raises(ValueError):\n        foo()\n",
+        "def test_foo():\n    with pytest.warns(UserWarning):\n        foo()\n",
+        "def test_foo():\n    with pytest.deprecated_call():\n        foo()\n",
+        "async def test_foo():\n    async with pytest.raises(ValueError):\n        await foo()\n",
+        "async def test_foo():\n    async with pytest.warns(UserWarning):\n        await foo()\n",
+        "def test_foo():\n    pytest.fail('boom')\n",
+        "def test_foo():\n    def helper():\n        assert foo() == 1\n    helper()\n",
+        (
+            "def test_foo():\n"
+            "    class Helper:\n"
+            "        def check(self):\n"
+            "            assert foo() == 1\n"
+            "    Helper().check()\n"
+        ),
+    ]
+    for source in verifying_sources:
+        tree = ast.parse(source)
+        assert _noop_lens_verifies(tree.body[0]), f"lens should count as verifying:\n{source}"
+
+    non_verifying_sources = [
+        "def test_foo():\n    foo()\n",
+        "def test_foo():\n    def helper():\n        assert foo() == 1\n    foo()\n",
+        "def test_foo():\n    class Helper:\n        def check(self):\n            assert foo() == 1\n",
+    ]
+    for source in non_verifying_sources:
+        tree = ast.parse(source)
+        assert not _noop_lens_verifies(tree.body[0]), f"lens should NOT count as verifying:\n{source}"
