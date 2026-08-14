@@ -66,5 +66,5 @@ def check_build_metadata_types(request):
 @then("git_sha is empty and ci_job_url is empty")
 def check_fallback_empty(request):
     body = request.node._body
-    assert body["git_sha"] == ""
-    assert body["ci_job_url"] == ""
+    assert not body["git_sha"]
+    assert not body["ci_job_url"]

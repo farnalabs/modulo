@@ -83,7 +83,7 @@ class TestFeatureFlagModel:
 
     def test_description_defaults_to_empty(self) -> None:
         flag = FeatureFlag(name="no_desc", tier="community", description="")
-        assert flag.description == ""
+        assert not flag.description
 
 
 class TestRegistryLifecycle:

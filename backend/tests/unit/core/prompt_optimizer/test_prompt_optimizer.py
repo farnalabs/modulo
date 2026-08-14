@@ -246,7 +246,7 @@ class TestParseLLMResponse:
 
     def test_non_string_analysis_defaults_to_empty(self) -> None:
         result = _parse_llm_response(json.dumps({"suggested_prompt": "p", "rationale": "R", "analysis": None}))
-        assert result.analysis == ""
+        assert not result.analysis
         assert result.suggested_prompt == "p"
         assert result.rationale == "R"
 

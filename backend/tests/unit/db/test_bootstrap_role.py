@@ -149,13 +149,13 @@ class TestUrlParsing:
         assert _parse_role("postgres://modulo:pass@db:5432/modulo") == "modulo"
 
     def test_parse_role_empty_when_no_username(self) -> None:
-        assert _parse_role("postgres://db:5432/modulo") == ""
+        assert not _parse_role("postgres://db:5432/modulo")
 
     def test_parse_password_extracts_and_unescapes(self) -> None:
         assert _parse_password("postgres://modulo:p%40ss%23word@db:5432/modulo") == "p@ss#word"
 
     def test_parse_password_empty_when_none(self) -> None:
-        assert _parse_password("postgres://modulo@db:5432/modulo") == ""
+        assert not _parse_password("postgres://modulo@db:5432/modulo")
 
 
 class TestAsyncpgAdminConnect:

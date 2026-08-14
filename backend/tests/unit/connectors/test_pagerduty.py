@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from modulo.connectors.base import ConnectorPayload, ConnectorQuery, ConnectorType
-from modulo.connectors.pagerduty import PagerDutyConnector
+from modulo.connectors.pagerduty import PagerDutyConnector, _next_offset_cursor, _paging_total
 
 TOKEN = "pd_test_token"
 _BASE = "https://api.pagerduty.com"
@@ -519,3 +519,88 @@ async def test_query_users_with_team_filter(connector: PagerDutyConnector) -> No
     result = await connector.query(ConnectorQuery(resource="users", filters={"team_ids": "TEAM1"}))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "Charlie"
+
+
+# ── Helpers: corrupt/non-finite paging hardening ──────────────────────
+
+
+def test_paging_total_missing() -> None:
+    assert _paging_total({}) is None
+
+
+def test_paging_total_valid() -> None:
+    assert _paging_total({"total": 42}) == 42
+
+
+def test_paging_total_corrupt_inf() -> None:
+    assert _paging_total({"total": float("inf")}) == 0
+
+
+def test_paging_total_corrupt_nan() -> None:
+    assert _paging_total({"total": float("nan")}) == 0
+
+
+def test_paging_total_corrupt_bool() -> None:
+    assert _paging_total({"total": True}) == 0
+
+
+def test_paging_total_corrupt_garbage() -> None:
+    assert _paging_total({"total": "not-a-number"}) == 0
+
+
+def test_next_offset_cursor_no_more() -> None:
+    assert _next_offset_cursor(0, [{"id": "A"}], None) is None
+    assert _next_offset_cursor(0, [{"id": "A"}], False) is None
+
+
+def test_next_offset_cursor_valid() -> None:
+    assert _next_offset_cursor(25, [{"id": "A"}, {"id": "B"}], True) == "27"
+
+
+def test_next_offset_cursor_corrupt_offset() -> None:
+    assert _next_offset_cursor(float("inf"), [{"id": "A"}], True) == "1"
+    assert _next_offset_cursor("garbage", [{"id": "A"}], True) == "1"
+    assert _next_offset_cursor(True, [{"id": "A"}], True) == "1"
+
+
+# ── Query: corrupt/non-finite response hardening ──────────────────────
+
+
+@respx.mock
+async def test_query_incidents_corrupt_total_inf(connector: PagerDutyConnector) -> None:
+    respx.get(f"{_BASE}/incidents").mock(
+        return_value=httpx.Response(200, content=b'{"incidents": [{"id": "I1"}], "total": 1e999, "more": false}')
+    )
+    result = await connector.query(ConnectorQuery(resource="incidents"))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_services_corrupt_total_garbage(connector: PagerDutyConnector) -> None:
+    respx.get(f"{_BASE}/services").mock(
+        return_value=httpx.Response(200, json={"services": [{"id": "S1"}], "total": "not-a-number", "more": False})
+    )
+    result = await connector.query(ConnectorQuery(resource="services"))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_on_calls_corrupt_offset_no_poisoned_cursor(connector: PagerDutyConnector) -> None:
+    respx.get(f"{_BASE}/oncalls").mock(
+        return_value=httpx.Response(200, content=b'{"oncalls": [{"user": {"id": "U1"}}], "total": 1e999, "more": true}')
+    )
+    result = await connector.query(ConnectorQuery(resource="on_calls"))
+    assert len(result.records) == 1
+    assert result.total == 0
+    assert result.next_cursor is None or result.next_cursor.isdigit()
+
+
+@respx.mock
+async def test_query_teams_final_page_no_cursor(connector: PagerDutyConnector) -> None:
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(200, json={"teams": [{"id": "T1"}], "total": 1}))
+    result = await connector.query(ConnectorQuery(resource="teams"))
+    assert len(result.records) == 1
+    assert result.total == 1
+    assert result.next_cursor is None

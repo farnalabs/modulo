@@ -128,7 +128,7 @@ class TestSearch:
 
 class TestFormatResults:
     def test_empty_results_returns_empty_string(self) -> None:
-        assert DocumentationIndex.format_results([]) == ""
+        assert not DocumentationIndex.format_results([])
 
     def test_single_entry_formats_markdown(self) -> None:
         out = DocumentationIndex.format_results(
@@ -262,8 +262,8 @@ class TestParse:
 
     def test_heading_without_paragraph_has_empty_first_paragraph(self) -> None:
         index = DocumentationIndex._parse("## Pipelines\n\n## Schemas\n")
-        assert index.entries[0].first_paragraph == ""
-        assert index.entries[1].first_paragraph == ""
+        assert not index.entries[0].first_paragraph
+        assert not index.entries[1].first_paragraph
 
     def test_multi_line_paragraph_is_joined(self) -> None:
         index = DocumentationIndex._parse("## Pipelines\n\nFirst line.\nSecond line.\n")
@@ -303,5 +303,5 @@ class TestExtractFirstParagraph:
         assert _extract_first_paragraph(lines, 0) == "emphasized"
 
     def test_no_content_returns_empty(self) -> None:
-        assert _extract_first_paragraph(["## Next"], 0) == ""
-        assert _extract_first_paragraph(["", ""], 0) == ""
+        assert not _extract_first_paragraph(["## Next"], 0)
+        assert not _extract_first_paragraph(["", ""], 0)

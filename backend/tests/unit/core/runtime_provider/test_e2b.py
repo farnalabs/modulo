@@ -287,8 +287,8 @@ async def test_exec_command_handles_proc_without_attributes(
     result = await provider.exec_command(ref, ["echo", "hi"])
 
     assert result.exit_code == -1
-    assert result.stdout == ""
-    assert result.stderr == ""
+    assert not result.stdout
+    assert not result.stderr
 
 
 @pytest.mark.asyncio

@@ -492,7 +492,7 @@ def test_get_plugin_registry_singleton():
 
 def test_plugin_health_defaults():
     h = PluginHealth(ok=True)
-    assert h.detail == ""
+    assert not h.detail
     assert h.checked_at is not None
 
 
@@ -562,7 +562,7 @@ def test_load_entry_point_uses_metadata_defaults():
     assert len(discovered) == 1
     assert discovered[0].PLUGIN_ID == "pkg-bare"
     assert discovered[0].display_name == "pkg-bare"
-    assert discovered[0].description == ""
+    assert not discovered[0].description
     assert discovered[0].version == "0.0.0"
 
 

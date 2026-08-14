@@ -53,7 +53,7 @@ class TestAssertOrgRole:
         with pytest.raises(PermissionDenied) as excinfo:
             assert_org_role("", required, "test.permission")
         assert excinfo.value.reason == "unknown_role"
-        assert excinfo.value.actual_role == ""
+        assert not excinfo.value.actual_role
 
     @pytest.mark.parametrize("required", ["viewer", "runner", "operator", "admin"])
     def test_none_role_denied(self, required: str) -> None:

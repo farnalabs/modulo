@@ -25,12 +25,20 @@ regression that silently weakens the suite:
 - ``assert len(x) == 0`` / ``assert 0 == len(x)`` where the ``len()`` operand
   is an attribute access, subscript, call, or container literal — an
   anti-idiom that should read ``assert not x`` and trips ruff SIM101
+- tautological ``len()`` comparison bounds — ``len(x) >= 0`` and friends
+  compare against a bound that ``len()`` can never cross (it never returns a
+  negative number), so the assertion either always passes (``>= 0``, ``> -1``,
+  ``!= -1``) or always fails (``< 0``, ``<= -1``, ``== -1``) and is dead either
+  way
 - ``assert len(x) > 0`` / ``assert len(x) >= 1`` / ``assert len(x) != 0``
   (the non-emptiness mirror of the ``len(x) == 0`` lens) — sized containers
   are truthy exactly when non-empty, so these should read ``assert x``
 - ``assert x == []`` / ``assert x == {}`` against an empty container literal —
   ``== []``/``== {}`` is the equality-based twin of the ``len() == 0`` idiom
   and should read ``assert not x`` (an empty container is falsy)
+- ``assert x == ""`` / ``assert x != ""`` against an empty string literal — the
+  string twin of the empty-container lens; an empty string is falsy, so these
+  should read ``assert not x`` / ``assert x``
 - hand-rolled ``try: ... raise AssertionError(...) except X: pass`` instead of
   ``pytest.raises`` (the success path is only guarded by the ``raise`` line)
 - ``assert`` nested inside ``except`` handlers (a failing assert masks the
@@ -652,6 +660,57 @@ def test_no_empty_container_literal_equality():
     )
 
 
+def test_no_empty_string_equality():
+    """``assert x == ""`` / ``assert x != ""`` compare a value against an empty
+    string literal — the string twin of the empty-container lens above. An
+    empty string is falsy, so ``assert x == ""`` should read ``assert not x``
+    and ``assert x != ""`` should read ``assert x`` — the same intent with less
+    noise and no literal-type coupling. Operands whose type is statically a
+    container (attribute access, subscript, call, or await) are flagged; a bare
+    name is left alone because it may bind ``None`` or a non-str object whose
+    emptiness is not ``not``. A ``.get(...)`` lookup is left alone for the same
+    reason: it returns ``None`` for a missing key, and ``""`` vs ``None`` is a
+    meaningful distinction for headers/config/API fields that truthiness
+    silently conflates."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assert):
+                continue
+            test = node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+                continue
+            if not isinstance(test.ops[0], (ast.Eq, ast.NotEq)):
+                continue
+            sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
+            for operand, literal in sides:
+                if not (isinstance(literal, ast.Constant) and isinstance(literal.value, str) and literal.value == ""):
+                    continue
+                if isinstance(operand, ast.Name):
+                    continue
+                if (
+                    isinstance(operand, ast.Call)
+                    and isinstance(operand.func, ast.Attribute)
+                    and operand.func.attr == "get"
+                ):
+                    continue
+                if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                    continue
+                op_name = "==" if isinstance(test.ops[0], ast.Eq) else "!="
+                prefer = "assert not ..." if isinstance(test.ops[0], ast.Eq) else "assert ..."
+                violations.append(f"  {rel}:{node.lineno}  asserts value {op_name} '' — prefer '{prefer}'")
+                break
+    assert not violations, (
+        f"Found {len(violations)} empty-string comparison(s).\n"
+        "An empty string is falsy; write 'assert not <expr>' instead of "
+        "'assert <expr> == \"\"' and 'assert <expr>' instead of 'assert <expr> != \"\"'.\n" + "\n".join(violations)
+    )
+
+
 def test_no_precision_fragile_float_equality():
     """``x == 0.1`` style assertions are precision-fragile: most decimal
     fractions have no exact binary representation, so the value under test
@@ -691,6 +750,100 @@ def test_no_precision_fragile_float_equality():
         f"Found {len(violations)} precision-fragile float comparison(s).\n"
         "Use pytest.approx(<literal>) instead of == against a non-representable float literal.\n"
         + "\n".join(violations)
+    )
+
+
+def test_no_tautological_len_bounds():
+    """``len(x) >= 0`` and friends are dead assertions: ``len()`` never returns
+    a negative number, so the comparison can never change outcome. The assert
+    is either guaranteed to pass (``>= 0``, ``> -1``, ``!= -N``) or guaranteed
+    to fail (``< 0``, ``<= -1``, ``== -N``) — it reports green regardless of
+    behaviour, or unconditionally breaks the suite. Assert the condition you
+    actually mean (``assert x`` for non-empty, ``assert not x`` for empty), or
+    drop the check entirely. Both operand orders are covered (``0 <= len(x)``
+    is the same tautology as ``len(x) >= 0``)."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+
+        def _is_len(expr: ast.AST) -> bool:
+            return (
+                isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "len" and expr.args
+            )
+
+        def _int_value(expr: ast.AST) -> int | None:
+            if isinstance(expr, ast.Constant) and isinstance(expr.value, int):
+                return expr.value
+            if (
+                isinstance(expr, ast.UnaryOp)
+                and isinstance(expr.op, ast.USub)
+                and isinstance(expr.operand, ast.Constant)
+                and isinstance(expr.operand.value, int)
+            ):
+                return -expr.operand.value
+            return None
+
+        def _verdict(op: type, value: int) -> str | None:
+            if op is ast.GtE and value <= 0:
+                return "always PASSES"
+            if op is ast.Gt and value < 0:
+                return "always PASSES"
+            if op is ast.Lt and value <= 0:
+                return "always FAILS"
+            if op is ast.LtE and value < 0:
+                return "always FAILS"
+            if op is ast.Eq and value < 0:
+                return "always FAILS"
+            if op is ast.NotEq and value < 0:
+                return "always PASSES"
+            return None
+
+        mirror = {
+            ast.GtE: ast.LtE,
+            ast.LtE: ast.GtE,
+            ast.Gt: ast.Lt,
+            ast.Lt: ast.Gt,
+            ast.Eq: ast.Eq,
+            ast.NotEq: ast.NotEq,
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+                continue
+            op = type(node.ops[0])
+            mirrored = mirror.get(op)
+            if mirrored is None:
+                continue
+            pairs = [
+                (node.left, node.comparators[0], op),
+                (node.comparators[0], node.left, mirrored),
+            ]
+            for len_side, const_side, effective in pairs:
+                if not _is_len(len_side):
+                    continue
+                value = _int_value(const_side)
+                if value is None:
+                    continue
+                verdict = _verdict(effective, value)
+                if verdict is None:
+                    continue
+                op_name = {
+                    ast.GtE: ">=",
+                    ast.Gt: ">",
+                    ast.Lt: "<",
+                    ast.LtE: "<=",
+                    ast.Eq: "==",
+                    ast.NotEq: "!=",
+                }.get(effective, "?")
+                violations.append(
+                    f"  {rel}:{node.lineno}  assert len(...) {op_name} {value} — {verdict} (len() is never negative)"
+                )
+    assert not violations, (
+        f"Found {len(violations)} tautological len() comparison(s).\n"
+        "len() never returns a negative number, so the bound can never be exercised.\n"
+        "Assert the real condition (assert x / assert not x) or drop the dead check.\n" + "\n".join(violations)
     )
 
 
@@ -905,3 +1058,99 @@ def test_noop_lens_recognizes_verification_patterns():
     for source in non_verifying_sources:
         tree = ast.parse(source)
         assert not _noop_lens_verifies(tree.body[0]), f"lens should NOT count as verifying:\n{source}"
+
+
+_SELF_COMPARISON_OPS = (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+"""Comparison operators where ``<operand> OP <identical operand>`` is a
+tautology in ordinary Python semantics: ``x == x``/``x <= x``/``x >= x``/
+``x is x`` always PASS, while ``x != x``/``x < x``/``x > x``/``x is not x``
+always FAIL, no matter what ``x`` evaluates to. IEEE-754 NaN is the one
+exception (``float('nan') != float('nan')`` is True), so the lens cannot
+claim the outcome is literally constant — what makes a self-comparison dead
+code is that it can never exercise distinct values."""
+
+
+def _self_comparison_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion that compares an
+    operand with a syntactically identical copy of itself."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        if not isinstance(node.ops[0], _SELF_COMPARISON_OPS):
+            continue
+        left, right = node.left, node.comparators[0]
+        if not isinstance(left, (ast.Name, ast.Attribute, ast.Subscript)):
+            continue
+        if ast.dump(left) != ast.dump(right):
+            continue
+        op_name = node.ops[0].__class__.__name__
+        expr = ast.unparse(left)
+        found.append(
+            (node.lineno, f"compares {expr} {op_name} {expr} — identical operands can never exercise distinct values")
+        )
+    return found
+
+
+def test_no_self_comparison_tautology():
+    """An assertion comparing a value with *itself* — ``assert x == x``,
+    ``assert result.value != result.value``, ``assert row['key'] is row['key']``
+    — is a tautology in ordinary Python semantics: it can never exercise the
+    behaviour under test, yet it reports green (or, for ``!=``/``<``/``>``/
+    ``is not``, red) no matter how broken the code under test is. IEEE-754
+    NaN is the one caveat (``float('nan') == float('nan')`` is False), so the
+    lens targets the deeper invariant: identical operands can never exercise
+    distinct values. These are almost always copy-paste or leftover-debugging
+    artefacts.
+
+    The lens only flags syntactically identical operands whose type is a
+    variable, attribute path, or subscript — expressions that re-evaluate to
+    the same object. ``Call`` operands are deliberately NOT flagged: ``assert
+    signal_fingerprint(a) == signal_fingerprint(a)`` is a legitimate
+    determinism/stability check of a (pure) function, so the lens cannot know
+    a call is redundant without interprocedural analysis.
+    """
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _self_comparison_tautologies(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} self-comparison tautolog(ies).\n"
+        "Comparing a value with itself can never exercise distinct values; it is dead code.\n"
+        "Assert against the expected value instead: 'assert x == <expected>'.\n" + "\n".join(violations)
+    )
+
+
+def test_self_comparison_lens_flags_tautologies():
+    """Synthetic positive/negative control for the self-comparison lens,
+    mirroring the no-op lens's verification-pattern test: the lens must flag
+    every syntactically identical self-comparison (variables, attribute
+    paths, subscripts) and ignore comparisons that could involve distinct
+    values or side-effecting calls."""
+    positive_sources = [
+        "def test_foo():\n    assert x == x\n",
+        "def test_foo():\n    assert result.value != result.value\n",
+        "def test_foo():\n    assert row['key'] is row['key']\n",
+        "def test_foo():\n    assert a.b.c <= a.b.c\n",
+        "def test_foo():\n    assert items[0] > items[0]\n",
+        "def test_foo():\n    assert x is not x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _self_comparison_tautologies(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x == y\n",
+        "def test_foo():\n    assert x != y\n",
+        "def test_foo():\n    assert row['a'] is row['b']\n",
+        "def test_foo():\n    assert x == 1\n",
+        "def test_foo():\n    assert len(a) != len(a)\n",
+        "def test_foo():\n    assert signal_fingerprint(a) == signal_fingerprint(a)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _self_comparison_tautologies(tree), f"lens should NOT flag:\n{source}"

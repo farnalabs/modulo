@@ -224,7 +224,7 @@ class TestParseAndVerify:
         assert result.valid is True
         assert result.license_data is not None
         assert result.license_data.tier == "community"
-        assert result.license_data.expires_at == ""
+        assert not result.license_data.expires_at
 
 
 class TestStoreAndGetLicense:

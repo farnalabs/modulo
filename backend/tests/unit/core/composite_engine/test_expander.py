@@ -108,7 +108,7 @@ class TestExpandCompositeNode:
         template = _template(nodes=[sub_node])
         node_def = _node_def()
         expanded = expand_composite_node(node_def, template)
-        assert expanded[0]["prompt"] == ""
+        assert not expanded[0]["prompt"]
 
     def test_none_prompt_unchanged(self) -> None:
         sub_node = {

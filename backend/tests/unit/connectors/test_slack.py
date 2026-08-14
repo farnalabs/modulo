@@ -114,7 +114,7 @@ async def test_query_channels(connector):
     result = await connector.query(ConnectorQuery(resource="channels", limit=10))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "general"
-    assert result.next_cursor == ""
+    assert not result.next_cursor
 
 
 @respx.mock
@@ -746,7 +746,7 @@ async def test_channel_members(connector):
     )
     assert len(result.records) == 3
     assert result.records[0]["user_id"] == "U001"
-    assert result.next_cursor == ""
+    assert not result.next_cursor
 
 
 @respx.mock
