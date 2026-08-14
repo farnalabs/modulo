@@ -41,7 +41,7 @@
               <label for="lifecyclemapview-field-1" class="text-sm text-muted-foreground">{{ $t('views.LifecycleMapView.version_label') }}</label>
               <Select :aria-label="$t('views.LifecycleMapView.version_label')" v-model="selectedVersion" @update:model-value="onVersionChange">
                 <SelectTrigger data-testid="lifecycle-map-version-select" class="rounded-lg border border-input bg-background px-3 py-1.5 text-sm">
-                  <SelectValue placeholder="Select version" />
+                  <SelectValue :placeholder="$t('views.LifecycleMapView.version_placeholder')" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem v-for="v in sortedVersions" :key="v.version" :value="v.version">
