@@ -1,7 +1,10 @@
+import asyncio
 import logging
 import re
 import smtplib
 import time
+import uuid
+from collections.abc import Callable
 from email.message import EmailMessage
 
 from modulo.settings import Settings
@@ -14,9 +17,112 @@ _REDACTED = "********"
 _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 120
 
+# Pragmatic SMTP-recipient shape check (no third-party validator dependency).
+# Requires exactly one ``@``, a non-empty local part, and a domain containing a
+# dot and no leading/trailing dot or consecutive dots.
+_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+"
+    r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$"
+)
+
 
 class EmailSendingError(Exception):
     pass
+
+
+class EmailTestSendRateError(Exception):
+    """Raised by :class:`EmailSendLimiter` when an org has exhausted its test-send budget."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(f"Test-send rate limit exceeded; retry in {retry_after_seconds}s")
+        self.retry_after_seconds = retry_after_seconds
+
+
+class EmailSendLimiter:
+    """In-memory fixed-window test-send budget, keyed per organisation.
+
+    The test-send endpoint relays mail to an arbitrary recipient, so it is a
+    potential abuse vector for SMTP relay enumeration (PRD §8.11 / the product
+    map's "test-send relay abuse" gap). This limiter caps how often an org may
+    fire a test email: at most ``limit`` sends per ``window_seconds``, enforced
+    with a per-org ``asyncio.Lock`` so concurrent sends cannot overdraw the
+    budget. The state is deliberately in-memory and per-process — consistent
+    with the other admin cooldowns in this codebase — and only ever *blocks*
+    (a limiter failure fails open, it never breaks a legitimate test-send).
+
+    ``now_fn`` is injectable for deterministic tests.
+    """
+
+    def __init__(
+        self,
+        *,
+        limit: int = 3,
+        window_seconds: int = 3600,
+        now_fn: Callable[[], float] | None = None,
+    ) -> None:
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        if window_seconds < 1:
+            raise ValueError("window_seconds must be >= 1")
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self._now = now_fn or time.monotonic
+        self._buckets: dict[uuid.UUID, tuple[float, int]] = {}
+        self._locks: dict[uuid.UUID, asyncio.Lock] = {}
+
+    def _lock_for(self, org_id: uuid.UUID) -> asyncio.Lock:
+        lock = self._locks.get(org_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[org_id] = lock
+        return lock
+
+    async def acquire(self, org_id: uuid.UUID) -> int:
+        """Consume one test-send slot for *org_id*.
+
+        Returns the number of seconds until a slot frees when the budget is
+        exhausted, or ``0`` when the send may proceed.
+        """
+        lock = self._lock_for(org_id)
+        async with lock:
+            now = self._now()
+            window_start, count = self._buckets.get(org_id, (now, 0))
+            if now - window_start >= self.window_seconds:
+                window_start = now
+                count = 0
+            if count >= self.limit:
+                return int(self.window_seconds - (now - window_start)) + 1
+            self._buckets[org_id] = (window_start, count + 1)
+            return 0
+
+    def reset(self, org_id: uuid.UUID | None = None) -> None:
+        """Clear the budget for one org (or every org when ``None``)."""
+        if org_id is None:
+            self._buckets.clear()
+            self._locks.clear()
+        else:
+            self._buckets.pop(org_id, None)
+            self._locks.pop(org_id, None)
+
+
+def _is_valid_recipient(address: str) -> bool:
+    """Reject malformed or header-injecting test-send recipients.
+
+    The address must be a bare RFC-5322-shaped ``local@domain.tld`` string:
+    no angle brackets, no display names, no CR/LF (header injection) and no
+    obviously non-email garbage such as URLs or shell metacharacters.
+    """
+    if not isinstance(address, str) or not address.strip():
+        return False
+    candidate = address.strip()
+    if len(candidate) > 320:
+        return False
+    if any(ch in candidate for ch in ("\r", "\n", "<", ">", '"', "(", ")", ",", ";")):
+        return False
+    if candidate.startswith(("http://", "https://", "mailto:", "/", "\\", "@")):
+        return False
+    return _EMAIL_RE.fullmatch(candidate) is not None
 
 
 def _effective_timeout(settings: object) -> int:

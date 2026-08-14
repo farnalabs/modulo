@@ -28,6 +28,16 @@ def email_ctx() -> dict[str, Any]:
     return {"_viewer": False}
 
 
+@pytest.fixture(autouse=True)
+def _reset_email_send_limiter() -> None:
+    """Start every scenario with a fresh test-send budget for every org."""
+    from modulo.api.routes import admin_email as admin_email_mod
+
+    admin_email_mod.test_send_limiter.reset()
+    yield
+    admin_email_mod.test_send_limiter.reset()
+
+
 def _make_org(settings_json: dict[str, Any] | None = None) -> MagicMock:
     from modulo.db.models.organisation import Organisation
 
@@ -148,6 +158,20 @@ def _given_relay_fails(message: str, email_ctx: dict[str, Any]) -> None:
     email_ctx["_send_error"] = EmailSendingError(message)
 
 
+@given("the test-send rate limit budget is exhausted for the test organisation")
+def _given_rate_limit_exhausted(email_ctx: dict[str, Any]) -> None:
+    """Consume every test-send slot for the shared org id up front."""
+    import asyncio
+
+    from modulo.api.routes import admin_email as admin_email_mod
+
+    async def _exhaust() -> None:
+        for _ in range(admin_email_mod.test_send_limiter.limit):
+            await admin_email_mod.test_send_limiter.acquire(_ORG_ID)
+
+    asyncio.run(_exhaust())
+
+
 @when("I GET the email settings for the test organisation")
 def _when_get_settings(email_ctx: dict[str, Any], request) -> None:
     if getattr(request.node, "_viewer_auth", False):
@@ -212,7 +236,7 @@ def _when_post_test(to: str, email_ctx: dict[str, Any], request) -> None:
             send = MagicMock(side_effect=email_ctx["_send_error"])
         else:
             send = MagicMock(return_value=True)
-        with patch("modulo.api.routes.admin_email.send_email", send):
+        with patch("modulo.api.routes.admin_email.send_email", send) as mock_send:
             _call(
                 "POST",
                 f"{_ORG_PATH}/test",
@@ -220,6 +244,41 @@ def _when_post_test(to: str, email_ctx: dict[str, Any], request) -> None:
                 request,
                 json={"to": to},
             )
+            email_ctx["_send_attempts"] = mock_send.call_count
+
+
+@when("I POST a test email with header injection for the test organisation")
+def _when_post_test_header_injection(email_ctx: dict[str, Any], request) -> None:
+    org = _make_org(email_ctx.get("_settings_json"))
+    with (
+        patch("modulo.api.routes.admin_email.get_organisation", AsyncMock(return_value=org)),
+        patch("modulo.api.routes.admin_email.send_email", MagicMock(return_value=True)) as mock_send,
+    ):
+        _call(
+            "POST",
+            f"{_ORG_PATH}/test",
+            email_ctx,
+            request,
+            json={"to": "admin@example.com\r\nBcc: victim@example.com"},
+        )
+        email_ctx["_send_attempts"] = mock_send.call_count
+
+
+@then("no test email is sent to the SMTP relay")
+def _then_no_send(email_ctx: dict[str, Any]) -> None:
+    import modulo.api.routes.admin_email as admin_email_mod
+
+    if email_ctx.get("_send_attempts") is not None:
+        assert email_ctx["_send_attempts"] == 0
+    else:
+        assert admin_email_mod.send_email.call_count == 0
+
+
+@then("the response carries a Retry-After header")
+def _then_retry_after(request) -> None:
+    resp = request.node._resp
+    assert resp.status_code == 429
+    assert resp.headers.get("retry-after")
 
 
 @then(parsers.parse("the response status is {status:d}"))

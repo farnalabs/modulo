@@ -48,6 +48,32 @@ Feature: Admin Email Settings
     Then the response status is 200
     And the response reports the test email failed
 
+  Scenario: Malformed test-send recipient is rejected
+    Given I am authenticated as a system admin
+    And email settings are configured with SMTP host "smtp.example.com"
+    And the SMTP relay accepts the test email
+    When I POST a test email to "not-an-email" for the test organisation
+    Then the response status is 422
+    And no test email is sent to the SMTP relay
+
+  Scenario: Test-send recipient header injection is rejected
+    Given I am authenticated as a system admin
+    And email settings are configured with SMTP host "smtp.example.com"
+    And the SMTP relay accepts the test email
+    When I POST a test email with header injection for the test organisation
+    Then the response status is 422
+    And no test email is sent to the SMTP relay
+
+  Scenario: Test-send endpoint is rate limited per organisation
+    Given I am authenticated as a system admin
+    And email settings are configured with SMTP host "smtp.example.com"
+    And the SMTP relay accepts the test email
+    And the test-send rate limit budget is exhausted for the test organisation
+    When I POST a test email to "admin@example.com" for the test organisation
+    Then the response status is 429
+    And the response carries a Retry-After header
+    And no test email is sent to the SMTP relay
+
   Scenario: Viewer cannot read email settings
     Given I am authenticated as a viewer in org "default"
     When I GET the email settings for the test organisation

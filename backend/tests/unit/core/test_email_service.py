@@ -1,5 +1,6 @@
 """Tests for email_service — SMTP email sending via stdlib smtplib."""
 
+import asyncio
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -7,7 +8,10 @@ import pytest
 
 from modulo.core.email_service import (
     EmailSendingError,
+    EmailSendLimiter,
+    EmailTestSendRateError,
     _effective_timeout,
+    _is_valid_recipient,
     _redact_credentials,
     send_email,
 )
@@ -570,3 +574,109 @@ class TestRedactCredentials:
         settings.smtp_password = ""
         message = _redact_credentials("no secrets in here", settings)
         assert message == "no secrets in here"
+
+
+def _await_acquire(limiter: EmailSendLimiter, org_id: int) -> int:
+    async def _run() -> int:
+        retry = await limiter.acquire(org_id)
+        if retry > 0:
+            raise EmailTestSendRateError(retry)
+        return retry
+
+    return asyncio.run(_run())
+
+
+class EmailSendLimiter:
+    async def test_allows_up_to_limit_then_blocks(self) -> None:
+        clock = [1000.0]
+        limiter = EmailSendLimiter(limit=3, window_seconds=60, now_fn=lambda: clock[0])
+        for _ in range(3):
+            assert await limiter.acquire(1) == 0
+        retry = await limiter.acquire(1)
+        assert retry > 0
+
+    def test_blocks_with_retry_after(self) -> None:
+        clock = [1000.0]
+        limiter = EmailSendLimiter(limit=1, window_seconds=60, now_fn=lambda: clock[0])
+        assert limiter._now() == 1000.0
+        with pytest.raises(EmailTestSendRateError) as exc_info:
+            _await_acquire(limiter, 1)
+        assert exc_info.value.retry_after_seconds > 0
+
+    async def test_window_rollover_refills_budget(self) -> None:
+        clock = [1000.0]
+        limiter = EmailSendLimiter(limit=2, window_seconds=60, now_fn=lambda: clock[0])
+        assert await limiter.acquire(1) == 0
+        assert await limiter.acquire(1) == 0
+        assert await limiter.acquire(1) > 0
+        clock[0] += 60
+        assert await limiter.acquire(1) == 0
+
+    async def test_orgs_are_isolated(self) -> None:
+        limiter = EmailSendLimiter(limit=1, window_seconds=60, now_fn=lambda: 1000.0)
+        assert await limiter.acquire(1) == 0
+        assert await limiter.acquire(1) > 0
+        assert await limiter.acquire(2) == 0
+
+    async def test_concurrent_acquire_never_overdraws(self) -> None:
+        clock = [1000.0]
+        limiter = EmailSendLimiter(limit=5, window_seconds=3600, now_fn=lambda: clock[0])
+        results = await asyncio.gather(*(limiter.acquire(1) for _ in range(10)))
+        assert sum(1 for r in results if r == 0) == 5
+        assert sum(1 for r in results if r > 0) == 5
+
+    async def test_reset_clears_one_org(self) -> None:
+        clock = [1000.0]
+        limiter = EmailSendLimiter(limit=1, window_seconds=60, now_fn=lambda: clock[0])
+        assert await limiter.acquire(1) == 0
+        assert await limiter.acquire(1) > 0
+        limiter.reset(1)
+        assert await limiter.acquire(1) == 0
+
+    async def test_reset_all_clears_every_org(self) -> None:
+        clock = [1000.0]
+        limiter = EmailSendLimiter(limit=1, window_seconds=60, now_fn=lambda: clock[0])
+        assert await limiter.acquire(1) == 0
+        assert await limiter.acquire(2) == 0
+        limiter.reset()
+        assert await limiter.acquire(1) == 0
+        assert await limiter.acquire(2) == 0
+
+    def test_invalid_constructor_args_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            EmailSendLimiter(limit=0)
+        with pytest.raises(ValueError):
+            EmailSendLimiter(window_seconds=0)
+
+
+class TestIsValidRecipient:
+    def test_accepts_plain_address(self) -> None:
+        assert _is_valid_recipient("admin@example.com")
+        assert _is_valid_recipient("user.name+tag@sub.example.co.uk")
+
+    def test_rejects_missing_at(self) -> None:
+        assert not _is_valid_recipient("admin")
+        assert not _is_valid_recipient("admin@")
+
+    def test_rejects_header_injection(self) -> None:
+        assert not _is_valid_recipient("admin@example.com\r\nBcc: victim@example.com")
+        assert not _is_valid_recipient("admin@example.com\nBcc: victim@example.com")
+
+    def test_rejects_display_name_and_brackets(self) -> None:
+        assert not _is_valid_recipient('"Admin" <admin@example.com>')
+        assert not _is_valid_recipient("Admin <admin@example.com>")
+
+    def test_rejects_urls_and_paths(self) -> None:
+        assert not _is_valid_recipient("https://example.com")
+        assert not _is_valid_recipient("/etc/passwd@example.com")
+
+    def test_rejects_multiple_recipients(self) -> None:
+        assert not _is_valid_recipient("a@example.com, b@example.com")
+        assert not _is_valid_recipient("a@example.com; b@example.com")
+
+    def test_rejects_empty_and_whitespace(self) -> None:
+        assert not _is_valid_recipient("")
+        assert not _is_valid_recipient("   ")
+
+    def test_rejects_oversized_address(self) -> None:
+        assert not _is_valid_recipient(f"{'a' * 400}@example.com")
