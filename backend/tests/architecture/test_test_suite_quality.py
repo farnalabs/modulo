@@ -86,6 +86,14 @@ regression that silently weakens the suite:
 - ``assert bool(x)`` / ``assert not bool(x)`` — ``bool()`` is a no-op inside an
   ``assert``, which already tests truthiness (and inverts it under ``not``);
   the wrapper adds noise without changing the outcome
+- ``assert not (a == b)`` / ``assert not (a in b)`` / ``assert not (a is b)`` —
+  negating a single comparison with ``not`` instead of writing the positive
+  mirror (``assert a != b``, ``assert a not in b``, ``assert a is not b``).
+  A ``not``-wrapped comparison reports the *negation* of a comparison in the
+  failure diff, where the mirrored operator reads the intent directly; it is
+  also the exact class of expression ruff's SIM201/SIM202 flags. ``not``
+  applied to a ``BoolOp`` (De Morgan compound) is left alone — that is the
+  intentional "none of these hold" idiom.
 - ``assert x == set()`` / ``assert x != list()`` against a zero-argument
   builtin call that always produces an empty container (``list()``,
   ``dict()``, ``set()``, ``tuple()``, ``bytes()``, ``bytearray()``,
@@ -2228,3 +2236,103 @@ def test_redundant_bool_lens_flags_noop_wrappers():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _redundant_bool_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+_NEGATED_COMPARISON_MIRRORS = {
+    ast.Eq: "!=",
+    ast.NotEq: "==",
+    ast.In: "not in",
+    ast.NotIn: "in",
+    ast.Is: "is not",
+    ast.IsNot: "is",
+}
+"""Operator -> preferred positive mirror for a negated single comparison."""
+
+
+def _negated_comparison_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert not (a <op> b)``
+    where ``not`` negates a single comparison instead of the comparison being
+    written with the mirrored operator (``!=``/``==``/``not in``/``in``/
+    ``is not``/``is``). ``not`` over a ``BoolOp`` (De Morgan compound such as
+    ``not (a == 1 and b == 2)``) is deliberately left alone — it is the
+    intentional "none of these hold" idiom and the mirrored form is a
+    different expression."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)):
+            continue
+        operand = test.operand
+        if not (isinstance(operand, ast.Compare) and len(operand.ops) == 1):
+            continue
+        op = operand.ops[0]
+        mirror = _NEGATED_COMPARISON_MIRRORS.get(type(op))
+        if mirror is None:
+            continue
+        prefer = f"assert {ast.unparse(operand.left)} {mirror} {ast.unparse(operand.comparators[0])}"
+        found.append((node.lineno, f"{ast.unparse(test)} — prefer '{prefer}'"))
+    return found
+
+
+def test_no_negated_comparison_asserts():
+    """``assert not (a == b)`` negates a single comparison when the positive
+    mirror — ``assert a != b`` — reads the intent directly. Wrapping the
+    comparison in ``not`` makes pytest report a negated boolean in the failure
+    diff (``assert not False``) instead of naming the two values that were
+    compared, and it is the exact class of expression ruff's SIM201/SIM202
+    flags (SIM201: ``assert not a == b`` -> ``assert a != b``; SIM202:
+    ``assert not a != b`` -> ``assert a == b``). The ``in``/``is`` mirrors are
+    the membership/identity twins (``assert a not in b``, ``assert a is not
+    b``). ``not`` over a compound ``BoolOp`` is left alone: ``assert not
+    (a == 1 and b == 2)`` is the intentional "none of these hold" idiom and
+    the existing compound-``and`` lens deliberately exempts it from splitting."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _negated_comparison_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} negated single-comparison assertion(s).\n"
+        "Write the comparison with the mirrored operator instead of wrapping it "
+        "in not: 'assert a != b' / 'assert a not in b' / 'assert a is not b'.\n" + "\n".join(violations)
+    )
+
+
+def test_negated_comparison_lens_flags_reversed_asserts():
+    """Synthetic positive/negative control for the negated-comparison lens:
+    must flag ``not``-wrapped ``==``/``!=``/``in``/``not in``/``is``/``is not``
+    comparisons (each with the correct preferred mirror) and ignore plain
+    truthiness negations, negated compounds, ``not`` over other operators, and
+    comparisons written with the mirrored operator already."""
+    positive_sources = [
+        ("def test_foo():\n    assert not (a == b)\n", "assert a != b"),
+        ("def test_foo():\n    assert not (a != b)\n", "assert a == b"),
+        ("def test_foo():\n    assert not (a in b)\n", "assert a not in b"),
+        ("def test_foo():\n    assert not (a not in b)\n", "assert a in b"),
+        ("def test_foo():\n    assert not (a is b)\n", "assert a is not b"),
+        ("def test_foo():\n    assert not (a is not b)\n", "assert a is b"),
+        ("def test_foo():\n    assert not (result.value == expected)\n", "assert result.value != expected"),
+    ]
+    for source, prefer in positive_sources:
+        tree = ast.parse(source)
+        violations = _negated_comparison_assert_violations(tree)
+        assert violations, f"lens should flag:\n{source}"
+        assert prefer in violations[0][1], f"lens should suggest '{prefer}' for:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert a == b\n",
+        "def test_foo():\n    assert a != b\n",
+        "def test_foo():\n    assert a\n",
+        "def test_foo():\n    assert not a\n",
+        "def test_foo():\n    assert not (a == 1 and b == 2)\n",
+        "def test_foo():\n    assert not (a < b)\n",
+        "def test_foo():\n    assert not a or b\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _negated_comparison_assert_violations(tree), f"lens should NOT flag:\n{source}"
