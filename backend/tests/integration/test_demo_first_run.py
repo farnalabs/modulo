@@ -348,14 +348,6 @@ async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url:
         _email, display_name = row
         assert display_name == "Demo User"
 
-    # Clean up the seed-created user to avoid cross-test contamination
-    async with db_engine.connect() as conn:
-        await _delete_demo_accounts(conn)
-        await conn.commit()
-
-    deps._engine = None
-    deps._session_factory = None
-
     async with db_engine.connect() as conn:
         result = await conn.execute(
             text(
@@ -375,6 +367,9 @@ async def test_seed_demo_data_runs_to_completion(db_engine: AsyncEngine, db_url:
     async with db_engine.connect() as conn:
         await _delete_demo_accounts(conn)
         await conn.commit()
+
+    deps._engine = None
+    deps._session_factory = None
 
 
 async def test_seed_demo_data_skipped_when_disabled(db_engine: AsyncEngine, db_url: str) -> None:
