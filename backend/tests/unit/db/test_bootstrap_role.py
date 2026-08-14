@@ -253,7 +253,7 @@ class TestIntrospection:
         assert await _existing_columns(conn, "accounts") == {"id", "email", "password_hash"}
 
     async def test_existing_columns_empty_table_returns_empty_set(self, conn: _FakeConn) -> None:
-        assert await _existing_columns(conn, "accounts") == set()
+        assert not await _existing_columns(conn, "accounts")
 
 
 # ---------------------------------------------------------------------------

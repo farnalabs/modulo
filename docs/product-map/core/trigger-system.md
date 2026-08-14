@@ -7,6 +7,12 @@ bdd:
   - backend/tests/bdd/features/pipelines/scheduling.feature
   - backend/tests/bdd/features/triggers/polling.feature
   - backend/tests/bdd/features/triggers/pause.feature
+  - backend/tests/bdd/features/triggers/manual.feature
+  - backend/tests/bdd/features/triggers/cron.feature
+  - backend/tests/bdd/features/triggers/agent_signal.feature
+  - backend/tests/bdd/features/triggers/flood_protection.feature
+  - backend/tests/bdd/features/triggers/ongoing.feature
+  - backend/tests/bdd/features/triggers/trigger_event_log.feature
 code:
   - backend/src/modulo/api/routes/triggers.py
   - backend/src/modulo/api/routes/admin_triggers.py
@@ -21,12 +27,15 @@ code:
 depends-on: [feat-connectors-hub, feat-core-pipeline-execution]
 unit-tests:
   - backend/tests/unit/trigger_engine/test_trigger_engine.py
+  - backend/tests/unit/trigger_engine/test_agent_signal.py
   - backend/tests/unit/trigger_engine/test_polling.py
   - backend/tests/unit/trigger_engine/test_polling_connector_drift.py
   - backend/tests/unit/trigger_engine/test_slack_app_mention.py
   - backend/tests/unit/api/test_triggers_endpoint.py
   - backend/tests/unit/api/test_slack_trigger_endpoint.py
   - backend/tests/bdd/steps/test_cron_triggers.py
+  - backend/tests/bdd/steps/test_agent_signal.py
+  - backend/tests/bdd/steps/test_ongoing_triggers.py
   - backend/tests/bdd/steps/test_polling_triggers.py
   - backend/tests/unit/api/test_admin_triggers.py
   - backend/tests/unit/api/test_webhooks_endpoint.py
@@ -153,6 +162,18 @@ concurrency management via `max_concurrent_runs`.
 - [x] Multiple agent_signal triggers can fire from a single node completion (org-scoped query returns all matching triggers)
 - [x] TriggerEvent logged with `trigger_type='agent_signal'` and result `signal_fired`
 
+### Ongoing Trigger
+
+- [x] `trigger_type='ongoing'` keeps a pipeline topped up to a target number of in-flight runs
+- [x] `PATCH /triggers/{id}/ongoing` validates config via the shared `validate_ongoing_config` helper (`daily_spend_limit` required > 0, `target` in 1..20, `scan_interval_seconds` >= 60 tick)
+- [x] `max_concurrent_runs` treated as the target upper bound (validated 1..20 via `ck_triggers_ongoing_target_range`)
+- [x] In-flight count (`_count_ongoing_runs`) includes pending runs toward the target
+- [x] Below target → top-up creates runs referencing the ongoing trigger
+- [x] At/above target → no top-up
+- [x] Daily spend limit respected before run creation
+- [x] Org pause respected — no top-up on a paused org
+- [x] `in_flight` surfaced on trigger detail/list responses for ongoing triggers
+
 ### Org-wide Pause (Kill-Switch)
 
 - [x] Org-wide pause toggle at `PUT /api/v1/admin/orgs/{org_id}/triggers/pause` — admin-only (`org.triggers.pause.manage`), `kill_switch_eligible=False` so the authz kill-switch cannot lift it
@@ -232,7 +253,8 @@ concurrency management via `max_concurrent_runs`.
 - BDD feature file `webhook_trigger.feature` has 5 scenarios all tagged `@awaiting-implementation` — no executable BDD coverage exists for webhook triggers
 - BDD `scheduling.feature` has 5 cron scenarios but zero polling scenarios — executable polling BDD lives in `triggers/polling.feature` (9 scenarios, wired)
 - `_build_polling_connector()` is a standalone copy of `connector_hub._build_connector()` — drifts as connector hub gains new types (41+ types registered vs 6 in polling)
-- Agent signal triggers have no BDD or unit test coverage for the `fire_agent_signal()` function
+- (Resolved) Agent signal triggers had no BDD or unit test coverage for the `fire_agent_signal()` function — now covered by `triggers/agent_signal.feature` (9 scenarios, wired via `steps/test_agent_signal.py`) and `unit/trigger_engine/test_agent_signal.py`
+- (Resolved) Ongoing trigger config validation had zero direct coverage — now covered by `unit/core/test_trigger_validation.py` (39 tests) plus `triggers/ongoing.feature` (6 scenarios, wired via `steps/test_ongoing_triggers.py`)
 - `list_trigger_events` in `triggers.py` uses a separate count query — not DRY with admin version
 - `snapshot_id` falls back to `uuid.UUID(int=0)` in polling/agent_signal/cron — may create runs against latest snapshot instead of intended one
 - Polling trigger has no `retain_payload` equivalent (webhook has it for replay)
