@@ -11,8 +11,9 @@ No live Postgres here (integration territory) — instead:
 * ``0095_ongoing_trigger_flag`` registers the flag inactive (default OFF);
   main's ``0096_hitl_claims_overdue_notified`` sits on top of it;
   ``0097_ongoing_trigger_enabled_by_default`` flips it active (default ON).
-* ``0098_slack_app_mention_trigger_type`` (FAR-57) is confirmed as the single
-  head of the chain, sitting on top of ``0097_ongoing_trigger_enabled_by_default``.
+* ``0098_slack_app_mention_trigger_type`` (FAR-57) sits on top of
+  ``0097_ongoing_trigger_enabled_by_default``; the chain head is the FAR-208
+  ``0099_guardrails`` migration added by this branch.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ _MIGRATION_0095 = "0095_ongoing_trigger_flag"
 _MIGRATION_0096 = "0096_hitl_claims_overdue_notified"
 _MIGRATION_0097 = "0097_ongoing_trigger_enabled_by_default"
 _MIGRATION_0098 = "0098_slack_app_mention_trigger_type"
+_MIGRATION_0099 = "0099_guardrails"
 
 _VERSIONS_DIR = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 
@@ -134,12 +136,13 @@ class TestMigration0095OngoingFlag:
         chain = {rev.revision for rev in script.walk_revisions()}
         assert migration_0095.revision in chain
         # 0095 is superseded as the head by 0097_ongoing_trigger_enabled_by_default,
-        # which is itself superseded by 0098_slack_app_mention_trigger_type.
+        # which is itself superseded by 0098_slack_app_mention_trigger_type, which
+        # is superseded by this branch's FAR-208 head 0099_guardrails.
         heads = script.get_heads()
         assert migration_0095.revision not in heads
         assert migration_0096.revision not in heads
-        assert heads == ["0098_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
-        assert _MIGRATION_0098 in heads
+        assert heads == [_MIGRATION_0099], f"expected a single head, got {heads}"
+        assert _MIGRATION_0098 not in heads
 
     def test_0096_revises_0095(self, migration_0096: ModuleType) -> None:
         assert migration_0096.down_revision == "0095_ongoing_trigger_flag"
@@ -157,9 +160,10 @@ class TestMigration0097OngoingFlagEnabled:
     def test_single_head_chain(self, migration_0097: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        # 0097 is superseded as the head by 0098_slack_app_mention_trigger_type.
+        # 0097 is superseded as the head by 0098_slack_app_mention_trigger_type,
+        # which is superseded by this branch's FAR-208 head 0099_guardrails.
         assert migration_0097.revision not in heads
-        assert heads == ["0098_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
+        assert heads == [_MIGRATION_0099], f"expected a single head, got {heads}"
 
     def test_flag_flips_ongoing_trigger_active(self, migration_0097: ModuleType) -> None:
         assert "ongoing_trigger" in migration_0097._FLAGS
@@ -184,8 +188,10 @@ class TestMigration0098SlackAppMention:
     def test_single_head_chain(self, migration_0098: ModuleType) -> None:
         script = _script()
         heads = script.get_heads()
-        assert heads == ["0098_slack_app_mention_trigger_type"], f"expected a single head, got {heads}"
-        assert migration_0098.revision in heads
+        # 0098 is no longer the head — this branch's FAR-208 migration
+        # 0099_guardrails revises it and is the single head of the chain.
+        assert migration_0098.revision not in heads
+        assert heads == [_MIGRATION_0099], f"expected a single head, got {heads}"
 
     def test_upgrade_widens_both_checks_with_slack_app_mention(self, migration_0098: ModuleType) -> None:
         source = _source(migration_0098)

@@ -8622,6 +8622,10 @@ export interface components {
             name: string;
             /** Eval Type */
             eval_type: string;
+            /** Config Json */
+            config_json?: {
+                [key: string]: unknown;
+            };
             /**
              * Failure Behaviour
              * @default warn

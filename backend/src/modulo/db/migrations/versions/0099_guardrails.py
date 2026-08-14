@@ -40,8 +40,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
-from sqlalchemy import Boolean, text
 
 revision: str = "0099_guardrails"
 down_revision: str | None = "0098_slack_app_mention_trigger_type"
@@ -83,7 +83,7 @@ def _audit_pre_existing_eval_types() -> None:
     CHECK would only trap after the fact. Fail with a precise report instead.
     """
     bind = op.get_bind()
-    rows = bind.execute(text("SELECT DISTINCT eval_type FROM eval_definitions")).fetchall()
+    rows = bind.execute(sa.text("SELECT DISTINCT eval_type FROM eval_definitions")).fetchall()
     offending = sorted({str(row[0]) for row in rows if str(row[0]) not in _ALLOWED_EVAL_TYPES})
     if offending:
         raise RuntimeError(
@@ -103,7 +103,7 @@ def upgrade() -> None:
     else:
         _recreate_check_other("eval_definitions", _CHECK_NAME, f"eval_type IN ({_EVAL_VALUES_POST})")
 
-    op.add_column("eval_results", op.Column("observed", Boolean, nullable=False, server_default="false"))
+    op.add_column("eval_results", sa.Column("observed", sa.Boolean, nullable=False, server_default=sa.text("false")))
 
 
 def downgrade() -> None:
@@ -112,7 +112,7 @@ def downgrade() -> None:
     # row that exists at downgrade time becomes a plain regex eval instead of
     # being destroyed).
     bind = op.get_bind()
-    bind.execute(text("UPDATE eval_definitions SET eval_type='regex' WHERE eval_type='guardrail'"))
+    bind.execute(sa.text("UPDATE eval_definitions SET eval_type='regex' WHERE eval_type='guardrail'"))
 
     if _is_postgres():
         _recreate_check_postgres("eval_definitions", _CHECK_NAME, f"eval_type IN ({_EVAL_VALUES_PRE})")
