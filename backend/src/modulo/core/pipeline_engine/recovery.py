@@ -26,7 +26,9 @@ class RecoveryNotAllowedError(RuntimeError):
     """Raised when the run state does not permit recovery."""
 
     def __init__(self, run_id: uuid.UUID, status: str) -> None:
-        super().__init__(f"Run {run_id} is in status {status!r} — recovery requires 'failed' or 'awaiting_human'")
+        super().__init__(
+            f"Run {run_id} is in status {status!r} — recovery requires 'failed', 'awaiting_human', or 'eval_failed'"
+        )
         self.run_id = run_id
         self.status = status
 
@@ -57,7 +59,30 @@ class ConcurrentRecoveryError(RuntimeError):
         self.run_id = run_id
 
 
-_RECOVERABLE_STATUSES = frozenset({"failed", "awaiting_human"})
+class GuardrailOverrideError(RuntimeError):
+    """Raised when a guardrail override is not permitted for the run."""
+
+    def __init__(self, run_id: uuid.UUID, reason: str) -> None:
+        super().__init__(f"Guardrail override refused for run {run_id}: {reason}")
+        self.run_id = run_id
+        self.reason = reason
+
+
+class GuardrailOverrideRejectedError(GuardrailOverrideError):
+    """Raised when the override's supplied input still violates a guardrail.
+
+    The override re-runs the guardrail pass on the operator-supplied input
+    (re-block safe default) — a still-violating input never flips the run back
+    to pending. The run stays terminal ``eval_failed``.
+    """
+
+    def __init__(self, run_id: uuid.UUID, guardrail_name: str, detail: str) -> None:
+        super().__init__(run_id, f"input still violates guardrail {guardrail_name!r}: {detail}")
+        self.guardrail_name = guardrail_name
+        self.detail = detail
+
+
+_RECOVERABLE_STATUSES = frozenset({"failed", "awaiting_human", "eval_failed"})
 
 
 async def recover_node(
@@ -184,6 +209,140 @@ async def recover_node(
             "run_id": str(run_id),
             "node_id": node_id,
             "action": "skip" if input_data is None else "replay",
+        },
+    )
+
+    return run
+
+
+async def guardrail_override(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    input_data: dict[str, Any],
+    actor_id: uuid.UUID | None = None,
+) -> Run:
+    """Remediate a guardrail-blocked run with operator-supplied input.
+
+    Guardrail remediation is an EXTENSION of :func:`recover_node` (FAR-208
+    item 6). A guardrail block is TERMINAL ``eval_failed`` with NO HITL gate
+    (deliver_manual is 404 on such runs — see the guardrails spike tests), so
+    the ONLY remediation is this override:
+
+    1. Pipeline ``FOR UPDATE`` lock + optimistic status UPDATE (single-flight
+       by run_id) — mirrors ``recover_node``.
+    2. The override RE-RUNS the guardrail pass on the operator-supplied input
+       (re-block safe default): a still-violating input raises
+       :class:`GuardrailOverrideRejectedError` and the run STAYS terminal.
+    3. On clean input the run flips ``eval_failed -> pending`` with the
+       POST-redaction payload persisted, ``is_replay=True`` (so lifecycle-map
+       journeys increment EXACTLY ONCE on the re-dispatch), and a
+       ``guardrail.override`` audit event.
+
+    The caller re-dispatches the pending run with ``execute_run`` (from run
+    start — the blocked run never executed, so there is no checkpoint to
+    resume). ``is_replay=True`` makes the re-dispatch detection-only.
+
+    Raises:
+        GuardrailOverrideError — run is not a guardrail-blocked terminal run.
+        GuardrailOverrideRejectedError — supplied input still violates a guardrail.
+        ConcurrentRecoveryError — another override won the race.
+    """
+    run = await get_run(session, run_id)
+    if run is None:
+        raise GuardrailOverrideError(run_id, "run not found")
+
+    await session.execute(select(Pipeline).where(Pipeline.id == run.pipeline_id).with_for_update())
+
+    run = await get_run(session, run_id)
+    if run is None:
+        raise GuardrailOverrideError(run_id, "run not found")
+    if run.status != "eval_failed" or run.error_code != "eval_blocked":
+        raise GuardrailOverrideError(
+            run_id, f"status={run.status!r} error_code={run.error_code!r} (expected eval_failed/eval_blocked)"
+        )
+
+    # Re-run the guardrail pass on the operator-supplied input BEFORE flipping
+    # the run (re-block safe default). Persisted state is post-redaction.
+    from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails import GuardrailInterceptionOutcome, run_interception_pass, to_engine_definition
+    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+
+    guardrail_rows = (
+        (
+            await session.execute(
+                select(EvalDefinitionModel).where(
+                    EvalDefinitionModel.pipeline_id == run.pipeline_id,
+                    EvalDefinitionModel.organisation_id == org_id,
+                    EvalDefinitionModel.eval_type == "guardrail",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    guardrail_defs = [to_engine_definition(row) for row in guardrail_rows]
+    outcome: GuardrailInterceptionOutcome = run_interception_pass(
+        EvalEngine(),
+        guardrail_defs,
+        input_data,
+        detection_only=False,
+    )
+    if outcome.blocked:
+        raise GuardrailOverrideRejectedError(
+            run_id,
+            outcome.blocking_eval_name or "<guardrail>",
+            outcome.block_message,
+        )
+
+    # Optimistic status UPDATE — a concurrent override loses the WHERE match.
+    new_status = "pending"
+    stmt = (
+        update(Run)
+        .where(
+            Run.id == run_id,
+            Run.status == "eval_failed",
+            Run.error_code == "eval_blocked",
+        )
+        .values(status=new_status)
+        .returning(Run.id)
+    )
+    locked_result = await session.execute(stmt)
+    locked_id = locked_result.scalar_one_or_none()
+    if locked_id is None:
+        raise ConcurrentRecoveryError(run_id)
+
+    run.status = new_status
+    run.error_code = None
+    run.error_detail = None
+    run.input_payload = outcome.payload
+    run.is_replay = True
+    await session.flush()
+
+    try:
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type="guardrail.override",
+            actor_user_id=actor_id,
+            resource_type="run",
+            resource_id=run_id,
+            payload_json={
+                "node_id": None,
+                "action": "override",
+                "is_replay": True,
+            },
+        )
+    except Exception:
+        _log.exception("Failed to record guardrail override audit event for run %s", run_id)
+
+    _log.info(
+        "guardrail.override.applied",
+        extra={
+            "run_id": str(run_id),
+            "action": "override",
+            "is_replay": True,
         },
     )
 
