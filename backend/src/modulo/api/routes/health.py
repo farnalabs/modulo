@@ -62,8 +62,15 @@ _STALE_PROBE_LIMIT = 4
 _consecutive_stale_probes: int = 0
 
 # dispatcher_reconcile runs on a 60s system-cron tick; a last_run_at older
-# than 60s means at least one tick was missed -> report "stale" (advisory).
+# than 60s means at least one tick was missed -> report "stale" (degraded).
+# FAR-199 two-tier gate: staleness past _RECONCILE_UNAVAILABLE_SECONDS (5 min
+# — 5x the cadence) flips the check to "unavailable" so readiness 503s. A
+# single missed tick must never block bluegreen, so the degraded tier stays
+# advisory; a reconcile stale 5+ minutes means the system worker's cron is
+# silently dead (a wedged worker fleet that can no longer terminalize
+# stalled/never-dispatched runs), which MUST block readiness.
 _RECONCILE_STALE_SECONDS = 60
+_RECONCILE_UNAVAILABLE_SECONDS = 300
 
 # stale_run_recovery (D1): the legacy sweep runs every 5 min on the system
 # worker and persists its outcome to this Redis key (saq_worker wraps the sweep
@@ -463,7 +470,7 @@ async def _check_saq_workers() -> CheckResult:
 
 
 async def _check_dispatcher_reconcile() -> CheckResult:
-    """ADVISORY — last dispatcher_reconcile outcome (never gates readiness).
+    """dispatcher_reconcile liveness — two-tier gate (FAR-199).
 
     The dispatcher_reconcile system cron runs in the SYSTEM WORKER process
     (PR dist/separate-workers: workers on ``worker`` machines, uvicorn on
@@ -471,9 +478,17 @@ async def _check_dispatcher_reconcile() -> CheckResult:
     here. This check reads the shared Redis key the cron persists every tick —
     "never run" now means the cron genuinely has not run (or its persistence
     failed). Fail-open on Redis read errors (never degrade a healthy machine on
-    a transient read). Stale-while-running: a last_run_at older than the 60s
-    cadence reports "stale" (degraded) to alert operators while the app remains
-    healthy — a stale reconcile does not block bluegreen.
+    a transient read).
+
+    Tiering (FAR-199): the dispatcher gates readiness ONLY at its unavailable
+    tier. A last_run_at older than the 60s cadence reports "stale" (degraded)
+    to alert operators while the app remains healthy — a single missed tick
+    must not block bluegreen. A last_run_at older than
+    ``_RECONCILE_UNAVAILABLE_SECONDS`` (5 min — 5x the cadence, far beyond a
+    transient tick gap) means the system worker's reconcile is silently dead:
+    a wedged worker fleet can no longer terminalize stalled / never-dispatched
+    runs, so the machine must NOT pass readiness and bluegreen must not cut
+    over. The readiness aggregation 503s on this check's "unavailable" status.
     """
     settings = get_settings()
     r: aioredis.Redis | None = None
@@ -491,17 +506,29 @@ async def _check_dispatcher_reconcile() -> CheckResult:
                 await r.aclose()
 
     if not stats or stats.get("last_run_at") is None:
-        return CheckResult(status="degraded", detail="dispatcher_reconcile has never run")
+        return CheckResult(
+            status="unavailable",
+            detail="dispatcher_reconcile has never run (system worker cron dead or stats persistence failing)",
+        )
     try:
         last_run = datetime.fromisoformat(stats["last_run_at"])
     except (ValueError, TypeError):
         return CheckResult(status="degraded", detail="dispatcher_reconcile last_run_at unparsable")
     stale_seconds = (datetime.now(UTC) - last_run).total_seconds()
+    if stale_seconds > _RECONCILE_UNAVAILABLE_SECONDS:
+        return CheckResult(
+            status="unavailable",
+            detail=(
+                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run, "
+                f"last_run_at={stats['last_run_at']}); {_format_reconcile_detail(stats)}"
+            ),
+        )
     if stale_seconds > _RECONCILE_STALE_SECONDS:
         return CheckResult(
             status="degraded",
             detail=(
-                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run); {_format_reconcile_detail(stats)}"
+                f"dispatcher_reconcile stale ({stale_seconds:.0f}s since last run, "
+                f"last_run_at={stats['last_run_at']}); {_format_reconcile_detail(stats)}"
             ),
         )
     return CheckResult(
@@ -729,7 +756,11 @@ async def readiness(response: Response) -> ReadinessResponse:
         # ADVISORY only — excluded from the aggregate so a break-glass config
         # warning never degrades readiness (plan §3 watchdog reduction).
         "break_glass": bg_check,
+        # FAR-199: dispatcher_reconcile gates readiness at its "unavailable"
+        # tier only (see the aggregation below); its "degraded" tier stays
+        # advisory so a single missed reconcile tick never blocks bluegreen.
         "dispatcher_reconcile": dr_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
         "stale_run_recovery": srr_check,
     }
 
@@ -742,7 +773,14 @@ async def readiness(response: Response) -> ReadinessResponse:
         saq_check.status,
         cron_check.status,
     ]
-    if "unavailable" in statuses:
+    # FAR-199: dispatcher_reconcile gates readiness ONLY at its "unavailable"
+    # tier — reconcile stale past _RECONCILE_UNAVAILABLE_SECONDS means the
+    # system worker's cron is silently dead (a wedged worker fleet that would
+    # silently accumulate executor_stalled / never_dispatched runs), so
+    # bluegreen must not cut over. Its "degraded" tier (a single missed 60s
+    # tick) stays advisory and is deliberately excluded from the degraded
+    # aggregation — short staleness must never flip readiness.
+    if "unavailable" in statuses or dr_check.status == "unavailable":
         overall: Literal["ok", "degraded", "unavailable"] = "unavailable"
         response.status_code = 503
     elif "degraded" in statuses:

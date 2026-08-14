@@ -66,14 +66,17 @@ def _fresh_payload(**overrides: Any) -> str:
 
 class TestCheckDispatcherReconcile:
     @pytest.mark.asyncio
-    async def test_never_run_degraded(self) -> None:
+    async def test_never_run_unavailable(self) -> None:
+        """FAR-199: a reconcile that has never run (Redis reachable, key
+        missing) is unavailable — the system-worker cron is dead or its stats
+        persistence failed, so readiness must gate rather than cut over."""
         fake = _FakeStatsRedis(blob=None)
         with (
             patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
             patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
         ):
             result = await _check_dispatcher_reconcile()
-        assert result.status == "degraded"
+        assert result.status == "unavailable"
         assert "has never run" in result.detail
 
     @pytest.mark.asyncio
@@ -89,7 +92,9 @@ class TestCheckDispatcherReconcile:
 
     @pytest.mark.asyncio
     async def test_stale_run_degraded(self) -> None:
-        stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=300)).isoformat())
+        """One-missed-tick staleness (120s, below the 300s unavailable tier) is
+        degraded, not unavailable — short staleness stays advisory (FAR-199)."""
+        stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat())
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
             patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
@@ -98,6 +103,29 @@ class TestCheckDispatcherReconcile:
             result = await _check_dispatcher_reconcile()
         assert result.status == "degraded"
         assert "stale" in result.detail
+        assert "last_run_at=" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_long_stale_unavailable(self) -> None:
+        """FAR-199: reconcile stale past the 300s unavailable tier (6 min) is
+        unavailable and carries the reconcile detail (last_run_at, scanned) so
+        the wedge symptom is visible in /healthz/ready output."""
+        stale = _fresh_payload(
+            last_run_at=(datetime.now(UTC) - timedelta(minutes=6)).isoformat(),
+            scanned=7,
+            repaired=3,
+        )
+        fake = _FakeStatsRedis(blob=stale.encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "unavailable"
+        assert "stale" in result.detail
+        assert "last_run_at=" in result.detail
+        assert "scanned=7" in result.detail
+        assert "repaired=3" in result.detail
 
     @pytest.mark.asyncio
     async def test_unparsable_last_run_at_degraded(self) -> None:

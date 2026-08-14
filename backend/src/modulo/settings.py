@@ -175,8 +175,14 @@ class Settings(BaseSettings):
     # where the worker process itself is wedged and cannot run the watchdog).
     # MUST exceed the pipeline's max node timeout so a legitimate long first
     # node (which writes its first checkpoint only after completing) is never
-    # failed. Default 45 min > the 1800s node timeout used by agent pipelines.
-    saq_claimed_nodeless_minutes: int = Field(default=45, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
+    # failed. Default 35 min > the 1800s node timeout used by agent pipelines
+    # (5 min margin for graph compile + reconcile tick cadence). Reduced from
+    # 45 min by FAR-199: a wedged worker fleet left claimed-but-nodeless runs
+    # 'running' for the whole window (observed executor_stalled /
+    # never_dispatched runs sitting 45-70 min before terminalization); 35 min
+    # bounds that accumulation while staying above the max node timeout so a
+    # slow-but-healthy first node is never false-failed. Tunable per deploy.
+    saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     # KEPT at 10 after budget verification (2026-08-06). Verified against the
     # deployed Postgres (modulo-app-db, Fly Postgres 17.9):
