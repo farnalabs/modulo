@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # Ed25519 public key (hex) for license signature verification.
     # Defaults to dev/test key — set MODULO_LICENSE_PUBLIC_KEY in production.
     modulo_license_public_key: str = Field("")
-    # Ed25519 private key (hex) used to SIGN enterprise license keys issued via
+    # Ed25519 private key (hex) used to SIGN team license keys issued via
     # the admin license-issue endpoint and the Stripe purchase fulfilment
     # webhook (FAR-179). Empty (default) disables issuance — signing fails
     # closed until the operator configures it.
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # SSO / OIDC — JSON array of {provider_id, client_id, client_secret, discovery_url}
     modulo_oidc_providers: str = Field("[]")
 
-    # SSO / SAML 2.0 (enterprise, requires license key)
+    # SSO / SAML 2.0 (team tier, requires license key)
     modulo_saml_enabled: bool = Field(False)
     modulo_saml_idp_metadata_url: str = Field("")
     modulo_saml_idp_metadata_xml: str = Field("")
@@ -175,8 +175,14 @@ class Settings(BaseSettings):
     # where the worker process itself is wedged and cannot run the watchdog).
     # MUST exceed the pipeline's max node timeout so a legitimate long first
     # node (which writes its first checkpoint only after completing) is never
-    # failed. Default 45 min > the 1800s node timeout used by agent pipelines.
-    saq_claimed_nodeless_minutes: int = Field(default=45, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
+    # failed. Default 35 min > the 1800s node timeout used by agent pipelines
+    # (5 min margin for graph compile + reconcile tick cadence). Reduced from
+    # 45 min by FAR-199: a wedged worker fleet left claimed-but-nodeless runs
+    # 'running' for the whole window (observed executor_stalled /
+    # never_dispatched runs sitting 45-70 min before terminalization); 35 min
+    # bounds that accumulation while staying above the max node timeout so a
+    # slow-but-healthy first node is never false-failed. Tunable per deploy.
+    saq_claimed_nodeless_minutes: int = Field(default=35, alias="SAQ_CLAIMED_NODELESS_MINUTES", ge=5, le=1440)
     # SAQ worker DB pool size (per worker; Postgres budget — F4).
     # KEPT at 10 after budget verification (2026-08-06). Verified against the
     # deployed Postgres (modulo-app-db, Fly Postgres 17.9):

@@ -230,7 +230,8 @@ class TestAfterProcessTaskFailureFacts:
         assert row is not None
         assert row[0] == "failed"
         assert row[1] == "task_failure"
-        assert row[2] is not None and len(row[2]) == 5000, "error_detail truncated to the 5000-codepoint column"
+        assert row[2] is not None
+        assert len(row[2]) == 5000, "error_detail truncated to the 5000-codepoint column"
         assert row[3] is not None, "completed_at is terminal"
 
         async with db_session.begin():

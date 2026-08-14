@@ -52,7 +52,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 |----------|----------|---------|-------------|
 | `MODULO_LICENSE_KEY` | No | – | Base64-encoded signed JSON payload enabling Team-tier features. Verified at startup using the embedded Ed25519 public key. |
 | `MODULO_LICENSE_PUBLIC_KEY` | No | – | Ed25519 public key (hex) for license signature verification. Defaults to dev/test key; set in production. |
-| `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN enterprise license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
+| `MODULO_LICENSE_PRIVATE_KEY` | No | – | Ed25519 private key (hex) used to SIGN team license keys issued via the admin license-issue endpoint and Stripe purchase fulfilment. Empty disables issuance (signing fails closed). |
 
 ---
 
@@ -61,7 +61,7 @@ See [`docs/deployment-security.md`](./deployment-security.md) for key rotation p
 The `POST /api/v1/webhooks/stripe` webhook verifies the `Stripe-Signature`
 header (HMAC-SHA256 over `t=<timestamp>.<body>` with the webhook secret,
 ±300s replay window), then idempotently generates an Ed25519-signed
-enterprise license and emails it to the customer on their first successful
+team license and emails it to the customer on their first successful
 payment (`invoice.paid`). `checkout.session.completed` is treated as a pure
 ack and never fulfils, so a single card-paid purchase (which emits both
 events) issues exactly one license.
@@ -130,7 +130,7 @@ executor – only in-memory rate limiting and an in-memory event broker.
 | `SAQ_RUN_TIMEOUT` | No | `7200` | Per-run execution ceiling; the job must reach a terminal state within this budget (seconds) |
 | `SAQ_RUN_CLAIM_CAP` | No | `20` | Per-claim cap on SAQ claim attempts for `dispatcher='saq'` runs |
 | `SAQ_SETUP_GRACE_SECONDS` | No | `600` | Zombie-run protection: a run must dispatch at least one node within this window or the watchdog fails it |
-| `SAQ_CLAIMED_NODELESS_MINUTES` | No | `45` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed |
+| `SAQ_CLAIMED_NODELESS_MINUTES` | No | `35` | Secondary zombie net: a run still `running` with a fresh heartbeat but zero checkpoints after this many minutes is failed. Reduced from `45` by FAR-199 (bounds wedged-fleet accumulation) — must stay above the 1800s max node timeout so a slow-but-healthy first node is never false-failed |
 | `SAQ_JOB_HEARTBEAT` | No | `300` | SAQ job heartbeat knob (per-job `heartbeat`) |
 | `SAQ_E2B_IDEMPOTENCY` | No | `true` | Per-claim E2B idempotency key `run:{id}:e2b:{claim_token}` |
 | `SAQ_REENQUEUE_WINDOW` | No | `600` | Re-enqueue staleness window for `dispatcher_reconcile` |

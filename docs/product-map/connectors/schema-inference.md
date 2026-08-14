@@ -90,7 +90,7 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [ ] Sample data is discarded after inference completes — not stored in the database
 - [x] Inferred schema is scoped to the org — not shared across orgs (RLS enforced)
 - [x] Connector ACL is enforced: operator must have read access to the connector instance
-- [ ] Schema inference is behind an enterprise feature flag (v1 feature)
+- [ ] Schema inference is behind a team feature flag (v1 feature)
 - [ ] Schema inference runs emit audit events (connector_type, model_backend_id, sample_count)
 
 ## Known Gaps
@@ -104,7 +104,7 @@ LLM-assisted schema draft generation from connected tool data (issue trackers, g
 - [ ] **SandboxedEnvironment for LLM prompt**: PRD requires `SandboxedEnvironment` with structural separators for prompt safety — structural separators + untrusted-data instruction implemented (2026-08-12); Jinja SandboxedEnvironment itself not used (no user-authored template in the inference path)
 - [x] ~~**CRITICAL: Sample data not sanitised before LLM prompt**: raw fields are interpolated with only markdown code-fence separation; PRD requires SandboxedEnvironment with structural separators~~ **RESOLVED 2026-08-12**: sample data is sanitised by `schema_registry/sanitize.py` and rendered between `<<<SAMPLE_DATA>>>` / `<<<END_SAMPLE_DATA>>>` structural separators; the system prompt declares the block untrusted input and forbids following embedded instructions
 - [ ] **No concurrency guard**: multiple concurrent inference requests per connector are not serialised
-- [ ] **No enterprise feature flag on inference endpoint**
+- [ ] **No team feature flag on inference endpoint**
 - [ ] **Connector-type-aware field extraction not implemented**: all connector types use the same generic prompt
 - [ ] **No dedicated BDD feature file for connector-type-aware inference (only generic schema_inference.feature exists)**
 

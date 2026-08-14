@@ -40,7 +40,7 @@ class _AllFeatures:
         return []
 
     def tier(self) -> str:
-        return "enterprise"
+        return "team"
 
     def has_license_key(self) -> bool:
         return True

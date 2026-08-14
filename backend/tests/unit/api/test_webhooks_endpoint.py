@@ -391,6 +391,67 @@ def test_receive_webhook_concurrent_limit_returns_429(client: TestClient) -> Non
     assert resp.status_code == 429
 
 
+def test_receive_webhook_snapshot_lock_busy_returns_202_queued(client: TestClient) -> None:
+    """Concurrent webhook delivery hitting the per-pipeline snapshot advisory
+    lock must 202 + {"status": "queued"} (like the MCP trigger path) instead of
+    falling through to the generic 500 handler. No fabricated run_id."""
+    from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+    with (
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            side_effect=SnapshotLockNotAvailableError("busy"),
+        ),
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": str(int(time.time()))},
+        )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["detail"] == "Pipeline busy — queued for retry"
+    assert body.get("run_id") is None
+    m.assert_not_called()
+    dispatch.assert_not_called()
+
+
+def test_replay_webhook_snapshot_lock_busy_returns_202_queued(client: TestClient) -> None:
+    """Replay hitting the snapshot advisory lock behaves like receive_webhook:
+    202 + {"status": "queued"}, no fabricated run_id, engine never called."""
+    from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+    event_id = uuid.uuid4()
+    with (
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            side_effect=SnapshotLockNotAvailableError("busy"),
+        ),
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["detail"] == "Pipeline busy — queued for retry"
+    assert body.get("run_id") is None
+    m.assert_not_called()
+    dispatch.assert_not_called()
+
+
 def test_replay_webhook_returns_202(client: TestClient) -> None:
     event_id = uuid.uuid4()
     run_mock = _make_mock_run()

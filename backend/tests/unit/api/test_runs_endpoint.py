@@ -604,7 +604,8 @@ def test_run_response_populates_trace_id(client: TestClient) -> None:
     body = resp.json()
     trace_id = body["trace_id"]
     assert isinstance(trace_id, str)
-    assert len(trace_id) == 36  # UUID format
+    assert len(trace_id) == 32  # 32-hex OTel trace id (FAR-198)
+    assert trace_id == uuid.uuid5(uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), _THREAD_ID).hex
 
 
 def test_run_response_trace_id_deterministic(client: TestClient) -> None:
@@ -617,6 +618,36 @@ def test_run_response_trace_id_deterministic(client: TestClient) -> None:
         resp2 = client.get(f"/api/v1/runs/{_RUN_ID}")
 
     assert resp1.json()["trace_id"] == resp2.json()["trace_id"]
+
+
+def test_run_response_trace_url_populated_when_endpoint_configured(client: TestClient) -> None:
+    run = _make_run(status="complete")
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch(
+            "modulo.api.routes.runs._do_get_otel_endpoint",
+            new_callable=AsyncMock,
+            return_value="https://otel.example.com",
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    body = resp.json()
+    assert body["trace_id"]
+    assert body["trace_url"] == f"https://otel.example.com/jaeger/ui/trace/{body['trace_id']}"
+
+
+def test_run_response_trace_url_absent_without_endpoint(client: TestClient) -> None:
+    run = _make_run(status="complete")
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.json()["trace_url"] is None
 
 
 # ---------------------------------------------------------------------------

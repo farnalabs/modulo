@@ -20,8 +20,8 @@ from modulo.core.license import (
     parse_and_verify,
     store_license,
 )
-from modulo.core.license_signing import ENTERPRISE_FEATURES, LicenseSigningError, generate_enterprise_license
-from modulo.core.stripe_fulfilment import email_enterprise_license
+from modulo.core.license_signing import TEAM_FEATURES, LicenseSigningError, generate_team_license
+from modulo.core.stripe_fulfilment import email_team_license
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.models.organisation import Organisation
 from modulo.settings import Settings, get_settings
@@ -221,17 +221,17 @@ async def issue_license(
     settings: Settings = Depends(get_settings),
     _: TenantPrincipal = require_permission("org.license.manage"),
 ) -> LicenseIssueResponse:
-    """Manually issue (sign) an enterprise license key for a customer.
+    """Manually issue (sign) a team license key for a customer.
 
     Uses the same signing service as the Stripe purchase fulfilment webhook.
     When ``email`` is provided, the license key is also emailed to the customer
     via a background task so this request stays fast.
     """
     try:
-        license_key = generate_enterprise_license(
+        license_key = generate_team_license(
             req.org_name,
             term_months=req.term_months,
-            features=req.features if req.features is not None else ENTERPRISE_FEATURES,
+            features=req.features if req.features is not None else TEAM_FEATURES,
             private_key_hex=settings.modulo_license_private_key or None,
         )
     except (LicenseSigningError, ValueError) as exc:
@@ -253,7 +253,7 @@ async def issue_license(
 
     if req.email:
         background_tasks.add_task(
-            email_enterprise_license,
+            email_team_license,
             settings,
             req.email,
             license_key,

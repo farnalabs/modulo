@@ -54,7 +54,7 @@ SAML 2.0 SSO with HTTP-Redirect AuthnRequest, HTTP-POST ACS, IdP metadata parsin
 - [x] Metadata contains correct entityID from `modulo_saml_entity_id`
 - [x] Metadata contains correct ACS Location URL
 
-### Enterprise license gating
+### Team license gating
 
 - [x] SAML login returns 402 when license key is absent
 - [x] SAML ACS returns 402 when license key is absent

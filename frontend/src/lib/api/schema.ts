@@ -712,7 +712,7 @@ export interface paths {
         put?: never;
         /**
          * Issue License
-         * @description Manually issue (sign) an enterprise license key for a customer.
+         * @description Manually issue (sign) a team license key for a customer.
          *
          *     Uses the same signing service as the Stripe purchase fulfilment webhook.
          *     When ``email`` is provided, the license key is also emailed to the customer
@@ -12541,6 +12541,8 @@ export interface components {
             } | null;
             /** Trace Id */
             trace_id?: string | null;
+            /** Trace Url */
+            trace_url?: string | null;
             /** Node Token Usage */
             node_token_usage?: {
                 [key: string]: unknown;

@@ -718,4 +718,70 @@ describe('RunDetailView', () => {
     expect(wrapper.find('[data-testid="run-detail-node-telemetry"]').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('renders a View trace link when trace_url is present', async () => {
+    const wrapper = await mountWithDetail({
+      ...baseDetail(),
+      trace_id: 'abc123',
+      trace_url: 'https://otel.example.com/jaeger/ui/trace/abc123',
+    })
+    const link = wrapper.find('[data-testid="run-detail-view-trace"]')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('https://otel.example.com/jaeger/ui/trace/abc123')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toBe('noopener noreferrer')
+    expect(link.text()).toContain('View trace')
+    wrapper.unmount()
+  })
+
+  it('renders no View trace link when trace_url is absent', async () => {
+    const wrapper = await mountWithDetail({ ...baseDetail(), trace_id: 'abc123' })
+    expect(wrapper.find('[data-testid="run-detail-view-trace"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows the per-node span id from node telemetry in the trace column', async () => {
+    const { api } = await import('../lib/api/client')
+    const originalImpl = (api.GET as any).getMockImplementation()
+    try {
+      ;(api.GET as any).mockImplementation((url: string) => {
+        if (url === '/api/v1/runs/{run_id}') {
+          return Promise.resolve({
+            data: {
+              ...baseDetail(),
+              node_token_usage: { 'node-a': { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+            },
+            error: undefined,
+          })
+        }
+        if (url === '/api/v1/runs/{run_id}/io') {
+          return Promise.resolve({
+            data: {
+              outputs_json: { 'node-a': { result: 'ok' } },
+              node_telemetry: {
+                'node-a': { status: 'complete', otel_span_id: '0123456789abcdef', otel_trace_id: 'zz99' },
+              },
+            },
+            error: undefined,
+          })
+        }
+        return Promise.resolve({ data: null, error: undefined })
+      })
+
+      router.push('/runs/test-run-id')
+      await router.isReady()
+      const wrapper = createWrapper()
+      await nextTick()
+      await flushPromises()
+      await nextTick()
+
+      const nodeTrace = wrapper.find('[data-testid="run-detail-node-trace-id"]')
+      expect(nodeTrace.exists()).toBe(true)
+      expect(nodeTrace.attributes('aria-label')).toBe('Copy node span ID')
+      expect(nodeTrace.text()).toContain('#01234567')
+      wrapper.unmount()
+    } finally {
+      ;(api.GET as any).mockImplementation(originalImpl)
+    }
+  })
 })
