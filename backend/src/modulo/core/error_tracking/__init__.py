@@ -41,6 +41,7 @@ from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotifi
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.system_config import SystemConfig
 from modulo.db.rls import set_rls_org
+from modulo.otel_bridge import trace_id_for_run
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -122,6 +123,21 @@ def signal_fingerprint(signal: str, pipeline_id: uuid.UUID | None) -> str:
     """
     raw = f"{signal}:{pipeline_id}" if pipeline_id is not None else signal
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _run_trace_id(org_id: Any, run_id: Any) -> str | None:
+    """Deterministic OTel trace id for an error event's run (FAR-198).
+
+    Mirrors ``RunResponse.trace_id`` (uuid5 of the run's LangGraph thread id
+    ``{org_id}:{run_id}``) so error events deep-link to the same trace.
+    Fail-open: an unusable org/run id must never break error ingestion.
+    """
+    if run_id is None:
+        return None
+    try:
+        return trace_id_for_run(org_id, run_id)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 async def _create_signal_event(
@@ -471,6 +487,7 @@ async def emit_signal_event(
             "run_group_id": str(run_group_id) if run_group_id is not None else None,
             "attempt_n": attempt_n,
             "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "trace_id": _run_trace_id(org_id, run_id),
         },
         environment=environment,
     )
@@ -575,6 +592,7 @@ async def emit_retry_deferred_alert(
             "reason": reason,
             "elevation_signal": signal,
             "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+            "trace_id": _run_trace_id(org_id, run_id),
         },
         environment=environment,
     )
