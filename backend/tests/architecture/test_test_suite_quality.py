@@ -909,18 +909,46 @@ def test_noop_lens_recognizes_verification_patterns():
 
 _SELF_COMPARISON_OPS = (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 """Comparison operators where ``<operand> OP <identical operand>`` is a
-tautology: ``x == x``/``x <= x``/``x >= x``/``x is x`` always PASS, while
-``x != x``/``x < x``/``x > x``/``x is not x`` always FAIL — regardless of
-what ``x`` evaluates to. Either way the assertion is dead code."""
+tautology in ordinary Python semantics: ``x == x``/``x <= x``/``x >= x``/
+``x is x`` always PASS, while ``x != x``/``x < x``/``x > x``/``x is not x``
+always FAIL, no matter what ``x`` evaluates to. IEEE-754 NaN is the one
+exception (``float('nan') != float('nan')`` is True), so the lens cannot
+claim the outcome is literally constant — what makes a self-comparison dead
+code is that it can never exercise distinct values."""
+
+
+def _self_comparison_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every assertion that compares an
+    operand with a syntactically identical copy of itself."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        if not isinstance(node.ops[0], _SELF_COMPARISON_OPS):
+            continue
+        left, right = node.left, node.comparators[0]
+        if not isinstance(left, (ast.Name, ast.Attribute, ast.Subscript)):
+            continue
+        if ast.dump(left) != ast.dump(right):
+            continue
+        op_name = node.ops[0].__class__.__name__
+        expr = ast.unparse(left)
+        found.append(
+            (node.lineno, f"compares {expr} {op_name} {expr} — identical operands can never exercise distinct values")
+        )
+    return found
 
 
 def test_no_self_comparison_tautology():
     """An assertion comparing a value with *itself* — ``assert x == x``,
     ``assert result.value != result.value``, ``assert row['key'] is row['key']``
-    — is a tautology: it can never exercise the behaviour under test, yet it
-    reports green (or, for ``!=``/``<``/``>``/``is not``, red) no matter how
-    broken the code under test is. These are almost always copy-paste or
-    leftover-debugging artefacts.
+    — is a tautology in ordinary Python semantics: it can never exercise the
+    behaviour under test, yet it reports green (or, for ``!=``/``<``/``>``/
+    ``is not``, red) no matter how broken the code under test is. IEEE-754
+    NaN is the one caveat (``float('nan') == float('nan')`` is False), so the
+    lens targets the deeper invariant: identical operands can never exercise
+    distinct values. These are almost always copy-paste or leftover-debugging
+    artefacts.
 
     The lens only flags syntactically identical operands whose type is a
     variable, attribute path, or subscript — expressions that re-evaluate to
@@ -935,23 +963,41 @@ def test_no_self_comparison_tautology():
         if tree is None:
             continue
         rel = path.relative_to(TESTS)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-                continue
-            if not isinstance(node.ops[0], _SELF_COMPARISON_OPS):
-                continue
-            left, right = node.left, node.comparators[0]
-            if not isinstance(left, (ast.Name, ast.Attribute, ast.Subscript)):
-                continue
-            if ast.dump(left) != ast.dump(right):
-                continue
-            op_name = node.ops[0].__class__.__name__
-            expr = ast.unparse(left)
-            violations.append(
-                f"  {rel}:{node.lineno}  compares {expr} {op_name} {expr} — identical operands, always the same result"
-            )
+        for lineno, detail in _self_comparison_tautologies(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
         f"Found {len(violations)} self-comparison tautolog(ies).\n"
-        "Comparing a value with itself can never fail (or never pass); it is dead code.\n"
+        "Comparing a value with itself can never exercise distinct values; it is dead code.\n"
         "Assert against the expected value instead: 'assert x == <expected>'.\n" + "\n".join(violations)
     )
+
+
+def test_self_comparison_lens_flags_tautologies():
+    """Synthetic positive/negative control for the self-comparison lens,
+    mirroring the no-op lens's verification-pattern test: the lens must flag
+    every syntactically identical self-comparison (variables, attribute
+    paths, subscripts) and ignore comparisons that could involve distinct
+    values or side-effecting calls."""
+    positive_sources = [
+        "def test_foo():\n    assert x == x\n",
+        "def test_foo():\n    assert result.value != result.value\n",
+        "def test_foo():\n    assert row['key'] is row['key']\n",
+        "def test_foo():\n    assert a.b.c <= a.b.c\n",
+        "def test_foo():\n    assert items[0] > items[0]\n",
+        "def test_foo():\n    assert x is not x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _self_comparison_tautologies(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x == y\n",
+        "def test_foo():\n    assert x != y\n",
+        "def test_foo():\n    assert row['a'] is row['b']\n",
+        "def test_foo():\n    assert x == 1\n",
+        "def test_foo():\n    assert len(a) != len(a)\n",
+        "def test_foo():\n    assert signal_fingerprint(a) == signal_fingerprint(a)\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _self_comparison_tautologies(tree), f"lens should NOT flag:\n{source}"
