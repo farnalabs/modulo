@@ -202,7 +202,7 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
     assert body["team_memberships"] == []
     assert body["team_memberships_truncated"] is False
     assert body["preferences"] == {}
-    assert len(body["feature_flags"]) > 0
+    assert body["feature_flags"]
     assert body["plan"]["tier"] == "community"
 
 

@@ -287,7 +287,7 @@ class TestDiffVersions:
         data = resp.json()
         assert data["version_a"] == "v1"
         assert data["version_b"] == "current"
-        assert len(data["lines"]) > 0
+        assert data["lines"]
         types = {line["type"] for line in data["lines"]}
         assert "added" in types or "removed" in types or "unchanged" in types
 

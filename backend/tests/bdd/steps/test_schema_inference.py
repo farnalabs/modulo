@@ -380,7 +380,7 @@ def step_assert_enum_constraint(request):
     assert "status" in properties, f"Field 'status' not found in schema properties: {list(properties.keys())}"
     assert "enum" in properties["status"], f"Field 'status' missing enum constraint: {properties['status']}"
     assert isinstance(properties["status"]["enum"], list)
-    assert len(properties["status"]["enum"]) > 0
+    assert properties["status"]["enum"]
 
 
 @then("the sample query limit defaults to 10")
