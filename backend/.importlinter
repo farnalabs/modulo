@@ -80,6 +80,13 @@ ignore_imports =
     modulo.db.crud.pipeline -> modulo.core.audit_logger
     modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.audit_logger
     modulo.db.session -> modulo.core.audit_logger.append_only
+    # FAR-189 — the shared fenced terminal write (update_run_status / the fenced
+    # variant / transition_run / request_cancellation) invokes the run-outcome
+    # classifier so EVERY terminalizer persists a classification record. Same
+    # cross-boundary wiring category as the audit_logger / composite_engine
+    # exceptions above: db.crud.run exposes the terminal write, classify.py is
+    # the pure decision function.
+    modulo.db.crud.run -> modulo.core.pipeline_engine.classify
 
 [importlinter:contract:connectors-do-not-import-core]
 name = Connectors don't reach into core

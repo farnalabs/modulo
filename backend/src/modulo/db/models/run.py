@@ -186,6 +186,13 @@ class Run(OrgScoped):
     # split-output machinery never touches the marker. Generic JSON here for
     # SQLite/MariaDB parity (the work_item_refs precedent, migration 0083).
     raw_output_markers: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # FAR-189 run-outcome classification (migration 0100) — JSONB column with
+    # shape {value, reason, delivered_pr_urls, computed_at, work_intact,
+    # declared_success_nodes}. UNIQUE(run_id) is the runs PK; the record is
+    # written atomically with terminalization by the shared fenced terminal
+    # write (crud/run) and refreshed (upsert) on re-terminalization. Generic
+    # JSON here for SQLite/MariaDB parity (the raw_output_markers precedent).
+    run_classification: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # Journey / work-item tracking (FAR-142, migration 0083) — additive,
     # nullable, never backfilled. ``work_item_id`` is the chain anchor written
     # ONCE at create (floor id or adopted from the parent run) and NEVER

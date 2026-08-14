@@ -579,6 +579,23 @@ def _json_bind(value: Any) -> str | bytes | None:
     return json.dumps(value)
 
 
+async def _classify_terminal_run(session: AsyncSession, run: Run) -> None:
+    """FAR-189 hook: classify + persist the run-outcome record for a terminal run.
+
+    Best-effort and NEVER raises — a classifier/persist failure is absorbed
+    inside ``classify_and_persist_run`` (an ``unclassified`` marker is written
+    instead), so terminalization is never blocked and no terminalizer that
+    funnels through this module leaves a run without a record. Imported lazily
+    so the classification machinery stays off the hot CRUD import path (the
+    vast majority of ``update_run_status`` calls are non-terminal).
+    """
+    if run.status not in TERMINAL_STATUSES:
+        return
+    from modulo.core.pipeline_engine.classify import classify_and_persist_run
+
+    await classify_and_persist_run(session, run)
+
+
 async def update_run_status(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -658,6 +675,8 @@ async def update_run_status(
         # pair lands in one atomic write, never a torn half-state.
         run.node_telemetry_json = node_telemetry_json
     await session.flush()
+    if run.status in TERMINAL_STATUSES:
+        await _classify_terminal_run(session, run)
     return run
 
 
@@ -751,8 +770,16 @@ async def _update_run_status_fenced(
     )
     if result.fetchone() is None:
         return None
-    refreshed = await session.execute(select(Run).where(Run.id == run_id))
-    return refreshed.scalar_one_or_none()
+    # ``populate_existing`` forces a REAL row read rather than returning the
+    # session's identity-map object (which is STALE for status/error_code/
+    # outputs_json after the raw fenced UPDATE above — finalize_cost loads the
+    # run earlier in the same transaction). The classification hook needs the
+    # freshly-written facts.
+    refreshed = await session.execute(select(Run).where(Run.id == run_id).execution_options(populate_existing=True))
+    refreshed_run = refreshed.scalar_one_or_none()
+    if refreshed_run is not None and refreshed_run.status in TERMINAL_STATUSES:
+        await _classify_terminal_run(session, refreshed_run)
+    return refreshed_run
 
 
 _TRANSITION_SQL = text(
@@ -831,7 +858,13 @@ async def transition_run(
             "allowed_from": sorted(allowed_from),
         },
     )
-    return result.fetchone() is not None
+    ok = result.fetchone() is not None
+    if ok and target_status in TERMINAL_STATUSES:
+        refreshed = await session.execute(select(Run).where(Run.id == run_id).execution_options(populate_existing=True))
+        refreshed_run = refreshed.scalar_one_or_none()
+        if refreshed_run is not None and refreshed_run.status in TERMINAL_STATUSES:
+            await _classify_terminal_run(session, refreshed_run)
+    return ok
 
 
 async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
@@ -843,6 +876,8 @@ async def request_cancellation(session: AsyncSession, run_id: uuid.UUID) -> Run 
     run.status = "cancelled"
     run.completed_at = datetime.now(UTC)
     await session.flush()
+    if run.status in TERMINAL_STATUSES:
+        await _classify_terminal_run(session, run)
     return run
 
 
