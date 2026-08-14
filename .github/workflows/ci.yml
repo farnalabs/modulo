@@ -119,7 +119,20 @@ jobs:
             BASE="HEAD^"
           fi
           CHANGED="$(git diff --name-only "$BASE" HEAD -- backend/tests/integration/ || true)"
-          CHANGED="$(printf '%s\n' "$CHANGED" | sed '/^$/d' | tr '\n' ' ' | sed 's/ *$//')"
+          # Keep only files that actually exist in the PR tree - a deleted or
+          # renamed-away integration test would otherwise be fed to pytest below
+          # and error "file or directory not found" (exit 4). Mirrors the
+          # migration-prefix collision check's HEAD-existence guard.
+          : > /tmp/integration-changed.txt
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if ! git cat-file -e "HEAD:${f}" 2>/dev/null; then
+              echo "  (skip) not present in PR tree: ${f}"
+              continue
+            fi
+            printf '%s\n' "${f#backend/}" >> /tmp/integration-changed.txt
+          done <<< "$CHANGED"
+          CHANGED="$(tr '\n' ' ' < /tmp/integration-changed.txt | sed 's/ *$//')"
           echo "changed_files=${CHANGED}" >> "$GITHUB_OUTPUT"
           if [ -n "$CHANGED" ]; then
             echo "Changed integration test files: ${CHANGED}"
@@ -138,9 +151,15 @@ jobs:
             -p 5433:5432 \
             postgres:16-alpine
           for i in $(seq 1 60); do
-            docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null && { echo "Postgres ready"; break; }
+            if docker exec modulo-ci-pg pg_isready -U modulo_test 2>/dev/null; then
+              echo "Postgres ready"
+              exit 0
+            fi
             sleep 2
           done
+          echo "::error::Postgres did not become ready within the retry budget"
+          docker logs modulo-ci-pg 2>/dev/null || true
+          exit 1
       - name: Start Redis (integration dependency)
         if: steps.changed.outputs.changed_files != ''
         shell: bash
@@ -148,15 +167,26 @@ jobs:
           docker rm -f modulo-ci-redis 2>/dev/null || true
           docker run -d --name modulo-ci-redis -p 6379:6379 redis:7-alpine
           for i in $(seq 1 30); do
-            docker exec modulo-ci-redis redis-cli ping 2>/dev/null && { echo "Redis ready"; break; }
+            if docker exec modulo-ci-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+              echo "Redis ready"
+              exit 0
+            fi
             sleep 2
           done
+          echo "::error::Redis did not become ready within the retry budget"
+          docker logs modulo-ci-redis 2>/dev/null || true
+          exit 1
       - name: Run changed integration tests
         if: steps.changed.outputs.changed_files != ''
         shell: bash
         run: |
-          echo "Running: pytest ${{ steps.changed.outputs.changed_files }}"
-          uv run --no-sync pytest ${{ steps.changed.outputs.changed_files }} -q --tb=short --timeout=300 -p no:warnings
+          # Expand the newline-delimited list via mapfile - never interpolate
+          # PR-controlled filenames into `run:` (shell metacharacters and
+          # spaces would be executed/split). The list was written to a temp
+          # file by the Detect step.
+          mapfile -t TEST_FILES < /tmp/integration-changed.txt
+          echo "Running: pytest ${TEST_FILES[*]}"
+          uv run --no-sync pytest "${TEST_FILES[@]}" -q --tb=short --timeout=300 -p no:warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
           DATABASE_URL: "postgresql+asyncpg://modulo_test:modulo_test@localhost:5433/modulo_test"
