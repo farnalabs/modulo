@@ -6,10 +6,12 @@ code:
   - backend/src/modulo/api/routes/node_categories.py
   - backend/src/modulo/db/crud/node_category.py
   - backend/src/modulo/db/models/node_category.py
-bdd: []
+bdd:
+  - backend/tests/bdd/features/admin/node-categories.feature
 unit-tests:
   - backend/tests/unit/api/test_node_category_endpoint.py
   - backend/tests/unit/db/crud/test_org_scoping.py
+  - backend/tests/unit/db/crud/test_node_category_referential_integrity.py
 depends-on:
   - feat-core-db-abstraction-core
 status: partial
@@ -52,7 +54,7 @@ CRUD management for pipeline node categories — labelled groupings with colour 
 - [x] Colour hex with/without `#` prefix normalised
 - [ ] Very long name truncation behaviour not defined
 - [ ] Colour value outside visible spectrum stored but not displayed correctly
-- [ ] Deleting a category in use by nodes — no referential integrity check
+- [x] Deleting a category in use by nodes — refused with 409 naming the referencing pipelines
 
 ## Security
 
@@ -62,5 +64,10 @@ CRUD management for pipeline node categories — labelled groupings with colour 
 
 ## Known Gaps
 
-- 2026-07-11: Cross-cutting QA — added IntegrityError→409 handling, logger.warning on error paths, populated frontmatter (unit-tests, depends-on, bdd reference), documented known gaps
-- 2026-07-12: Round 2 improve-architecture QA — verified B904, CancelledError, dead code (all clean). Removed stale known gap about `created_by` tracking: the field IS populated from `principal.account_id` in the create route handler (correct architecture — server-set, not client-supplied). Updated frontmatter note: `prd: 8` confirmed as best available (no specific PRD subsection for node categories). No code changes needed.
+- [x] ~~**Deleting a category in use by nodes**~~ — **RESOLVED (2026-08-14)**: `node_category_id` references live inside each pipeline's `graph_nodes_json` JSON column, so there was no relational FK to enforce integrity. `soft_delete_node_category` now scans the org's active pipelines via the new `node_category_in_use()` helper and raises `NodeCategoryInUseError` when a node still references the category; the delete route maps it to 409 naming the referencing pipelines. Soft-deleted pipelines and non-dict JSON entries are ignored; other-org references never block the delete.
+
+## QA History
+
+### 2026-08-14 — improve-architecture: referential-integrity guard on category deletion
+
+**RESOLVED the "Deleting a category in use by nodes — no referential integrity check" known gap** (`db/crud/node_category.py` + `api/routes/node_categories.py`). `node_category_id` references live per-node inside each pipeline's `graph_nodes_json` JSON column (not a relational FK), so soft-deleting a category could leave pipeline graphs dangling a reference to a deleted category. (1) New `node_category_in_use(session, category_id, *, org_id)` scans the org's active (non-soft-deleted) pipelines for graph nodes whose `node_category_id` matches, returning the referencing pipelines; non-dict JSON entries are ignored and other-org pipelines are never considered. (2) `soft_delete_node_category` now calls the check first and raises the new `NodeCategoryInUseError` (carries `category_id` + referencing pipelines, `ValueError`-compatible) instead of deleting. (3) The delete route maps the error to 409 with a detail naming the referencing pipelines (`Cannot delete: the category is referenced by N pipeline(s): <names>`) — the previous 409 branch only ever fired on `IntegrityError`, which this check (lacking any FK) could never produce. **Tests** — 10 new CRUD tests in `test_node_category_referential_integrity.py` (empty scan, referencing pipeline reported with id/name, only-matching-category, other-org ignored, soft-deleted-pipeline ignored, malformed entries ignored, delete blocked + error fields, delete succeeds unreferenced, delete succeeds after reference removed, other-org delete unaffected) + 2 new endpoint tests in `test_node_category_endpoint.py` (409 with the pipeline named, 409 lists all referencing pipelines). **BDD** — new `node-categories.feature` (3 scenarios: unreferenced delete → 204, referenced delete → 409 naming the pipeline, viewer delete → 403) with co-located step definitions in `test_node_categories.py`. Updated product map (`bdd:` + `unit-tests:` frontmatter populated, Edge Case behaviour `[ ]`→`[x]`, Known Gap → RESOLVED, QA History). 10/10 referential-integrity + 20/20 node-category endpoint + 20/20 org-scoping + 3/3 BDD scenarios + 16/16 category-validator unit tests pass, ruff check + format clean, mypy --strict clean. Status: partial (category reordering, default category seeding, `asyncio.CancelledError` re-raise, owner-team scoping remain).
