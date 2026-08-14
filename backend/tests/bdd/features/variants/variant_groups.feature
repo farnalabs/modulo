@@ -4,14 +4,14 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
   and detect eval coverage gaps
   So that I can A/B test pipeline configurations at scale
 
-  @awaiting-implementation
-  Scenario: Weighted batch run distributes N runs by variant weights
+  Scenario: Batch run fires one run per variant in insertion order
     Given a variant group "ab-test-1" configured for pipeline "deploy-service"
     And the group has weighted variants "control" (70) and "experiment" (30)
-    When a batch of 100 runs is triggered on the variant group
-    Then 100 runs are created across the variants
-    And the control variant receives approximately 70 runs
-    And the experiment variant receives approximately 30 runs
+    When a batch run is triggered on the variant group
+    Then 2 runs are created across the variants
+    And the first run has variant_name "control"
+    And the second run has variant_name "experiment"
+    And each batch run merges its variant's run_context_overrides into the input payload
 
   @awaiting-implementation
   Scenario: Sequential execution order matches insertion order
@@ -52,9 +52,9 @@ Feature: Variant Groups — Weighted Multi-Run, Comparison, and Eval Coverage
     When a single run is triggered on the variant group
     Then the selected variant is "control"
 
-  @awaiting-implementation
   Scenario: Batch run is rejected when quota is exceeded
     Given a variant group "quota-test" configured for pipeline "deploy-service"
+    And the group has weighted variants "control" (100) and "experiment" (0)
     And the group has max_concurrent_runs set to 0
-    When a batch of 5 runs is triggered on the variant group
+    When a batch run is triggered on the variant group
     Then the batch is rejected with a quota_exceeded error

@@ -6,10 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.db.crud.variant_group import (
+    check_pipeline_run_quota_for_batch,
     get_coverage_gaps,
     get_prompt_diffs,
     increment_run_count,
     pick_variant_weighted,
+    run_variant_batch,
     run_variant_weighted,
 )
 
@@ -108,6 +110,278 @@ class TestIncrementRunCount:
         assert returned is None
         session.execute.assert_awaited_once()
         session.flush.assert_not_called()
+
+    async def test_increments_by_delta(self) -> None:
+        session = AsyncMock()
+        group_id = uuid.uuid4()
+        mock_group = MagicMock()
+        mock_group.run_count = 2
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none = MagicMock(return_value=mock_group)
+        session.execute = AsyncMock(return_value=result_mock)
+
+        returned = await increment_run_count(session, group_id, delta=3)
+
+        assert returned is mock_group
+        assert mock_group.run_count == 5
+        session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+class TestCheckPipelineRunQuotaForBatch:
+    async def test_allows_when_headroom_for_whole_batch(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.max_concurrent_runs = 5
+
+        with patch(
+            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            new_callable=AsyncMock,
+            return_value=3,
+        ):
+            assert await check_pipeline_run_quota_for_batch(session, group, batch_size=2) is True
+
+    async def test_rejects_when_batch_breaches_quota(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.max_concurrent_runs = 5
+
+        with patch(
+            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            new_callable=AsyncMock,
+            return_value=4,
+        ):
+            assert await check_pipeline_run_quota_for_batch(session, group, batch_size=2) is False
+
+    async def test_rejects_at_exactly_quota(self) -> None:
+        session = AsyncMock()
+        group = MagicMock()
+        group.pipeline_id = uuid.uuid4()
+        group.max_concurrent_runs = 2
+
+        with patch(
+            "modulo.db.crud.variant_group.count_active_runs_for_pipeline",
+            new_callable=AsyncMock,
+            return_value=2,
+        ):
+            assert await check_pipeline_run_quota_for_batch(session, group, batch_size=1) is False
+
+
+@pytest.mark.asyncio
+class TestRunVariantBatch:
+    def _make_group(self, *, degraded_evals: bool = False) -> MagicMock:
+        group = MagicMock()
+        group.id = uuid.uuid4()
+        group.pipeline_id = uuid.uuid4()
+        group.degraded_evals = degraded_evals
+        group.max_concurrent_runs = 5
+        return group
+
+    def _make_locked(self, group: MagicMock) -> MagicMock:
+        locked = MagicMock()
+        locked.id = group.id
+        locked.pipeline_id = group.pipeline_id
+        locked.variants = group.variants
+        locked.degraded_evals = group.degraded_evals
+        locked.max_concurrent_runs = group.max_concurrent_runs
+        return locked
+
+    def _make_variants(self, names: list[str]) -> list[dict]:
+        return [
+            {
+                "name": name,
+                "snapshot_id": str(uuid.uuid4()),
+                "weight": 1.0,
+                "run_context_overrides": {"model_backend_id": f"backend-{name}"},
+            }
+            for name in names
+        ]
+
+    async def test_fires_one_run_per_variant_in_insertion_order(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = self._make_variants(["control", "experiment"])
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock) as mock_inc,
+        ):
+            results = await run_variant_batch(
+                session,
+                org_id=org_id,
+                group=group,
+                input_payload={"shared": "payload"},
+            )
+
+        assert results is not None
+        assert len(results) == 2
+        assert [r["variant"]["name"] for r in results] == ["control", "experiment"]
+        assert results[0]["run_id"] == mock_run.id
+        assert results[0]["merged_payload"]["shared"] == "payload"
+        assert results[0]["merged_payload"]["model_backend_id"] == "backend-control"
+        assert results[1]["merged_payload"]["model_backend_id"] == "backend-experiment"
+        mock_inc.assert_awaited_once_with(session, group.id, delta=2)
+
+    async def test_returns_none_when_quota_exceeded_for_batch(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = self._make_variants(["control", "experiment"])
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create,
+        ):
+            result = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert result is None
+        mock_create.assert_not_called()
+
+    async def test_returns_none_when_no_variants(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = []
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        with patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create:
+            result = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert result is None
+        mock_create.assert_not_called()
+
+    async def test_returns_none_when_any_variant_missing_snapshot_id(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = [
+            {"name": "ok", "snapshot_id": str(uuid.uuid4())},
+            {"name": "no-sid", "weight": 1.0},
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create,
+        ):
+            result = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert result is None
+        mock_create.assert_not_called()
+
+    async def test_returns_none_when_group_deleted(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = None
+        session.execute.return_value = exec_result
+
+        with patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock) as mock_create:
+            result = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert result is None
+        mock_create.assert_not_called()
+
+    async def test_injects_degraded_evals_flag_into_each_run(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group(degraded_evals=True)
+        group.variants = self._make_variants(["control", "experiment"])
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock),
+        ):
+            results = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert results is not None
+        for r in results:
+            assert r["merged_payload"]["_degraded_evals"] is True
+
+    async def test_filters_non_dict_variants(self) -> None:
+        session = AsyncMock()
+        org_id = uuid.uuid4()
+        group = self._make_group()
+        group.variants = [
+            {"name": "valid", "snapshot_id": str(uuid.uuid4())},
+            "not-a-dict",
+        ]
+
+        locked = self._make_locked(group)
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none.return_value = locked
+        session.execute.return_value = exec_result
+
+        mock_run = MagicMock()
+        mock_run.id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.db.crud.variant_group.check_pipeline_run_quota_for_batch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("modulo.db.crud.variant_group.create_run", new_callable=AsyncMock, return_value=mock_run),
+            patch("modulo.db.crud.variant_group.increment_run_count", new_callable=AsyncMock) as mock_inc,
+        ):
+            results = await run_variant_batch(session, org_id=org_id, group=group)
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0]["variant"]["name"] == "valid"
+        mock_inc.assert_awaited_once_with(session, group.id, delta=1)
 
 
 @pytest.mark.asyncio

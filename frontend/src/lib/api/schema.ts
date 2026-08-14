@@ -6118,6 +6118,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/variant-groups/{group_id}/batch-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Batch */
+        post: operations["run_batch_api_v1_variant_groups__group_id__batch_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/variant-groups/{group_id}/coverage-gaps": {
         parameters: {
             query?: never;
@@ -12575,6 +12592,13 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** RunVariantBatchResponse */
+        RunVariantBatchResponse: {
+            /** Runs */
+            runs: components["schemas"]["RunVariantResponse"][];
+            /** Count */
+            count: number;
         };
         /** RunVariantRequest */
         RunVariantRequest: {
@@ -29501,6 +29525,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunVariantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_batch_api_v1_variant_groups__group_id__batch_run_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunVariantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunVariantBatchResponse"];
                 };
             };
             /** @description Validation Error */
