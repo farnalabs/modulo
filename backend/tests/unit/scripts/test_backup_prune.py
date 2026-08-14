@@ -119,7 +119,7 @@ def test_collect_backups_sorts_by_date_descending(tmp_path):
 
 
 def test_classify_empty_returns_empty_set():
-    assert prune.classify_backups([]) == set()
+    assert not prune.classify_backups([])
 
 
 def test_classify_keeps_all_when_under_limits():

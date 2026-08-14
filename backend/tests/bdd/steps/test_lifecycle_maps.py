@@ -132,7 +132,8 @@ def export_envelope_carries_version_history(request: Any) -> None:
     assert isinstance(versions, list) and versions, data
     first = versions[0]
     assert isinstance(first, dict), data
-    assert "stages" in first and "edges" in first, data
+    assert "stages" in first, data
+    assert "edges" in first, data
     assert first.get("version") is not None, data
 
 

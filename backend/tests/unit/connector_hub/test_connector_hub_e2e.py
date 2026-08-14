@@ -102,7 +102,7 @@ async def test_e2e_full_lifecycle_spans_and_credential_cleanup(tmp_path, exporte
             assert read_result.records[0]["content"] == "e2e secret"
 
         # Credential cleanup contract: the hub no longer exposes the connector.
-        assert hub.connector_ids == frozenset()
+        assert not hub.connector_ids
         assert hub._initialised is False
         with pytest.raises(ConnectorNotFoundError):
             hub.get(ci.id)
@@ -148,7 +148,7 @@ async def test_e2e_credentials_decrypted_into_connector_and_close_releases(expor
 
     # close() is the named shutdown lifecycle method.
     hub.close()
-    assert hub.connector_ids == frozenset()
+    assert not hub.connector_ids
     assert hub._initialised is False
     with pytest.raises(ConnectorNotFoundError):
         hub.get(ci.id)
@@ -172,7 +172,7 @@ async def test_e2e_close_is_idempotent(exporter: InMemorySpanExporter):
 
         hub.close()
         hub.close()  # double-close is a no-op
-        assert hub.connector_ids == frozenset()
+        assert not hub.connector_ids
 
 
 async def test_e2e_error_span_recorded(tmp_path, exporter: InMemorySpanExporter):

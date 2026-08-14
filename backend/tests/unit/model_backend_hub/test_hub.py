@@ -648,7 +648,7 @@ async def test_aexit_logs_and_clears_on_error():
         async with hub:
             raise RuntimeError("boom")
 
-    assert hub.backend_ids == frozenset()
+    assert not hub.backend_ids
 
 
 async def test_register_overwrite_logs_warning():

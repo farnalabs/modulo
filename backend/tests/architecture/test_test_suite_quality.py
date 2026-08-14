@@ -86,6 +86,12 @@ regression that silently weakens the suite:
 - ``assert bool(x)`` / ``assert not bool(x)`` — ``bool()`` is a no-op inside an
   ``assert``, which already tests truthiness (and inverts it under ``not``);
   the wrapper adds noise without changing the outcome
+- ``assert x == set()`` / ``assert x != list()`` against a zero-argument
+  builtin call that always produces an empty container (``list()``,
+  ``dict()``, ``set()``, ``tuple()``, ``bytes()``, ``bytearray()``,
+  ``frozenset()``) — the call-based twin of the ``== []``/``== {}`` literal
+  lens. Every such builtin returns a falsy container, so these should read
+  ``assert not x`` / ``assert x``
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -974,6 +980,115 @@ def test_empty_tuple_lens_flags_empty_tuple():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _empty_tuple_comparisons(tree), f"lens should NOT flag:\n{source}"
+
+
+_EMPTY_BUILTIN_CALLS = frozenset({"list", "dict", "set", "tuple", "bytes", "bytearray", "frozenset"})
+"""Zero-argument builtin calls that always produce an empty (falsy) container.
+
+The literal-based empty-container lens catches ``[]``/``{}``/``""``/``()`` but
+cannot see ``set()``/``list()`` — those are ``ast.Call`` nodes, not literals.
+This lens is their call-based twin."""
+
+
+def _empty_builtin_call_comparisons(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` that compares a
+    value against an empty container produced by a zero-argument builtin call
+    (``list()``/``dict()``/``set()``/``tuple()``/``bytes()``/``bytearray()``/
+    ``frozenset()``) with ``==``/``!=``."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assert):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+            continue
+        if not isinstance(test.ops[0], (ast.Eq, ast.NotEq)):
+            continue
+        sides = [(test.left, test.comparators[0]), (test.comparators[0], test.left)]
+        for operand, literal in sides:
+            if not (
+                isinstance(literal, ast.Call)
+                and isinstance(literal.func, ast.Name)
+                and literal.func.id in _EMPTY_BUILTIN_CALLS
+                and not literal.args
+                and not literal.keywords
+            ):
+                continue
+            if isinstance(operand, ast.Name):
+                continue
+            if isinstance(operand, ast.Call) and isinstance(operand.func, ast.Attribute) and operand.func.attr == "get":
+                continue
+            if not isinstance(operand, (ast.Attribute, ast.Subscript, ast.Call, ast.Await)):
+                continue
+            op_name = "==" if isinstance(test.ops[0], ast.Eq) else "!="
+            prefer = "assert not ..." if isinstance(test.ops[0], ast.Eq) else "assert ..."
+            found.append((node.lineno, f"asserts value {op_name} {literal.func.id}() — prefer '{prefer}'"))
+            break
+    return found
+
+
+def test_no_empty_builtin_call_equality():
+    """``assert x == set()`` / ``assert x == list()`` compare a value against
+    an empty container produced by a zero-argument builtin call — the
+    call-based twin of the ``== []``/``== {}`` literal lens. Every such
+    builtin returns a falsy container, so ``assert x == set()`` should read
+    ``assert not x`` and ``assert x != set()`` should read ``assert x`` — the
+    same intent with less noise and no literal-type coupling. Operands whose
+    type is statically a container (attribute access, subscript, call, or
+    await) are flagged; a bare name is left alone because it may bind ``None``
+    or a ``__bool__``-/``__eq__``-overloading object whose emptiness is not
+    ``not``, and a ``.get(...)`` lookup is left alone because it returns
+    ``None`` for a missing key — ``set()`` vs ``None`` is a meaningful
+    distinction."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _empty_builtin_call_comparisons(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} empty-builtin-call comparison(s).\n"
+        "An empty list()/dict()/set()/tuple()/bytes()/frozenset() is falsy; write "
+        "'assert not <expr>' instead of 'assert <expr> == list()/set()' and "
+        "'assert <expr>' instead of 'assert <expr> != list()/set()'.\n" + "\n".join(violations)
+    )
+
+
+def test_empty_builtin_call_lens_flags_empty_calls():
+    """Synthetic positive/negative control for the empty-builtin-call lens:
+    must flag ``== set()``/``!= frozenset()`` on attribute/subscript/call/await
+    operands (either operand order) for every supported builtin and ignore bare
+    names, ``.get(...)`` lookups, non-empty builtin calls, non-container calls,
+    and list/dict literal comparisons."""
+    positive_sources = [
+        "def test_foo():\n    assert result.items == set()\n",
+        "def test_foo():\n    assert result['items'] != frozenset()\n",
+        "def test_foo():\n    assert collect_items() == list()\n",
+        "def test_foo():\n    assert await load_items() == dict()\n",
+        "def test_foo():\n    assert tuple() != result.items\n",
+        "def test_foo():\n    assert result.items == bytes()\n",
+        "def test_foo():\n    assert result.items == bytearray()\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _empty_builtin_call_comparisons(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x == set()\n",
+        "def test_foo():\n    assert config.get('items') == set()\n",
+        "def test_foo():\n    assert result.items == set([1])\n",
+        "def test_foo():\n    assert result.items == frozenset({'a'})\n",
+        "def test_foo():\n    assert result.items == []\n",
+        "def test_foo():\n    assert result.items == {}\n",
+        "def test_foo():\n    assert result.items == len(items)\n",
+        "def test_foo():\n    assert result.items == sorted(items)\n",
+        "def test_foo():\n    assert result.items == str()\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _empty_builtin_call_comparisons(tree), f"lens should NOT flag:\n{source}"
 
 
 def test_no_precision_fragile_float_equality():
