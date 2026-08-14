@@ -391,6 +391,7 @@ async def test_query_search_non_finite_total_does_not_crash(connector):
     )
     result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}))
     assert len(result.records) == 1
+    assert result.total == 1
     assert result.next_cursor is None
 
 
