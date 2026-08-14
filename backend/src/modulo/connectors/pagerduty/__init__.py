@@ -1,11 +1,11 @@
 """PagerDutyConnector — async PagerDuty REST API v2 connector."""
 
 import asyncio
-import contextlib
 from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -16,6 +16,17 @@ from modulo.connectors.base import (
 )
 
 _BASE = "https://api.pagerduty.com"
+
+
+def _paging_total(body: dict[str, Any]) -> int | None:
+    """Coerce the API's ``total`` into an int, keeping ``None`` when absent.
+
+    PagerDuty reports a result ``total``; guarding it with ``safe_int`` stops a
+    corrupt/non-finite value from leaking into ``ConnectorResult.total`` (which
+    is typed ``int | None``). Booleans and garbage strings fall back to 0.
+    """
+    raw = body.get("total")
+    return _safe_int(raw) if raw is not None else None
 
 
 class PagerDutyConnector(ConnectorBase):
@@ -93,8 +104,7 @@ class PagerDutyConnector(ConnectorBase):
             params["limit"] = q.limit
         offset: int = 0
         if q.cursor:
-            with contextlib.suppress(ValueError):
-                offset = int(q.cursor)
+            offset = _safe_int(q.cursor)
             params["offset"] = offset
         resp = await c.get("/incidents", params=params)
         resp.raise_for_status()
@@ -103,7 +113,7 @@ class PagerDutyConnector(ConnectorBase):
         params["offset"] = offset + len(records)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("total"),
+            total=_paging_total(body),
             next_cursor=str(offset + len(records)) if body.get("more") else None,
         )
 
@@ -123,8 +133,8 @@ class PagerDutyConnector(ConnectorBase):
         records = body.get("services", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("total"),
-            next_cursor=str(body.get("offset", 0) + len(records)) if body.get("more") else None,
+            total=_paging_total(body),
+            next_cursor=str(_safe_int(body.get("offset")) + len(records)) if body.get("more") else None,
         )
 
     async def _list_teams(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -141,8 +151,8 @@ class PagerDutyConnector(ConnectorBase):
         records = body.get("teams", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("total"),
-            next_cursor=str(body.get("offset", 0) + len(records)) if body.get("more") else None,
+            total=_paging_total(body),
+            next_cursor=str(_safe_int(body.get("offset")) + len(records)) if body.get("more") else None,
         )
 
     async def _list_users(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -161,8 +171,8 @@ class PagerDutyConnector(ConnectorBase):
         records = body.get("users", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("total"),
-            next_cursor=str(body.get("offset", 0) + len(records)) if body.get("more") else None,
+            total=_paging_total(body),
+            next_cursor=str(_safe_int(body.get("offset")) + len(records)) if body.get("more") else None,
         )
 
     async def _list_escalation_policies(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -181,8 +191,8 @@ class PagerDutyConnector(ConnectorBase):
         records = body.get("escalation_policies", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("total"),
-            next_cursor=str(body.get("offset", 0) + len(records)) if body.get("more") else None,
+            total=_paging_total(body),
+            next_cursor=str(_safe_int(body.get("offset")) + len(records)) if body.get("more") else None,
         )
 
     async def _list_schedules(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -199,8 +209,8 @@ class PagerDutyConnector(ConnectorBase):
         records = body.get("schedules", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("total"),
-            next_cursor=str(body.get("offset", 0) + len(records)) if body.get("more") else None,
+            total=_paging_total(body),
+            next_cursor=str(_safe_int(body.get("offset")) + len(records)) if body.get("more") else None,
         )
 
     async def _list_on_calls(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -218,8 +228,8 @@ class PagerDutyConnector(ConnectorBase):
         records = body.get("oncalls", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("total"),
-            next_cursor=str(body.get("offset", 0) + len(records)) if body.get("more") else None,
+            total=_paging_total(body),
+            next_cursor=str(_safe_int(body.get("offset")) + len(records)) if body.get("more") else None,
         )
 
     async def _trigger_incident(self, c: httpx.AsyncClient, data: dict[str, Any]) -> dict[str, Any]:

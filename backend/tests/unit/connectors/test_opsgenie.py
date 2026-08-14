@@ -564,3 +564,31 @@ async def test_auth_header_sent(connector: OpsgenieConnector) -> None:
     await connector.query(ConnectorQuery(resource="alerts"))
     req = route.calls[0].request
     assert req.headers["Authorization"] == f"GenieKey {API_KEY}"
+
+
+@respx.mock
+async def test_query_alerts_non_numeric_cursor_does_not_crash(connector: OpsgenieConnector) -> None:
+    """A non-numeric 'offset' cursor must not crash next-cursor arithmetic."""
+    respx.get(f"{_BASE}/alerts", params={"offset": "abc"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"id": "A1", "message": "Down"}], "totalCount": 25, "paging": {"next": "offset=10"}},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts", cursor="abc"))
+    assert len(result.records) == 1
+    assert result.next_cursor == "1"
+
+
+@respx.mock
+async def test_query_alerts_non_finite_total_count_does_not_leak(connector: OpsgenieConnector) -> None:
+    """A corrupt 'totalCount: 1e999' (json parses to inf) must not leak into the result."""
+    respx.get(f"{_BASE}/alerts").mock(
+        return_value=httpx.Response(
+            200,
+            text='{"data": [{"id": "A1", "message": "Down"}], "totalCount": 1e999}',
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="alerts"))
+    assert len(result.records) == 1
+    assert result.total == 0

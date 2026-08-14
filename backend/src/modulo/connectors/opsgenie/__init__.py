@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -15,6 +16,17 @@ from modulo.connectors.base import (
 )
 
 _BASE = "https://api.opsgenie.com/v2"
+
+
+def _total_count(body: dict[str, Any]) -> int | None:
+    """Coerce the API's ``totalCount`` into an int, keeping ``None`` when absent.
+
+    Opsgenie reports a result ``totalCount``; guarding it with ``safe_int``
+    stops a corrupt/non-finite value from leaking into ``ConnectorResult.total``
+    (typed ``int | None``). Booleans and garbage strings fall back to 0.
+    """
+    raw = body.get("totalCount")
+    return _safe_int(raw) if raw is not None else None
 
 
 class OpsgenieConnector(ConnectorBase):
@@ -99,11 +111,11 @@ class OpsgenieConnector(ConnectorBase):
         resp.raise_for_status()
         body = resp.json()
         records = body.get("data", [])
-        total = body.get("totalCount")
+        total = _total_count(body)
         return ConnectorResult(
             records=records[: q.limit or len(records)],
             total=total,
-            next_cursor=str(int(params.get("offset", 0)) + len(records)) if body.get("paging") else None,
+            next_cursor=str(_safe_int(params.get("offset")) + len(records)) if body.get("paging") else None,
         )
 
     async def _query_alert(self, c: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
@@ -134,7 +146,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -154,7 +166,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -172,7 +184,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -188,7 +200,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 
@@ -221,7 +233,7 @@ class OpsgenieConnector(ConnectorBase):
         records = body.get("data", [])
         return ConnectorResult(
             records=records[: q.limit or len(records)],
-            total=body.get("totalCount"),
+            total=_total_count(body),
             next_cursor=str(len(records)) if records and len(records) == (q.limit or 100) else None,
         )
 

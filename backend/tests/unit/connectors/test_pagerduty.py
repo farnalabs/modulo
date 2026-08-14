@@ -519,3 +519,62 @@ async def test_query_users_with_team_filter(connector: PagerDutyConnector) -> No
     result = await connector.query(ConnectorQuery(resource="users", filters={"team_ids": "TEAM1"}))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "Charlie"
+
+
+@respx.mock
+async def test_query_services_non_finite_offset_does_not_poison_cursor(connector: PagerDutyConnector) -> None:
+    """A corrupt 'offset: 1e999' (json parses to inf) must not poison the next cursor."""
+    respx.get(f"{_BASE}/services").mock(
+        return_value=httpx.Response(
+            200,
+            text='{"services": [{"id": "S1", "name": "Web API"}], "total": 50, "more": true, "offset": 1e999}',
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="services"))
+    assert len(result.records) == 1
+    assert result.next_cursor == "1"
+
+
+@respx.mock
+async def test_query_users_string_offset_does_not_crash(connector: PagerDutyConnector) -> None:
+    """A string 'offset' from the API must not crash next-cursor arithmetic."""
+    respx.get(f"{_BASE}/users").mock(
+        return_value=httpx.Response(
+            200,
+            text='{"users": [{"id": "U1"}], "total": 10, "more": true, "offset": "25"}',
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="users"))
+    assert len(result.records) == 1
+    assert result.next_cursor == "26"
+
+
+@respx.mock
+async def test_query_incidents_non_finite_total_does_not_leak(connector: PagerDutyConnector) -> None:
+    """A corrupt 'total: 1e999' (json parses to inf) must not leak into the result."""
+    respx.get(f"{_BASE}/incidents").mock(
+        return_value=httpx.Response(
+            200,
+            text='{"incidents": [{"id": "I1"}], "total": 1e999, "more": false}',
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="incidents"))
+    assert len(result.records) == 1
+    assert result.total == 0
+
+
+@respx.mock
+async def test_query_incidents_garbage_cursor_does_not_crash(connector: PagerDutyConnector) -> None:
+    """A non-numeric cursor falls back to offset 0 instead of raising ValueError."""
+    respx.get(
+        f"{_BASE}/incidents",
+        params={"offset": 0},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"incidents": [{"id": "I0", "title": "First incident"}], "total": 1, "more": False},
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="incidents", cursor="not-a-number"))
+    assert len(result.records) == 1
+    assert result.next_cursor is None

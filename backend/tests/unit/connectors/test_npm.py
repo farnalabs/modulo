@@ -380,6 +380,20 @@ async def test_query_unsupported_resource(connector):
         await connector.query(ConnectorQuery(resource="unknown"))
 
 
+@respx.mock
+async def test_query_search_non_finite_total_does_not_crash(connector):
+    """A corrupt 'total: 1e999' (json parses to inf) must not crash pagination."""
+    respx.get(f"{API_BASE}/-/v1/search", params={"text": "react", "size": "100"}).mock(
+        return_value=httpx.Response(
+            200,
+            text='{"objects": [{"package": {"name": "pkg", "version": "1.0.0"}}], "total": 1e999}',
+        )
+    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"text": "react"}))
+    assert len(result.records) == 1
+    assert result.next_cursor is None
+
+
 # --- write ---
 
 
