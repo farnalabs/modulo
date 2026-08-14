@@ -488,6 +488,36 @@ async def _apply_work_intact(
     )
 
 
+async def _reclassify_after_work_intact(session: AsyncSession, run_id: uuid.UUID) -> None:
+    """FAR-189 round-2 FIX 3: refresh + re-persist the classification record
+    after the ``work_intact`` write so the record carries the real value.
+
+    ``finalize_cost`` triggers the terminal status write → inline classify
+    BEFORE ``_apply_work_intact`` runs, so the record persists
+    ``work_intact=None`` for every executor-terminalized run — and the
+    reconciliation sweep SKIPS already-classified rows, so it never corrects
+    them. This is the only path that fixes the executor-written records.
+
+    Runs INSIDE the caller's terminalization transaction, AFTER
+    ``_apply_work_intact`` succeeded. The re-read forces a real row load
+    (``populate_existing=True``) because the work_intact write bypassed the ORM
+    identity map (a raw UPDATE); ``classify_and_persist_run`` then recomputes
+    the verdict from the fresh row and upserts it. Best-effort and NEVER
+    raises — mirrors the ``work_intact.write_failed`` wrapper so a classify or
+    persist failure can never block or fail terminalization.
+    """
+    try:
+        from modulo.core.pipeline_engine.classify import classify_and_persist_run
+
+        run = await session.get(Run, run_id, populate_existing=True)
+        if run is not None:
+            await classify_and_persist_run(session, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("work_intact.classify_refresh_failed", extra={"run_id": str(run_id)})
+
+
 async def org_sandbox_capacity_free(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -1382,6 +1412,12 @@ class PipelineExecutor:
             if work_intact is not None:
                 try:
                     await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                    # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran
+                    # BEFORE this write (work_intact still NULL at classify
+                    # time). Re-persist the classification with the real value —
+                    # the sweep skips already-classified rows, so this is the
+                    # only correction for executor-terminalized runs.
+                    await _reclassify_after_work_intact(session, run_id)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1948,6 +1984,12 @@ class PipelineExecutor:
                 # superseded executor cannot stamp work_intact on a successor.
                 try:
                     await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                    # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran
+                    # BEFORE this write (work_intact still NULL at classify
+                    # time). Re-persist the classification with the real value —
+                    # the sweep skips already-classified rows, so this is the
+                    # only correction for executor-terminalized runs.
+                    await _reclassify_after_work_intact(session, run_id)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
