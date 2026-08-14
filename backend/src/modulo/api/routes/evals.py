@@ -42,7 +42,7 @@ class CreateEvalRequest(BaseModel):
     pipeline_id: uuid.UUID
     node_id: uuid.UUID | None = None
     name: str = Field(min_length=1, max_length=255)
-    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$")
     config_json: ClassVar[dict[str, Any]] = {}
     failure_behaviour: str = "warn"
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
@@ -83,10 +83,51 @@ def _eval_def_to_dict(eval_def: EvalDefinition) -> dict[str, Any]:
     }
 
 
+def _validate_guardrail_request(
+    *,
+    eval_type: str,
+    failure_behaviour: str | None,
+    config_json: dict[str, Any] | None,
+) -> None:
+    """Graph-save validation for guardrail definitions (FAR-208 item 5).
+
+    A guardrail binding never carries ``failure_behaviour='retry'`` — a
+    guardrail block is TERMINAL (eval_failed) and run-level retries are
+    excluded by design. Rejected at the API edge so an invalid binding can
+    never reach the graph or the engine.
+    """
+    if eval_type != "guardrail":
+        return
+    if failure_behaviour == "retry":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A guardrail may never use failure_behaviour='retry' — guardrail blocks are terminal.",
+        )
+    if failure_behaviour not in (None, "warn", "block"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Guardrail failure_behaviour must be 'warn' or 'block'.",
+        )
+    if config_json is None:
+        return
+    action = config_json.get("action")
+    if action is not None and action not in ("observe", "warn", "block", "redact"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Guardrail action must be one of observe|warn|block|redact (got {action!r}).",
+        )
+    detection_type = config_json.get("type")
+    if detection_type is not None and detection_type not in ("regex", "json_schema"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Guardrail detection must be regex|json_schema (got {detection_type!r}).",
+        )
+
+
 class UpdateEvalRequest(BaseModel):
     node_id: uuid.UUID | None = None
     name: str | None = Field(None, min_length=1, max_length=255)
-    eval_type: str | None = Field(None, pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    eval_type: str | None = Field(None, pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$")
     config_json: dict[str, Any] | None = None
     failure_behaviour: str | None = None
     pass_threshold: float | None = Field(None, ge=0.0, le=1.0)
@@ -126,6 +167,12 @@ async def create_eval_definition(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can create eval definitions",
         )
+
+    _validate_guardrail_request(
+        eval_type=req.eval_type,
+        failure_behaviour=req.failure_behaviour,
+        config_json=req.config_json,
+    )
 
     try:
         async with session.begin():
@@ -436,6 +483,16 @@ async def update_eval_definition(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Eval definition not found")
 
             updates = req.model_dump(exclude_unset=True)
+            new_type = updates.get("eval_type", eval_def.eval_type)
+            new_behaviour = updates.get("failure_behaviour")
+            if new_behaviour is None:
+                new_behaviour = eval_def.failure_behaviour
+            new_config = updates.get("config_json", eval_def.config_json)
+            _validate_guardrail_request(
+                eval_type=new_type,
+                failure_behaviour=new_behaviour,
+                config_json=new_config,
+            )
             for key, value in updates.items():
                 setattr(eval_def, key, value)
             await session.flush()
@@ -639,7 +696,7 @@ class CompareEvalsRequest(BaseModel):
 class CreateEvalFromRunRequest(BaseModel):
     run_id: uuid.UUID
     node_id: uuid.UUID
-    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function)$")
+    eval_type: str = Field(pattern=r"^(llm_judge|regex|json_schema|custom_function|guardrail)$")
     name: str = Field(min_length=1, max_length=255)
 
 

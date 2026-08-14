@@ -348,6 +348,66 @@ async def create_run(
     # alter the run's hash, and the STRIPPED payload is what gets stored.
     stored_payload = _strip_reserved_keys(input_payload)
 
+    # Guardrail interception (FAR-208 item 2) — the ingestion edge. The
+    # two-phase pass runs BEFORE the run's input_payload is persisted, so
+    # persisted state is post-redaction. A block outcome creates the run as a
+    # TERMINAL eval_failed run instead of a pending/executable one. Replays
+    # (is_replay=True) are detection-only — no act, no re-block (item 10).
+    #
+    # Mechanism errors FAIL CLOSED when any bound guardrail carries a block or
+    # redact action (item 7: warn-on-error applies to warn-action only);
+    # observe/warn-only guardrails log-and-continue on mechanism error.
+    guardrail_results: list[Any] = []
+    guardrail_blocked = False
+    guardrail_block_message = ""
+    guardrail_observed_by_eval: dict[uuid.UUID, bool] = {}
+    from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails import GuardrailAction, run_interception_pass, to_engine_definition
+    from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionModel
+
+    guardrail_rows = (
+        (
+            await session.execute(
+                select(EvalDefinitionModel).where(
+                    EvalDefinitionModel.pipeline_id == pipeline_id,
+                    EvalDefinitionModel.organisation_id == org_id,
+                    EvalDefinitionModel.eval_type == "guardrail",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if guardrail_rows:
+        guardrail_defs = [to_engine_definition(row) for row in guardrail_rows]
+        guardrail_observed_by_eval = {d.id: d.config.get("action") == GuardrailAction.OBSERVE for d in guardrail_defs}
+        any_guarding = any(
+            d.config.get("action") in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in guardrail_defs
+        )
+        try:
+            outcome = run_interception_pass(
+                EvalEngine(),
+                guardrail_defs,
+                stored_payload,
+                detection_only=bool(is_replay),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Fail-closed for block/redact guardrails; log-and-continue for
+            # observe/warn-only guardrails. NEVER a raw payload in the log.
+            _log.exception("guardrails.interception_error")
+            if any_guarding:
+                guardrail_blocked = True
+                guardrail_block_message = "guardrail mechanism error at ingestion edge"
+            else:
+                guardrail_blocked = False
+        else:
+            stored_payload = outcome.payload
+            guardrail_results = outcome.results
+            guardrail_blocked = outcome.blocked
+            guardrail_block_message = outcome.block_message
+
     # Engine-only feedback-correction context (FAR-142): the
     # ``_feedback_correction`` key is reserved and stripped above, so a user
     # payload can never forge correction-run context. Correction runs flow the
@@ -407,8 +467,38 @@ async def create_run(
         is_replay=is_replay,
         variant_group_id=variant_group_id,
     )
+    if guardrail_blocked:
+        # A guardrail block at the ingestion edge is TERMINAL (eval_failed) —
+        # the run is created only so the failure is visible in the run list.
+        # It is NEVER dispatched to the executor (dispatch_run refuses terminal
+        # runs), never retried, and has no HITL gate to resume.
+        run.status = "eval_failed"
+        run.error_code = "eval_blocked"
+        run.error_detail = guardrail_block_message[:5000]
+        run.completed_at = datetime.now(UTC)
     session.add(run)
     await session.flush()
+
+    # Persist guardrail eval results (evidence deltas vs the pre-act base).
+    # detail is count-only / pattern-descriptive — never raw payload (item 7
+    # no-raw-persist). Observe-mode guardrails stamp observed=True so the
+    # guardrail_summary observed bucket is counted exactly once.
+    if guardrail_results:
+        from modulo.db.models.eval_result import EvalResult as EvalResultModel
+
+        for gr in guardrail_results:
+            session.add(
+                EvalResultModel(
+                    organisation_id=org_id,
+                    run_id=run_id,
+                    node_id=None,
+                    eval_id=gr.eval_id,
+                    passed=gr.passed,
+                    score=gr.score,
+                    detail=(gr.detail or "")[:2000],
+                    observed=guardrail_observed_by_eval.get(gr.eval_id, False),
+                )
+            )
 
     # Journey hydration (mint-only, fail-open). A journey write failure must
     # NEVER abort create_run — a lost create-stamp is recoverable at finalise

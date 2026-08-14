@@ -1,0 +1,308 @@
+"""Unit tests for modulo.core.guardrails — ingestion-edge guardrail machinery.
+
+Covers the pure detection, masks-only redaction, static path resolution,
+two-phase pass, block semantics, allowlist, and conformance derivation.
+"""
+
+import uuid
+
+import pytest
+
+from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType, GuardrailMisroutedError
+from modulo.core.guardrails import (
+    REDACTION_MASK,
+    FieldRedactionMode,
+    FieldRedactionPolicy,
+    GuardrailBlockedError,
+    GuardrailConfigError,
+    apply_redaction_masks,
+    derive_conformance_state,
+    evaluate_guardrails,
+    resolve_static_path,
+    run_guardrail_pass,
+    set_static_path,
+)
+
+_ORG_ID = uuid.uuid4()
+
+
+def _guardrail(
+    *,
+    name: str = "gr",
+    action: str = "block",
+    detection: dict | None = None,
+    failure_behaviour: str = "block",
+    redaction: list | None = None,
+    required_capabilities: list | None = None,
+) -> EvalDefinition:
+    config: dict = {"action": action, "interception_point": "input"}
+    if redaction is not None:
+        config["redaction"] = redaction
+    if required_capabilities is not None:
+        config["required_capabilities"] = required_capabilities
+    if detection:
+        config.update(detection)
+    else:
+        config.setdefault("type", "regex")
+        config.setdefault("field", "body")
+        config.setdefault("pattern", r"SECRET_[A-Z0-9]{8}")
+    return EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name=name,
+        eval_type=EvalType.GUARDRAIL,
+        config=config,
+        failure_behaviour=failure_behaviour,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Static field-path resolution (EXACT/ANCHOR — substring forbidden)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_static_path_exact_nested():
+    payload = {"config": {"credentials": {"api_key": "abc"}}, "body": "text"}
+    found, value = resolve_static_path(payload, "config.credentials.api_key")
+    assert found and value == "abc"
+
+
+def test_resolve_static_path_absent_segment_is_not_found():
+    payload = {"config": {"credentials": {"api_key": "abc"}}}
+    assert resolve_static_path(payload, "config.credentials.secret") == (False, None)
+    assert resolve_static_path(payload, "config.missing") == (False, None)
+
+
+def test_resolve_static_path_never_substring_matches():
+    payload = {"api_key_legacy": "abc", "body": "contains api_key_legacy"}
+    # Substring-style matching would find 'api_key' inside 'api_key_legacy';
+    # exact matching must NOT.
+    assert resolve_static_path(payload, "api_key") == (False, None)
+
+
+def test_set_static_path_only_updates_existing_keys():
+    payload = {"config": {"credentials": {"api_key": "abc"}}}
+    assert set_static_path(payload, "config.credentials.api_key", "masked") is True
+    assert payload["config"]["credentials"]["api_key"] == "masked"
+    # Missing intermediate segments are never created.
+    assert set_static_path(payload, "config.new.nested", "x") is False
+    assert "new" not in payload["config"]
+
+
+# ---------------------------------------------------------------------------
+# Redaction (masks-only)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_redaction_masks_transform_uses_fixed_mask():
+    payload = {"credentials": {"api_key": "sk-live-123"}, "body": "keep me"}
+    redacted, entries = apply_redaction_masks(
+        payload,
+        [FieldRedactionPolicy(path="credentials.api_key", mode=FieldRedactionMode.TRANSFORM)],
+    )
+    assert redacted["credentials"]["api_key"] == REDACTION_MASK
+    assert redacted["body"] == "keep me"
+    assert entries[0].applied and entries[0].reason == "masked"
+
+
+def test_apply_redaction_masks_does_not_mutate_original():
+    payload = {"credentials": {"api_key": "sk-live-123"}}
+    redacted, _ = apply_redaction_masks(
+        payload,
+        [FieldRedactionPolicy(path="credentials.api_key")],
+    )
+    assert payload["credentials"]["api_key"] == "sk-live-123"
+    assert redacted["credentials"]["api_key"] == REDACTION_MASK
+
+
+def test_apply_redaction_masks_drop_removes_key():
+    payload = {"credentials": {"api_key": "sk-live-123", "name": "prod"}}
+    redacted, entries = apply_redaction_masks(
+        payload,
+        [FieldRedactionPolicy(path="credentials.api_key", mode=FieldRedactionMode.DROP)],
+    )
+    assert "api_key" not in redacted["credentials"]
+    assert redacted["credentials"]["name"] == "prod"
+    assert entries[0].reason == "dropped"
+
+
+def test_apply_redaction_masks_block_policy_raises_when_present():
+    payload = {"credentials": {"api_key": "sk-live-123"}}
+    with pytest.raises(GuardrailBlockedError):
+        apply_redaction_masks(
+            payload,
+            [FieldRedactionPolicy(path="credentials.api_key", mode=FieldRedactionMode.BLOCK)],
+            raise_on_block=True,
+        )
+
+
+def test_apply_redaction_masks_allowlist_never_touched():
+    payload = {
+        "run_id": "abc",
+        "organisation_id": "org-1",
+        "credentials": {"api_key": "sk-live-123"},
+    }
+    redacted, entries = apply_redaction_masks(
+        payload,
+        [
+            FieldRedactionPolicy(path="run_id"),
+            FieldRedactionPolicy(path="credentials.api_key"),
+        ],
+    )
+    assert redacted["run_id"] == "abc"
+    assert redacted["credentials"]["api_key"] == REDACTION_MASK
+    assert entries[0].reason == "allowlist"
+    assert entries[1].reason == "masked"
+
+
+def test_apply_redaction_masks_field_absent_is_recorded():
+    _redacted, entries = apply_redaction_masks(
+        {"body": "x"},
+        [FieldRedactionPolicy(path="credentials.api_key")],
+    )
+    assert entries[0].reason == "field-absent"
+    assert not entries[0].applied
+
+
+# ---------------------------------------------------------------------------
+# Detection / engine contract
+# ---------------------------------------------------------------------------
+
+
+def test_engine_rejects_guardrail_misrouting():
+    """Guardrails must never route through EvalEngine.evaluate."""
+    engine = EvalEngine()
+    eval_def = _guardrail(name="never-here", action="block")
+    with pytest.raises(GuardrailMisroutedError):
+        engine.evaluate({"body": "SECRET_ABC12345"}, eval_def)
+
+
+def test_guardrail_config_rejects_retry_failure_behaviour():
+    eval_def = _guardrail(failure_behaviour="warn")
+    # Pydantic rejects failure_behaviour='retry' at construction (Literal
+    # ['warn','block']), so the engine-level guard must be exercised by
+    # bypassing the model (AGENTS.md eval-engine lesson).
+    object.__setattr__(eval_def, "failure_behaviour", "retry")
+    with pytest.raises(GuardrailConfigError):
+        evaluate_guardrails(EvalEngine(), [eval_def], {"body": "clean text"})
+
+
+def test_guardrail_config_requires_deterministic_detection():
+    bad = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="llm-detection-forbidden",
+        eval_type=EvalType.GUARDRAIL,
+        config={"action": "block", "type": "llm_judge"},
+        failure_behaviour="block",
+    )
+    with pytest.raises(GuardrailConfigError):
+        evaluate_guardrails(EvalEngine(), [bad], {})
+
+
+def test_evaluate_guardrails_block_action_raises_on_failure():
+    eval_def = _guardrail(name="no-secrets", action="block", failure_behaviour="block")
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(engine, [eval_def], {"body": "leak SECRET_ABC12345"})
+    # A clean payload passes without raising (no regex match → no violation).
+    results = evaluate_guardrails(engine, [eval_def], {"body": "clean text"})
+    assert results[0].passed is False  # raw eval: regex did not match
+
+
+def test_evaluate_guardrails_warn_never_raises():
+    eval_def = _guardrail(name="advisory", action="warn", failure_behaviour="warn")
+    results = evaluate_guardrails(EvalEngine(), [eval_def], {"body": "leak SECRET_ABC12345"})
+    assert results[0].passed is True  # raw eval: regex matched the violation
+
+
+def test_guardrail_json_schema_detection_violation_is_validation_failure():
+    eval_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="schema-guard",
+        eval_type=EvalType.GUARDRAIL,
+        config={
+            "action": "block",
+            "type": "json_schema",
+            "field": "body",
+            "schema": {"type": "object", "required": ["safe"], "properties": {"safe": {"type": "boolean"}}},
+        },
+        failure_behaviour="block",
+    )
+    engine = EvalEngine()
+    with pytest.raises(GuardrailBlockedError):
+        evaluate_guardrails(engine, [eval_def], {"body": {"safe": "not-a-bool"}})
+    results = evaluate_guardrails(engine, [eval_def], {"body": {"safe": True}})
+    assert results[0].passed is True
+
+
+# ---------------------------------------------------------------------------
+# Two-phase pass
+# ---------------------------------------------------------------------------
+
+
+def test_run_guardrail_pass_two_phase_detection_then_redaction():
+    block = _guardrail(name="must-clean", action="block", failure_behaviour="block")
+    redact = _guardrail(
+        name="redact-key",
+        action="redact",
+        failure_behaviour="warn",
+        redaction=[{"path": "credentials.api_key", "mode": "transform"}],
+    )
+    payload = {"credentials": {"api_key": "sk-live-123"}, "body": "clean"}
+    outcome = run_guardrail_pass(EvalEngine(), [block, redact], payload)
+    # Phase 1 detected a clean body (no regex match → no violation → no block).
+    # Phase 2 masked the static path deterministically.
+    assert outcome.redactions
+    assert outcome.redactions[0].applied
+
+
+def test_run_guardrail_pass_zero_guardrail_fast_path():
+    outcome = run_guardrail_pass(EvalEngine(), [], {"body": "x"})
+    assert not outcome.results and not outcome.redactions
+
+
+def test_run_guardrail_pass_block_fires_before_any_mask():
+    block = _guardrail(name="hard-stop", action="block", failure_behaviour="block")
+    redact = _guardrail(
+        name="never-applied",
+        action="redact",
+        failure_behaviour="warn",
+        redaction=[{"path": "body", "mode": "transform"}],
+    )
+    with pytest.raises(GuardrailBlockedError):
+        run_guardrail_pass(EvalEngine(), [block, redact], {"body": "leak SECRET_ABC12345"})
+
+
+# ---------------------------------------------------------------------------
+# Conformance (three-state for block-action guardrails)
+# ---------------------------------------------------------------------------
+
+
+def test_conformance_present_when_all_confirmed():
+    d = derive_conformance_state(["github.read"], {"github.read": True})
+    assert d.state == "present" and d.claimed
+
+
+def test_conformance_absent_when_any_confirmed_missing():
+    d = derive_conformance_state(["github.read", "github.write"], {"github.read": True, "github.write": False})
+    assert d.state == "absent" and d.missing == ("github.write",)
+
+
+def test_conformance_unknown_fail_closed_when_unreadable():
+    d = derive_conformance_state(["github.read"], {"github.read": None})
+    assert d.state == "unknown" and d.unreadable == ("github.read",)
+
+
+def test_conformance_empty_required_is_no_claim():
+    d = derive_conformance_state([], {})
+    assert not d.claimed
+
+
+def test_conformance_block_action_fail_closed_absent_and_unknown():
+    # Enforcement contract: absent AND unknown both block for block-action.
+    absent = derive_conformance_state(["cap"], {"cap": False})
+    unknown = derive_conformance_state(["cap"], {"cap": None})
+    assert absent.state in ("absent", "unknown")
+    assert unknown.state in ("absent", "unknown")

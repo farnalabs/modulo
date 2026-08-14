@@ -80,6 +80,13 @@ ignore_imports =
     modulo.db.crud.pipeline -> modulo.core.audit_logger
     modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.audit_logger
     modulo.db.session -> modulo.core.audit_logger.append_only
+    # FAR-208 guardrails: the ingestion-edge interception lives in create_run
+    # (the single chokepoint for all run-creation dispatch paths), so the DB
+    # layer is the ONLY caller of the core guardrail pass. The mapping is a
+    # thin DTO conversion (to_engine_definition); all guardrail logic stays in
+    # core.
+    modulo.db.crud.run -> modulo.core.guardrails
+    modulo.db.crud.run -> modulo.core.eval_engine
 
 [importlinter:contract:connectors-do-not-import-core]
 name = Connectors don't reach into core

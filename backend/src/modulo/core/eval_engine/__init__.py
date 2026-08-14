@@ -59,6 +59,7 @@ class EvalType(StrEnum):
     REGEX = "regex"
     JSON_SCHEMA = "json_schema"
     CUSTOM_FUNCTION = "custom_function"
+    GUARDRAIL = "guardrail"
 
 
 FailureBehaviour = Literal["warn", "block"]
@@ -118,6 +119,20 @@ class UnknownEvalTypeError(ValueError):
     def __init__(self, eval_type: str) -> None:
         super().__init__(f"Unknown eval type: {eval_type!r}")
         self.eval_type = eval_type
+
+
+class GuardrailMisroutedError(RuntimeError):
+    """Raised when a guardrail definition is routed through ``EvalEngine.evaluate``.
+
+    Guardrail detection is a sibling function in ``modulo.core.guardrails``
+    that reuses the pure eval helpers; the ``EvalEngine.evaluate`` contract is
+    untouched. Any attempt to evaluate a guardrail through the generic engine
+    is a routing bug and must fail loudly rather than silently mis-evaluate.
+    """
+
+    def __init__(self, eval_name: str) -> None:
+        super().__init__(f"Guardrail {eval_name!r} must not be routed through EvalEngine.evaluate")
+        self.eval_name = eval_name
 
 
 class SuiteEvalResult(BaseModel):
@@ -217,6 +232,13 @@ class EvalEngine:
                 result = self._evaluate_custom(output, eval_def, run_id)
             case EvalType.LLM_JUDGE:
                 result = self._evaluate_llm(output, eval_def, run_id, llm_judge_callable)
+            case EvalType.GUARDRAIL:
+                # Guardrail detection is a sibling function (modulo.core.guardrails)
+                # that reuses the pure regex/json_schema helpers; it must never be
+                # routed through the generic engine — its config shape differs and
+                # block semantics are guardrail-owned (terminal eval_failed). Fail
+                # loudly on misrouting rather than silently mis-evaluate.
+                raise GuardrailMisroutedError(eval_def.name)
             case _:
                 raise UnknownEvalTypeError(str(eval_def.eval_type))
 
@@ -599,6 +621,7 @@ __all__ = [
     "EvalSuiteBlockedError",
     "EvalType",
     "FailureBehaviour",
+    "GuardrailMisroutedError",
     "LLMJudgeCallable",
     "SuiteEvalResult",
     "UnknownEvalTypeError",
