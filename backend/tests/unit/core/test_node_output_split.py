@@ -529,13 +529,14 @@ def test_extend_type_map_stamps_gates_from_edges() -> None:
             {"source": "a", "target": "c", "type": "normal"},
         ],
     }
-    result = extend_node_type_map_from_edges({"a": "agent", "b": "agent"}, graph)
+    input_map = {"a": "agent", "b": "agent"}
+    result = extend_node_type_map_from_edges(input_map, graph)
     assert result["a"] == "agent"
     assert result["hitl_gate_a_b"] == NODE_TYPE_GATE
     assert result["hitl_gate_b_a"] == NODE_TYPE_GATE
     assert "c" not in result
     # Input map is never mutated.
-    assert "hitl_gate_a_b" not in {"a": "agent"}
+    assert "hitl_gate_a_b" not in input_map
 
 
 def test_extend_type_map_source_node_id_fallback() -> None:
